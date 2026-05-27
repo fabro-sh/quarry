@@ -1,42 +1,40 @@
 # Quarry Phase One Spec
-
 ## Purpose
+Quarry is a local-first document substrate for agents and developer tools. It gives agents a durable memory/workspace that can be accessed as structured documents over HTTP, as ordinary files through a Linux FUSE mount, and as a Git-synchronized repository for human review and portability.
 
-Quarry is a local-first document substrate for agents and developer tools. It gives agents a durable memory/workspace that can be accessed as structured documents over HTTP, as ordinary files through a FUSE mount, and as a Git-synchronized repository for human review and portability.
-
-Phase one should deliver the smallest complete version of that substrate: a single-user, single-machine daemon that stores versioned documents, supports multi-document transactions, exposes a REST API, syncs with Git without destructive conflicts, mounts the library as a filesystem, and ships as a usable CLI/binary.
+Phase one delivers the smallest complete version of that substrate: a single-user, single-server daemon that stores versioned documents in TursoDB, supports multi-document transactions, exposes a REST API, syncs with Git without destructive conflicts, mounts libraries as a Linux filesystem, and ships as a usable CLI/binary.
 
 Quarry is not the memory product itself in this phase. It is the lower storage layer that future search, MCP, UI, and agent-memory products can build on.
-
 ## Phase One Outcome
+At the end of phase one, a user can:
 
-At the end of phase one, a user should be able to:
-
-- Create a Quarry Library on their laptop.
+- Create multiple Quarry Libraries on one Quarry server.
+- Store all Libraries in one server-owned TursoDB database.
 - Write, read, list, rename, delete, and version documents by path.
 - Attach arbitrary JSON metadata to documents.
 - Store small text documents inline and large/binary documents in content-addressed storage.
 - Use auto-commit writes for simple operations.
 - Use explicit transactions for atomic multi-document edits.
-- Access the Library through a local REST API with generated OpenAPI documentation.
+- Access Libraries through a local REST API with generated OpenAPI documentation.
+- Override the default REST bind address explicitly when needed.
 - Import from and export to a normal Git working tree.
 - Run explicit bidirectional Git sync against one remote/branch while preserving both sides of conflicts.
-- Mount the Library through FUSE and use standard tools like `ls`, `cat`, `find`, `rg`, `vim`, and `cp`.
+- Mount a Library through Linux FUSE and use standard tools like `ls`, `cat`, `find`, `rg`, `vim`, and `cp`.
 - Package and run Quarry as a local daemon/CLI without needing a hosted service.
 
 ## Design Center
-
 - Single user.
-- Single machine.
-- Local daemon bound to `127.0.0.1` by default.
-- One running Quarry process owns a Library at a time.
-- Git sync is explicit, not ambient background sync, in the first release.
+- Single server process.
+- One TursoDB database for all Libraries on that server.
+- One running Quarry process owns the TursoDB database and CAS directory at a time.
+- REST binds to `127.0.0.1` by default.
+- REST bind address can be explicitly overridden by the user.
+- Git sync is explicit, not ambient background sync.
 - REST is the canonical control and transaction surface.
-- FUSE is a projection over committed state, not the source of truth.
+- FUSE is a Linux-only projection over committed state, not the source of truth.
 - Git is an interoperability and version-control surface, not the storage engine.
 
 ## Non-Goals
-
 These are intentionally out of scope for phase one:
 
 - Hosted multi-user service.
@@ -47,21 +45,21 @@ These are intentionally out of scope for phase one:
 - Full MCP server product. A minimal skeleton/shim may ship during packaging, but production MCP tools are later work.
 - Git LFS or git-annex protocol support.
 - Multi-device automatic sync.
-- Multiple Quarry daemons concurrently writing the same Library.
+- Multiple Quarry daemons concurrently writing the same database.
 - POSIX-perfect filesystem behavior.
+- macOS FUSE support.
+- Windows filesystem support.
 - Symlinks and hard links in FUSE.
 - Executing build artifacts directly from the FUSE mount as a supported workflow.
 
 ## Core Product Model
-
 ### Library
+A Library is the logical isolation boundary for documents, transactions, sync state, conflicts, and mount state.
 
-A Library is the isolation boundary for documents, transactions, sync state, conflicts, and mount state.
+Phase one uses one physical TursoDB database for all Libraries on the server. Libraries are rows and foreign-key boundaries inside that database, not separate database files. This keeps the server simple, makes cross-library administration possible, and matches the desired server model.
 
-Phase one should use one physical database file per Library, plus a small control-plane database for local registry and daemon bookkeeping. This keeps Libraries portable, easy to back up, and easy to mount or sync independently.
-
+The server also owns one CAS root. CAS content can be deduplicated across Libraries because content identity is global to the server.
 ### Document
-
 A Document is addressed by a normalized, case-sensitive path-like key inside a Library.
 
 Examples:
@@ -79,56 +77,52 @@ The canonical storage model is:
 - JSON metadata snapshots per version.
 
 This avoids in-place mutation as the durable history model. A write creates a new version and advances the document head atomically at commit time.
-
 ### Directories
+Directories are derived from path prefixes, S3-style. Quarry does not make directories the canonical storage model in phase one.
 
-Directories are derived from path prefixes, S3-style. Quarry should not make directories the canonical storage model in phase one.
-
-To satisfy FUSE requirements, add a small `dir_metadata` sidecar table keyed by directory path for POSIX attributes and empty directory support. FUSE gets stable inodes from an allocated `inodes` table.
-
+To satisfy FUSE requirements, add a small `dir_metadata` sidecar table keyed by library and directory path for POSIX attributes and empty directory support. FUSE gets stable inodes from an allocated `inodes` table scoped by Library.
 ### Metadata
-
-Document metadata is canonical JSON. Phase one should index only known hot fields:
+Document metadata is canonical JSON. Phase one indexes only known hot fields:
 
 - `content_type`
 - `created_at`
 - `updated_at`
 
 Everything else remains flexible JSON. EAV tables, typed schemas, and rich schema validation are deferred.
-
 ### Content Storage
-
 Use hybrid inline/CAS storage:
 
-- Store content <= 64 KiB inline in the database.
-- Store content > 64 KiB in CAS and keep only a content reference, byte size, and hash metadata in the database.
+- Store content <= 64 KiB inline in TursoDB.
+- Store content > 64 KiB in CAS and keep only a content reference, byte size, and hash metadata in TursoDB.
 - Decide inline vs CAS on every write based on the current content size.
 - When content moves from inline to CAS or vice versa, old unreferenced blobs become eligible for GC.
 
-Use BLAKE3 for content hashes. The phase-one CAS can be a hand-rolled disk store with a Git-like fanout layout:
+Use BLAKE3 for content hashes. The phase-one CAS is a disk store with a Git-like fanout layout:
 
 ```text
 cas/objects/ab/cdef0123...
 ```
 
 Writes must be atomic: write to a temp file, flush, then rename into place.
-
 ## Storage Engine Decision
+Phase one uses TursoDB directly via the `turso` Rust crate from `https://github.com/tursodatabase/turso`.
 
-The phase-one implementation should not bind the domain model directly to Turso Database internals.
+Do not use `libsql` or `rusqlite` as the phase-one backend. Do not make backend choice a user-facing configuration knob.
 
-Ship a `Storage` trait and a conservative default implementation using `rusqlite` or `libsql`. `rusqlite` is the safest default for local transactional behavior. `libsql` can be supported if it fits the async/runtime needs cleanly. A direct `turso` implementation stays behind the trait and should be gated by the phase-zero transaction spike.
+Keep the storage code behind an internal module boundary so Turso-specific details do not leak into REST, Git, FUSE, or CLI code. This boundary is for maintainability, not for shipping multiple database backends.
 
-Decision rule:
+Required Turso behavior:
 
-- If the Turso spike proves reliable under concurrent write soak tests, keep a direct Turso implementation as an optional backend.
-- If it does not, phase one ships on `rusqlite`/`libsql` without changing the public model.
+- All Libraries live in one TursoDB database.
+- All write paths use explicit transaction handling.
+- Write transactions use a consistent `BEGIN`/`COMMIT`/`ROLLBACK` wrapper.
+- Busy/locked errors use bounded retry with backoff.
+- The daemon is the only process allowed to write the database.
+- Startup uses a lock file or equivalent guard to reject multiple Quarry daemons over the same database path.
 
-The API, FUSE layer, Git sync, and CLI must depend on the Quarry storage contract, not on a concrete database crate.
-
+The phase-zero Turso spike is still required, but it defines transaction wrappers, retry policy, and operational limits. It is not a backend selection gate.
 ## Data Model
-
-Phase one should include these entities:
+Phase one includes these entities:
 
 - `libraries`
 - `documents`
@@ -256,7 +250,6 @@ Storage invariants:
 - True purge/excision is not a phase-one default operation.
 
 ## Transaction Semantics
-
 All write paths flow through the same transaction system.
 
 Supported modes:
@@ -280,12 +273,12 @@ Required behavior:
 - Failed commits do not leave partially published CAS objects referenced by documents.
 - Open transactions block GC for referenced temporary blobs.
 - Git sync and GC acquire an exclusive global operation lock.
+- Turso busy/locked errors are retried within a bounded policy and then surfaced clearly.
 
 ## REST API
-
 Use `axum` for the API server and `utoipa`/`utoipa-axum` for generated OpenAPI.
 
-Bind to `127.0.0.1` by default. No auth in phase one.
+Bind to `127.0.0.1` by default. The user can explicitly override the bind address with `quarry serve --addr`. Phase one has no auth, so non-loopback binds must emit a clear warning.
 
 Canonical phase-one endpoints:
 
@@ -337,7 +330,6 @@ HTTP behavior:
 - Conflicting preconditions return `412 Precondition Failed`.
 
 ## Git Sync
-
 Git sync is a peer adapter over Quarry documents.
 
 Phase-one limits:
@@ -346,10 +338,9 @@ Phase-one limits:
 - One remote and one branch per sync peer.
 - Sync is explicit through REST/CLI, not always-on watching.
 - Use `git2`/libgit2 for phase-one Git operations.
-- Keep a `GitSync` trait so `gix` can replace read-heavy paths later.
+- Keep a `GitSync` module boundary so `gix` can replace read-heavy paths later.
 
 ### Import
-
 `git/import` reads a working tree and ingests files into Quarry documents.
 
 Rules:
@@ -361,7 +352,6 @@ Rules:
 - Import creates a Quarry transaction with `source = git`.
 
 ### Export
-
 `git/export` materializes Library documents into a Git working tree and commits them.
 
 Rules:
@@ -372,14 +362,14 @@ Rules:
 - Binary metadata exports as sidecar files.
 - Very large binary content is not pushed through Git LFS in phase one.
 
-Recommended binary policy:
+Binary policy:
 
-- Allow ordinary binary export below a configurable threshold.
+- Allow ordinary binary export below 5 MiB by default.
 - Warn or refuse export above 5 MiB unless explicitly forced.
 - Always refuse content larger than the hosting platform limit when known.
+- No Git LFS protocol support in phase one.
 
 ### Bidirectional Sync
-
 Bidirectional sync uses a snapshot-based three-way diff:
 
 1. Snapshot current Quarry document heads.
@@ -426,16 +416,15 @@ Safety rules:
 - Preserve sync logs and transaction provenance for auditability.
 
 ## FUSE Filesystem
+FUSE is a Linux-only projection of a Library's committed state.
 
-FUSE is a projection of a Library's committed state.
-
-Use `fuser` plus `fuser-async` for phase one because macOS support matters. Start Linux-first for implementation speed, but the design must support FUSE-T/macFUSE testing before phase-one acceptance.
+Use a Linux FUSE implementation for phase one. `fuse3` is the preferred crate because native async handlers match the Tokio-based daemon. macOS FUSE-T/macFUSE support is not required and is not part of phase-one acceptance.
 
 Delivery sequence:
 
-1. Read-only mount.
-2. Writable auto-commit mount.
-3. Packaging/docs for Linux and macOS prerequisites.
+1. Read-only Linux mount.
+2. Writable Linux auto-commit mount.
+3. Packaging/docs for Linux FUSE prerequisites.
 
 Read operations:
 
@@ -466,6 +455,9 @@ Write semantics:
 
 FUSE limitations:
 
+- Linux only.
+- No macOS FUSE support in phase one.
+- No Windows filesystem support in phase one.
 - No hard links.
 - No symlinks in phase one.
 - No guarantee that case-conflicting keys behave well on case-insensitive filesystems.
@@ -473,14 +465,13 @@ FUSE limitations:
 - Executable/JIT-heavy workflows should use a normal filesystem for build artifacts, not the Quarry mount.
 
 ## CLI And Daemon
-
 Ship a `quarry` binary that can run the daemon and perform basic local operations.
 
 Required commands:
 
 ```text
-quarry init <path-or-name>
-quarry serve [--library <id-or-path>] [--addr 127.0.0.1:port]
+quarry init <server-root>
+quarry serve [--db <path>] [--cas <path>] [--addr 127.0.0.1:port]
 quarry mount <library> <mountpoint> [--read-only]
 quarry get <library> <path>
 quarry put <library> <path> <file>
@@ -495,23 +486,20 @@ quarry git export <library> <repo>
 quarry git sync <library> <peer>
 quarry conflicts list <library>
 quarry conflicts resolve <library> <conflict>
-quarry gc <library>
-quarry backup <library> <destination>
-quarry restore <source> <library>
+quarry gc
+quarry backup <destination>
+quarry restore <source>
 ```
 
 The CLI may be a thin client over the local REST API where possible.
-
 ## Packaging And Documentation
-
-Phase one should ship:
+Phase one ships:
 
 - Cargo workspace.
 - Single `quarry` binary.
 - GitHub release artifact.
-- Homebrew formula.
 - Debian package or documented Linux install path.
-- macOS FUSE-T/macFUSE setup notes.
+- Linux FUSE setup notes.
 - Quickstart.
 - REST API docs from OpenAPI.
 - Git sync behavior docs.
@@ -520,7 +508,6 @@ Phase one should ship:
 - Known filesystem limitations.
 
 ## Workspace Shape
-
 Recommended Cargo workspace:
 
 ```text
@@ -541,42 +528,40 @@ quarry/
 Responsibilities:
 
 - `quarry-core`: domain types, IDs, errors, metadata, document model.
-- `quarry-storage`: storage trait, migrations, SQL implementation.
+- `quarry-storage`: TursoDB integration, migrations, transaction wrappers.
 - `quarry-cas`: BLAKE3 hash type, disk CAS, GC.
 - `quarry-git`: Git peer config, import/export, sync, conflicts.
-- `quarry-fuse`: mount implementation, inode cache, FUSE projection.
+- `quarry-fuse`: Linux mount implementation, inode cache, FUSE projection.
 - `quarry-server`: axum routes, OpenAPI, REST semantics.
 - `quarry-cli`: command parsing and local client UX.
 - `quarry`: binary crate wiring daemon/server/mount.
 
 ## Delivery Increments
-
 ### Increment 0: Risk Spikes
-
-Goal: prove or reject the highest-risk technical bets before building the durable architecture.
+Goal: prove the highest-risk Turso, Git, FUSE, and CAS details before building the durable architecture.
 
 Deliver:
 
-- Database transaction/concurrency spike.
-- FUSE trivial filesystem spike on Linux and macOS/FUSE-T if available.
+- Turso transaction/concurrency spike.
+- Linux FUSE trivial filesystem spike.
 - `git2` bidirectional conflict spike.
 - CAS write-throughput spike.
 
 Exit criteria:
 
-- Database backend can handle concurrent writes or fallback decision is made.
-- Trivial FUSE mount can read, write, rename, and list files on target OSes.
+- Turso wrapper can run concurrent write tests with bounded busy retry and no lost commits.
+- Trivial Linux FUSE mount can read, write, rename, and list files.
 - Git conflict spike preserves both copies without inline markers.
 - CAS write path is fast enough for local large-file use.
 
 ### Increment 1: Core Storage And CAS
-
 Deliver:
 
 - Cargo workspace skeleton.
 - Core domain types.
-- Storage trait.
-- SQL schema and migrations.
+- TursoDB schema and migrations.
+- Turso transaction wrapper and retry policy.
+- Server-level database with multiple logical Libraries.
 - Library create/open.
 - Document put/get/list/delete.
 - Document move/rename.
@@ -587,12 +572,12 @@ Deliver:
 
 Exit criteria:
 
-- Integration test creates a Library and writes, reads, lists, renames, deletes, and versions 1000 mixed-size documents.
+- Integration test creates multiple Libraries in one TursoDB database.
+- Integration test writes, reads, lists, renames, deletes, and versions 1000 mixed-size documents.
 - Large documents are stored in CAS and survive restart.
 - GC removes unreachable blobs and preserves reachable ones.
 
 ### Increment 2: Transactions And REST API
-
 Deliver:
 
 - Auto-commit transaction path.
@@ -602,15 +587,16 @@ Deliver:
 - Generated OpenAPI.
 - ETag/conditional write behavior.
 - Local health endpoint.
+- Explicit `--addr` bind override with warning for non-loopback addresses.
 
 Exit criteria:
 
 - `curl` can create a Library, put/get/list/delete documents, run explicit multi-document transactions, and roll back cleanly.
 - OpenAPI spec validates.
 - Concurrent write tests return correct success, retry, or precondition behavior.
+- Server binds to `127.0.0.1` by default and to an alternate address only when explicitly configured.
 
 ### Increment 3: Git Import And Export
-
 Deliver:
 
 - Git peer config.
@@ -627,7 +613,6 @@ Exit criteria:
 - Wrong Library marker causes safe refusal.
 
 ### Increment 4: Bidirectional Git Sync
-
 Deliver:
 
 - Three-way sync state.
@@ -645,32 +630,30 @@ Exit criteria:
 - Deletes never cascade beyond safety threshold.
 - Sync updates `sync_state` only after a successful commit.
 
-### Increment 5: FUSE Mount
-
+### Increment 5: Linux FUSE Mount
 Deliver:
 
-- Read-only FUSE mount.
+- Read-only Linux FUSE mount.
 - Inode allocation/cache.
 - Directory listing from prefixes.
-- Read/write autocommit mount.
+- Read/write autocommit Linux mount.
 - Write coalescing.
 - Cache invalidation between REST/Git/FUSE.
-- Linux and macOS prerequisite docs.
+- Linux FUSE prerequisite docs.
 
 Exit criteria:
 
-- `ls`, `cat`, `find`, `rg`, `vim`, `cp -r`, and `git status` work against a mounted Library.
+- `ls`, `cat`, `find`, `rg`, `vim`, `cp -r`, and `git status` work against a mounted Library on Linux.
 - Writes through FUSE are visible through REST.
 - REST writes are visible through FUSE after invalidation.
 - Mount/unmount leaves no corrupted Library state.
 
 ### Increment 6: Packaging And Operational Hardening
-
 Deliver:
 
 - `quarry` CLI/daemon.
-- Release packaging.
-- Backup/restore command.
+- Linux release packaging.
+- Backup/restore command for server database and CAS.
 - Admin GC command.
 - Structured logs for API, sync, FUSE, GC.
 - Crash-safety/invariant test suite.
@@ -679,15 +662,16 @@ Deliver:
 
 Exit criteria:
 
-- Fresh install can follow quickstart from zero to mounted Library.
-- Backup/restore reproduces documents, metadata, versions, and CAS references.
+- Fresh Linux install can follow quickstart from zero to mounted Library.
+- Backup/restore reproduces Libraries, documents, metadata, versions, and CAS references.
 - Basic observability is enough to debug sync and mount failures.
 - A human and an agent can edit the same Library for a representative workflow without data loss.
 
 ## Testing Requirements
-
 Storage tests:
 
+- Turso schema migrations.
+- Single TursoDB database with multiple Libraries.
 - Path normalization.
 - Case-sensitive keys.
 - Document lifecycle.
@@ -697,6 +681,7 @@ Storage tests:
 - CAS atomic writes.
 - CAS GC reachability.
 - Transaction commit and rollback.
+- Busy retry behavior.
 - Crash/restart around staged writes where practical.
 
 REST tests:
@@ -707,6 +692,8 @@ REST tests:
 - OpenAPI generation.
 - Busy/retry mapping.
 - JSON metadata validation and patch behavior.
+- Default bind address.
+- Explicit bind address override.
 
 Git tests:
 
@@ -724,8 +711,8 @@ Git tests:
 
 FUSE tests:
 
-- Basic read-only operations.
-- Write/create/delete/rename.
+- Linux read-only operations.
+- Linux write/create/delete/rename.
 - Directory metadata and empty directories.
 - Cache invalidation.
 - Editor save patterns.
@@ -734,58 +721,45 @@ FUSE tests:
 
 Operational tests:
 
-- Backup/restore.
+- Backup/restore of TursoDB database plus CAS.
 - GC under no active transactions.
 - Exclusive lock around sync and GC.
 - Daemon restart.
+- Second-daemon lock rejection.
 - CLI smoke tests.
 
 ## Risks And Mitigations
+### Turso maturity
+Risk: TursoDB may still expose rough edges around local transactions, busy handling, or concurrent writes.
 
-### Database maturity
-
-Risk: Direct Turso integration may not yet be stable enough for transaction-centric local storage.
-
-Mitigation: ship through `Storage` trait with `rusqlite`/`libsql` default and keep Turso optional until spikes prove it.
-
+Mitigation: make the Turso wrapper explicit, keep one writer-owning daemon process, use bounded busy retry, add concurrency soak tests, and keep transaction semantics in Quarry's application layer.
 ### Git reconciliation complexity
-
 Risk: Two-way Git sync can lose data if treated as naive file mirroring.
 
 Mitigation: require stored sync state, three-way diff, explicit sync matrix tests, and store-both conflict behavior.
-
-### FUSE semantics
-
-Risk: Filesystem behavior is surprising, especially around writeback, rename, append, editor save patterns, and macOS support.
+### Linux FUSE semantics
+Risk: Filesystem behavior is surprising, especially around writeback, rename, append, and editor save patterns.
 
 Mitigation: deliver read-only first, then write autocommit, avoid explicit FUSE transactions, add write coalescing, and document limitations.
-
 ### Large binary sync
-
 Risk: Git repositories become unusable if Quarry pushes large blobs directly.
 
-Mitigation: CAS remains canonical; Git export warns/refuses above threshold; full Git LFS support is deferred.
-
+Mitigation: CAS remains canonical; Git export warns/refuses above 5 MiB by default; full Git LFS support is deferred.
 ### Multi-process writes
-
-Risk: Multiple daemons writing one Library can corrupt state or produce undefined locking behavior.
+Risk: Multiple daemons writing one TursoDB database can corrupt state or produce undefined locking behavior.
 
 Mitigation: single-process ownership is a phase-one requirement; use lock files and clear startup errors.
-
 ### Future search/MCP/UI scope creep
-
 Risk: Phase one grows into a full memory app.
 
 Mitigation: reserve schema/API hooks, but ship only the storage substrate and thin operational surfaces.
+## Confirmed Decisions
+These decisions came out of the phase-one research review:
 
-## Open Decisions To Confirm
-
-The research strongly points to these defaults, and this spec adopts them. Confirm or change them before implementation planning:
-
-1. Library storage: one physical database per Library plus a local control database.
-2. Database backend: `rusqlite`/`libsql` default behind `Storage`; direct Turso only if the spike passes.
-3. Git sync: explicit pull/push/sync first, no ambient watcher in phase one.
+1. Library storage: one TursoDB database stores all Libraries on the server.
+2. Database backend: use `https://github.com/tursodatabase/turso`; do not use `libsql` or `rusqlite` for phase one.
+3. Git sync: explicit pull/push/sync only; no ambient watcher in phase one.
 4. FUSE writes: auto-commit only; explicit multi-document transactions stay REST/CLI-only.
 5. Binary Git policy: warn/refuse above 5 MiB by default; no Git LFS protocol in phase one.
 6. Deletion policy: keep tombstones/history by default; true purge is deferred.
-7. Auth policy: no auth in phase one; localhost binding only.
+7. Auth policy: no auth in phase one; bind to `127.0.0.1` by default and allow explicit override.
