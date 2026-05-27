@@ -1,8 +1,0 @@
-/.quarry/
-/target/
-/references/
-node_modules/
-dist/
-*.log
-/.DS_Store
-/docs/.DS_Store
