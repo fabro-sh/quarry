@@ -1,1 +1,4 @@
 .ai/research/
+target/
+.quarry/
+*.lockfile

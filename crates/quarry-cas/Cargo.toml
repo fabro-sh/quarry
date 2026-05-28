@@ -1,0 +1,14 @@
+[package]
+name = "quarry-cas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+blake3.workspace = true
+quarry-core.workspace = true
+serde.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

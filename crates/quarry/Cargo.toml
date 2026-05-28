@@ -1,0 +1,20 @@
+[package]
+name = "quarry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "quarry"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+quarry-cli.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+quarry-core.workspace = true
+quarry-storage.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true

@@ -1,0 +1,259 @@
+use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+use thiserror::Error;
+use utoipa::ToSchema;
+
+pub const INLINE_CONTENT_THRESHOLD: usize = 64 * 1024;
+pub const GIT_BINARY_WARN_THRESHOLD: usize = 5 * 1024 * 1024;
+
+pub type Result<T> = std::result::Result<T, QuarryError>;
+
+#[derive(Debug, Error)]
+pub enum QuarryError {
+    #[error("invalid path: {0}")]
+    InvalidPath(String),
+    #[error("not found: {0}")]
+    NotFound(String),
+    #[error("precondition failed: {0}")]
+    PreconditionFailed(String),
+    #[error("conflict: {0}")]
+    Conflict(String),
+    #[error("storage busy: {0}")]
+    Busy(String),
+    #[error("unsupported: {0}")]
+    Unsupported(String),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("yaml error: {0}")]
+    Yaml(#[from] serde_yaml::Error),
+    #[error("storage error: {0}")]
+    Storage(String),
+    #[error("git error: {0}")]
+    Git(String),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct Library {
+    pub id: String,
+    pub slug: String,
+    pub created_at: String,
+    pub settings: JsonValue,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentSource {
+    Rest,
+    Git,
+    Fuse,
+    Cli,
+    System,
+}
+
+impl DocumentSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Rest => "rest",
+            Self::Git => "git",
+            Self::Fuse => "fuse",
+            Self::Cli => "cli",
+            Self::System => "system",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionState {
+    Open,
+    Committed,
+    RolledBack,
+}
+
+impl TransactionState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Committed => "committed",
+            Self::RolledBack => "rolled_back",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeType {
+    Put,
+    Delete,
+    Move,
+    Metadata,
+}
+
+impl ChangeType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Put => "put",
+            Self::Delete => "delete",
+            Self::Move => "move",
+            Self::Metadata => "metadata",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictStatus {
+    Open,
+    Resolved,
+}
+
+impl ConflictStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Resolved => "resolved",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WritePrecondition {
+    None,
+    IfMatch(String),
+    IfNoneMatch,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct DocumentVersion {
+    pub id: String,
+    pub document_id: String,
+    pub tx_id: String,
+    pub content_hash: Option<String>,
+    #[schema(value_type = Option<String>, format = Binary)]
+    pub inline_content: Option<Vec<u8>>,
+    pub metadata: JsonValue,
+    pub content_type: String,
+    pub byte_size: u64,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct Document {
+    pub id: String,
+    pub library_id: String,
+    pub path: String,
+    pub version: DocumentVersion,
+    #[schema(value_type = String, format = Binary)]
+    pub content: Vec<u8>,
+    pub metadata: JsonValue,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct DocumentListEntry {
+    pub id: String,
+    pub path: String,
+    pub head_version_id: String,
+    pub content_type: String,
+    pub byte_size: u64,
+    pub metadata: JsonValue,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct WriteOutcome {
+    pub document: DocumentListEntry,
+    pub version: DocumentVersion,
+    pub transaction: TransactionRecord,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct TransactionRecord {
+    pub id: String,
+    pub library_id: String,
+    pub state: TransactionState,
+    pub actor: Option<String>,
+    pub source: DocumentSource,
+    pub message: Option<String>,
+    pub provenance: JsonValue,
+    pub created_at: String,
+    pub committed_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct ConflictRecord {
+    pub id: String,
+    pub library_id: String,
+    pub path: String,
+    pub ours_version_id: Option<String>,
+    pub theirs_version_id: Option<String>,
+    pub status: ConflictStatus,
+    pub discovered_at: String,
+    pub resolved_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct GitPeer {
+    pub id: String,
+    pub library_id: String,
+    pub kind: String,
+    pub config: JsonValue,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct SyncStateEntry {
+    pub peer_id: String,
+    pub path: String,
+    pub last_synced_doc_version_id: Option<String>,
+    pub last_synced_git_oid: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct GcReport {
+    pub reachable: usize,
+    pub removed: usize,
+}
+
+pub fn now_timestamp() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+pub fn normalize_path(path: &str) -> Result<String> {
+    let trimmed = path.trim_matches('/');
+    if trimmed.is_empty() {
+        return Err(QuarryError::InvalidPath(path.to_string()));
+    }
+    if trimmed == ".quarry" || trimmed.starts_with(".quarry/") {
+        return Err(QuarryError::InvalidPath(format!(
+            "{path} is reserved for Quarry metadata"
+        )));
+    }
+    if trimmed.contains('\\') {
+        return Err(QuarryError::InvalidPath(path.to_string()));
+    }
+
+    let mut parts = Vec::new();
+    for part in trimmed.split('/') {
+        if part.is_empty() || part == "." || part == ".." {
+            return Err(QuarryError::InvalidPath(path.to_string()));
+        }
+        parts.push(part);
+    }
+    Ok(parts.join("/"))
+}
+
+pub fn parent_dirs(path: &str) -> Vec<String> {
+    let mut dirs = Vec::new();
+    let mut parts: Vec<&str> = path.split('/').collect();
+    parts.pop();
+    while !parts.is_empty() {
+        dirs.push(parts.join("/"));
+        parts.pop();
+    }
+    dirs.reverse();
+    dirs
+}
