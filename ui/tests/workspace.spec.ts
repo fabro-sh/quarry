@@ -1,0 +1,1464 @@
+import AxeBuilder from '@axe-core/playwright';
+import { expect, test, type Page, type Route } from 'playwright/test';
+
+interface MockDocument {
+  byteSize?: number;
+  content: string;
+  contentHash?: string | null;
+  contentType?: string;
+  id: string;
+  metadata?: Record<string, unknown>;
+  path: string;
+  version: string;
+}
+
+interface MockLibrary {
+  id: string;
+  slug: string;
+}
+
+interface MockConflict {
+  conflict_path?: string | null;
+  id: string;
+  ours_version_id?: string | null;
+  path: string;
+  theirs_version_id?: string | null;
+}
+
+interface MockLink {
+  alias?: string | null;
+  end_offset?: number;
+  resolution_status?: 'resolved' | 'unresolved' | 'ambiguous';
+  resolved?: boolean;
+  src_doc_id?: string;
+  src_path?: string;
+  src_version_id?: string;
+  start_offset?: number;
+  target_anchor?: string | null;
+  target_doc_id?: string | null;
+  target_kind?: string;
+  target_path?: string | null;
+  target_text?: string;
+}
+
+interface MockVersion {
+  content: string;
+  created_at?: string;
+  id: string;
+}
+
+test.describe('Quarry Browser smoke flows', () => {
+  test.beforeEach(async ({ page }) => {
+    await disableEventSource(page);
+  });
+
+  test('creates, edits, saves, and reloads a markdown document', async ({ page }) => {
+    const api = await installMockApi(page, {
+      documents: [
+        {
+          content: '# Daily\n',
+          id: 'doc-daily',
+          metadata: { title: 'Daily' },
+          path: 'daily.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+
+    await expect(page.getByRole('treeitem', { name: /Daily/ })).toBeVisible();
+    page.once('dialog', async (dialog) => {
+      expect(dialog.message()).toBe('New document path');
+      await dialog.accept('new.md');
+    });
+    await page.getByRole('button', { name: 'New' }).click();
+
+    await expect(page.getByRole('treeitem', { name: /new\.md/ })).toBeVisible();
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# Untitled\n');
+    expect(api.createHeaders).toContain('*');
+
+    await page.getByLabel('Markdown source').fill('# Created\nBody');
+    await page.getByRole('button', { name: 'Save document' }).click();
+
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# Created\nBody');
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
+    expect(api.saveHeaders).toContain('"v-new"');
+
+    await page.reload();
+
+    await expect(page.getByRole('treeitem', { name: /new\.md/ })).toBeVisible();
+    await page.getByRole('treeitem', { name: /new\.md/ }).click();
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# Created\nBody');
+  });
+
+  test('opens the browser and selects a library', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [],
+      documentsByLibrary: {
+        personal: [
+          {
+            content: '# Personal\n',
+            id: 'doc-personal',
+            metadata: { title: 'Personal' },
+            path: 'personal.md',
+            version: 'v-personal',
+          },
+        ],
+        work: [
+          {
+            content: '# Work\n',
+            id: 'doc-work',
+            metadata: { title: 'Work' },
+            path: 'work.md',
+            version: 'v-work',
+          },
+        ],
+      },
+      libraries: [
+        { id: 'lib-personal', slug: 'personal' },
+        { id: 'lib-work', slug: 'work' },
+      ],
+    });
+
+    await page.goto('/');
+
+    const switcher = page.getByRole('combobox', { name: 'Library switcher' });
+    await expect(switcher).toHaveValue('');
+    await switcher.selectOption('work');
+
+    await expect(page).toHaveURL(/\/libraries\/work$/);
+    await expect(page.getByRole('treeitem', { name: /Work/ })).toBeVisible();
+    await expect(page.getByRole('treeitem', { name: /Personal/ })).not.toBeVisible();
+
+    await page.getByRole('treeitem', { name: /Work/ }).click();
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# Work\n');
+    await expect(page.evaluate(() => localStorage.getItem('quarry:active-library'))).resolves.toBe('work');
+  });
+
+  test('supports the main workflow without pointer input', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [],
+      documentsByLibrary: {
+        personal: [],
+        work: [
+          {
+            content: '# Daily\n',
+            id: 'doc-daily',
+            metadata: { title: 'Daily' },
+            path: 'daily.md',
+            version: 'v-daily',
+          },
+          {
+            content: '# Guide\n',
+            id: 'doc-guide',
+            metadata: { title: 'Guide' },
+            path: 'guide.md',
+            version: 'v-guide',
+          },
+        ],
+      },
+      libraries: [
+        { id: 'lib-personal', slug: 'personal' },
+        { id: 'lib-work', slug: 'work' },
+      ],
+    });
+
+    await page.goto('/');
+
+    const switcher = page.getByRole('combobox', { name: 'Library switcher' });
+    await expect(switcher.locator('option')).toHaveCount(3);
+    await switcher.focus();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+
+    await expect(switcher).toHaveValue('work');
+    await expect(page).toHaveURL(/\/libraries\/work$/);
+
+    await page.getByRole('treeitem', { name: /Daily/ }).focus();
+    await page.keyboard.press('Enter');
+    const source = page.getByLabel('Markdown source');
+    await expect(source).toHaveValue('# Daily\n');
+
+    await source.focus();
+    await page.keyboard.press('ControlOrMeta+A');
+    await page.keyboard.type('# Daily keyboard\n');
+    await page.getByRole('button', { name: 'Save document' }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
+
+    const search = page.getByRole('textbox', { name: 'Search' });
+    await search.focus();
+    await page.keyboard.type('guide');
+    const results = page.getByRole('listbox', { name: 'Search results' });
+    await expect(results.getByRole('option', { name: /Guide/ })).toBeVisible();
+    await results.focus();
+    await page.keyboard.press('Enter');
+    await expect(source).toHaveValue('# Guide\n');
+
+    await page.keyboard.press('ControlOrMeta+K');
+    const palette = page.getByRole('dialog', { name: 'Command palette' });
+    await expect(palette).toBeVisible();
+    await page.keyboard.type('daily');
+    await page.keyboard.press('Enter');
+    await expect(source).toHaveValue('# Daily keyboard\n');
+  });
+
+  test('runs create, move, search, sync, settings, and delete from the command palette', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: '# Guide\n',
+          id: 'doc-guide',
+          metadata: { title: 'Guide' },
+          path: 'guide.md',
+          version: 'v-guide',
+        },
+      ],
+    });
+
+    await page.goto('/');
+
+    page.once('dialog', async (dialog) => {
+      expect(dialog.message()).toBe('New document path');
+      await dialog.accept('palette-new.md');
+    });
+    await runCommand(page, 'create', 'Create document');
+    await expect(page.getByRole('treeitem', { name: /palette-new\.md/ })).toBeVisible();
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# Untitled\n');
+
+    page.once('dialog', async (dialog) => {
+      expect(dialog.message()).toBe('Move document to path');
+      expect(dialog.defaultValue()).toBe('palette-new.md');
+      await dialog.accept('palette-moved.md');
+    });
+    await runCommand(page, 'move', 'Move current document');
+    await expect(page.getByRole('treeitem', { name: /palette-moved\.md/ })).toBeVisible();
+    await expect(page).toHaveURL(/\/libraries\/notes\/documents\/palette-moved\.md$/);
+
+    await runCommand(page, 'guide', 'Search server for "guide"');
+    await expect(page.getByRole('listbox', { name: 'Search results' }).getByRole('option', { name: /Guide/ })).toBeVisible();
+
+    await runCommand(page, 'sync', 'Sync with Git peer');
+    await expect(page.getByRole('dialog', { name: 'Git operations' })).toBeVisible();
+    await page.getByRole('button', { name: 'Close' }).click();
+
+    await runCommand(page, 'settings', 'Open settings');
+    await expect(page.getByRole('dialog', { name: 'Workspace settings' })).toBeVisible();
+    await page.getByRole('button', { name: 'Close settings' }).click();
+
+    page.once('dialog', async (dialog) => {
+      expect(dialog.message()).toBe('Delete palette-moved.md?');
+      await dialog.accept();
+    });
+    await runCommand(page, 'delete', 'Delete current document');
+    await expect(page.getByRole('treeitem', { name: /palette-moved\.md/ })).not.toBeVisible();
+    await expect(page.locator('[aria-label="Document status"]')).toContainText('No document open');
+  });
+
+  test('passes automated accessibility checks for shell and conflict workflows', async ({ page }) => {
+    await installMockApi(page, {
+      conflicts: [
+        {
+          conflict_path: 'conflict.sibling.md',
+          id: 'conflict-a11y',
+          ours_version_id: 'ours',
+          path: 'conflict.md',
+          theirs_version_id: 'theirs',
+        },
+      ],
+      documents: [
+        {
+          content: '# Conflict\n',
+          id: 'doc-conflict',
+          metadata: { title: 'Conflict' },
+          path: 'conflict.md',
+          version: 'head',
+        },
+        {
+          content: '# Theirs\n',
+          id: 'doc-conflict-sibling',
+          metadata: { title: 'Conflict sibling' },
+          path: 'conflict.sibling.md',
+          version: 'theirs',
+        },
+      ],
+      versions: {
+        'conflict.md': [{ id: 'ours', content: '# Ours\n' }],
+        'conflict.sibling.md': [{ id: 'theirs', content: '# Theirs\n' }],
+      },
+    });
+
+    await page.goto('/');
+    await expect(page.locator('[data-tree-path="conflict.md"]')).toBeVisible();
+    await expectNoAxeViolations(page, 'workspace shell');
+
+    await page.keyboard.press('ControlOrMeta+K');
+    await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeVisible();
+    await expectNoAxeViolations(page, 'command palette');
+    await page.keyboard.press('Escape');
+
+    await page.getByRole('tab', { name: 'Conflicts' }).click();
+    await expect(page.getByText('conflict.md open')).toBeVisible();
+    await expectNoAxeViolations(page, 'conflicts tab');
+
+    await page.getByLabel('Open conflict conflict-a11y').click();
+    await expect(page.getByRole('dialog', { name: 'Resolve conflict' })).toBeVisible();
+    await expectNoAxeViolations(page, 'conflict resolution dialog');
+  });
+
+  test('shows a stale-save workflow without retrying an unconditional overwrite', async ({ page }) => {
+    const api = await installMockApi(page, {
+      documents: [
+        {
+          content: '# Base\n',
+          id: 'doc-daily',
+          metadata: { title: 'Daily' },
+          path: 'daily.md',
+          version: 'v1',
+        },
+      ],
+      rejectNextSaveAsStale: {
+        content: '# Remote\n',
+        version: 'v2',
+      },
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Daily/ }).click();
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# Base\n');
+
+    await page.getByLabel('Markdown source').fill('# Local\n');
+    await page.getByRole('button', { name: 'Save document' }).click();
+
+    await expect(page.getByRole('heading', { name: 'Local draft' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Latest remote' })).toBeVisible();
+    await expect(page.getByText('Path daily.md')).toBeVisible();
+    await expect(page.getByText('Base "v1"')).toBeVisible();
+    await expect(page.getByText('Latest "v2"')).toBeVisible();
+    await expect(page.locator('pre').filter({ hasText: '# Local' })).toBeVisible();
+    await expect(page.locator('pre').filter({ hasText: '# Remote' })).toBeVisible();
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Stale');
+    expect(api.saveHeaders).toEqual(['"v1"']);
+  });
+
+  test('searches and opens a server result from the keyboard', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: '# Daily\n',
+          id: 'doc-daily',
+          metadata: { title: 'Daily' },
+          path: 'daily.md',
+          version: 'v1',
+        },
+        {
+          content: '# Guide\nSearchable body',
+          id: 'doc-guide',
+          metadata: { title: 'Guide' },
+          path: 'docs/guide.md',
+          version: 'v-guide',
+        },
+      ],
+    });
+
+    await page.goto('/');
+
+    await page.getByRole('textbox', { name: 'Search' }).fill('guide');
+    const results = page.getByRole('listbox', { name: 'Search results' });
+    await expect(results.getByRole('option', { name: /Guide/ })).toBeVisible();
+
+    await results.focus();
+    await page.keyboard.press('Enter');
+
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# Guide\nSearchable body');
+    await expect(page).toHaveURL(/\/libraries\/notes\/documents\/docs\/guide\.md$/);
+  });
+
+  test('renames a focused tree document from the keyboard', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: '# Daily\n',
+          id: 'doc-daily',
+          metadata: { title: 'Daily' },
+          path: 'daily.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+
+    await expect(page.getByRole('treeitem', { name: /Daily/ })).toBeVisible();
+    page.once('dialog', async (dialog) => {
+      expect(dialog.message()).toBe('Move document to path');
+      expect(dialog.defaultValue()).toBe('daily.md');
+      await dialog.accept('archive/daily.md');
+    });
+
+    await page.getByRole('treeitem', { name: /Daily/ }).focus();
+    await page.keyboard.press('F2');
+
+    await expect(page.getByRole('treeitem', { name: /archive/ })).toBeVisible();
+    await page.getByRole('treeitem', { name: /Daily/ }).click();
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# Daily\n');
+    await expect(page).toHaveURL(/\/libraries\/notes\/documents\/archive\/daily\.md$/);
+  });
+
+  test('deletes a document from the tree context menu', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: '# Daily\n',
+          id: 'doc-daily',
+          metadata: { title: 'Daily' },
+          path: 'daily.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+
+    await page.getByRole('treeitem', { name: /Daily/ }).click();
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# Daily\n');
+
+    page.once('dialog', async (dialog) => {
+      expect(dialog.message()).toBe('Delete daily.md?');
+      await dialog.accept();
+    });
+    await page.getByRole('treeitem', { name: /Daily/ }).focus();
+    await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: 'Delete' }).click();
+
+    await expect(page.getByRole('treeitem', { name: /Daily/ })).not.toBeVisible();
+    await expect(page.locator('[aria-label="Document status"]')).toContainText('No document open');
+  });
+
+  test('restores an unsaved draft after reloading the workspace', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: '# Server\n',
+          id: 'doc-draft',
+          metadata: { title: 'Draft' },
+          path: 'draft.md',
+          version: 'v-draft',
+        },
+      ],
+    });
+
+    await page.goto('/');
+
+    await page.getByRole('treeitem', { name: /Draft/ }).click();
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# Server\n');
+    await page.getByLabel('Markdown source').fill('# Local draft\n');
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Draft saved locally');
+
+    await page.reload();
+
+    await page.getByRole('treeitem', { name: /Draft/ }).click();
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# Local draft\n');
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Draft saved locally');
+  });
+
+  test('keeps a ten-thousand document tree virtualized and usable', async ({ page }) => {
+    await installMockApi(page, {
+      documents: Array.from({ length: 10_000 }, (_, index) => {
+        const paddedIndex = index.toString().padStart(4, '0');
+        return {
+          content: `# Note ${paddedIndex}\n`,
+          id: `doc-${paddedIndex}`,
+          metadata: { title: `Note ${paddedIndex}` },
+          path: `folder-${Math.floor(index / 1000)}/note-${paddedIndex}.md`,
+          version: `v-${paddedIndex}`,
+        };
+      }),
+    });
+
+    await page.goto('/');
+
+    await expect(page.getByRole('treeitem', { name: /folder-0/ })).toBeVisible();
+    const renderedTreeItems = await page.getByRole('treeitem').count();
+    expect(renderedTreeItems).toBeGreaterThan(0);
+    expect(renderedTreeItems).toBeLessThan(200);
+
+    await page.getByRole('textbox', { name: 'Search' }).fill('note-9999');
+    const results = page.getByRole('listbox', { name: 'Search results' });
+    await expect(results.getByRole('option', { name: /Note 9999/ })).toBeVisible();
+    await results.focus();
+    await page.keyboard.press('Enter');
+
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# Note 9999\n');
+    await expect(page).toHaveURL(/\/libraries\/notes\/documents\/folder-9\/note-9999\.md$/);
+  });
+
+  test('previews image and binary documents without opening the editor', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          byteSize: 2048,
+          content: 'image-bytes',
+          contentType: 'image/png',
+          id: 'doc-photo',
+          metadata: {},
+          path: 'assets/photo.png',
+          version: 'v-photo',
+        },
+        {
+          byteSize: 4096,
+          content: 'binary-bytes',
+          contentHash: 'blake3-raw-bin',
+          contentType: 'application/octet-stream',
+          id: 'doc-raw',
+          metadata: {},
+          path: 'archives/raw.bin',
+          version: 'v-raw',
+        },
+      ],
+    });
+
+    await page.goto('/');
+
+    await page.getByRole('treeitem', { name: /photo\.png/ }).click();
+    await expect(page.getByRole('img', { name: 'assets/photo.png preview' })).toHaveAttribute(
+      'src',
+      '/v1/libraries/notes/documents/assets/photo.png'
+    );
+    await expect(page.getByLabel('Markdown source')).not.toBeVisible();
+
+    await page.getByRole('treeitem', { name: /raw\.bin/ }).click();
+    const binaryPreview = page.getByRole('region', { name: 'Binary document preview' });
+    await expect(binaryPreview).toContainText('application/octet-stream');
+    await expect(binaryPreview).toContainText('4 KB');
+    await expect(binaryPreview).toContainText('Hash');
+    await expect(binaryPreview).toContainText('blake3-raw-bin');
+    await expect(page.getByRole('link', { name: 'Download' })).toHaveAttribute(
+      'href',
+      '/v1/libraries/notes/documents/archives/raw.bin'
+    );
+    await expect(page.getByLabel('Markdown source')).not.toBeVisible();
+  });
+
+  test('navigates through wiki-links and backlinks', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: '# Daily\n\nSee [[Guide]].',
+          id: 'doc-daily',
+          metadata: { title: 'Daily' },
+          path: 'daily.md',
+          version: 'v-daily',
+        },
+        {
+          content: '# Guide\n\nReference notes.',
+          id: 'doc-guide',
+          metadata: { title: 'Guide' },
+          path: 'guide.md',
+          version: 'v-guide',
+        },
+      ],
+      links: {
+        'daily.md': {
+          outgoing: [
+            link({
+              src_doc_id: 'doc-daily',
+              src_path: 'daily.md',
+              src_version_id: 'v-daily',
+              target_doc_id: 'doc-guide',
+              target_path: 'guide.md',
+              target_text: 'Guide',
+            }),
+          ],
+        },
+        'guide.md': {
+          backlinks: [
+            link({
+              src_doc_id: 'doc-daily',
+              src_path: 'daily.md',
+              src_version_id: 'v-daily',
+              target_doc_id: 'doc-guide',
+              target_path: 'guide.md',
+              target_text: 'Guide',
+            }),
+          ],
+        },
+      },
+    });
+
+    await page.goto('/');
+
+    await page.getByRole('treeitem', { name: /Daily/ }).click();
+    await page.getByRole('button', { name: 'Rich' }).click();
+    await page.getByRole('button', { name: 'Guide', exact: true }).click();
+
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('Reference notes.');
+    await expect(page).toHaveURL(/\/libraries\/notes\/documents\/guide\.md$/);
+
+    await page.getByRole('tab', { name: 'Backlinks' }).click();
+    await page.getByRole('button', { name: 'daily.md' }).click();
+
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('See [[Guide]].');
+    await expect(page).toHaveURL(/\/libraries\/notes\/documents\/daily\.md$/);
+  });
+
+  test('diffs selected historical versions from the version pane', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: '# Three\n',
+          id: 'doc-compare',
+          metadata: { title: 'Compare' },
+          path: 'compare.md',
+          version: 'v3',
+        },
+      ],
+      versions: {
+        'compare.md': [
+          { id: 'v3', content: '# Three\n', created_at: '2026-05-29T12:00:00Z' },
+          { id: 'v2', content: '# Two\n', created_at: '2026-05-28T12:00:00Z' },
+          { id: 'v1', content: '# One\n', created_at: '2026-05-27T12:00:00Z' },
+        ],
+      },
+    });
+
+    await page.goto('/');
+
+    await page.getByRole('treeitem', { name: /Compare/ }).click();
+    await page.getByRole('tab', { name: 'Versions' }).click();
+    await page.getByLabel('View version v1').click();
+
+    await expect(page.getByText('# One', { exact: true })).toBeVisible();
+    await expect(page.locator('pre').filter({ hasText: '+# Three' })).toBeVisible();
+
+    await page.getByLabel('Compare version against').selectOption('v2');
+
+    await expect(page.locator('pre').filter({ hasText: '+# Two' })).toBeVisible();
+    await expect(page.locator('pre').filter({ hasText: '+# Three' })).not.toBeVisible();
+  });
+
+  test('restores an older version from the version pane', async ({ page }) => {
+    const api = await installMockApi(page, {
+      documents: [
+        {
+          content: '# Current\n',
+          id: 'doc-versioned',
+          metadata: { title: 'Versioned' },
+          path: 'versioned.md',
+          version: 'v-current',
+        },
+      ],
+      versions: {
+        'versioned.md': [
+          { id: 'v-current', content: '# Current\n', created_at: '2026-05-29T12:00:00Z' },
+          { id: 'v-old', content: '# Old\n', created_at: '2026-05-28T12:00:00Z' },
+        ],
+      },
+    });
+
+    await page.goto('/');
+
+    await page.getByRole('treeitem', { name: /Versioned/ }).click();
+    await page.getByRole('tab', { name: 'Versions' }).click();
+    await page.getByLabel('Restore version v-old').click();
+
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# Old\n');
+    await expect(page.locator('[aria-label="Version status"]')).toContainText('Version v-restored');
+    expect(api.restoredVersions).toEqual(['versioned.md:v-old']);
+  });
+
+  test('refreshes the open document from SSE change events', async ({ page }) => {
+    await installControllableEventSource(page);
+    const api = await installMockApi(page, {
+      documents: [
+        {
+          content: '# Initial\n',
+          id: 'doc-daily',
+          metadata: { title: 'Daily' },
+          path: 'daily.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await expect(page.locator('[aria-label="Event status"]')).toContainText('Live');
+
+    await page.getByRole('treeitem', { name: /Daily/ }).click();
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# Initial\n');
+
+    api.documents.set('daily.md', {
+      ...api.documents.get('daily.md')!,
+      content: '# External\n',
+      version: 'v2',
+    });
+    await emitMockEventSource(page, 'doc.changed', {
+      type: 'doc.changed',
+      library: 'notes',
+      path: 'daily.md',
+    });
+
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# External\n');
+    await expect(page.locator('[aria-label="Version status"]')).toContainText('Version v2');
+  });
+
+  test('resolves a Git conflict record from the conflict workflow', async ({ page }) => {
+    const api = await installMockApi(page, {
+      conflicts: [
+        {
+          conflict_path: 'conflict.sibling.md',
+          id: 'conflict-git',
+          ours_version_id: 'ours',
+          path: 'conflict.md',
+          theirs_version_id: 'theirs',
+        },
+      ],
+      documents: [
+        {
+          content: '# Head\n',
+          id: 'doc-conflict',
+          metadata: { title: 'Conflict' },
+          path: 'conflict.md',
+          version: 'head',
+        },
+        {
+          content: '# Theirs\n',
+          id: 'doc-conflict-sibling',
+          metadata: { title: 'Conflict sibling' },
+          path: 'conflict.sibling.md',
+          version: 'theirs',
+        },
+      ],
+      versions: {
+        'conflict.md': [{ id: 'ours', content: '# Ours\n' }],
+        'conflict.sibling.md': [{ id: 'theirs', content: '# Theirs\n' }],
+      },
+    });
+
+    await page.goto('/');
+
+    await page.getByRole('tab', { name: 'Conflicts' }).click();
+    await expect(page.getByText('conflict.md open')).toBeVisible();
+    await expect(page.getByText('Sibling conflict.sibling.md')).toBeVisible();
+    await page.getByLabel('Open conflict conflict-git').click();
+
+    const dialog = page.getByRole('dialog', { name: 'Resolve conflict' });
+    await expect(dialog.locator('pre').filter({ hasText: '# Ours' })).toBeVisible();
+    await expect(dialog.locator('pre').filter({ hasText: '# Theirs' })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Use theirs' }).click();
+
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByText('conflict.md open')).not.toBeVisible();
+    await page.locator('[data-tree-path="conflict.md"]').click();
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# Theirs\n');
+    expect(api.resolvedConflicts).toEqual(['conflict-git']);
+    expect(api.saveHeaders).toContain('"head"');
+  });
+
+  test('resolves a Git conflict using keyboard-only navigation', async ({ page }) => {
+    const api = await installMockApi(page, {
+      conflicts: [
+        {
+          conflict_path: 'conflict.sibling.md',
+          id: 'conflict-keyboard',
+          ours_version_id: 'ours',
+          path: 'conflict.md',
+          theirs_version_id: 'theirs',
+        },
+      ],
+      documents: [
+        {
+          content: '# Head\n',
+          id: 'doc-conflict',
+          metadata: { title: 'Conflict' },
+          path: 'conflict.md',
+          version: 'head',
+        },
+        {
+          content: '# Theirs\n',
+          id: 'doc-conflict-sibling',
+          metadata: { title: 'Conflict sibling' },
+          path: 'conflict.sibling.md',
+          version: 'theirs',
+        },
+      ],
+      versions: {
+        'conflict.md': [{ id: 'ours', content: '# Ours\n' }],
+        'conflict.sibling.md': [{ id: 'theirs', content: '# Theirs\n' }],
+      },
+    });
+
+    await page.goto('/');
+
+    await page.getByRole('tab', { name: 'Conflicts' }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByText('conflict.md open')).toBeVisible();
+
+    await page.getByLabel('Open conflict conflict-keyboard').focus();
+    await page.keyboard.press('Enter');
+
+    const dialog = page.getByRole('dialog', { name: 'Resolve conflict' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
+
+    await page.keyboard.press('Tab');
+    await expect(dialog.getByLabel('Manual resolution')).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(dialog.getByRole('button', { name: 'Use ours' })).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(dialog.getByRole('button', { name: 'Use theirs' })).toBeFocused();
+    await page.keyboard.press('Enter');
+
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByText('conflict.md open')).not.toBeVisible();
+
+    await page.locator('[data-tree-path="conflict.md"]').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByLabel('Markdown source')).toHaveValue('# Theirs\n');
+    expect(api.resolvedConflicts).toEqual(['conflict-keyboard']);
+    expect(api.saveHeaders).toContain('"head"');
+  });
+});
+
+async function disableEventSource(page: Page) {
+  await page.addInitScript(() => {
+    class DisabledEventSource {
+      onerror: ((event: Event) => void) | null = null;
+      onopen: ((event: Event) => void) | null = null;
+
+      constructor() {
+        window.setTimeout(() => this.onerror?.(new Event('error')), 0);
+      }
+
+      addEventListener() {}
+      close() {}
+      removeEventListener() {}
+    }
+
+    Object.defineProperty(window, 'EventSource', {
+      configurable: true,
+      value: DisabledEventSource,
+    });
+  });
+}
+
+async function installControllableEventSource(page: Page) {
+  await page.addInitScript(() => {
+    type TestEventSourceInstance = EventSource & {
+      listeners: Map<string, Array<(event: MessageEvent) => void>>;
+    };
+    type TestEventWindow = Window & {
+      __quarryEmitSse?: (type: string, payload: Record<string, unknown>) => void;
+      __quarryEventSources?: TestEventSourceInstance[];
+    };
+    const testWindow = window as TestEventWindow;
+    testWindow.__quarryEventSources = [];
+
+    function TestEventSource(this: TestEventSourceInstance, url: string) {
+      Object.assign(this, { listeners: new Map(), onerror: null, onopen: null, url });
+      testWindow.__quarryEventSources?.push(this);
+      window.queueMicrotask(() => this.onopen?.(new Event('open')));
+    }
+
+    TestEventSource.prototype.addEventListener = function (
+      this: TestEventSourceInstance,
+      type: string,
+      listener: (event: MessageEvent) => void
+    ) {
+      this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+    };
+    TestEventSource.prototype.removeEventListener = function (
+      this: TestEventSourceInstance,
+      type: string,
+      listener: (event: MessageEvent) => void
+    ) {
+      this.listeners.set(
+        type,
+        (this.listeners.get(type) ?? []).filter((existing) => existing !== listener)
+      );
+    };
+    TestEventSource.prototype.close = function (this: TestEventSourceInstance) {
+      testWindow.__quarryEventSources = (testWindow.__quarryEventSources ?? []).filter(
+        (source) => source !== this
+      );
+    };
+
+    Object.defineProperty(window, 'EventSource', {
+      configurable: true,
+      value: TestEventSource,
+    });
+    Object.defineProperty(window, '__quarryEmitSse', {
+      configurable: true,
+      value: (type: string, payload: Record<string, unknown>) => {
+        for (const source of testWindow.__quarryEventSources ?? []) {
+          for (const listener of source.listeners.get(type) ?? []) {
+            listener(new MessageEvent(type, { data: JSON.stringify(payload) }));
+          }
+        }
+      },
+    });
+  });
+}
+
+async function emitMockEventSource(page: Page, type: string, payload: Record<string, unknown>) {
+  await page.evaluate(
+    ({ eventType, eventPayload }) => {
+      (window as Window & {
+        __quarryEmitSse?: (type: string, payload: Record<string, unknown>) => void;
+      }).__quarryEmitSse?.(eventType, eventPayload);
+    },
+    { eventPayload: payload, eventType: type }
+  );
+}
+
+async function expectNoAxeViolations(page: Page, context: string) {
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations, `${context} has accessibility violations`).toEqual([]);
+}
+
+async function runCommand(page: Page, query: string, command: string) {
+  await page.keyboard.press('ControlOrMeta+K');
+  const palette = page.getByRole('dialog', { name: 'Command palette' });
+  await expect(palette).toBeVisible();
+  await page.getByRole('combobox', { name: 'Command palette' }).fill(query);
+  await palette.getByText(command, { exact: true }).click();
+  await expect(palette).not.toBeVisible();
+}
+
+async function installMockApi(
+  page: Page,
+  options: {
+    conflicts?: MockConflict[];
+    documents: MockDocument[];
+    documentsByLibrary?: Record<string, MockDocument[]>;
+    libraries?: MockLibrary[];
+    links?: Record<string, { backlinks?: MockLink[]; outgoing?: MockLink[] }>;
+    rejectNextSaveAsStale?: Pick<MockDocument, 'content' | 'version'>;
+    versions?: Record<string, MockVersion[]>;
+  }
+) {
+  const libraries = options.libraries ?? [{ id: 'lib-notes', slug: 'notes' }];
+  const documentsByLibrary = new Map<string, Map<string, MockDocument>>();
+  const initialDocumentsByLibrary = options.documentsByLibrary ?? {};
+
+  for (const library of libraries) {
+    const libraryDocuments = initialDocumentsByLibrary[library.slug] ?? (library.slug === 'notes' ? options.documents : []);
+    documentsByLibrary.set(
+      library.slug,
+      new Map(libraryDocuments.map((document) => [document.path, { ...document }]))
+    );
+  }
+
+  const defaultDocuments =
+    documentsByLibrary.get('notes') ?? documentsByLibrary.get(libraries[0]?.slug ?? '') ?? new Map<string, MockDocument>();
+
+  const state = {
+    conflicts: options.conflicts ?? [],
+    createHeaders: [] as string[],
+    deletedDocuments: [] as string[],
+    documents: defaultDocuments,
+    documentsByLibrary,
+    links: options.links ?? {},
+    rejectNextSaveAsStale: options.rejectNextSaveAsStale,
+    resolvedConflicts: [] as string[],
+    restoredVersions: [] as string[],
+    saveHeaders: [] as string[],
+    versions: options.versions ?? {},
+  };
+
+  await page.route('**/v1/**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = decodeURIComponent(url.pathname);
+
+    if (path === '/v1/libraries') {
+      await route.fulfill({
+        json: libraries.map((library) => ({ ...library, created_at: 'now', settings: {} })),
+      });
+      return;
+    }
+
+    const libraryEndpoint = libraryPathFromEndpoint(path);
+    const libraryDocuments = libraryEndpoint ? state.documentsByLibrary.get(libraryEndpoint.library) : undefined;
+
+    if (libraryEndpoint?.resourcePath === 'documents' && request.method() === 'GET') {
+      await route.fulfill({ json: Array.from(libraryDocuments?.values() ?? []).map(documentStub) });
+      return;
+    }
+
+    const conflictResolveId = conflictResolveFromEndpoint(path);
+    if (conflictResolveId && request.method() === 'POST') {
+      const conflict = state.conflicts.find((entry) => entry.id === conflictResolveId);
+      if (!conflict) {
+        await notFound(route);
+        return;
+      }
+      state.resolvedConflicts.push(conflictResolveId);
+      await route.fulfill({ json: conflictRecord(conflict, true) });
+      return;
+    }
+
+    if (libraryEndpoint?.resourcePath === 'conflicts') {
+      await route.fulfill({
+        json: state.conflicts
+          .filter((conflict) => !state.resolvedConflicts.includes(conflict.id))
+          .map((conflict) => conflictRecord(conflict)),
+      });
+      return;
+    }
+
+    if (libraryEndpoint?.resourcePath === 'git/peers') {
+      await route.fulfill({ json: [] });
+      return;
+    }
+
+    if (libraryEndpoint?.resourcePath.startsWith('search/suggest')) {
+      await route.fulfill({ json: [] });
+      return;
+    }
+
+    if (libraryEndpoint?.resourcePath.startsWith('search')) {
+      const query = url.searchParams.get('q')?.trim().toLowerCase() ?? '';
+      await route.fulfill({
+        json: {
+          results: Array.from(libraryDocuments?.values() ?? [])
+            .filter((document) => documentMatchesSearch(document, query))
+            .map(searchResult),
+          cursor: null,
+        },
+      });
+      return;
+    }
+
+    if (libraryEndpoint?.resourcePath.startsWith('graph')) {
+      await route.fulfill({ json: { nodes: [], edges: [], truncated: false } });
+      return;
+    }
+
+    if (path.endsWith('/outgoing-links') || path.endsWith('/backlinks')) {
+      const documentPath = documentPathFromNestedEndpoint(path);
+      const direction = path.endsWith('/backlinks') ? 'backlinks' : 'outgoing';
+      await route.fulfill({ json: { path: documentPath, links: state.links[documentPath]?.[direction] ?? [] } });
+      return;
+    }
+
+    const restorePath = documentVersionRestoreFromEndpoint(path);
+    if (restorePath && request.method() === 'POST') {
+      const documents = state.documentsByLibrary.get(restorePath.library);
+      const document = documents?.get(restorePath.documentPath);
+      const versionToRestore = state.versions[restorePath.documentPath]?.find(
+        (version) => version.id === restorePath.version
+      );
+      if (!documents || !document || !versionToRestore) {
+        await notFound(route);
+        return;
+      }
+
+      state.restoredVersions.push(`${restorePath.documentPath}:${restorePath.version}`);
+      const restoredDocument: MockDocument = {
+        ...document,
+        content: versionToRestore.content,
+        version: 'v-restored',
+      };
+      documents.set(restorePath.documentPath, restoredDocument);
+      state.versions[restorePath.documentPath] = [
+        { id: restoredDocument.version, content: restoredDocument.content, created_at: '2026-05-29T13:00:00Z' },
+        ...(state.versions[restorePath.documentPath] ?? []),
+      ];
+      await route.fulfill({
+        headers: { ETag: `"${restoredDocument.version}"` },
+        json: writeOutcome(restoredDocument),
+      });
+      return;
+    }
+
+    const diffPath = documentVersionDiffFromEndpoint(path);
+    if (diffPath && request.method() === 'GET') {
+      const document = state.documentsByLibrary.get(diffPath.library)?.get(diffPath.documentPath);
+      const versions = state.versions[diffPath.documentPath] ?? [];
+      const baseVersion = versions.find((entry) => entry.id === diffPath.version);
+      const againstVersionId = url.searchParams.get('against');
+      const againstVersion = againstVersionId ? versions.find((entry) => entry.id === againstVersionId) : undefined;
+      const againstContent = againstVersion?.content ?? document?.content;
+      const againstId = againstVersion?.id ?? document?.version;
+      if (!baseVersion || !againstContent || !againstId) {
+        await notFound(route);
+        return;
+      }
+
+      await route.fulfill({
+        json: {
+          base_version_id: baseVersion.id,
+          against_version_id: againstId,
+          unified_diff: mockUnifiedDiff(baseVersion.content, againstContent),
+        },
+      });
+      return;
+    }
+
+    const versionPath = documentVersionFromEndpoint(path);
+    if (versionPath && request.method() === 'GET') {
+      const document = state.documentsByLibrary.get(versionPath.library)?.get(versionPath.documentPath);
+      const version = state.versions[versionPath.documentPath]?.find((entry) => entry.id === versionPath.version);
+      if (!document || !version) {
+        await notFound(route);
+        return;
+      }
+      await route.fulfill({
+        json: { version: versionRecord(document, version), content: version.content },
+      });
+      return;
+    }
+
+    const versionsPath = documentVersionsFromEndpoint(path);
+    if (versionsPath) {
+      const document = state.documentsByLibrary.get(versionsPath.library)?.get(versionsPath.documentPath);
+      const versions = state.versions[versionsPath.documentPath] ?? [];
+      await route.fulfill({ json: document ? versions.map((version) => versionRecord(document, version)) : [] });
+      return;
+    }
+
+    const movePath = documentPathFromMoveEndpoint(path);
+    if (movePath && request.method() === 'POST') {
+      const documents = state.documentsByLibrary.get(movePath.library);
+      const document = documents?.get(movePath.documentPath);
+      if (!documents || !document) {
+        await notFound(route);
+        return;
+      }
+
+      const body = request.postDataJSON() as { to_path?: string };
+      const toPath = body.to_path;
+      if (!toPath) {
+        await route.fulfill({ body: 'missing to_path', status: 400 });
+        return;
+      }
+
+      const movedDocument: MockDocument = {
+        ...document,
+        path: toPath,
+        version: 'v-moved',
+      };
+      documents.delete(movePath.documentPath);
+      documents.set(toPath, movedDocument);
+      await route.fulfill({
+        headers: { ETag: `"${movedDocument.version}"` },
+        json: writeOutcome(movedDocument),
+      });
+      return;
+    }
+
+    const documentPath = documentPathFromDocumentEndpoint(path);
+    if (documentPath && request.method() === 'DELETE') {
+      const documents = state.documentsByLibrary.get(documentPath.library) ?? state.documents;
+      if (!documents.has(documentPath.documentPath)) {
+        await notFound(route);
+        return;
+      }
+
+      documents.delete(documentPath.documentPath);
+      state.deletedDocuments.push(documentPath.documentPath);
+      await route.fulfill({
+        json: {
+          actor: null,
+          committed_at: 'now',
+          created_at: 'now',
+          id: `tx-delete-${documentPath.documentPath}`,
+          library_id: `lib-${documentPath.library}`,
+          message: null,
+          provenance: {},
+          source: 'rest',
+          state: 'committed',
+        },
+      });
+      return;
+    }
+
+    if (documentPath && request.method() === 'GET') {
+      const document = state.documentsByLibrary.get(documentPath.library)?.get(documentPath.documentPath);
+      if (!document) {
+        await notFound(route);
+        return;
+      }
+      await route.fulfill({
+        body: document.content,
+        headers: { ETag: `"${document.version}"`, 'content-type': documentContentType(document) },
+      });
+      return;
+    }
+
+    if (documentPath && request.method() === 'PUT') {
+      const ifNoneMatch = request.headers()['if-none-match'];
+      const ifMatch = request.headers()['if-match'];
+      if (ifNoneMatch) state.createHeaders.push(ifNoneMatch);
+      if (ifMatch) state.saveHeaders.push(ifMatch);
+
+      if (state.rejectNextSaveAsStale) {
+        const documents = state.documentsByLibrary.get(documentPath.library) ?? state.documents;
+        const current = documents.get(documentPath.documentPath);
+        documents.set(documentPath.documentPath, {
+          content: state.rejectNextSaveAsStale.content,
+          id: current?.id ?? `doc-${documentPath.documentPath}`,
+          metadata: current?.metadata,
+          path: documentPath.documentPath,
+          version: state.rejectNextSaveAsStale.version,
+        });
+        state.rejectNextSaveAsStale = undefined;
+        await route.fulfill({
+          json: { error: 'precondition failed' },
+          status: 412,
+        });
+        return;
+      }
+
+      const nextVersion = ifNoneMatch ? 'v-new' : 'v-saved';
+      const documents = state.documentsByLibrary.get(documentPath.library) ?? state.documents;
+      const document: MockDocument = {
+        content: request.postData() ?? '',
+        id: documents.get(documentPath.documentPath)?.id ?? `doc-${documentPath.documentPath}`,
+        metadata: documents.get(documentPath.documentPath)?.metadata ?? {},
+        path: documentPath.documentPath,
+        version: nextVersion,
+      };
+      documents.set(documentPath.documentPath, document);
+      await route.fulfill({
+        headers: { ETag: `"${document.version}"` },
+        json: writeOutcome(document),
+      });
+      return;
+    }
+
+    await notFound(route);
+  });
+
+  return state;
+}
+
+function libraryPathFromEndpoint(path: string) {
+  const prefix = '/v1/libraries/';
+  if (!path.startsWith(prefix)) return null;
+  const remainingPath = path.slice(prefix.length);
+  const separatorIndex = remainingPath.indexOf('/');
+  if (separatorIndex === -1) {
+    return { library: remainingPath, resourcePath: '' };
+  }
+  return {
+    library: remainingPath.slice(0, separatorIndex),
+    resourcePath: remainingPath.slice(separatorIndex + 1),
+  };
+}
+
+function documentPathFromDocumentEndpoint(path: string) {
+  const endpoint = libraryPathFromEndpoint(path);
+  const prefix = 'documents/';
+  if (!endpoint?.resourcePath.startsWith(prefix)) return null;
+  const documentPath = endpoint.resourcePath.slice(prefix.length);
+  if (
+    documentPath.endsWith('/backlinks') ||
+    documentPath.endsWith('/outgoing-links') ||
+    documentPath.endsWith('/versions') ||
+    documentPath.endsWith('/move')
+  ) {
+    return null;
+  }
+  return { documentPath, library: endpoint.library };
+}
+
+function documentPathFromMoveEndpoint(path: string) {
+  const endpoint = libraryPathFromEndpoint(path);
+  const prefix = 'documents/';
+  const suffix = '/move';
+  if (!endpoint?.resourcePath.startsWith(prefix) || !endpoint.resourcePath.endsWith(suffix)) return null;
+  return {
+    documentPath: endpoint.resourcePath.slice(prefix.length, -suffix.length),
+    library: endpoint.library,
+  };
+}
+
+function documentVersionsFromEndpoint(path: string) {
+  const endpoint = libraryPathFromEndpoint(path);
+  const prefix = 'documents/';
+  const suffix = '/versions';
+  if (!endpoint?.resourcePath.startsWith(prefix) || !endpoint.resourcePath.endsWith(suffix)) return null;
+  return {
+    documentPath: endpoint.resourcePath.slice(prefix.length, -suffix.length),
+    library: endpoint.library,
+  };
+}
+
+function documentVersionFromEndpoint(path: string) {
+  const endpoint = libraryPathFromEndpoint(path);
+  const prefix = 'documents/';
+  if (!endpoint?.resourcePath.startsWith(prefix)) return null;
+  const marker = '/versions/';
+  const markerIndex = endpoint.resourcePath.lastIndexOf(marker);
+  if (markerIndex === -1 || endpoint.resourcePath.endsWith('/restore') || endpoint.resourcePath.includes('/diff')) {
+    return null;
+  }
+  return {
+    documentPath: endpoint.resourcePath.slice(prefix.length, markerIndex),
+    library: endpoint.library,
+    version: endpoint.resourcePath.slice(markerIndex + marker.length),
+  };
+}
+
+function documentVersionRestoreFromEndpoint(path: string) {
+  const suffix = '/restore';
+  if (!path.endsWith(suffix)) return null;
+  const versionPath = documentVersionFromEndpoint(path.slice(0, -suffix.length));
+  return versionPath;
+}
+
+function documentVersionDiffFromEndpoint(path: string) {
+  const suffix = '/diff';
+  if (!path.endsWith(suffix)) return null;
+  return documentVersionFromEndpoint(path.slice(0, -suffix.length));
+}
+
+function conflictResolveFromEndpoint(path: string) {
+  const endpoint = libraryPathFromEndpoint(path);
+  const prefix = 'conflicts/';
+  const suffix = '/resolve';
+  if (!endpoint?.resourcePath.startsWith(prefix) || !endpoint.resourcePath.endsWith(suffix)) return null;
+  return endpoint.resourcePath.slice(prefix.length, -suffix.length);
+}
+
+function documentPathFromNestedEndpoint(path: string) {
+  const endpoint = libraryPathFromEndpoint(path);
+  return endpoint?.resourcePath.replace(/^documents\//, '').replace(/\/(?:backlinks|outgoing-links|versions)$/, '') ?? '';
+}
+
+function documentStub(document: MockDocument) {
+  return {
+    id: document.id,
+    path: document.path,
+    head_version_id: document.version,
+    content_type: documentContentType(document),
+    byte_size: documentByteSize(document),
+    content_hash: document.contentHash ?? null,
+    metadata: document.metadata ?? {},
+    updated_at: 'now',
+  };
+}
+
+function documentMatchesSearch(document: MockDocument, query: string) {
+  if (!query) return false;
+  const title = typeof document.metadata?.title === 'string' ? document.metadata.title : document.path;
+  return [document.path, title, document.content].some((value) => value.toLowerCase().includes(query));
+}
+
+function searchResult(document: MockDocument) {
+  const title = typeof document.metadata?.title === 'string' ? document.metadata.title : document.path;
+  return {
+    document_id: document.id,
+    path: document.path,
+    title,
+    content_type: documentContentType(document),
+    score: 1,
+    snippet: document.content,
+    matched_fields: ['body'],
+    head_version_id: document.version,
+  };
+}
+
+function versionRecord(document: MockDocument, version: MockVersion) {
+  return {
+    id: version.id,
+    document_id: document.id,
+    tx_id: `tx-${version.id}`,
+    transaction_source: 'rest',
+    transaction_actor: null,
+    transaction_message: null,
+    transaction_provenance: {},
+    content_hash: document.contentHash ?? null,
+    inline_content: null,
+    metadata: document.metadata ?? {},
+    content_type: documentContentType(document),
+    byte_size: version.content.length,
+    created_at: version.created_at ?? 'now',
+  };
+}
+
+function mockUnifiedDiff(base: string, against: string) {
+  const baseLines = base.trimEnd().split('\n');
+  const againstLines = against.trimEnd().split('\n');
+  return ['--- base', '+++ against', ...baseLines.map((line) => `-${line}`), ...againstLines.map((line) => `+${line}`)].join('\n');
+}
+
+function conflictRecord(conflict: MockConflict, resolved = false) {
+  return {
+    id: conflict.id,
+    library_id: 'lib-notes',
+    path: conflict.path,
+    conflict_path: conflict.conflict_path ?? null,
+    ours_version_id: conflict.ours_version_id ?? null,
+    theirs_version_id: conflict.theirs_version_id ?? null,
+    status: resolved ? 'resolved' : 'open',
+    discovered_at: '2026-05-29T12:00:00Z',
+    resolved_at: resolved ? '2026-05-29T12:05:00Z' : null,
+  };
+}
+
+function link(overrides: MockLink) {
+  return {
+    src_doc_id: overrides.src_doc_id ?? 'doc-source',
+    src_version_id: overrides.src_version_id ?? 'v-source',
+    src_path: overrides.src_path ?? 'source.md',
+    target_kind: overrides.target_kind ?? 'wiki_link',
+    target_text: overrides.target_text ?? 'Target',
+    target_doc_id: overrides.target_doc_id ?? null,
+    target_path: overrides.target_path ?? null,
+    target_anchor: overrides.target_anchor ?? null,
+    alias: overrides.alias ?? null,
+    start_offset: overrides.start_offset ?? 0,
+    end_offset: overrides.end_offset ?? 8,
+    resolved: overrides.resolved ?? true,
+    resolution_status: overrides.resolution_status ?? 'resolved',
+  };
+}
+
+function writeOutcome(document: MockDocument) {
+  return {
+    document: documentStub(document),
+    transaction: {
+      actor: null,
+      committed_at: 'now',
+      created_at: 'now',
+      id: `tx-${document.version}`,
+      library_id: 'lib-notes',
+      message: null,
+      provenance: {},
+      source: 'rest',
+      state: 'committed',
+    },
+    version: {
+      byte_size: documentByteSize(document),
+      content_hash: document.contentHash ?? null,
+      content_type: documentContentType(document),
+      created_at: 'now',
+      document_id: document.id,
+      id: document.version,
+      inline_content: null,
+      metadata: document.metadata ?? {},
+      transaction_actor: null,
+      transaction_message: null,
+      transaction_provenance: {},
+      transaction_source: 'rest',
+      tx_id: `tx-${document.version}`,
+    },
+  };
+}
+
+function documentContentType(document: MockDocument) {
+  return document.contentType ?? 'text/markdown';
+}
+
+function documentByteSize(document: MockDocument) {
+  return document.byteSize ?? document.content.length;
+}
+
+async function notFound(route: Route) {
+  await route.fulfill({ body: 'not found', status: 404 });
+}

@@ -1,19 +1,21 @@
 use quarry_cas::DiskCas;
 use quarry_core::{
     normalize_path, now_timestamp, parent_dirs, ChangeType, ConflictRecord, ConflictStatus,
-    Document, DocumentListEntry, DocumentSource, DocumentVersion, GcReport, GitPeer, Library,
-    QuarryError, Result, SyncStateEntry, TransactionRecord, TransactionState, WriteOutcome,
-    WritePrecondition, INLINE_CONTENT_THRESHOLD,
+    Document, DocumentLink, DocumentListEntry, DocumentSource, DocumentVersion,
+    DocumentVersionContent, GcReport, GitPeer, GraphEdge, GraphNode, GraphResponse, Library,
+    LinkCollection, QuarryError, ReindexReport, Result, SearchResponse, SearchResult,
+    SearchSuggestion, SyncStateEntry, TransactionRecord, TransactionState, VersionDiff,
+    WriteOutcome, WritePrecondition, INLINE_CONTENT_THRESHOLD,
 };
 use serde_json::Value as JsonValue;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex, OwnedMutexGuard};
-use turso::{params, Builder, Connection, Database, Row, Value};
+use turso::{params, Builder, Connection, Database, Row, Rows, Value};
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
@@ -40,9 +42,14 @@ pub enum StoreEventKind {
     DocumentPut,
     DocumentDelete,
     DocumentMove,
+    LinksIndexed,
     DirectoryPut,
     DirectoryDelete,
     DirectoryMove,
+    ConflictCreated,
+    ConflictResolved,
+    LibraryReindexed,
+    GitSyncCompleted,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,6 +60,12 @@ pub struct StoreEvent {
     pub new_path: Option<String>,
     pub source: Option<DocumentSource>,
     pub tx_id: Option<String>,
+    pub doc_id: Option<String>,
+    pub version_id: Option<String>,
+    pub conflict_id: Option<String>,
+    pub peer_id: Option<String>,
+    pub applied: Option<usize>,
+    pub conflicts: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -269,6 +282,12 @@ impl QuarryStore {
             new_path: None,
             source: Some(DocumentSource::Fuse),
             tx_id: None,
+            doc_id: None,
+            version_id: None,
+            conflict_id: None,
+            peer_id: None,
+            applied: None,
+            conflicts: None,
         });
         Ok(metadata)
     }
@@ -329,6 +348,12 @@ impl QuarryStore {
             new_path: None,
             source: Some(source_for_event),
             tx_id: None,
+            doc_id: None,
+            version_id: None,
+            conflict_id: None,
+            peer_id: None,
+            applied: None,
+            conflicts: None,
         });
         Ok(metadata)
     }
@@ -438,6 +463,12 @@ impl QuarryStore {
             new_path: Some(to_path),
             source: Some(source_for_event),
             tx_id: None,
+            doc_id: None,
+            version_id: None,
+            conflict_id: None,
+            peer_id: None,
+            applied: None,
+            conflicts: None,
         });
         Ok(())
     }
@@ -473,6 +504,12 @@ impl QuarryStore {
             new_path: None,
             source: Some(DocumentSource::Fuse),
             tx_id: None,
+            doc_id: None,
+            version_id: None,
+            conflict_id: None,
+            peer_id: None,
+            applied: None,
+            conflicts: None,
         });
         Ok(())
     }
@@ -600,8 +637,9 @@ impl QuarryStore {
             )
             .await?;
             publish_put_conn(&conn, &doc_id, &version.id).await?;
-            commit_transaction_record_conn(&conn, &tx.id).await?;
             ensure_path_inodes_conn(&conn, &library.id, &path).await?;
+            self.reindex_links_conn(&conn, &library.id).await?;
+            commit_transaction_record_conn(&conn, &tx.id).await?;
             let document = self.document_entry_conn(&conn, &library.id, &path).await?;
             let tx = self.transaction_conn(&conn, &tx.id).await?;
             Ok(WriteOutcome {
@@ -619,7 +657,17 @@ impl QuarryStore {
             new_path: None,
             source: Some(source_for_event),
             tx_id: Some(outcome.transaction.id.clone()),
+            doc_id: Some(outcome.document.id.clone()),
+            version_id: Some(outcome.version.id.clone()),
+            conflict_id: None,
+            peer_id: None,
+            applied: None,
+            conflicts: None,
         });
+        self.emit_event(links_indexed_event(
+            outcome.transaction.library_id.clone(),
+            outcome.document.path.clone(),
+        ));
         Ok(outcome)
     }
 
@@ -653,7 +701,7 @@ impl QuarryStore {
 
         let (sql, params) = if let Some(prefix) = normalized_prefix {
             (
-                "SELECT d.id, d.path, d.head_version_id, v.content_type, v.byte_size, v.metadata_json, d.updated_at
+                "SELECT d.id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.updated_at
                  FROM documents d
                  JOIN document_versions v ON v.id = d.head_version_id
                  WHERE d.library_id = ?1 AND d.deleted_at IS NULL AND d.head_version_id IS NOT NULL AND d.path LIKE ?2
@@ -666,7 +714,7 @@ impl QuarryStore {
             )
         } else {
             (
-                "SELECT d.id, d.path, d.head_version_id, v.content_type, v.byte_size, v.metadata_json, d.updated_at
+                "SELECT d.id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.updated_at
                  FROM documents d
                  JOIN document_versions v ON v.id = d.head_version_id
                  WHERE d.library_id = ?1 AND d.deleted_at IS NULL AND d.head_version_id IS NOT NULL
@@ -683,6 +731,436 @@ impl QuarryStore {
         Ok(documents)
     }
 
+    pub async fn search_documents(
+        &self,
+        library: &str,
+        query: &str,
+        limit: Option<u64>,
+    ) -> Result<SearchResponse> {
+        let query = query.trim();
+        let query_lc = query.to_lowercase();
+        let tag_query_lc = query.trim_start_matches('#').to_lowercase();
+        let limit = limit.unwrap_or(50).min(100) as usize;
+        let conn = self.conn()?;
+        let library_record = self.require_library_conn(&conn, library).await?;
+        let documents = self
+            .document_entries_for_library_conn(&conn, &library_record.id, 10_000)
+            .await?;
+        let mut results = Vec::new();
+
+        for entry in documents {
+            let title = title_for_entry(&entry);
+            let mut matched_fields = Vec::new();
+            let mut score = 0.0;
+            let mut snippet = None;
+
+            if query.is_empty() || entry.path.to_lowercase().contains(&query_lc) {
+                push_unique(&mut matched_fields, "path");
+                score += 3.0;
+            }
+            if query.is_empty() || title.to_lowercase().contains(&query_lc) {
+                push_unique(&mut matched_fields, "title");
+                score += 2.0;
+            }
+            if !query.is_empty()
+                && metadata_aliases(&entry.metadata)
+                    .iter()
+                    .any(|alias| alias.to_lowercase().contains(&query_lc))
+            {
+                push_unique(&mut matched_fields, "alias");
+                score += 2.5;
+            }
+            if !query.is_empty() && is_textual_content_type(&entry.content_type) {
+                let document = self.get_document(library, &entry.path).await?;
+                let body = String::from_utf8_lossy(&document.content);
+                if let Some(index) = body.to_lowercase().find(&query_lc) {
+                    push_unique(&mut matched_fields, "body");
+                    score += 1.0;
+                    snippet = Some(make_snippet(&body, index, query.len()));
+                }
+            }
+            if !tag_query_lc.is_empty() {
+                let tag_match = self
+                    .links_for_source_conn(&conn, &library_record.id, &entry.id)
+                    .await?
+                    .into_iter()
+                    .filter(|link| link.target_kind == "tag")
+                    .any(|link| link.target_text.to_lowercase().contains(&tag_query_lc));
+                if tag_match {
+                    push_unique(&mut matched_fields, "tag");
+                    score += 2.5;
+                }
+            }
+
+            if score > 0.0 {
+                results.push(SearchResult {
+                    document_id: entry.id,
+                    path: entry.path,
+                    title,
+                    content_type: entry.content_type,
+                    score,
+                    snippet,
+                    matched_fields,
+                    head_version_id: entry.head_version_id,
+                });
+            }
+        }
+
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        results.truncate(limit);
+
+        Ok(SearchResponse {
+            results,
+            cursor: None,
+        })
+    }
+
+    pub async fn suggest_documents(
+        &self,
+        library: &str,
+        query: &str,
+        limit: Option<u64>,
+    ) -> Result<Vec<SearchSuggestion>> {
+        let query_lc = query.trim().to_lowercase();
+        let limit = limit.unwrap_or(20).min(100) as usize;
+        let conn = self.conn()?;
+        let library = self.require_library_conn(&conn, library).await?;
+        let documents = self
+            .document_entries_for_library_conn(&conn, &library.id, 10_000)
+            .await?;
+        let mut suggestions = Vec::new();
+
+        for entry in documents {
+            let title = title_for_entry(&entry);
+            let title_match = query_lc.is_empty() || title.to_lowercase().contains(&query_lc);
+            let path_match = query_lc.is_empty() || entry.path.to_lowercase().contains(&query_lc);
+            if title_match || path_match {
+                suggestions.push(SearchSuggestion {
+                    path: entry.path.clone(),
+                    title,
+                    match_type: if title_match { "title" } else { "path" }.to_string(),
+                    head_version_id: entry.head_version_id.clone(),
+                    matched_text: Some(if title_match {
+                        title_for_entry(&entry)
+                    } else {
+                        entry.path.clone()
+                    }),
+                    target_anchor: None,
+                });
+            }
+
+            for alias in metadata_aliases(&entry.metadata) {
+                if query_lc.is_empty() || alias.to_lowercase().contains(&query_lc) {
+                    suggestions.push(SearchSuggestion {
+                        path: entry.path.clone(),
+                        title: title_for_entry(&entry),
+                        match_type: "alias".to_string(),
+                        head_version_id: entry.head_version_id.clone(),
+                        matched_text: Some(alias),
+                        target_anchor: None,
+                    });
+                }
+            }
+
+            if is_textual_content_type(&entry.content_type) {
+                for link in self
+                    .links_for_source_conn(&conn, &library.id, &entry.id)
+                    .await?
+                    .into_iter()
+                    .filter(|link| link.target_kind == "heading")
+                {
+                    if query_lc.is_empty() || link.target_text.to_lowercase().contains(&query_lc) {
+                        suggestions.push(SearchSuggestion {
+                            path: entry.path.clone(),
+                            title: title_for_entry(&entry),
+                            match_type: "heading".to_string(),
+                            head_version_id: entry.head_version_id.clone(),
+                            matched_text: Some(link.target_text.clone()),
+                            target_anchor: Some(link.target_text),
+                        });
+                    }
+                }
+            }
+        }
+
+        suggestions.sort_by(|a, b| {
+            suggestion_match_rank(&a.match_type)
+                .cmp(&suggestion_match_rank(&b.match_type))
+                .then_with(|| a.path.cmp(&b.path))
+                .then_with(|| a.matched_text.cmp(&b.matched_text))
+        });
+        suggestions.truncate(limit);
+        Ok(suggestions)
+    }
+
+    pub async fn reindex_library(&self, library: &str) -> Result<ReindexReport> {
+        let _operation_guard = self.normal_write_gate().await;
+        let _guard = self.write_lock.lock().await;
+        let conn = self.conn()?;
+        begin_immediate(&conn).await?;
+        let result = async {
+            let library = self.require_library_conn(&conn, library).await?;
+            let library_id = library.id.clone();
+            let indexed_documents = self.reindex_links_conn(&conn, &library.id).await?;
+            Ok((
+                library_id,
+                ReindexReport {
+                    ok: true,
+                    indexed_documents,
+                },
+            ))
+        }
+        .await;
+        let (library_id, report) = finish_tx(&conn, result).await?;
+        self.emit_event(StoreEvent {
+            kind: StoreEventKind::LibraryReindexed,
+            library_id,
+            path: None,
+            new_path: None,
+            source: None,
+            tx_id: None,
+            doc_id: None,
+            version_id: None,
+            conflict_id: None,
+            peer_id: None,
+            applied: None,
+            conflicts: None,
+        });
+        Ok(report)
+    }
+
+    pub async fn emit_git_sync_completed(
+        &self,
+        library: &str,
+        peer_id: &str,
+        applied: usize,
+        conflicts: usize,
+    ) -> Result<()> {
+        let conn = self.conn()?;
+        let library = self.require_library_conn(&conn, library).await?;
+        self.emit_event(StoreEvent {
+            kind: StoreEventKind::GitSyncCompleted,
+            library_id: library.id,
+            path: None,
+            new_path: None,
+            source: Some(DocumentSource::Git),
+            tx_id: None,
+            doc_id: None,
+            version_id: None,
+            conflict_id: None,
+            peer_id: Some(peer_id.to_string()),
+            applied: Some(applied),
+            conflicts: Some(conflicts),
+        });
+        Ok(())
+    }
+
+    pub async fn outgoing_links(&self, library: &str, path: &str) -> Result<LinkCollection> {
+        let path = normalize_path(path)?;
+        let conn = self.conn()?;
+        let library = self.require_library_conn(&conn, library).await?;
+        let document = self.document_entry_conn(&conn, &library.id, &path).await?;
+        Ok(LinkCollection {
+            path: document.path.clone(),
+            links: self
+                .links_for_source_conn(&conn, &library.id, &document.id)
+                .await?,
+        })
+    }
+
+    pub async fn backlinks(&self, library: &str, path: &str) -> Result<LinkCollection> {
+        let path = normalize_path(path)?;
+        let conn = self.conn()?;
+        let library = self.require_library_conn(&conn, library).await?;
+        let target = self.document_entry_conn(&conn, &library.id, &path).await?;
+        Ok(LinkCollection {
+            path: target.path,
+            links: self
+                .links_for_target_conn(&conn, &library.id, &target.id)
+                .await?,
+        })
+    }
+
+    pub async fn graph(
+        &self,
+        library: &str,
+        root: Option<&str>,
+        depth: Option<u64>,
+        limit: Option<u64>,
+        folder: Option<&str>,
+        tag: Option<&str>,
+        link_kind: Option<&str>,
+        resolved: Option<bool>,
+    ) -> Result<GraphResponse> {
+        let limit = limit.unwrap_or(500).min(10_000) as usize;
+        let depth = depth.unwrap_or(1).min(32);
+        let root = root.map(normalize_path).transpose()?;
+        let folder = folder
+            .map(normalize_graph_folder)
+            .transpose()?
+            .filter(|folder| !folder.is_empty());
+        let tag = tag.map(normalize_graph_tag).filter(|tag| !tag.is_empty());
+        let conn = self.conn()?;
+        let library = self.require_library_conn(&conn, library).await?;
+        let documents = self
+            .document_entries_for_library_conn(&conn, &library.id, 10_000)
+            .await?;
+        let document_by_id: HashMap<String, &DocumentListEntry> = documents
+            .iter()
+            .map(|entry| (entry.id.clone(), entry))
+            .collect();
+        let mut node_map: HashMap<String, GraphNode> = HashMap::new();
+        let mut edges = Vec::new();
+        let mut candidate_nodes = 0usize;
+
+        let mut add_node = |entry: &DocumentListEntry| {
+            if node_map.contains_key(&entry.id) {
+                return;
+            }
+            candidate_nodes += 1;
+            if node_map.len() < limit {
+                node_map.insert(entry.id.clone(), graph_node_from_entry(entry));
+            }
+        };
+
+        let document_matches_folder = |entry: &DocumentListEntry| {
+            folder
+                .as_deref()
+                .is_none_or(|folder| path_is_in_folder(&entry.path, folder))
+        };
+        let link_matches_folder = |link: &DocumentLink| {
+            folder.as_deref().is_none_or(|folder| {
+                path_is_in_folder(&link.src_path, folder)
+                    && link
+                        .target_path
+                        .as_deref()
+                        .is_none_or(|path| path_is_in_folder(path, folder))
+            })
+        };
+        let link_matches_tag = |link: &DocumentLink| {
+            tag.as_deref().is_none_or(|tag| {
+                link.target_kind == "tag" && link.target_text.eq_ignore_ascii_case(tag)
+            })
+        };
+        let links: Vec<DocumentLink> = self
+            .links_for_library_conn(&conn, &library.id)
+            .await?
+            .into_iter()
+            .filter(|link| {
+                link_kind.is_none_or(|kind| link.target_kind == kind)
+                    && resolved.is_none_or(|expected| link.resolved == expected)
+                    && link_matches_folder(link)
+                    && link_matches_tag(link)
+            })
+            .collect();
+        let mut included_ids: HashSet<String> = HashSet::new();
+        let has_edge_filter = link_kind.is_some() || resolved.is_some() || tag.is_some();
+
+        if root.is_none() {
+            if has_edge_filter {
+                for link in &links {
+                    if let Some(source) = document_by_id.get(&link.src_doc_id) {
+                        if document_matches_folder(source) && included_ids.insert(source.id.clone())
+                        {
+                            add_node(source);
+                        }
+                    }
+                    if let Some(target_id) = link.target_doc_id.as_deref() {
+                        if let Some(target) = document_by_id.get(target_id) {
+                            if document_matches_folder(target)
+                                && included_ids.insert(target.id.clone())
+                            {
+                                add_node(target);
+                            }
+                        }
+                    }
+                }
+            } else {
+                for entry in &documents {
+                    if document_matches_folder(entry) {
+                        included_ids.insert(entry.id.clone());
+                        add_node(entry);
+                    }
+                }
+            }
+        } else if let Some(root_path) = root.as_deref() {
+            if let Some(root_entry) = documents.iter().find(|entry| entry.path == root_path) {
+                if document_matches_folder(root_entry) {
+                    included_ids.insert(root_entry.id.clone());
+                    add_node(root_entry);
+                    let mut queue = VecDeque::from([(root_entry.id.clone(), 0u64)]);
+                    while let Some((document_id, distance)) = queue.pop_front() {
+                        if distance >= depth {
+                            continue;
+                        }
+                        for link in &links {
+                            let neighbor_id = if link.src_doc_id == document_id {
+                                link.target_doc_id.as_deref()
+                            } else if link.target_doc_id.as_deref() == Some(document_id.as_str()) {
+                                Some(link.src_doc_id.as_str())
+                            } else {
+                                None
+                            };
+                            let Some(neighbor_id) = neighbor_id else {
+                                continue;
+                            };
+                            if included_ids.insert(neighbor_id.to_string()) {
+                                if let Some(neighbor) = document_by_id.get(neighbor_id) {
+                                    add_node(neighbor);
+                                    queue.push_back((neighbor_id.to_string(), distance + 1));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for link in links {
+            if root.is_some() || folder.is_some() || has_edge_filter {
+                let source_included = included_ids.contains(&link.src_doc_id);
+                let target_included = link
+                    .target_doc_id
+                    .as_deref()
+                    .is_some_and(|target_id| included_ids.contains(target_id));
+                if link.target_doc_id.is_some() {
+                    if !source_included || !target_included {
+                        continue;
+                    }
+                } else if !source_included {
+                    continue;
+                }
+            }
+            edges.push(GraphEdge {
+                id: format!(
+                    "{}:{}:{}",
+                    link.src_doc_id, link.start_offset, link.end_offset
+                ),
+                source: link.src_doc_id,
+                source_path: link.src_path,
+                target: link.target_doc_id,
+                target_path: link.target_path,
+                target_kind: link.target_kind,
+                target_text: link.target_text,
+                resolved: link.resolved,
+                resolution_status: link.resolution_status,
+            });
+        }
+
+        let truncated = candidate_nodes > limit;
+        let nodes = node_map.into_values().collect();
+        Ok(GraphResponse {
+            nodes,
+            edges,
+            truncated,
+        })
+    }
+
     pub async fn version_history(&self, library: &str, path: &str) -> Result<Vec<DocumentVersion>> {
         let path = normalize_path(path)?;
         let conn = self.conn()?;
@@ -693,8 +1171,11 @@ impl QuarryStore {
             .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
         let mut rows = conn
             .query(
-                "SELECT id, document_id, tx_id, content_hash, inline_content, metadata_json, content_type, byte_size, created_at
-                 FROM document_versions WHERE document_id = ?1 ORDER BY created_at, id",
+                "SELECT v.id, v.document_id, v.tx_id, v.content_hash, v.inline_content, v.metadata_json,
+                        v.content_type, v.byte_size, v.created_at, t.source, t.actor, t.message, t.provenance_json
+                 FROM document_versions v
+                 JOIN transactions t ON t.id = v.tx_id
+                 WHERE v.document_id = ?1 ORDER BY v.created_at DESC, v.id DESC",
                 params![document_id],
             )
             .await
@@ -704,6 +1185,96 @@ impl QuarryStore {
             versions.push(version_from_row(&row)?);
         }
         Ok(versions)
+    }
+
+    pub async fn document_version(
+        &self,
+        library: &str,
+        path: &str,
+        version_id: &str,
+    ) -> Result<DocumentVersionContent> {
+        let path = normalize_path(path)?;
+        let conn = self.conn()?;
+        let library = self.require_library_conn(&conn, library).await?;
+        let document_id = self
+            .document_id_conn(&conn, &library.id, &path)
+            .await?
+            .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+        let (version, content) = self
+            .version_content_conn(&conn, &document_id, version_id)
+            .await?;
+        Ok(DocumentVersionContent {
+            version,
+            content: String::from_utf8_lossy(&content).into_owned(),
+        })
+    }
+
+    pub async fn version_diff(
+        &self,
+        library: &str,
+        path: &str,
+        version_id: &str,
+        against: Option<&str>,
+    ) -> Result<VersionDiff> {
+        let path = normalize_path(path)?;
+        let conn = self.conn()?;
+        let library_record = self.require_library_conn(&conn, library).await?;
+        let document_id = self
+            .document_id_conn(&conn, &library_record.id, &path)
+            .await?
+            .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+        let (_, base_content) = self
+            .version_content_conn(&conn, &document_id, version_id)
+            .await?;
+        let against_id = if let Some(against) = against {
+            against.to_string()
+        } else {
+            self.document_entry_conn(&conn, &library_record.id, &path)
+                .await?
+                .head_version_id
+        };
+        let (_, against_content) = self
+            .version_content_conn(&conn, &document_id, &against_id)
+            .await?;
+
+        Ok(VersionDiff {
+            base_version_id: version_id.to_string(),
+            against_version_id: against_id,
+            unified_diff: unified_line_diff(
+                &String::from_utf8_lossy(&base_content),
+                &String::from_utf8_lossy(&against_content),
+            ),
+        })
+    }
+
+    pub async fn restore_document_version(
+        &self,
+        library: &str,
+        path: &str,
+        version_id: &str,
+    ) -> Result<WriteOutcome> {
+        let path = normalize_path(path)?;
+        let conn = self.conn()?;
+        let library_record = self.require_library_conn(&conn, library).await?;
+        let document_id = self
+            .document_id_conn(&conn, &library_record.id, &path)
+            .await?
+            .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+        let (version, content) = self
+            .version_content_conn(&conn, &document_id, version_id)
+            .await?;
+        drop(conn);
+
+        self.put_document(
+            library,
+            &path,
+            content,
+            version.metadata,
+            &version.content_type,
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
     }
 
     pub async fn delete_document(
@@ -749,6 +1320,7 @@ impl QuarryStore {
             )
             .await
             .map_err(map_turso_error)?;
+            self.reindex_links_conn(&conn, &library.id).await?;
             commit_transaction_record_conn(&conn, &tx.id).await?;
             self.transaction_conn(&conn, &tx.id).await
         }
@@ -757,11 +1329,18 @@ impl QuarryStore {
         self.emit_event(StoreEvent {
             kind: StoreEventKind::DocumentDelete,
             library_id: tx.library_id.clone(),
-            path: Some(path),
+            path: Some(path.clone()),
             new_path: None,
             source: Some(source_for_event),
             tx_id: Some(tx.id.clone()),
+            doc_id: None,
+            version_id: None,
+            conflict_id: None,
+            peer_id: None,
+            applied: None,
+            conflicts: None,
         });
+        self.emit_event(links_indexed_event(tx.library_id.clone(), path));
         Ok(tx)
     }
 
@@ -846,6 +1425,7 @@ impl QuarryStore {
                 )
                 .await?;
                 move_path_inode_conn(&conn, &library.id, &from_path, &to_path).await?;
+                self.reindex_links_conn(&conn, &library.id).await?;
                 commit_transaction_record_conn(&conn, &tx.id).await?;
                 return self.transaction_conn(&conn, &tx.id).await;
             }
@@ -875,6 +1455,7 @@ impl QuarryStore {
             .await
             .map_err(map_turso_error)?;
             move_path_inode_conn(&conn, &library.id, &from_path, &to_path).await?;
+            self.reindex_links_conn(&conn, &library.id).await?;
             commit_transaction_record_conn(&conn, &tx.id).await?;
             self.transaction_conn(&conn, &tx.id).await
         }
@@ -883,11 +1464,18 @@ impl QuarryStore {
         self.emit_event(StoreEvent {
             kind: StoreEventKind::DocumentMove,
             library_id: tx.library_id.clone(),
-            path: Some(from_path),
-            new_path: Some(to_path),
+            path: Some(from_path.clone()),
+            new_path: Some(to_path.clone()),
             source: Some(source_for_event),
             tx_id: Some(tx.id.clone()),
+            doc_id: None,
+            version_id: None,
+            conflict_id: None,
+            peer_id: None,
+            applied: None,
+            conflicts: None,
         });
+        self.emit_event(links_indexed_event(tx.library_id.clone(), to_path));
         Ok(tx)
     }
 
@@ -964,6 +1552,7 @@ impl QuarryStore {
             )
             .await?;
             move_path_inode_conn(&conn, &library.id, &from_path, &to_path).await?;
+            self.reindex_links_conn(&conn, &library.id).await?;
             commit_transaction_record_conn(&conn, &tx.id).await?;
             self.transaction_conn(&conn, &tx.id).await
         }
@@ -972,11 +1561,18 @@ impl QuarryStore {
         self.emit_event(StoreEvent {
             kind: StoreEventKind::DocumentMove,
             library_id: tx.library_id.clone(),
-            path: Some(from_path),
-            new_path: Some(to_path),
+            path: Some(from_path.clone()),
+            new_path: Some(to_path.clone()),
             source: Some(source_for_event),
             tx_id: Some(tx.id.clone()),
+            doc_id: None,
+            version_id: None,
+            conflict_id: None,
+            peer_id: None,
+            applied: None,
+            conflicts: None,
         });
+        self.emit_event(links_indexed_event(tx.library_id.clone(), to_path));
         Ok(tx)
     }
 
@@ -1282,7 +1878,14 @@ impl QuarryStore {
                             new_path: None,
                             source: Some(tx.source.clone()),
                             tx_id: Some(tx.id.clone()),
+                            doc_id: Some(doc_id),
+                            version_id: Some(version_id),
+                            conflict_id: None,
+                            peer_id: None,
+                            applied: None,
+                            conflicts: None,
                         });
+                        events.push(links_indexed_event(tx.library_id.clone(), change.path.clone()));
                     }
                     "delete" => {
                         if let Some((doc_id, _)) =
@@ -1302,7 +1905,14 @@ impl QuarryStore {
                             new_path: None,
                             source: Some(tx.source.clone()),
                             tx_id: Some(tx.id.clone()),
+                            doc_id: None,
+                            version_id: None,
+                            conflict_id: None,
+                            peer_id: None,
+                            applied: None,
+                            conflicts: None,
                         });
+                        events.push(links_indexed_event(tx.library_id.clone(), change.path.clone()));
                     }
                     "move" => {
                         let new_path = change.new_path.ok_or_else(|| {
@@ -1352,10 +1962,17 @@ impl QuarryStore {
                                 kind: StoreEventKind::DocumentMove,
                                 library_id: tx.library_id.clone(),
                                 path: Some(change.path.clone()),
-                                new_path: Some(new_path),
+                                new_path: Some(new_path.clone()),
                                 source: Some(tx.source.clone()),
                                 tx_id: Some(tx.id.clone()),
+                                doc_id: None,
+                                version_id: None,
+                                conflict_id: None,
+                                peer_id: None,
+                                applied: None,
+                                conflicts: None,
                             });
+                            events.push(links_indexed_event(tx.library_id.clone(), new_path));
                             continue;
                         }
                         conn.execute(
@@ -1370,16 +1987,24 @@ impl QuarryStore {
                             kind: StoreEventKind::DocumentMove,
                             library_id: tx.library_id.clone(),
                             path: Some(change.path.clone()),
-                            new_path: Some(new_path),
+                            new_path: Some(new_path.clone()),
                             source: Some(tx.source.clone()),
                             tx_id: Some(tx.id.clone()),
+                            doc_id: None,
+                            version_id: None,
+                            conflict_id: None,
+                            peer_id: None,
+                            applied: None,
+                            conflicts: None,
                         });
+                        events.push(links_indexed_event(tx.library_id.clone(), new_path));
                     }
                     other => {
                         return Err(QuarryError::Storage(format!("unknown change type {other}")));
                     }
                 }
             }
+            self.reindex_links_conn(&conn, &tx.library_id).await?;
             commit_transaction_record_conn(&conn, tx_id).await?;
             let tx = self.transaction_conn(&conn, tx_id).await?;
             Ok((tx, events))
@@ -1546,8 +2171,14 @@ impl QuarryStore {
         let library = self.require_library_conn(&conn, library).await?;
         let mut rows = conn
             .query(
-                "SELECT id, library_id, path, ours_version_id, theirs_version_id, status, discovered_at, resolved_at
-                 FROM conflicts WHERE library_id = ?1 ORDER BY discovered_at DESC",
+                "SELECT c.id, c.library_id, c.path, c.ours_version_id, c.theirs_version_id,
+                        c.status, c.discovered_at, c.resolved_at,
+                        CASE WHEN d.path IS NOT NULL AND d.path <> c.path THEN d.path ELSE NULL END
+                 FROM conflicts c
+                 LEFT JOIN document_versions tv ON tv.id = c.theirs_version_id
+                 LEFT JOIN documents d ON d.id = tv.document_id AND d.library_id = c.library_id
+                 WHERE c.library_id = ?1
+                 ORDER BY c.discovered_at DESC",
                 params![library.id],
             )
             .await
@@ -1582,6 +2213,7 @@ impl QuarryStore {
                 id: Uuid::new_v4().to_string(),
                 library_id: library.id,
                 path,
+                conflict_path: None,
                 ours_version_id,
                 theirs_version_id,
                 status: ConflictStatus::Open,
@@ -1604,10 +2236,25 @@ impl QuarryStore {
             )
             .await
             .map_err(map_turso_error)?;
-            Ok(conflict)
+            self.conflict_conn(&conn, &conflict.id).await
         }
         .await;
-        finish_tx(&conn, result).await
+        let conflict = finish_tx(&conn, result).await?;
+        self.emit_event(StoreEvent {
+            kind: StoreEventKind::ConflictCreated,
+            library_id: conflict.library_id.clone(),
+            path: Some(conflict.path.clone()),
+            new_path: None,
+            source: None,
+            tx_id: None,
+            doc_id: None,
+            version_id: None,
+            conflict_id: Some(conflict.id.clone()),
+            peer_id: None,
+            applied: None,
+            conflicts: None,
+        });
+        Ok(conflict)
     }
 
     pub async fn resolve_conflict(&self, conflict_id: &str) -> Result<ConflictRecord> {
@@ -1629,7 +2276,22 @@ impl QuarryStore {
             self.conflict_conn(&conn, conflict_id).await
         }
         .await;
-        finish_tx(&conn, result).await
+        let conflict = finish_tx(&conn, result).await?;
+        self.emit_event(StoreEvent {
+            kind: StoreEventKind::ConflictResolved,
+            library_id: conflict.library_id.clone(),
+            path: Some(conflict.path.clone()),
+            new_path: None,
+            source: None,
+            tx_id: None,
+            doc_id: None,
+            version_id: None,
+            conflict_id: Some(conflict.id.clone()),
+            peer_id: None,
+            applied: None,
+            conflicts: None,
+        });
+        Ok(conflict)
     }
 
     pub async fn gc(&self) -> Result<GcReport> {
@@ -1668,6 +2330,7 @@ impl QuarryStore {
     async fn migrate(&self) -> Result<()> {
         let conn = self.conn()?;
         conn.execute_batch(SCHEMA).await.map_err(map_turso_error)?;
+        ensure_links_resolution_status_column(&conn).await?;
         Ok(())
     }
 
@@ -1878,6 +2541,7 @@ impl QuarryStore {
         let id = Uuid::new_v4().to_string();
         let created_at = now_timestamp();
         let byte_size = content.len() as u64;
+        let metadata = merge_markdown_frontmatter_metadata(&content, metadata, content_type)?;
         let (content_hash, inline_content) = if content.len() <= INLINE_CONTENT_THRESHOLD {
             (None, Some(content))
         } else {
@@ -1896,6 +2560,10 @@ impl QuarryStore {
             id,
             document_id: document_id.to_string(),
             tx_id: tx_id.to_string(),
+            transaction_source: None,
+            transaction_actor: None,
+            transaction_message: None,
+            transaction_provenance: None,
             content_hash,
             inline_content,
             metadata,
@@ -1935,7 +2603,7 @@ impl QuarryStore {
     ) -> Result<DocumentListEntry> {
         let mut rows = conn
             .query(
-                "SELECT d.id, d.path, d.head_version_id, v.content_type, v.byte_size, v.metadata_json, d.updated_at
+                "SELECT d.id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.updated_at
                  FROM documents d
                  JOIN document_versions v ON v.id = d.head_version_id
                  WHERE d.library_id = ?1 AND d.path = ?2 AND d.deleted_at IS NULL AND d.head_version_id IS NOT NULL
@@ -1949,6 +2617,170 @@ impl QuarryStore {
         } else {
             Err(QuarryError::NotFound(path.to_string()))
         }
+    }
+
+    async fn document_entries_for_library_conn(
+        &self,
+        conn: &Connection,
+        library_id: &str,
+        limit: i64,
+    ) -> Result<Vec<DocumentListEntry>> {
+        let mut rows = conn
+            .query(
+                "SELECT d.id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.updated_at
+                 FROM documents d
+                 JOIN document_versions v ON v.id = d.head_version_id
+                 WHERE d.library_id = ?1 AND d.deleted_at IS NULL AND d.head_version_id IS NOT NULL
+                 ORDER BY d.path LIMIT ?2",
+                params![library_id.to_string(), limit],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        let mut documents = Vec::new();
+        while let Some(row) = rows.next().await.map_err(map_turso_error)? {
+            documents.push(document_entry_from_row(&row)?);
+        }
+        Ok(documents)
+    }
+
+    async fn reindex_links_conn(&self, conn: &Connection, library_id: &str) -> Result<usize> {
+        let documents = self
+            .document_entries_for_library_conn(conn, library_id, 10_000)
+            .await?;
+
+        conn.execute(
+            "DELETE FROM links WHERE library_id = ?1",
+            params![library_id.to_string()],
+        )
+        .await
+        .map_err(map_turso_error)?;
+        conn.execute(
+            "DELETE FROM aliases WHERE library_id = ?1",
+            params![library_id.to_string()],
+        )
+        .await
+        .map_err(map_turso_error)?;
+
+        for document in &documents {
+            for alias in metadata_aliases(&document.metadata) {
+                if alias.trim().is_empty() {
+                    continue;
+                }
+                conn.execute(
+                    "INSERT OR IGNORE INTO aliases (library_id, doc_id, alias, alias_source)
+                     VALUES (?1, ?2, ?3, 'metadata')",
+                    params![
+                        library_id.to_string(),
+                        document.id.clone(),
+                        alias.trim().to_string()
+                    ],
+                )
+                .await
+                .map_err(map_turso_error)?;
+            }
+        }
+
+        for entry in &documents {
+            if !is_textual_content_type(&entry.content_type) {
+                continue;
+            }
+            let document = self.document_conn(conn, library_id, &entry.path).await?;
+            for link in extract_links_for_document(&document, &documents) {
+                insert_link_conn(conn, library_id, &link).await?;
+            }
+        }
+
+        Ok(documents.len())
+    }
+
+    async fn links_for_source_conn(
+        &self,
+        conn: &Connection,
+        library_id: &str,
+        source_doc_id: &str,
+    ) -> Result<Vec<DocumentLink>> {
+        let mut rows = conn
+            .query(
+                "SELECT l.src_doc_id, l.src_version_id, sd.path,
+                        l.target_kind, l.target_text, l.target_doc_id, td.path,
+                        l.target_anchor, l.alias, l.start_offset, l.end_offset, l.resolution_status
+                 FROM links l
+                 JOIN documents sd ON sd.library_id = l.library_id AND sd.id = l.src_doc_id
+                 LEFT JOIN documents td
+                   ON td.library_id = l.library_id
+                  AND td.id = l.target_doc_id
+                  AND td.deleted_at IS NULL
+                  AND td.head_version_id IS NOT NULL
+                 WHERE l.library_id = ?1
+                   AND l.src_doc_id = ?2
+                   AND sd.deleted_at IS NULL
+                   AND sd.head_version_id IS NOT NULL
+                 ORDER BY l.start_offset, l.end_offset, l.target_kind",
+                params![library_id.to_string(), source_doc_id.to_string()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        links_from_rows(&mut rows).await
+    }
+
+    async fn links_for_target_conn(
+        &self,
+        conn: &Connection,
+        library_id: &str,
+        target_doc_id: &str,
+    ) -> Result<Vec<DocumentLink>> {
+        let mut rows = conn
+            .query(
+                "SELECT l.src_doc_id, l.src_version_id, sd.path,
+                        l.target_kind, l.target_text, l.target_doc_id, td.path,
+                        l.target_anchor, l.alias, l.start_offset, l.end_offset, l.resolution_status
+                 FROM links l
+                 JOIN documents sd ON sd.library_id = l.library_id AND sd.id = l.src_doc_id
+                 LEFT JOIN documents td
+                   ON td.library_id = l.library_id
+                  AND td.id = l.target_doc_id
+                  AND td.deleted_at IS NULL
+                  AND td.head_version_id IS NOT NULL
+                 WHERE l.library_id = ?1
+                   AND l.target_doc_id = ?2
+                   AND l.target_kind <> 'heading'
+                   AND sd.deleted_at IS NULL
+                   AND sd.head_version_id IS NOT NULL
+                 ORDER BY l.start_offset, l.end_offset, l.target_kind",
+                params![library_id.to_string(), target_doc_id.to_string()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        links_from_rows(&mut rows).await
+    }
+
+    async fn links_for_library_conn(
+        &self,
+        conn: &Connection,
+        library_id: &str,
+    ) -> Result<Vec<DocumentLink>> {
+        let mut rows = conn
+            .query(
+                "SELECT l.src_doc_id, l.src_version_id, sd.path,
+                        l.target_kind, l.target_text, l.target_doc_id, td.path,
+                        l.target_anchor, l.alias, l.start_offset, l.end_offset, l.resolution_status
+                 FROM links l
+                 JOIN documents sd ON sd.library_id = l.library_id AND sd.id = l.src_doc_id
+                 LEFT JOIN documents td
+                   ON td.library_id = l.library_id
+                  AND td.id = l.target_doc_id
+                  AND td.deleted_at IS NULL
+                  AND td.head_version_id IS NOT NULL
+                 WHERE l.library_id = ?1
+                   AND l.target_kind <> 'heading'
+                   AND sd.deleted_at IS NULL
+                   AND sd.head_version_id IS NOT NULL
+                 ORDER BY sd.path, l.start_offset, l.end_offset, l.target_kind",
+                params![library_id.to_string()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        links_from_rows(&mut rows).await
     }
 
     async fn document_conn(
@@ -1979,6 +2811,10 @@ impl QuarryStore {
             id: text(&row, 5)?,
             document_id: text(&row, 6)?,
             tx_id: text(&row, 7)?,
+            transaction_source: None,
+            transaction_actor: None,
+            transaction_message: None,
+            transaction_provenance: None,
             content_hash: opt_text(&row, 8)?,
             inline_content: opt_blob(&row, 9)?,
             metadata: serde_json::from_str(&text(&row, 10)?)?,
@@ -2008,6 +2844,42 @@ impl QuarryStore {
         })
     }
 
+    async fn version_content_conn(
+        &self,
+        conn: &Connection,
+        document_id: &str,
+        version_id: &str,
+    ) -> Result<(DocumentVersion, Vec<u8>)> {
+        let mut rows = conn
+            .query(
+                "SELECT v.id, v.document_id, v.tx_id, v.content_hash, v.inline_content, v.metadata_json,
+                        v.content_type, v.byte_size, v.created_at, t.source, t.actor, t.message, t.provenance_json
+                 FROM document_versions v
+                 JOIN transactions t ON t.id = v.tx_id
+                 WHERE v.document_id = ?1 AND v.id = ?2 LIMIT 1",
+                params![document_id.to_string(), version_id.to_string()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(map_turso_error)?
+            .ok_or_else(|| QuarryError::NotFound(format!("version {version_id}")))?;
+        let version = version_from_row(&row)?;
+        let content = match (&version.inline_content, &version.content_hash) {
+            (Some(bytes), None) => bytes.clone(),
+            (None, Some(hash)) => self.cas.read(hash)?,
+            _ => {
+                return Err(QuarryError::Storage(format!(
+                    "version {} violates inline/CAS invariant",
+                    version.id
+                )))
+            }
+        };
+        Ok((version, content))
+    }
+
     async fn transaction_conn(&self, conn: &Connection, tx_id: &str) -> Result<TransactionRecord> {
         let mut rows = conn
             .query(
@@ -2027,8 +2899,14 @@ impl QuarryStore {
     async fn conflict_conn(&self, conn: &Connection, conflict_id: &str) -> Result<ConflictRecord> {
         let mut rows = conn
             .query(
-                "SELECT id, library_id, path, ours_version_id, theirs_version_id, status, discovered_at, resolved_at
-                 FROM conflicts WHERE id = ?1 LIMIT 1",
+                "SELECT c.id, c.library_id, c.path, c.ours_version_id, c.theirs_version_id,
+                        c.status, c.discovered_at, c.resolved_at,
+                        CASE WHEN d.path IS NOT NULL AND d.path <> c.path THEN d.path ELSE NULL END
+                 FROM conflicts c
+                 LEFT JOIN document_versions tv ON tv.id = c.theirs_version_id
+                 LEFT JOIN documents d ON d.id = tv.document_id AND d.library_id = c.library_id
+                 WHERE c.id = ?1
+                 LIMIT 1",
                 params![conflict_id.to_string()],
             )
             .await
@@ -2146,6 +3024,29 @@ CREATE TABLE IF NOT EXISTS inodes(
   UNIQUE(library_id, path)
 );
 
+CREATE TABLE IF NOT EXISTS links(
+  library_id TEXT NOT NULL,
+  src_doc_id TEXT NOT NULL,
+  src_version_id TEXT NOT NULL,
+  target_kind TEXT NOT NULL,
+  target_text TEXT NOT NULL,
+  target_doc_id TEXT,
+  target_anchor TEXT,
+  start_offset INTEGER NOT NULL,
+  end_offset INTEGER NOT NULL,
+  alias TEXT,
+  resolution_status TEXT NOT NULL DEFAULT 'unresolved',
+  PRIMARY KEY(library_id, src_doc_id, src_version_id, start_offset, end_offset, target_kind, target_text)
+);
+
+CREATE TABLE IF NOT EXISTS aliases(
+  library_id TEXT NOT NULL,
+  doc_id TEXT NOT NULL,
+  alias TEXT NOT NULL,
+  alias_source TEXT NOT NULL,
+  PRIMARY KEY(library_id, alias, doc_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_documents_library_path ON documents(library_id, path);
 CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at);
 CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents(updated_at);
@@ -2153,7 +3054,475 @@ CREATE INDEX IF NOT EXISTS idx_versions_document ON document_versions(document_i
 CREATE INDEX IF NOT EXISTS idx_versions_content_type ON document_versions(content_type);
 CREATE INDEX IF NOT EXISTS idx_versions_created_at ON document_versions(created_at);
 CREATE INDEX IF NOT EXISTS idx_changes_tx ON transaction_changes(tx_id);
+CREATE INDEX IF NOT EXISTS idx_links_src ON links(library_id, src_doc_id, src_version_id);
+CREATE INDEX IF NOT EXISTS idx_links_target ON links(library_id, target_doc_id);
+CREATE INDEX IF NOT EXISTS idx_aliases_lookup ON aliases(library_id, alias);
 "#;
+
+fn title_for_entry(entry: &DocumentListEntry) -> String {
+    entry
+        .metadata
+        .get("title")
+        .and_then(JsonValue::as_str)
+        .filter(|title| !title.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| display_name_from_path(&entry.path))
+}
+
+fn graph_node_from_entry(entry: &DocumentListEntry) -> GraphNode {
+    GraphNode {
+        id: entry.id.clone(),
+        path: entry.path.clone(),
+        title: title_for_entry(entry),
+        content_type: entry.content_type.clone(),
+    }
+}
+
+fn display_name_from_path(path: &str) -> String {
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+    file_name
+        .strip_suffix(".md")
+        .or_else(|| file_name.strip_suffix(".markdown"))
+        .unwrap_or(file_name)
+        .to_string()
+}
+
+fn is_textual_content_type(content_type: &str) -> bool {
+    content_type.starts_with("text/")
+        || matches!(
+            content_type,
+            "application/json"
+                | "application/markdown"
+                | "application/x-markdown"
+                | "application/yaml"
+                | "application/x-yaml"
+        )
+}
+
+fn push_unique(fields: &mut Vec<String>, field: &str) {
+    if !fields.iter().any(|existing| existing == field) {
+        fields.push(field.to_string());
+    }
+}
+
+fn suggestion_match_rank(match_type: &str) -> u8 {
+    match match_type {
+        "title" => 0,
+        "path" => 1,
+        "alias" => 2,
+        "heading" => 3,
+        _ => 4,
+    }
+}
+
+fn make_snippet(text: &str, index: usize, query_len: usize) -> String {
+    let mut start = index.saturating_sub(60);
+    let mut end = (index + query_len + 60).min(text.len());
+    while start > 0 && !text.is_char_boundary(start) {
+        start -= 1;
+    }
+    while end < text.len() && !text.is_char_boundary(end) {
+        end += 1;
+    }
+    let prefix = if start > 0 { "..." } else { "" };
+    let suffix = if end < text.len() { "..." } else { "" };
+    format!("{prefix}{}{suffix}", text[start..end].replace('\n', " "))
+}
+
+fn extract_links_for_document(
+    document: &Document,
+    documents: &[DocumentListEntry],
+) -> Vec<DocumentLink> {
+    if !is_textual_content_type(&document.version.content_type) {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&document.content);
+    let mut links = Vec::new();
+    extract_headings(&text, document, &mut links);
+    extract_wikilinks(&text, document, documents, &mut links);
+    extract_markdown_links(&text, document, documents, &mut links);
+    extract_tags(&text, document, &mut links);
+    links.sort_by_key(|link| link.start_offset);
+    links
+}
+
+fn extract_headings(text: &str, document: &Document, links: &mut Vec<DocumentLink>) {
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        let line_body = line.trim_end_matches(['\r', '\n']);
+        let trimmed_start = line_body.trim_start();
+        let leading_whitespace = line_body.len() - trimmed_start.len();
+        let heading_marks = trimmed_start
+            .as_bytes()
+            .iter()
+            .take_while(|byte| **byte == b'#')
+            .count();
+        if !(1..=6).contains(&heading_marks) {
+            offset += line.len();
+            continue;
+        }
+        let after_marks = &trimmed_start[heading_marks..];
+        if !after_marks.starts_with(' ') && !after_marks.starts_with('\t') {
+            offset += line.len();
+            continue;
+        }
+        let content_start_in_after_marks = after_marks.len() - after_marks.trim_start().len();
+        let raw_text = after_marks.trim();
+        let heading_text = raw_text.trim_end_matches('#').trim();
+        if heading_text.is_empty() {
+            offset += line.len();
+            continue;
+        }
+        let start_offset =
+            offset + leading_whitespace + heading_marks + content_start_in_after_marks;
+        links.push(DocumentLink {
+            src_doc_id: document.id.clone(),
+            src_version_id: document.version.id.clone(),
+            src_path: document.path.clone(),
+            target_kind: "heading".to_string(),
+            target_text: heading_text.to_string(),
+            target_doc_id: Some(document.id.clone()),
+            target_path: Some(document.path.clone()),
+            target_anchor: Some(slugify_heading(heading_text)),
+            alias: None,
+            start_offset,
+            end_offset: start_offset + heading_text.len(),
+            resolved: true,
+            resolution_status: "resolved".to_string(),
+        });
+        offset += line.len();
+    }
+}
+
+fn extract_wikilinks(
+    text: &str,
+    document: &Document,
+    documents: &[DocumentListEntry],
+    links: &mut Vec<DocumentLink>,
+) {
+    let mut search_start = 0;
+    while let Some(open_rel) = text[search_start..].find("[[") {
+        let open = search_start + open_rel;
+        let Some(close_rel) = text[open + 2..].find("]]") else {
+            break;
+        };
+        let close = open + 2 + close_rel;
+        let inner = &text[open + 2..close];
+        let is_embed = open > 0 && text.as_bytes()[open - 1] == b'!';
+        let start_offset = if is_embed { open - 1 } else { open };
+        let (target_text, alias) = split_alias(inner);
+        let (lookup_target, target_anchor) = split_anchor(&target_text);
+        let resolution = resolve_link_target(&lookup_target, documents);
+        links.push(DocumentLink {
+            src_doc_id: document.id.clone(),
+            src_version_id: document.version.id.clone(),
+            src_path: document.path.clone(),
+            target_kind: if is_embed { "embed" } else { "wiki_link" }.to_string(),
+            target_text: lookup_target,
+            target_doc_id: resolution.target.map(|entry| entry.id.clone()),
+            target_path: resolution.target.map(|entry| entry.path.clone()),
+            target_anchor,
+            alias,
+            start_offset,
+            end_offset: close + 2,
+            resolved: resolution.target.is_some(),
+            resolution_status: resolution.status.to_string(),
+        });
+        search_start = close + 2;
+    }
+}
+
+fn extract_markdown_links(
+    text: &str,
+    document: &Document,
+    documents: &[DocumentListEntry],
+    links: &mut Vec<DocumentLink>,
+) {
+    let mut search_start = 0;
+    while let Some(open_rel) = text[search_start..].find('[') {
+        let open = search_start + open_rel;
+        if text[open..].starts_with("[[") {
+            search_start = open + 2;
+            continue;
+        }
+        let Some(label_end_rel) = text[open + 1..].find("](") else {
+            search_start = open + 1;
+            continue;
+        };
+        let target_start = open + 1 + label_end_rel + 2;
+        let Some(close_rel) = text[target_start..].find(')') else {
+            break;
+        };
+        let close = target_start + close_rel;
+        let target = text[target_start..close].trim();
+        if target.is_empty() {
+            search_start = close + 1;
+            continue;
+        }
+        let (lookup_target, target_anchor) = split_anchor(target);
+        let resolution = if is_external_link(&lookup_target) || lookup_target.starts_with('#') {
+            LinkResolution::unresolved()
+        } else {
+            resolve_link_target(&lookup_target, documents)
+        };
+        links.push(DocumentLink {
+            src_doc_id: document.id.clone(),
+            src_version_id: document.version.id.clone(),
+            src_path: document.path.clone(),
+            target_kind: "markdown_link".to_string(),
+            target_text: lookup_target,
+            target_doc_id: resolution.target.map(|entry| entry.id.clone()),
+            target_path: resolution.target.map(|entry| entry.path.clone()),
+            target_anchor,
+            alias: None,
+            start_offset: open,
+            end_offset: close + 1,
+            resolved: resolution.target.is_some(),
+            resolution_status: resolution.status.to_string(),
+        });
+        search_start = close + 1;
+    }
+}
+
+fn extract_tags(text: &str, document: &Document, links: &mut Vec<DocumentLink>) {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'#' {
+            index += 1;
+            continue;
+        }
+        let previous = index.checked_sub(1).map(|idx| bytes[idx] as char);
+        if previous.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == ']') {
+            index += 1;
+            continue;
+        }
+        let mut end = index + 1;
+        while end < bytes.len() {
+            let ch = bytes[end] as char;
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '/' {
+                end += 1;
+            } else {
+                break;
+            }
+        }
+        if end > index + 1 {
+            let tag = text[index + 1..end].to_string();
+            links.push(DocumentLink {
+                src_doc_id: document.id.clone(),
+                src_version_id: document.version.id.clone(),
+                src_path: document.path.clone(),
+                target_kind: "tag".to_string(),
+                target_text: tag,
+                target_doc_id: None,
+                target_path: None,
+                target_anchor: None,
+                alias: None,
+                start_offset: index,
+                end_offset: end,
+                resolved: false,
+                resolution_status: "unresolved".to_string(),
+            });
+        }
+        index = end.max(index + 1);
+    }
+}
+
+fn split_alias(text: &str) -> (String, Option<String>) {
+    let (target, alias) = text
+        .split_once('|')
+        .map(|(target, alias)| (target, Some(alias)))
+        .unwrap_or((text, None));
+    (
+        target.trim().to_string(),
+        alias
+            .map(str::trim)
+            .filter(|alias| !alias.is_empty())
+            .map(ToOwned::to_owned),
+    )
+}
+
+fn split_anchor(target: &str) -> (String, Option<String>) {
+    if let Some((path, anchor)) = target.split_once('#') {
+        return (
+            path.trim().to_string(),
+            Some(anchor.trim().trim_start_matches('#').to_string()),
+        );
+    }
+    if let Some((path, anchor)) = target.split_once('^') {
+        return (
+            path.trim().to_string(),
+            Some(format!("^{}", anchor.trim().trim_start_matches('^'))),
+        );
+    }
+    (target.trim().to_string(), None)
+}
+
+fn is_external_link(target: &str) -> bool {
+    target.starts_with("http://")
+        || target.starts_with("https://")
+        || target.starts_with("mailto:")
+        || target.starts_with("tel:")
+}
+
+struct LinkResolution<'a> {
+    target: Option<&'a DocumentListEntry>,
+    status: &'static str,
+}
+
+impl<'a> LinkResolution<'a> {
+    fn resolved(target: &'a DocumentListEntry) -> Self {
+        Self {
+            target: Some(target),
+            status: "resolved",
+        }
+    }
+
+    fn unresolved() -> Self {
+        Self {
+            target: None,
+            status: "unresolved",
+        }
+    }
+
+    fn ambiguous() -> Self {
+        Self {
+            target: None,
+            status: "ambiguous",
+        }
+    }
+}
+
+fn resolve_link_target<'a>(target: &str, documents: &'a [DocumentListEntry]) -> LinkResolution<'a> {
+    let normalized = target.trim().trim_start_matches('/');
+    if normalized.is_empty() {
+        return LinkResolution::unresolved();
+    }
+    let normalized_lc = normalized.to_lowercase();
+    let normalized_md_lc = format!("{normalized_lc}.md");
+    let normalized_without_ext = strip_markdown_extension(&normalized_lc);
+    let mut candidates: Vec<(&DocumentListEntry, u8)> = documents
+        .iter()
+        .filter_map(|entry| {
+            let path_lc = entry.path.to_lowercase();
+            let path_without_ext = strip_markdown_extension(&path_lc);
+            let file_name = entry.path.rsplit('/').next().unwrap_or(&entry.path);
+            let file_stem_lc = strip_markdown_extension(&file_name.to_lowercase());
+            let rank = if path_lc == normalized_lc {
+                0
+            } else if path_lc == normalized_md_lc {
+                1
+            } else if path_without_ext == normalized_without_ext {
+                2
+            } else if file_stem_lc == normalized_without_ext {
+                3
+            } else if metadata_aliases(&entry.metadata)
+                .iter()
+                .any(|alias| alias.eq_ignore_ascii_case(normalized))
+            {
+                4
+            } else {
+                return None;
+            };
+            Some((entry, rank))
+        })
+        .collect();
+    candidates.sort_by(|(a, a_rank), (b, b_rank)| {
+        a_rank.cmp(b_rank).then_with(|| {
+            a.path
+                .len()
+                .cmp(&b.path.len())
+                .then_with(|| a.path.cmp(&b.path))
+        })
+    });
+    let Some((first, rank)) = candidates.first().copied() else {
+        return LinkResolution::unresolved();
+    };
+    let shortest_path_len = first.path.len();
+    let ambiguous = candidates.iter().skip(1).any(|(entry, candidate_rank)| {
+        *candidate_rank == rank && (rank == 4 || entry.path.len() == shortest_path_len)
+    });
+    if ambiguous {
+        LinkResolution::ambiguous()
+    } else {
+        LinkResolution::resolved(first)
+    }
+}
+
+fn strip_markdown_extension(path: &str) -> String {
+    path.strip_suffix(".md")
+        .or_else(|| path.strip_suffix(".markdown"))
+        .unwrap_or(path)
+        .to_string()
+}
+
+fn slugify_heading(text: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_dash = false;
+    for ch in text.chars() {
+        if ch.is_alphanumeric() {
+            for lowercase in ch.to_lowercase() {
+                slug.push(lowercase);
+            }
+            last_was_dash = false;
+        } else if !slug.is_empty() && !last_was_dash {
+            slug.push('-');
+            last_was_dash = true;
+        }
+    }
+    if last_was_dash {
+        slug.pop();
+    }
+    slug
+}
+
+fn metadata_aliases(metadata: &JsonValue) -> Vec<String> {
+    match metadata.get("aliases") {
+        Some(JsonValue::String(alias)) => vec![alias.clone()],
+        Some(JsonValue::Array(aliases)) => aliases
+            .iter()
+            .filter_map(JsonValue::as_str)
+            .map(ToOwned::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn unified_line_diff(base: &str, against: &str) -> String {
+    let base_lines: Vec<&str> = base.lines().collect();
+    let against_lines: Vec<&str> = against.lines().collect();
+    let mut diff = String::from("--- base\n+++ against\n");
+    let max = base_lines.len().max(against_lines.len());
+    for index in 0..max {
+        match (base_lines.get(index), against_lines.get(index)) {
+            (Some(base_line), Some(against_line)) if base_line == against_line => {
+                diff.push(' ');
+                diff.push_str(base_line);
+                diff.push('\n');
+            }
+            (Some(base_line), Some(against_line)) => {
+                diff.push('-');
+                diff.push_str(base_line);
+                diff.push('\n');
+                diff.push('+');
+                diff.push_str(against_line);
+                diff.push('\n');
+            }
+            (Some(base_line), None) => {
+                diff.push('-');
+                diff.push_str(base_line);
+                diff.push('\n');
+            }
+            (None, Some(against_line)) => {
+                diff.push('+');
+                diff.push_str(against_line);
+                diff.push('\n');
+            }
+            (None, None) => {}
+        }
+    }
+    diff
+}
 
 fn acquire_lock(config: &StoreConfig) -> Result<LockGuard> {
     let path = config
@@ -2275,6 +3644,39 @@ async fn insert_change_conn(
     .await
     .map_err(map_turso_error)?;
     Ok(())
+}
+
+async fn insert_link_conn(conn: &Connection, library_id: &str, link: &DocumentLink) -> Result<()> {
+    conn.execute(
+        "INSERT INTO links
+         (library_id, src_doc_id, src_version_id, target_kind, target_text, target_doc_id,
+          target_anchor, start_offset, end_offset, alias, resolution_status)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        vec![
+            Value::Text(library_id.to_string()),
+            Value::Text(link.src_doc_id.clone()),
+            Value::Text(link.src_version_id.clone()),
+            Value::Text(link.target_kind.clone()),
+            Value::Text(link.target_text.clone()),
+            opt_value(link.target_doc_id.clone()),
+            opt_value(link.target_anchor.clone()),
+            Value::Integer(link.start_offset as i64),
+            Value::Integer(link.end_offset as i64),
+            opt_value(link.alias.clone()),
+            Value::Text(link.resolution_status.clone()),
+        ],
+    )
+    .await
+    .map_err(map_turso_error)?;
+    Ok(())
+}
+
+async fn links_from_rows(rows: &mut Rows) -> Result<Vec<DocumentLink>> {
+    let mut links = Vec::new();
+    while let Some(row) = rows.next().await.map_err(map_turso_error)? {
+        links.push(link_from_row(&row)?);
+    }
+    Ok(links)
 }
 
 async fn delete_staged_change_conn(conn: &Connection, tx_id: &str, path: &str) -> Result<()> {
@@ -2549,23 +3951,92 @@ fn document_entry_from_row(row: &Row) -> Result<DocumentListEntry> {
         head_version_id: text(row, 2)?,
         content_type: text(row, 3)?,
         byte_size: int(row, 4)? as u64,
-        metadata: serde_json::from_str(&text(row, 5)?)?,
-        updated_at: text(row, 6)?,
+        content_hash: opt_text(row, 5)?,
+        metadata: serde_json::from_str(&text(row, 6)?)?,
+        updated_at: text(row, 7)?,
+    })
+}
+
+fn link_from_row(row: &Row) -> Result<DocumentLink> {
+    let target_doc_id = opt_text(row, 5)?;
+    let target_path = opt_text(row, 6)?;
+    let resolved = target_doc_id.is_some() && target_path.is_some();
+    let stored_resolution_status = text(row, 11)?;
+    let resolution_status = if resolved {
+        "resolved".to_string()
+    } else if stored_resolution_status == "ambiguous" {
+        "ambiguous".to_string()
+    } else {
+        "unresolved".to_string()
+    };
+    Ok(DocumentLink {
+        src_doc_id: text(row, 0)?,
+        src_version_id: text(row, 1)?,
+        src_path: text(row, 2)?,
+        target_kind: text(row, 3)?,
+        target_text: text(row, 4)?,
+        target_doc_id: if resolved { target_doc_id } else { None },
+        target_path,
+        target_anchor: opt_text(row, 7)?,
+        alias: opt_text(row, 8)?,
+        start_offset: int(row, 9)? as usize,
+        end_offset: int(row, 10)? as usize,
+        resolved,
+        resolution_status,
     })
 }
 
 fn version_from_row(row: &Row) -> Result<DocumentVersion> {
-    Ok(DocumentVersion {
+    let mut version = DocumentVersion {
         id: text(row, 0)?,
         document_id: text(row, 1)?,
         tx_id: text(row, 2)?,
+        transaction_source: None,
+        transaction_actor: None,
+        transaction_message: None,
+        transaction_provenance: None,
         content_hash: opt_text(row, 3)?,
         inline_content: opt_blob(row, 4)?,
         metadata: serde_json::from_str(&text(row, 5)?)?,
         content_type: text(row, 6)?,
         byte_size: int(row, 7)? as u64,
         created_at: text(row, 8)?,
-    })
+    };
+    if let Some(source) = opt_text(row, 9)? {
+        version.transaction_source = Some(document_source_from_str(&source)?);
+        version.transaction_actor = opt_text(row, 10)?;
+        version.transaction_message = opt_text(row, 11)?;
+        version.transaction_provenance = Some(serde_json::from_str(&text(row, 12)?)?);
+    }
+    Ok(version)
+}
+
+fn document_source_from_str(source: &str) -> Result<DocumentSource> {
+    match source {
+        "rest" => Ok(DocumentSource::Rest),
+        "git" => Ok(DocumentSource::Git),
+        "fuse" => Ok(DocumentSource::Fuse),
+        "cli" => Ok(DocumentSource::Cli),
+        "system" => Ok(DocumentSource::System),
+        other => Err(QuarryError::Storage(format!("invalid source {other}"))),
+    }
+}
+
+fn links_indexed_event(library_id: String, path: String) -> StoreEvent {
+    StoreEvent {
+        kind: StoreEventKind::LinksIndexed,
+        library_id,
+        path: Some(path),
+        new_path: None,
+        source: None,
+        tx_id: None,
+        doc_id: None,
+        version_id: None,
+        conflict_id: None,
+        peer_id: None,
+        applied: None,
+        conflicts: None,
+    }
 }
 
 fn transaction_from_row(row: &Row) -> Result<TransactionRecord> {
@@ -2579,14 +4050,7 @@ fn transaction_from_row(row: &Row) -> Result<TransactionRecord> {
             other => return Err(QuarryError::Storage(format!("invalid tx state {other}"))),
         },
         actor: opt_text(row, 3)?,
-        source: match text(row, 4)?.as_str() {
-            "rest" => DocumentSource::Rest,
-            "git" => DocumentSource::Git,
-            "fuse" => DocumentSource::Fuse,
-            "cli" => DocumentSource::Cli,
-            "system" => DocumentSource::System,
-            other => return Err(QuarryError::Storage(format!("invalid source {other}"))),
-        },
+        source: document_source_from_str(&text(row, 4)?)?,
         message: opt_text(row, 5)?,
         provenance: serde_json::from_str(&text(row, 6)?)?,
         created_at: text(row, 7)?,
@@ -2599,6 +4063,7 @@ fn conflict_from_row(row: &Row) -> Result<ConflictRecord> {
         id: text(row, 0)?,
         library_id: text(row, 1)?,
         path: text(row, 2)?,
+        conflict_path: opt_text(row, 8)?,
         ours_version_id: opt_text(row, 3)?,
         theirs_version_id: opt_text(row, 4)?,
         status: match text(row, 5)?.as_str() {
@@ -2649,6 +4114,25 @@ fn validate_slug(slug: &str) -> Result<()> {
     }
 }
 
+async fn ensure_links_resolution_status_column(conn: &Connection) -> Result<()> {
+    let mut rows = conn
+        .query("PRAGMA table_info(links)", ())
+        .await
+        .map_err(map_turso_error)?;
+    while let Some(row) = rows.next().await.map_err(map_turso_error)? {
+        if text(&row, 1)? == "resolution_status" {
+            return Ok(());
+        }
+    }
+    conn.execute(
+        "ALTER TABLE links ADD COLUMN resolution_status TEXT NOT NULL DEFAULT 'unresolved'",
+        (),
+    )
+    .await
+    .map_err(map_turso_error)?;
+    Ok(())
+}
+
 fn normalize_prefix(prefix: &str) -> Result<String> {
     let trimmed = prefix.trim_start_matches('/');
     if trimmed.is_empty() {
@@ -2658,6 +4142,26 @@ fn normalize_prefix(prefix: &str) -> Result<String> {
     } else {
         normalize_path(trimmed)
     }
+}
+
+fn normalize_graph_folder(folder: &str) -> Result<String> {
+    let trimmed = folder.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        Ok(String::new())
+    } else {
+        normalize_path(trimmed)
+    }
+}
+
+fn normalize_graph_tag(tag: &str) -> String {
+    tag.trim().trim_start_matches('#').to_string()
+}
+
+fn path_is_in_folder(path: &str, folder: &str) -> bool {
+    path == folder
+        || path
+            .strip_prefix(folder)
+            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 fn normalize_directory_path(path: &str) -> Result<String> {
@@ -2685,6 +4189,61 @@ fn merge_json(target: &mut JsonValue, patch: JsonValue) {
         }
         (target, value) => *target = value,
     }
+}
+
+fn merge_markdown_frontmatter_metadata(
+    content: &[u8],
+    metadata: JsonValue,
+    content_type: &str,
+) -> Result<JsonValue> {
+    if !is_markdown_content_type(content_type) {
+        return Ok(metadata);
+    }
+    let mut frontmatter = markdown_frontmatter_metadata(content)?;
+    merge_json(&mut frontmatter, metadata);
+    Ok(frontmatter)
+}
+
+fn markdown_frontmatter_metadata(content: &[u8]) -> Result<JsonValue> {
+    let Ok(text) = std::str::from_utf8(content) else {
+        return Ok(serde_json::json!({}));
+    };
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let Some(open_len) = markdown_frontmatter_open_len(text) else {
+        return Ok(serde_json::json!({}));
+    };
+    let body = &text[open_len..];
+    let Some((end, _close_len)) = markdown_frontmatter_close(body) else {
+        return Ok(serde_json::json!({}));
+    };
+    let yaml = &body[..end];
+    Ok(serde_json::to_value(serde_yaml::from_str::<
+        serde_yaml::Value,
+    >(yaml)?)?)
+}
+
+fn markdown_frontmatter_open_len(text: &str) -> Option<usize> {
+    if text.starts_with("---\n") {
+        Some(4)
+    } else if text.starts_with("---\r\n") {
+        Some(5)
+    } else {
+        None
+    }
+}
+
+fn markdown_frontmatter_close(text: &str) -> Option<(usize, usize)> {
+    ["\n---\n", "\r\n---\r\n", "\n---\r\n", "\r\n---\n"]
+        .into_iter()
+        .filter_map(|marker| text.find(marker).map(|index| (index, marker.len())))
+        .min_by_key(|(index, _)| *index)
+}
+
+fn is_markdown_content_type(content_type: &str) -> bool {
+    matches!(
+        content_type.split(';').next().unwrap_or("").trim(),
+        "text/markdown" | "text/x-markdown" | "application/markdown" | "application/x-markdown"
+    )
 }
 
 fn opt_value(value: Option<String>) -> Value {

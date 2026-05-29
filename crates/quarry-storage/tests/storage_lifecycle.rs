@@ -50,6 +50,14 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
         .unwrap();
     assert!(large.version.content_hash.is_some());
     assert!(large.version.inline_content.is_none());
+    let listed_large = store
+        .list_documents(&alpha.slug, Some("assets/"), None)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|document| document.path == "assets/large.bin")
+        .unwrap();
+    assert_eq!(listed_large.content_hash, large.version.content_hash);
 
     let second = store
         .put_document(
@@ -177,6 +185,442 @@ async fn concurrent_auto_commit_writes_publish_without_lost_documents() {
             format!("document {index}\n").as_bytes()
         );
     }
+}
+
+#[tokio::test]
+async fn link_index_updates_from_markdown_writes_and_ignores_binary_content() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("links").await.unwrap();
+
+    store
+        .put_document(
+            &library.slug,
+            "target.md",
+            b"# Target Heading\n\nTarget body.\n".to_vec(),
+            serde_json::json!({
+                "content_type": "text/markdown",
+                "aliases": ["Target Alias"]
+            }),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    let source = store
+        .put_document(
+            &library.slug,
+            "source.md",
+            b"See [[Target Alias#Target Heading|alias]], ![[target]], [target](target.md), [[Missing]], and #tag.\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    let outgoing = store
+        .outgoing_links(&library.slug, "source.md")
+        .await
+        .unwrap();
+    assert!(outgoing.links.iter().any(|link| {
+        link.target_kind == "wiki_link"
+            && link.target_path.as_deref() == Some("target.md")
+            && link.target_anchor.as_deref() == Some("Target Heading")
+            && link.alias.as_deref() == Some("alias")
+            && link.resolved
+    }));
+    assert!(outgoing.links.iter().any(
+        |link| link.target_kind == "embed" && link.target_path.as_deref() == Some("target.md")
+    ));
+    assert!(outgoing
+        .links
+        .iter()
+        .any(|link| link.target_kind == "tag" && link.target_text == "tag"));
+    assert!(outgoing
+        .links
+        .iter()
+        .any(|link| link.target_kind == "wiki_link"
+            && link.target_text == "Missing"
+            && !link.resolved));
+
+    let target_links = store
+        .outgoing_links(&library.slug, "target.md")
+        .await
+        .unwrap();
+    assert!(target_links.links.iter().any(|link| {
+        link.target_kind == "heading"
+            && link.target_text == "Target Heading"
+            && link.target_anchor.as_deref() == Some("target-heading")
+            && link.target_path.as_deref() == Some("target.md")
+            && link.resolved
+    }));
+
+    store
+        .put_document(
+            &library.slug,
+            "raw.bin",
+            b"[[target]] should not be indexed from binary content".to_vec(),
+            serde_json::json!({"content_type":"application/octet-stream"}),
+            "application/octet-stream",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    assert!(store
+        .outgoing_links(&library.slug, "raw.bin")
+        .await
+        .unwrap()
+        .links
+        .is_empty());
+    let focused_graph = store
+        .graph(
+            &library.slug,
+            Some("target.md"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(focused_graph
+        .nodes
+        .iter()
+        .any(|node| node.path == "target.md"));
+    assert!(focused_graph
+        .nodes
+        .iter()
+        .any(|node| node.path == "source.md"));
+    assert!(!focused_graph
+        .nodes
+        .iter()
+        .any(|node| node.path == "raw.bin"));
+
+    store
+        .put_document(
+            &library.slug,
+            "source.md",
+            b"No links now.\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::IfMatch(source.version.id.clone()),
+        )
+        .await
+        .unwrap();
+    assert!(store
+        .outgoing_links(&library.slug, "source.md")
+        .await
+        .unwrap()
+        .links
+        .is_empty());
+    assert!(store
+        .backlinks(&library.slug, "target.md")
+        .await
+        .unwrap()
+        .links
+        .is_empty());
+
+    let tx = store
+        .begin_transaction(
+            &library.slug,
+            DocumentSource::Rest,
+            None,
+            Some("restore source link".to_string()),
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+    store
+        .stage_put(
+            &tx.id,
+            "source.md",
+            b"Transaction link to [[target]].\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+        )
+        .await
+        .unwrap();
+    store.commit_transaction(&tx.id).await.unwrap();
+
+    assert!(store
+        .backlinks(&library.slug, "target.md")
+        .await
+        .unwrap()
+        .links
+        .iter()
+        .any(|link| link.src_path == "source.md"));
+}
+
+#[tokio::test]
+async fn suggestions_include_aliases_and_headings_for_wikilink_completion() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("suggestions").await.unwrap();
+
+    store
+        .put_document(
+            &library.slug,
+            "guide.md",
+            b"# Deep Section\n\nGuide body.\n".to_vec(),
+            serde_json::json!({
+                "content_type": "text/markdown",
+                "title": "Guide",
+                "aliases": ["Shortcut"]
+            }),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    let alias_suggestions = serde_json::to_value(
+        store
+            .suggest_documents(&library.slug, "shortcut", Some(10))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(alias_suggestions
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|suggestion| {
+            suggestion["path"] == "guide.md"
+                && suggestion["match_type"] == "alias"
+                && suggestion["matched_text"] == "Shortcut"
+        }));
+
+    let heading_suggestions = serde_json::to_value(
+        store
+            .suggest_documents(&library.slug, "deep", Some(10))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(heading_suggestions
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|suggestion| {
+            suggestion["path"] == "guide.md"
+                && suggestion["match_type"] == "heading"
+                && suggestion["matched_text"] == "Deep Section"
+                && suggestion["target_anchor"] == "Deep Section"
+        }));
+}
+
+#[tokio::test]
+async fn markdown_frontmatter_aliases_participate_in_link_resolution() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("frontmatterlinks").await.unwrap();
+
+    store
+        .put_document(
+            &library.slug,
+            "guide.md",
+            b"---\naliases:\n  - Front Alias\n---\n# Guide\n".to_vec(),
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "source.md",
+            b"See [[Front Alias]].\n".to_vec(),
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    let guide = store.get_document(&library.slug, "guide.md").await.unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&guide.content),
+        "---\naliases:\n  - Front Alias\n---\n# Guide\n"
+    );
+    assert_eq!(guide.version.metadata["aliases"][0], "Front Alias");
+
+    let outgoing = store
+        .outgoing_links(&library.slug, "source.md")
+        .await
+        .unwrap();
+    assert!(outgoing.links.iter().any(|link| {
+        link.target_kind == "wiki_link"
+            && link.target_text == "Front Alias"
+            && link.target_path.as_deref() == Some("guide.md")
+            && link.resolved
+    }));
+}
+
+#[tokio::test]
+async fn ambiguous_short_wikilinks_remain_unresolved() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("ambiguouslinks").await.unwrap();
+
+    for path in ["alpha/target.md", "omega/target.md"] {
+        store
+            .put_document(
+                &library.slug,
+                path,
+                b"# Target\n".to_vec(),
+                serde_json::json!({"content_type": "text/markdown"}),
+                "text/markdown",
+                DocumentSource::Rest,
+                WritePrecondition::None,
+            )
+            .await
+            .unwrap();
+    }
+    store
+        .put_document(
+            &library.slug,
+            "source.md",
+            b"See [[target]].\n".to_vec(),
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    let outgoing = store
+        .outgoing_links(&library.slug, "source.md")
+        .await
+        .unwrap();
+    let link = outgoing
+        .links
+        .iter()
+        .find(|link| link.target_kind == "wiki_link" && link.target_text == "target")
+        .unwrap();
+    assert_eq!(link.target_path, None);
+    assert!(!link.resolved);
+    assert_eq!(
+        serde_json::to_value(link).unwrap()["resolution_status"],
+        "ambiguous"
+    );
+}
+
+#[tokio::test]
+async fn link_index_tracks_moves_and_deletes() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("links").await.unwrap();
+
+    store
+        .put_document(
+            &library.slug,
+            "target.md",
+            b"# Target\n".to_vec(),
+            serde_json::json!({
+                "content_type": "text/markdown",
+                "aliases": ["target"]
+            }),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "source.md",
+            b"See [[target]].\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    store
+        .move_document(
+            &library.slug,
+            "target.md",
+            "renamed.md",
+            DocumentSource::Rest,
+        )
+        .await
+        .unwrap();
+    let backlinks = store.backlinks(&library.slug, "renamed.md").await.unwrap();
+    assert!(backlinks.links.iter().any(|link| {
+        link.src_path == "source.md" && link.target_path.as_deref() == Some("renamed.md")
+    }));
+
+    store
+        .move_document(
+            &library.slug,
+            "source.md",
+            "folder/source.md",
+            DocumentSource::Rest,
+        )
+        .await
+        .unwrap();
+    let backlinks = store.backlinks(&library.slug, "renamed.md").await.unwrap();
+    assert!(backlinks
+        .links
+        .iter()
+        .any(|link| link.src_path == "folder/source.md"));
+
+    store
+        .delete_document(&library.slug, "folder/source.md", DocumentSource::Rest)
+        .await
+        .unwrap();
+    assert!(store
+        .backlinks(&library.slug, "renamed.md")
+        .await
+        .unwrap()
+        .links
+        .is_empty());
 }
 
 #[tokio::test]
@@ -692,7 +1136,7 @@ async fn visible_writes_emit_in_process_store_events() {
     let library = store.create_library("events").await.unwrap();
     let mut events = store.subscribe_events();
 
-    store
+    let write = store
         .put_document(
             &library.slug,
             "notes/a.md",
@@ -706,6 +1150,12 @@ async fn visible_writes_emit_in_process_store_events() {
         .unwrap();
     let event = events.recv().await.unwrap();
     assert_eq!(event.kind, StoreEventKind::DocumentPut);
+    assert_eq!(event.library_id, library.id);
+    assert_eq!(event.path.as_deref(), Some("notes/a.md"));
+    assert_eq!(event.doc_id.as_deref(), Some(write.document.id.as_str()));
+    assert_eq!(event.version_id.as_deref(), Some(write.version.id.as_str()));
+    let event = events.recv().await.unwrap();
+    assert_eq!(event.kind, StoreEventKind::LinksIndexed);
     assert_eq!(event.library_id, library.id);
     assert_eq!(event.path.as_deref(), Some("notes/a.md"));
 
@@ -722,6 +1172,10 @@ async fn visible_writes_emit_in_process_store_events() {
     assert_eq!(event.kind, StoreEventKind::DocumentMove);
     assert_eq!(event.path.as_deref(), Some("notes/a.md"));
     assert_eq!(event.new_path.as_deref(), Some("notes/b.md"));
+    let event = events.recv().await.unwrap();
+    assert_eq!(event.kind, StoreEventKind::LinksIndexed);
+    assert_eq!(event.library_id, library.id);
+    assert_eq!(event.path.as_deref(), Some("notes/b.md"));
 
     store
         .delete_document(&library.slug, "notes/b.md", DocumentSource::Rest)
@@ -730,6 +1184,51 @@ async fn visible_writes_emit_in_process_store_events() {
     let event = events.recv().await.unwrap();
     assert_eq!(event.kind, StoreEventKind::DocumentDelete);
     assert_eq!(event.path.as_deref(), Some("notes/b.md"));
+    let event = events.recv().await.unwrap();
+    assert_eq!(event.kind, StoreEventKind::LinksIndexed);
+    assert_eq!(event.library_id, library.id);
+    assert_eq!(event.path.as_deref(), Some("notes/b.md"));
+
+    let conflict = store
+        .record_conflict(
+            &library.slug,
+            "notes/conflicted.md",
+            Some("ours-version".to_string()),
+            Some("theirs-version".to_string()),
+        )
+        .await
+        .unwrap();
+    let event = events.recv().await.unwrap();
+    assert_eq!(event.kind, StoreEventKind::ConflictCreated);
+    assert_eq!(event.library_id, library.id);
+    assert_eq!(event.path.as_deref(), Some("notes/conflicted.md"));
+    assert_eq!(event.conflict_id.as_deref(), Some(conflict.id.as_str()));
+
+    store.resolve_conflict(&conflict.id).await.unwrap();
+    let event = events.recv().await.unwrap();
+    assert_eq!(event.kind, StoreEventKind::ConflictResolved);
+    assert_eq!(event.library_id, library.id);
+    assert_eq!(event.path.as_deref(), Some("notes/conflicted.md"));
+    assert_eq!(event.conflict_id.as_deref(), Some(conflict.id.as_str()));
+
+    let report = store.reindex_library(&library.slug).await.unwrap();
+    assert!(report.ok);
+    let event = events.recv().await.unwrap();
+    assert_eq!(event.kind, StoreEventKind::LibraryReindexed);
+    assert_eq!(event.library_id, library.id);
+    assert_eq!(event.path, None);
+    assert_eq!(event.conflict_id, None);
+
+    store
+        .emit_git_sync_completed(&library.slug, "peer-1", 2, 1)
+        .await
+        .unwrap();
+    let event = events.recv().await.unwrap();
+    assert_eq!(event.kind, StoreEventKind::GitSyncCompleted);
+    assert_eq!(event.library_id, library.id);
+    assert_eq!(event.peer_id.as_deref(), Some("peer-1"));
+    assert_eq!(event.applied, Some(2));
+    assert_eq!(event.conflicts, Some(1));
 }
 
 #[tokio::test]
