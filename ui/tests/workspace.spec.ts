@@ -125,7 +125,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(switcher).toHaveValue('personal');
     await switcher.selectOption('work');
 
-    await expect(page).toHaveURL(/\/libraries\/work$/);
+    await expect(page).toHaveURL(/\/lib\/work$/);
     await expect(page.getByRole('treeitem', { name: /Work/ })).toBeVisible();
     await expect(page.getByRole('treeitem', { name: /Personal/ })).not.toBeVisible();
 
@@ -171,7 +171,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.keyboard.press('Enter');
 
     await expect(switcher).toHaveValue('work');
-    await expect(page).toHaveURL(/\/libraries\/work$/);
+    await expect(page).toHaveURL(/\/lib\/work$/);
 
     await page.getByRole('treeitem', { name: /Daily/ }).focus();
     await page.keyboard.press('Enter');
@@ -227,7 +227,7 @@ test.describe('Quarry Browser smoke flows', () => {
     });
     await runCommand(page, 'move', 'Move current document');
     await expect(page.getByRole('treeitem', { name: /palette-moved\.md/ })).toBeVisible();
-    await expect(page).toHaveURL(/\/libraries\/notes\/documents\/palette-moved\.md$/);
+    await expect(page).toHaveURL(/\/lib\/notes\/documents\/palette-moved\.md$/);
 
     await runCommand(page, 'guide', 'Search server for "guide"');
     await expect(page.getByRole('listbox', { name: 'Search results' }).getByRole('option', { name: /Guide/ })).toBeVisible();
@@ -365,7 +365,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.keyboard.press('Enter');
 
     await expect(page.getByLabel('Plate markdown editor')).toContainText('Searchable body');
-    await expect(page).toHaveURL(/\/libraries\/notes\/documents\/docs\/guide\.md$/);
+    await expect(page).toHaveURL(/\/lib\/notes\/documents\/docs\/guide\.md$/);
   });
 
   test('renames a focused tree document from the keyboard', async ({ page }) => {
@@ -396,7 +396,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(page.getByRole('treeitem', { name: /archive/ })).toBeVisible();
     await page.getByRole('treeitem', { name: /Daily/ }).click();
     await expect(page.getByLabel('Plate markdown editor')).toContainText('Daily');
-    await expect(page).toHaveURL(/\/libraries\/notes\/documents\/archive\/daily\.md$/);
+    await expect(page).toHaveURL(/\/lib\/notes\/documents\/archive\/daily\.md$/);
   });
 
   test('deletes a document from the tree context menu', async ({ page }) => {
@@ -488,7 +488,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.keyboard.press('Enter');
 
     await expect(page.getByLabel('Plate markdown editor')).toContainText('Note 9999');
-    await expect(page).toHaveURL(/\/libraries\/notes\/documents\/folder-9\/note-9999\.md$/);
+    await expect(page).toHaveURL(/\/lib\/notes\/documents\/folder-9\/note-9999\.md$/);
   });
 
   test('previews image and binary documents without opening the editor', async ({ page }) => {
@@ -590,13 +590,12 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.getByRole('button', { name: 'guide.md' }).click();
 
     await expect(page.getByLabel('Plate markdown editor')).toContainText('Reference notes.');
-    await expect(page).toHaveURL(/\/libraries\/notes\/documents\/guide\.md$/);
+    await expect(page).toHaveURL(/\/lib\/notes\/documents\/guide\.md$/);
 
-    await page.getByRole('tab', { name: 'Backlinks' }).click();
     await page.getByRole('button', { name: 'daily.md' }).click();
 
     await expect(page.getByLabel('Plate markdown editor')).toContainText('See [[Guide]].');
-    await expect(page).toHaveURL(/\/libraries\/notes\/documents\/daily\.md$/);
+    await expect(page).toHaveURL(/\/lib\/notes\/documents\/daily\.md$/);
   });
 
   test('shows a floating formatting toolbar when text is selected', async ({ page }) => {
@@ -634,6 +633,116 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.keyboard.press('ControlOrMeta+a');
     await page.getByRole('button', { name: 'Italic' }).click();
     await expect(editor.locator('em').first()).toBeVisible();
+  });
+
+  test('turns a block into a heading from the floating toolbar', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: '# Title\n\nA plain paragraph.',
+          id: 'doc-blocks',
+          metadata: { title: 'Blocks' },
+          path: 'blocks.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Blocks/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('A plain paragraph');
+
+    await page.getByText('A plain paragraph', { exact: false }).click({ clickCount: 3 });
+    await page.getByRole('button', { name: 'Turn into' }).click();
+    await page.getByRole('menuitem', { name: 'Heading 2' }).click();
+    await expect(editor.locator('h2')).toHaveText('A plain paragraph.');
+  });
+
+  test('auto-formats markdown shortcuts into blocks while typing', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: '',
+          id: 'doc-autoformat',
+          metadata: { title: 'Autoformat' },
+          path: 'autoformat.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Autoformat/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await editor.click();
+
+    await page.keyboard.type('# Big heading');
+    await expect(editor.locator('h1')).toHaveText('Big heading');
+
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('###### Small heading');
+    await expect(editor.locator('h6')).toHaveText('Small heading');
+
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('> A quote');
+    await expect(editor.locator('blockquote')).toHaveText('A quote');
+  });
+
+  test('toggles bullet and numbered lists from the floating toolbar', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: 'A list item.',
+          id: 'doc-lists',
+          metadata: { title: 'Lists' },
+          path: 'lists.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Lists/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('A list item');
+
+    await page.getByText('A list item', { exact: false }).click({ clickCount: 3 });
+    const bullet = page.getByRole('button', { name: 'Bullet list' });
+    await bullet.click();
+    await expect(bullet).toHaveAttribute('aria-pressed', 'true');
+
+    const numbered = page.getByRole('button', { name: 'Numbered list' });
+    await numbered.click();
+    await expect(numbered).toHaveAttribute('aria-pressed', 'true');
+    await expect(bullet).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('turns a block into a code block from the Turn into dropdown', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: 'A plain paragraph.',
+          id: 'doc-code',
+          metadata: { title: 'Codey' },
+          path: 'codey.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Codey/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('A plain paragraph');
+
+    await page.getByText('A plain paragraph', { exact: false }).click({ clickCount: 3 });
+    await page.getByRole('button', { name: 'Turn into' }).click();
+    await page.getByRole('menuitem', { name: 'Code' }).click();
+    await expect(editor.locator('.slate-code_block')).toContainText('A plain paragraph');
+
+    await editor.getByRole('button', { name: 'Copy code' }).click();
+    await expect(editor.getByRole('button', { name: 'Copied' })).toBeVisible();
   });
 
   test('diffs selected historical versions from the version pane', async ({ page }) => {

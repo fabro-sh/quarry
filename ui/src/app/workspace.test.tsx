@@ -157,8 +157,6 @@ describe('Quarry Browser workspace', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save document' }));
 
     expect(await screen.findByRole('button', { name: 'target.md' })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('tab', { name: 'Graph' }));
-    expect(await screen.findByText('source.md -> target.md')).toBeInTheDocument();
   });
 
   it('traps stale-save conflict dialog focus and restores focus after closing', async () => {
@@ -225,65 +223,6 @@ describe('Quarry Browser workspace', () => {
     expect(screen.queryByRole('dialog', { name: 'Save conflict' })).not.toBeInTheDocument();
   });
 
-  it('shows document properties for the open document', async () => {
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === '/v1/libraries') {
-        return json([{ id: 'lib-props', slug: 'properties-lib', created_at: 'now', settings: {} }]);
-      }
-      if (url === '/v1/libraries/properties-lib/documents') {
-        return json([
-          {
-            id: 'doc-props',
-            path: 'notes/details.md',
-            head_version_id: 'v-props',
-            content_type: 'text/markdown',
-            byte_size: 2048,
-            metadata: { aliases: ['Spec Alias'], custom: 'Reviewed', title: 'Details' },
-            updated_at: '2026-05-28T12:00:00Z',
-          },
-        ]);
-      }
-      if (url === '/v1/libraries/properties-lib/documents/notes/details.md') {
-        return new Response('# Details', { headers: { ETag: '"v-props"', 'content-type': 'text/markdown' } });
-      }
-      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) {
-        return json({ path: 'notes/details.md', links: [] });
-      }
-      if (url.startsWith('/v1/libraries/properties-lib/graph')) {
-        return json({ nodes: [], edges: [], truncated: false });
-      }
-      if (url.endsWith('/versions')) return json([]);
-      if (url === '/v1/libraries/properties-lib/conflicts') return json([]);
-      if (url.startsWith('/v1/libraries/properties-lib/search')) return json({ results: [], cursor: null });
-      return new Response('not found', { status: 404 });
-    });
-    vi.stubGlobal('fetch', fetch);
-
-    renderApp();
-
-    await userEvent.click(await screen.findByRole('treeitem', { name: /Details/ }));
-    await userEvent.click(screen.getByRole('tab', { name: 'Properties' }));
-    const properties = screen.getByRole('tabpanel', { name: 'Properties' });
-
-    expect(within(properties).getByText('Path')).toBeInTheDocument();
-    expect(within(properties).getByText('notes/details.md')).toBeInTheDocument();
-    expect(within(properties).getByText('Type')).toBeInTheDocument();
-    expect(within(properties).getByText('text/markdown')).toBeInTheDocument();
-    expect(within(properties).getByText('Size')).toBeInTheDocument();
-    expect(within(properties).getByText('2 KB')).toBeInTheDocument();
-    expect(within(properties).getByText('Version')).toBeInTheDocument();
-    expect(within(properties).getByText('v-props')).toBeInTheDocument();
-    expect(within(properties).getByText('Updated')).toBeInTheDocument();
-    expect(within(properties).getByText('2026-05-28T12:00:00Z')).toBeInTheDocument();
-    expect(within(properties).getByText('Title')).toBeInTheDocument();
-    expect(within(properties).getByText('Details')).toBeInTheDocument();
-    expect(within(properties).getByText('Aliases')).toBeInTheDocument();
-    expect(within(properties).getByText('Spec Alias')).toBeInTheDocument();
-    expect(within(properties).getByText('Custom')).toBeInTheDocument();
-    expect(within(properties).getByText('Reviewed')).toBeInTheDocument();
-  });
-
   it('persists the selected right pane tab per library', async () => {
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -332,25 +271,23 @@ describe('Quarry Browser workspace', () => {
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Tabbed/ }));
     expect(screen.getByRole('tab', { name: 'Links' })).toHaveAttribute('aria-selected', 'true');
+    // The Links tab combines outgoing links and backlinks in one panel.
     expect(await screen.findByText('guide.md')).toBeInTheDocument();
-    expect(screen.queryByText('source.md')).not.toBeInTheDocument();
+    expect(await screen.findByText('source.md')).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('tab', { name: 'Backlinks' }));
-    expect(screen.getByRole('tab', { name: 'Backlinks' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByText('source.md')).toBeInTheDocument();
-    expect(screen.queryByText('guide.md')).not.toBeInTheDocument();
-    expect(localStorage.getItem('quarry:right-pane-tab:right-tabs')).toBe('backlinks');
+    await userEvent.click(screen.getByRole('tab', { name: 'Versions' }));
+    expect(screen.getByRole('tab', { name: 'Versions' })).toHaveAttribute('aria-selected', 'true');
+    expect(localStorage.getItem('quarry:right-pane-tab:right-tabs')).toBe('versions');
 
     unmount();
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Tabbed/ }));
-    expect(screen.getByRole('tab', { name: 'Backlinks' })).toHaveAttribute('aria-selected', 'true');
-    expect(await screen.findByText('source.md')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Versions' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('loads the selected library and document from the route and updates the route on open', async () => {
-    window.history.pushState({}, '', '/libraries/routed-lib/documents/folder/deep.md');
+    window.history.pushState({}, '', '/lib/routed-lib/documents/folder/deep.md');
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/v1/libraries') {
@@ -404,7 +341,7 @@ describe('Quarry Browser workspace', () => {
     await userEvent.click(screen.getByRole('treeitem', { name: /Next/ }));
 
     await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Next'));
-    expect(window.location.pathname).toBe('/libraries/routed-lib/documents/next.md');
+    expect(window.location.pathname).toBe('/lib/routed-lib/documents/next.md');
   });
 
   it('offers tree context menu actions for folders and documents', async () => {
@@ -498,10 +435,9 @@ describe('Quarry Browser workspace', () => {
     );
     await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
 
-    fireEvent.contextMenu(treeItemLabel(/Source/, 'Source'), { clientX: 40, clientY: 72 });
-    await userEvent.click(await screen.findByRole('menuitem', { name: 'Reveal in graph' }));
+    await userEvent.click(screen.getByRole('treeitem', { name: /Source/ }));
     await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Source'));
-    expect(window.location.pathname).toBe('/libraries/tree-lib/documents/folder/source.md');
+    expect(window.location.pathname).toBe('/lib/tree-lib/documents/folder/source.md');
 
     fireEvent.contextMenu(treeItemLabel(/Source/, 'Source'), { clientX: 40, clientY: 72 });
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Move' }));
@@ -765,12 +701,8 @@ describe('Quarry Browser workspace', () => {
     expect((await screen.findAllByLabelText('Link preview'))[0]).toHaveTextContent('Hover preview body.');
     await userEvent.unhover(resolvedLinkButtons[0]);
     await waitFor(() => expect(screen.queryAllByLabelText('Link preview')).toHaveLength(0));
-    await userEvent.click(screen.getByRole('tab', { name: 'Backlinks' }));
+    // Backlinks render in the same Links panel as outgoing links.
     expect(screen.getByText('source.md')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('tab', { name: 'Graph' }));
-    expect(await screen.findByText('links.md -> guide.md')).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('tab', { name: 'Links' }));
     await userEvent.click(screen.getByRole('button', { name: 'Create document for Missing' }));
     expect(prompt).toHaveBeenCalledWith('New document path', 'Missing.md');
     await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Untitled'));
@@ -779,247 +711,6 @@ describe('Quarry Browser workspace', () => {
     await waitFor(() =>
       expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Hover preview body.')
     );
-  });
-
-  it('switches between focused and full-library graph modes and persists the choice per library', async () => {
-    const graphRequests: string[] = [];
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === '/v1/libraries') {
-        return json([{ id: 'lib-graph-mode', slug: 'graph-mode', created_at: 'now', settings: {} }]);
-      }
-      if (url === '/v1/libraries/graph-mode/documents') {
-        return json([
-          {
-            id: 'doc-home',
-            path: 'home.md',
-            head_version_id: 'v-home',
-            content_type: 'text/markdown',
-            byte_size: 6,
-            metadata: { title: 'Home' },
-            updated_at: 'now',
-          },
-          {
-            id: 'doc-away',
-            path: 'away.md',
-            head_version_id: 'v-away',
-            content_type: 'text/markdown',
-            byte_size: 6,
-            metadata: { title: 'Away' },
-            updated_at: 'now',
-          },
-          {
-            id: 'doc-deep',
-            path: 'deep.md',
-            head_version_id: 'v-deep',
-            content_type: 'text/markdown',
-            byte_size: 6,
-            metadata: { title: 'Deep' },
-            updated_at: 'now',
-          },
-        ]);
-      }
-      if (url === '/v1/libraries/graph-mode/documents/home.md') {
-        return new Response('# Home', { headers: { ETag: '"v-home"', 'content-type': 'text/markdown' } });
-      }
-      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) {
-        return json({ path: 'home.md', links: [] });
-      }
-      if (url.endsWith('/versions')) return json([]);
-      if (url.startsWith('/v1/libraries/graph-mode/graph')) {
-        graphRequests.push(url);
-        if (url.includes('tag=planning')) {
-          return json({
-            nodes: [{ id: 'doc-brief', path: 'projects/brief.md', title: 'Brief', content_type: 'text/markdown' }],
-            edges: [
-              {
-                id: 'edge-filter-tag',
-                source: 'doc-brief',
-                source_path: 'projects/brief.md',
-                target: null,
-                target_path: null,
-                target_kind: 'tag',
-                target_text: 'planning',
-                resolved: false,
-              },
-            ],
-            truncated: false,
-          });
-        }
-        if (url.includes('folder=projects')) {
-          return json({
-            nodes: [
-              { id: 'doc-brief', path: 'projects/brief.md', title: 'Brief', content_type: 'text/markdown' },
-              {
-                id: 'doc-roadmap',
-                path: 'projects/roadmap.md',
-                title: 'Roadmap',
-                content_type: 'text/markdown',
-              },
-            ],
-            edges: [
-              {
-                id: 'edge-folder',
-                source: 'doc-brief',
-                source_path: 'projects/brief.md',
-                target: 'doc-roadmap',
-                target_path: 'projects/roadmap.md',
-                target_kind: 'wiki_link',
-                target_text: 'Roadmap',
-                resolved: true,
-              },
-            ],
-            truncated: false,
-          });
-        }
-        if (url.includes('link_kind=tag')) {
-          return json({
-            nodes: [{ id: 'doc-home', path: 'home.md', title: 'Home', content_type: 'text/markdown' }],
-            edges: [
-              {
-                id: 'edge-tag',
-                source: 'doc-home',
-                source_path: 'home.md',
-                target: null,
-                target_path: null,
-                target_kind: 'tag',
-                target_text: 'planning',
-                resolved: true,
-              },
-            ],
-            truncated: false,
-          });
-        }
-        if (url.includes('resolved=false')) {
-          return json({
-            nodes: [{ id: 'doc-home', path: 'home.md', title: 'Home', content_type: 'text/markdown' }],
-            edges: [
-              {
-                id: 'edge-unresolved',
-                source: 'doc-home',
-                source_path: 'home.md',
-                target: null,
-                target_path: null,
-                target_kind: 'wiki_link',
-                target_text: 'Missing',
-                resolved: false,
-              },
-            ],
-            truncated: false,
-          });
-        }
-        if (url.includes('root=home.md') && url.includes('depth=2')) {
-          return json({
-            nodes: [
-              { id: 'doc-home', path: 'home.md', title: 'Home', content_type: 'text/markdown' },
-              { id: 'doc-away', path: 'away.md', title: 'Away', content_type: 'text/markdown' },
-              { id: 'doc-deep', path: 'deep.md', title: 'Deep', content_type: 'text/markdown' },
-            ],
-            edges: [
-              {
-                id: 'edge-depth',
-                source: 'doc-away',
-                source_path: 'away.md',
-                target: 'doc-deep',
-                target_path: 'deep.md',
-                target_kind: 'wiki_link',
-                target_text: 'Deep',
-                resolved: true,
-              },
-            ],
-            truncated: false,
-          });
-        }
-        if (url.includes('root=home.md')) {
-          return json({
-            nodes: [{ id: 'doc-home', path: 'home.md', title: 'Home', content_type: 'text/markdown' }],
-            edges: [],
-            truncated: false,
-          });
-        }
-        return json({
-          nodes: [
-            { id: 'doc-home', path: 'home.md', title: 'Home', content_type: 'text/markdown' },
-            { id: 'doc-away', path: 'away.md', title: 'Away', content_type: 'text/markdown' },
-            { id: 'doc-deep', path: 'deep.md', title: 'Deep', content_type: 'text/markdown' },
-          ],
-          edges: [
-            {
-              id: 'edge-full',
-              source: 'doc-away',
-              source_path: 'away.md',
-              target: 'doc-home',
-              target_path: 'home.md',
-              target_kind: 'wiki_link',
-              target_text: 'Home',
-              resolved: true,
-            },
-          ],
-          truncated: true,
-        });
-      }
-      if (url === '/v1/libraries/graph-mode/conflicts') return json([]);
-      if (url.startsWith('/v1/libraries/graph-mode/search')) return json({ results: [], cursor: null });
-      return new Response('not found', { status: 404 });
-    });
-    vi.stubGlobal('fetch', fetch);
-
-    const { unmount } = renderApp();
-
-    await userEvent.click(await screen.findByRole('treeitem', { name: /Home/ }));
-    await userEvent.click(screen.getByRole('tab', { name: 'Graph' }));
-    expect(screen.getByRole('button', { name: 'Focused' })).toHaveAttribute('aria-pressed', 'true');
-    await waitFor(() => expect(graphRequests).toContain('/v1/libraries/graph-mode/graph?root=home.md'));
-    expect(screen.queryByText('away.md -> home.md')).not.toBeInTheDocument();
-
-    await userEvent.selectOptions(screen.getByLabelText('Graph depth'), '2');
-    await waitFor(() => expect(graphRequests).toContain('/v1/libraries/graph-mode/graph?root=home.md&depth=2'));
-    expect(await screen.findByText('away.md -> deep.md')).toBeInTheDocument();
-    expect(localStorage.getItem('quarry:graph-depth:graph-mode')).toBe('2');
-
-    await userEvent.selectOptions(screen.getByLabelText('Graph link kind'), 'tag');
-    await waitFor(() =>
-      expect(graphRequests).toContain('/v1/libraries/graph-mode/graph?root=home.md&depth=2&link_kind=tag')
-    );
-    expect(await screen.findByText('home.md -> planning')).toBeInTheDocument();
-    expect(localStorage.getItem('quarry:graph-link-kind:graph-mode')).toBe('tag');
-
-    await userEvent.selectOptions(screen.getByLabelText('Graph link kind'), 'all');
-    await userEvent.selectOptions(screen.getByLabelText('Graph resolution'), 'unresolved');
-    await waitFor(() =>
-      expect(graphRequests).toContain('/v1/libraries/graph-mode/graph?root=home.md&depth=2&resolved=false')
-    );
-    expect(await screen.findByText('home.md -> Missing')).toBeInTheDocument();
-    expect(localStorage.getItem('quarry:graph-resolution:graph-mode')).toBe('unresolved');
-
-    await userEvent.selectOptions(screen.getByLabelText('Graph resolution'), 'all');
-    await userEvent.click(screen.getByRole('button', { name: 'Full library' }));
-    expect(screen.getByRole('button', { name: 'Full library' })).toHaveAttribute('aria-pressed', 'true');
-    await waitFor(() => expect(graphRequests).toContain('/v1/libraries/graph-mode/graph'));
-    expect(await screen.findByText('away.md -> home.md')).toBeInTheDocument();
-    expect(screen.getByText(/Full graph is too large/)).toBeInTheDocument();
-    expect(screen.getByText(/use focused mode or filters/i)).toBeInTheDocument();
-    expect(localStorage.getItem('quarry:graph-scope:graph-mode')).toBe('full');
-
-    fireEvent.change(screen.getByLabelText('Graph folder'), { target: { value: 'projects' } });
-    expect(screen.getByLabelText('Graph folder')).toHaveValue('projects');
-    expect(localStorage.getItem('quarry:graph-folder:graph-mode')).toBe('projects');
-    await waitFor(() => expect(graphRequests.some((url) => url.includes('folder=projects'))).toBe(true));
-    expect(await screen.findByText('projects/brief.md -> projects/roadmap.md')).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText('Graph tag'), { target: { value: 'planning' } });
-    await waitFor(() =>
-      expect(graphRequests.some((url) => url.includes('folder=projects') && url.includes('tag=planning'))).toBe(true)
-    );
-    expect(await screen.findByText('projects/brief.md -> planning')).toBeInTheDocument();
-    expect(localStorage.getItem('quarry:graph-tag:graph-mode')).toBe('planning');
-
-    unmount();
-    renderApp();
-
-    await userEvent.click(await screen.findByRole('treeitem', { name: /Home/ }));
-    await userEvent.click(screen.getByRole('tab', { name: 'Graph' }));
-    expect(await screen.findByRole('button', { name: 'Full library' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('opens a historical version diff and restores the selected version', async () => {
@@ -1820,7 +1511,7 @@ describe('Quarry Browser workspace', () => {
     await userEvent.keyboard('{Enter}');
 
     await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Journal'));
-    expect(window.location.pathname).toBe('/libraries/search-key-lib/documents/journal.md');
+    expect(window.location.pathname).toBe('/lib/search-key-lib/documents/journal.md');
   });
 
   it('runs Git peer sync as an explicit operation with pending and result state', async () => {

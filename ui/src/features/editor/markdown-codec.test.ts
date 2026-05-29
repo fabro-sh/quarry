@@ -27,4 +27,9 @@ describe('markdown codec', () => {
     const value = markdownToPlateValue('A ~~struck~~ word.');
     expect(plateValueToMarkdown(value)).toContain('~~struck~~');
   });
+
+  it('round-trips headings from h1 through h6', () => {
+    const markdown = '# One\n\n## Two\n\n### Three\n\n#### Four\n\n##### Five\n\n###### Six\n';
+    expect(plateValueToMarkdown(markdownToPlateValue(markdown))).toContain('###### Six');
+  });
 });

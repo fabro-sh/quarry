@@ -65,23 +65,114 @@ body {
   min-height: 100vh;
 }
 
-button,
-input,
-textarea,
-select {
-  font: inherit;
-}
+/*
+ * Base element defaults live in @layer base so Tailwind utilities can override
+ * them. Without the layer these rules are unlayered and beat every utility —
+ * which made `outline-none` on custom-wrapped inputs (search, command palette)
+ * a no-op, leaving a stray focus outline that fought the wrapper's own ring.
+ */
+@layer base {
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
 
-button:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-[role="treeitem"]:focus-visible {
-  outline: 2px solid var(--color-accent-ring);
-  outline-offset: 2px;
+  button:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  [role="treeitem"]:focus-visible {
+    outline: 2px solid var(--color-accent-ring);
+    outline-offset: 2px;
+  }
 }
 
 #root {
   min-height: 100vh;
+}
+
+/*
+ * Editor block styles. Plate renders raw <h1>/<h2>/<h3>/<blockquote>, but
+ * Tailwind's preflight resets headings to inherit, so block conversions would
+ * otherwise show no visual change. Scoped to the editor surface.
+ */
+/*
+ * Heading ramp (h1–h6): size shrinks while weight grows, so deep headings read
+ * as strong small labels rather than just smaller titles. Geist is a variable
+ * font (300–700), so the in-between weights render exactly.
+ */
+[aria-label="Plate markdown editor"] :is(.slate-h1, .slate-h2, .slate-h3, .slate-h4, .slate-h5, .slate-h6) {
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  margin-top: 1.1rem;
+  margin-bottom: 0.25rem;
+}
+
+[aria-label="Plate markdown editor"] .slate-h1 {
+  font-size: 1.875rem;
+  font-weight: 600;
+  line-height: 1.2;
+  margin-top: 1.25rem;
+}
+
+[aria-label="Plate markdown editor"] .slate-h2 {
+  font-size: 1.5rem;
+  font-weight: 610;
+}
+
+[aria-label="Plate markdown editor"] .slate-h3 {
+  font-size: 1.25rem;
+  font-weight: 630;
+}
+
+[aria-label="Plate markdown editor"] .slate-h4 {
+  font-size: 1.125rem;
+  font-weight: 650;
+}
+
+[aria-label="Plate markdown editor"] .slate-h5 {
+  font-size: 1rem;
+  font-weight: 680;
+}
+
+/* h6 never drops below body text (0.9375rem) — it's distinguished by weight. */
+[aria-label="Plate markdown editor"] .slate-h6 {
+  font-size: 0.9375rem;
+  font-weight: 700;
+}
+
+[aria-label="Plate markdown editor"] .slate-blockquote {
+  margin-block: 0.4rem;
+  border-left: 3px solid var(--color-accent-line);
+  padding-left: 0.875rem;
+  color: var(--color-muted);
+  font-style: italic;
+}
+
+/*
+ * Code blocks render on a subtle, borderless well-toned surface (à la
+ * Plate/Potion). The inner <pre> carries the box and the horizontal scroll, so
+ * the absolutely-positioned copy button stays pinned while the code scrolls.
+ */
+[aria-label="Plate markdown editor"] .slate-code_block {
+  position: relative;
+  margin-block: 0.6rem;
+}
+
+[aria-label="Plate markdown editor"] .slate-code_block pre {
+  margin: 0;
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--color-well) 45%, var(--color-surface));
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+[aria-label="Plate markdown editor"] .slate-code_line {
+  font-family: var(--font-mono);
 }
 
 /* Dark mode — Fabro navy. Redefine the tokens; everything follows. */

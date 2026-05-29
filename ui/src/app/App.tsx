@@ -19,7 +19,6 @@ import {
   Link2,
   Moon,
   MoreHorizontal,
-  Network,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -68,7 +67,6 @@ import {
   gitPull,
   gitPush,
   gitSync,
-  graph as loadGraph,
   isTextContentType,
   listConflicts,
   listDocuments,
@@ -88,7 +86,6 @@ import type {
   DocumentVersion,
   DocumentVersionContent,
   ConflictRecord,
-  GraphResponse,
   Library as LibraryType,
   SearchResult,
   SearchSuggestion,
@@ -102,7 +99,6 @@ import type {
 } from '../api/client';
 import { clearDraft, loadDraft, saveDraft } from '../features/editor/drafts';
 import { MarkdownEditor } from '../features/editor/MarkdownEditor';
-import { layoutGraphNodes } from '../features/graph/layout';
 import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../features/tree/tree-model';
 import { cn } from '../lib/utils';
 
@@ -110,11 +106,7 @@ type SaveState = 'clean' | 'dirty' | 'drafted' | 'saving' | 'saved' | 'stale' | 
 type EventState = 'idle' | 'connecting' | 'open' | 'polling' | 'error';
 type ThemePreference = 'light' | 'dark';
 type TreeOpenState = Record<string, boolean>;
-type RightPaneTab = 'links' | 'backlinks' | 'properties' | 'graph' | 'versions' | 'conflicts';
-type GraphScope = 'focused' | 'full';
-type GraphDepth = 1 | 2 | 3;
-type GraphLinkKindFilter = 'all' | 'wiki_link' | 'markdown_link' | 'embed' | 'heading' | 'tag';
-type GraphResolutionFilter = 'all' | 'resolved' | 'unresolved';
+type RightPaneTab = 'links' | 'versions' | 'conflicts';
 const EVENT_POLL_INTERVAL_MS = 5_000;
 const RECENT_LIBRARY_LIMIT = 8;
 
@@ -140,11 +132,6 @@ interface TreeMenuState {
   y: number;
 }
 
-type SigmaRenderer = {
-  kill: () => void;
-  on: (event: 'clickNode', handler: (payload: { node: string }) => void) => void;
-};
-
 export function App() {
   return (
     <BrowserRouter>
@@ -166,14 +153,6 @@ function Workspace() {
     loadTreeOpenState(activeLibrary)
   );
   const [rightPaneTab, setRightPaneTab] = useState<RightPaneTab>(() => loadRightPaneTab(activeLibrary));
-  const [graphScope, setGraphScope] = useState<GraphScope>(() => loadGraphScope(activeLibrary));
-  const [graphDepth, setGraphDepth] = useState<GraphDepth>(() => loadGraphDepth(activeLibrary));
-  const [graphFolder, setGraphFolder] = useState(() => loadGraphFolder(activeLibrary));
-  const [graphTag, setGraphTag] = useState(() => loadGraphTag(activeLibrary));
-  const [graphLinkKind, setGraphLinkKind] = useState<GraphLinkKindFilter>(() => loadGraphLinkKind(activeLibrary));
-  const [graphResolution, setGraphResolution] = useState<GraphResolutionFilter>(() =>
-    loadGraphResolution(activeLibrary)
-  );
   const [selectedPath, setSelectedPath] = useState(routeSelection.path ?? '');
   const [searchQuery, setSearchQuery] = useState('');
   const [content, setContent] = useState('');
@@ -213,24 +192,12 @@ function Workspace() {
       setActiveLibrary(nextLibrary);
       setTreeOpenState(loadTreeOpenState(nextLibrary));
       setRightPaneTab(loadRightPaneTab(nextLibrary));
-      setGraphScope(loadGraphScope(nextLibrary));
-      setGraphDepth(loadGraphDepth(nextLibrary));
-      setGraphFolder(loadGraphFolder(nextLibrary));
-      setGraphTag(loadGraphTag(nextLibrary));
-      setGraphLinkKind(loadGraphLinkKind(nextLibrary));
-      setGraphResolution(loadGraphResolution(nextLibrary));
     }
     if (activeLibrary && libraries.length > 0 && libraries.every((library) => library.slug !== activeLibrary)) {
       const nextLibrary = libraries[0]?.slug ?? '';
       setActiveLibrary(nextLibrary);
       setTreeOpenState(loadTreeOpenState(nextLibrary));
       setRightPaneTab(loadRightPaneTab(nextLibrary));
-      setGraphScope(loadGraphScope(nextLibrary));
-      setGraphDepth(loadGraphDepth(nextLibrary));
-      setGraphFolder(loadGraphFolder(nextLibrary));
-      setGraphTag(loadGraphTag(nextLibrary));
-      setGraphLinkKind(loadGraphLinkKind(nextLibrary));
-      setGraphResolution(loadGraphResolution(nextLibrary));
     }
   }, [activeLibrary, libraries]);
 
@@ -242,12 +209,6 @@ function Workspace() {
       setActiveLibrary(selection.library);
       setTreeOpenState(loadTreeOpenState(selection.library));
       setRightPaneTab(loadRightPaneTab(selection.library));
-      setGraphScope(loadGraphScope(selection.library));
-      setGraphDepth(loadGraphDepth(selection.library));
-      setGraphFolder(loadGraphFolder(selection.library));
-      setGraphTag(loadGraphTag(selection.library));
-      setGraphLinkKind(loadGraphLinkKind(selection.library));
-      setGraphResolution(loadGraphResolution(selection.library));
     }
     if (selection.path !== undefined) setSelectedPath(selection.path);
   }, [location.pathname]);
@@ -335,7 +296,6 @@ function Workspace() {
       void mutate(['/v1/versions', activeLibrary, path]);
       void mutate(['/v1/outgoing', activeLibrary, path]);
       void mutate(['/v1/backlinks', activeLibrary, path]);
-      void mutateGraphState();
     }
 
     function invalidateCurrentBacklinks() {
@@ -354,7 +314,6 @@ function Workspace() {
         void mutate(['/v1/outgoing', activeLibrary, currentPath]);
         void mutate(['/v1/backlinks', activeLibrary, currentPath]);
       }
-      void mutateGraphState();
       invalidateSearch();
     }
 
@@ -362,8 +321,6 @@ function Workspace() {
       const currentPath = selectedPathRef.current;
       if (currentPath) {
         invalidateDocumentState(currentPath);
-      } else {
-        void mutateGraphState();
       }
       void mutate(['/v1/conflicts', activeLibrary]);
       void mutate(['/v1/git-peers', activeLibrary]);
@@ -418,8 +375,6 @@ function Workspace() {
       const currentPath = selectedPathRef.current;
       if (currentPath) {
         invalidateDocumentState(currentPath);
-      } else {
-        void mutateGraphState();
       }
       void mutate(['/v1/conflicts', activeLibrary]);
       void mutate(['/v1/git-peers', activeLibrary]);
@@ -485,33 +440,6 @@ function Workspace() {
   const { data: incoming = { path: selectedPath, links: [] } } = useSWR(
     activeLibrary && selectedPath ? ['/v1/backlinks', activeLibrary, selectedPath] : null,
     () => backlinks(activeLibrary, selectedPath)
-  );
-  const graphRoot = graphScope === 'focused' ? selectedPath : undefined;
-  const focusedGraphDepth = graphScope === 'focused' ? graphDepth : undefined;
-  const graphFilters = useMemo(
-    () => ({
-      folder: graphFolder || undefined,
-      tag: graphTag || undefined,
-      linkKind: graphLinkKind === 'all' ? undefined : graphLinkKind,
-      resolution: graphResolution === 'all' ? undefined : graphResolution,
-    }),
-    [graphFolder, graphTag, graphLinkKind, graphResolution]
-  );
-  const canLoadGraph = Boolean(activeLibrary && (graphScope === 'full' || selectedPath));
-  const { data: graphData = { nodes: [], edges: [], truncated: false } } = useSWR(
-    canLoadGraph
-      ? graphCacheKey(
-          activeLibrary,
-          graphScope,
-          selectedPath,
-          graphDepth,
-          graphFolder,
-          graphTag,
-          graphLinkKind,
-          graphResolution
-        )
-      : null,
-    () => loadGraph(activeLibrary, graphRoot, focusedGraphDepth, graphFilters)
   );
   const { data: versionList = [] } = useSWR(
     activeLibrary && selectedPath ? ['/v1/versions', activeLibrary, selectedPath] : null,
@@ -621,7 +549,6 @@ function Workspace() {
         mutate(['/v1/versions', activeLibrary, selectedPath]),
         mutate(['/v1/outgoing', activeLibrary, selectedPath]),
         mutate(['/v1/backlinks', activeLibrary, selectedPath]),
-        mutateGraphState(),
         searchQuery ? mutate(['/v1/search', activeLibrary, searchQuery]) : Promise.resolve(),
       ]);
     } catch (error) {
@@ -672,7 +599,6 @@ function Workspace() {
     await Promise.all([
       mutate(['/v1/documents', activeLibrary]),
       selectedPath ? mutate(['/v1/outgoing', activeLibrary, selectedPath]) : Promise.resolve(),
-      mutateGraphState(),
     ]);
     setSelectedPath(path);
   }
@@ -750,7 +676,6 @@ function Workspace() {
       mutate(['/v1/versions', activeLibrary, selectedPath]),
       mutate(['/v1/outgoing', activeLibrary, selectedPath]),
       mutate(['/v1/backlinks', activeLibrary, selectedPath]),
-      mutateGraphState(),
     ]);
   }
 
@@ -807,21 +732,10 @@ function Workspace() {
     void navigator.clipboard?.writeText(node.path);
   }
 
-  function revealTreeDocument(node: TreeNode) {
-    closeTreeContextMenu();
-    if (node.kind === 'document') openDocument(node.path);
-  }
-
   function changeActiveLibrary(slug: string) {
     setActiveLibrary(slug);
     setTreeOpenState(loadTreeOpenState(slug));
     setRightPaneTab(loadRightPaneTab(slug));
-    setGraphScope(loadGraphScope(slug));
-    setGraphDepth(loadGraphDepth(slug));
-    setGraphFolder(loadGraphFolder(slug));
-    setGraphTag(loadGraphTag(slug));
-    setGraphLinkKind(loadGraphLinkKind(slug));
-    setGraphResolution(loadGraphResolution(slug));
     setSelectedPath('');
     navigate(workspaceRoute(slug, ''), { replace: false });
   }
@@ -839,38 +753,6 @@ function Workspace() {
     persistRightPaneTab(activeLibrary, tab);
   }
 
-  function changeGraphScope(scope: GraphScope) {
-    setGraphScope(scope);
-    persistGraphScope(activeLibrary, scope);
-  }
-
-  function changeGraphDepth(depth: GraphDepth) {
-    setGraphDepth(depth);
-    persistGraphDepth(activeLibrary, depth);
-  }
-
-  function changeGraphFolder(folder: string) {
-    const nextFolder = normalizeGraphTextFilter(folder);
-    setGraphFolder(nextFolder);
-    persistGraphFolder(activeLibrary, nextFolder);
-  }
-
-  function changeGraphTag(tag: string) {
-    const nextTag = normalizeGraphTextFilter(tag).replace(/^#/, '');
-    setGraphTag(nextTag);
-    persistGraphTag(activeLibrary, nextTag);
-  }
-
-  function changeGraphLinkKind(linkKind: GraphLinkKindFilter) {
-    setGraphLinkKind(linkKind);
-    persistGraphLinkKind(activeLibrary, linkKind);
-  }
-
-  function changeGraphResolution(resolution: GraphResolutionFilter) {
-    setGraphResolution(resolution);
-    persistGraphResolution(activeLibrary, resolution);
-  }
-
   function viewSelectedVersion(versionId: string) {
     setCurrentDiffOpen(false);
     setSelectedVersionId(versionId);
@@ -881,11 +763,6 @@ function Workspace() {
     setSelectedVersionId(null);
     setCompareVersionId(null);
     setCurrentDiffOpen(true);
-  }
-
-  function mutateGraphState() {
-    if (!activeLibrary) return Promise.resolve();
-    return mutate((key) => isGraphCacheKey(key, activeLibrary));
   }
 
   function toggleLeftPane() {
@@ -1013,13 +890,6 @@ function Workspace() {
             currentDiffOpen={currentDiffOpen}
             currentEditorDiff={currentEditorDiff}
             compareVersionId={compareVersionId}
-            graphDepth={graphDepth}
-            graphFolder={graphFolder}
-            graphTag={graphTag}
-            graphLinkKind={graphLinkKind}
-            graphResolution={graphResolution}
-            graphScope={graphScope}
-            graphData={graphData}
             incoming={incoming.links}
             onCompareVersionChange={setCompareVersionId}
             onCreateDocumentFromLink={createDocumentFromLink}
@@ -1028,16 +898,8 @@ function Workspace() {
             onOpenConflict={setMergeConflictId}
             onResolveConflict={resolveOpenConflict}
             onRestoreVersion={restoreSelectedVersion}
-            onGraphDepthChange={changeGraphDepth}
-            onGraphFolderChange={changeGraphFolder}
-            onGraphTagChange={changeGraphTag}
-            onGraphLinkKindChange={changeGraphLinkKind}
-            onGraphResolutionChange={changeGraphResolution}
-            onGraphScopeChange={changeGraphScope}
             onViewVersion={viewSelectedVersion}
             outgoing={outgoing.links}
-            selectedContentType={selectedContentType}
-            selectedEntry={selectedEntry}
             selectedVersionContent={selectedVersionContent}
             selectedVersionDiff={selectedVersionDiff}
             selectedVersionId={selectedVersionId}
@@ -1145,7 +1007,6 @@ function Workspace() {
         onCreateDocument={createTreeDocument}
         onDeleteDocument={deleteTreeDocument}
         onMoveDocument={moveTreeDocument}
-        onRevealDocument={revealTreeDocument}
       />
 
       {mergeConflict ? (
@@ -1366,7 +1227,7 @@ function CommandPalette({
             <Command.Input
               aria-label="Command palette"
               autoFocus
-              className="min-w-0 flex-1 border-0 bg-transparent text-sm outline-none"
+              className="min-w-0 flex-1 border-0 bg-transparent text-sm text-body outline-none placeholder:text-faint"
               placeholder="Open, search, or run a command"
               value={query}
               onValueChange={onQueryChange}
@@ -1604,7 +1465,6 @@ function ConflictMergeDialog({
       mutate(['/v1/versions', activeLibrary, conflict.path]),
       mutate(['/v1/outgoing', activeLibrary, conflict.path]),
       mutate(['/v1/backlinks', activeLibrary, conflict.path]),
-      mutate((key) => isGraphCacheKey(key, activeLibrary)),
     ]);
   }
 
@@ -2170,10 +2030,10 @@ function LeftPane({
 
   return (
     <aside aria-label="Document tree" className="flex h-full min-h-0 flex-col border-r border-line bg-surface">
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-2.5">
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3">
         <select
           aria-label="Library switcher"
-          className="h-8 min-w-0 flex-1 rounded-md border border-line-strong bg-raised px-2 text-sm font-medium text-body"
+          className="h-8 min-w-0 flex-1 rounded-md border border-line-strong bg-raised px-2.5 text-sm font-medium text-body"
           value={active?.slug ?? ''}
           onChange={(event) => onLibraryChange(event.target.value)}
           onKeyDown={handleLibraryKeyDown}
@@ -2186,7 +2046,7 @@ function LeftPane({
           ))}
         </select>
       </div>
-      <div className="flex h-9 shrink-0 items-center justify-between pr-1.5 pl-3">
+      <div className="flex h-10 shrink-0 items-center justify-between pr-2 pl-3">
         <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-faint">Documents</span>
         <div className="flex items-center gap-0.5">
           <button
@@ -2212,7 +2072,7 @@ function LeftPane({
         </div>
       </div>
       {searchOpen ? (
-        <div className="px-2.5 pb-2">
+        <div className="px-3 pb-2">
           <label className="flex h-8 items-center gap-2 rounded-md border border-line-strong bg-raised px-2.5 text-sm transition-colors focus-within:border-accent focus-within:ring-2 focus-within:ring-accent-tint">
             <Search className="shrink-0 text-muted" size={15} />
             <input
@@ -2230,10 +2090,10 @@ function LeftPane({
         </div>
       ) : null}
       {searchResults.length ? (
-        <section className="border-b border-line p-2">
+        <section className="border-b border-line px-3 py-2.5">
           <div
             aria-label="Search results"
-            className="space-y-1 outline-none"
+            className="space-y-0.5 outline-none"
             role="listbox"
             tabIndex={0}
             onKeyDown={handleSearchResultsKeyDown}
@@ -2272,7 +2132,7 @@ function LeftPane({
           ) : null}
         </section>
       ) : null}
-      <div className="min-h-0 flex-1" onKeyDown={handleTreeKeyDown}>
+      <div className="min-h-0 flex-1 px-1.5 pt-1" onKeyDown={handleTreeKeyDown}>
         <Tree<TreeNode>
           data={tree}
           height={800}
@@ -2288,16 +2148,19 @@ function LeftPane({
           onToggle={onTreeToggle}
           openByDefault
           renderRow={DocumentTreeRow}
-          rowHeight={28}
+          rowHeight={30}
           width="100%"
         >
           {({ node, style }) => (
             <div
               className={cn(
-                'group/row flex cursor-default items-center gap-1 truncate pr-1 pl-2 text-sm hover:bg-well',
+                'group/row flex cursor-default items-center gap-1.5 truncate rounded-md pr-1.5 text-sm transition-colors hover:bg-well',
                 node.data.path === selectedPath && 'bg-accent-tint text-accent-ink'
               )}
-              style={style}
+              style={{
+                ...style,
+                paddingLeft: (typeof style.paddingLeft === 'number' ? style.paddingLeft : 0) + 8,
+              }}
               onContextMenu={(event) => {
                 onOpenContextMenu(node.data, event);
               }}
@@ -2330,7 +2193,6 @@ function TreeContextMenu({
   onCreateDocument,
   onDeleteDocument,
   onMoveDocument,
-  onRevealDocument,
 }: {
   menu: TreeMenuState | null;
   onClose: () => void;
@@ -2338,7 +2200,6 @@ function TreeContextMenu({
   onCreateDocument: (node: TreeNode) => void;
   onDeleteDocument: (node: TreeNode) => void;
   onMoveDocument: (node: TreeNode) => void;
-  onRevealDocument: (node: TreeNode) => void;
 }) {
   if (!menu) return null;
   return (
@@ -2358,9 +2219,6 @@ function TreeContextMenu({
         </button>
         {menu.node.kind === 'document' ? (
           <>
-            <button className={treeMenuItem} role="menuitem" type="button" onClick={() => onRevealDocument(menu.node)}>
-              Reveal in graph
-            </button>
             <button className={treeMenuItem} role="menuitem" type="button" onClick={() => onMoveDocument(menu.node)}>
               Move
             </button>
@@ -2394,12 +2252,16 @@ function DocumentToolbar({
   onSave: () => void;
 }) {
   return (
-    <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line bg-surface px-3">
+    <div className="flex h-12 shrink-0 items-center gap-2 bg-surface px-3">
       <h1 className="min-w-0 flex-1 truncate text-sm">
-        {documentDirname(path) ? (
-          <span className="text-muted">{documentDirname(path)}/</span>
-        ) : null}
-        <span className="font-semibold text-ink">{documentBasename(path)}</span>
+        {path.split('/').map((segment, index, segments) => (
+          <span key={index}>
+            {index > 0 ? <span className="px-1.5 text-faint">/</span> : null}
+            <span className={index === segments.length - 1 ? 'font-semibold text-ink' : 'text-muted'}>
+              {segment}
+            </span>
+          </span>
+        ))}
       </h1>
       {saveState === 'stale' ? <AlertTriangle className="shrink-0 text-warn-ink" size={16} /> : null}
       {isText ? (
@@ -2455,23 +2317,10 @@ function RightPane({
   conflicts,
   currentDiffOpen,
   currentEditorDiff,
-  graphData,
-  graphDepth,
-  graphFolder,
-  graphTag,
-  graphLinkKind,
-  graphResolution,
-  graphScope,
   incoming,
   onCompareVersionChange,
   onCreateDocumentFromLink,
   onDiffCurrent,
-  onGraphDepthChange,
-  onGraphFolderChange,
-  onGraphTagChange,
-  onGraphLinkKindChange,
-  onGraphResolutionChange,
-  onGraphScopeChange,
   onOpenDocument,
   onOpenConflict,
   onResolveConflict,
@@ -2479,8 +2328,6 @@ function RightPane({
   onToggleCollapsed,
   onViewVersion,
   outgoing,
-  selectedContentType,
-  selectedEntry,
   selectedVersionContent,
   selectedVersionDiff,
   selectedVersionId,
@@ -2494,23 +2341,10 @@ function RightPane({
   conflicts: ConflictRecord[];
   currentDiffOpen: boolean;
   currentEditorDiff: string;
-  graphData: GraphResponse;
-  graphDepth: GraphDepth;
-  graphFolder: string;
-  graphTag: string;
-  graphLinkKind: GraphLinkKindFilter;
-  graphResolution: GraphResolutionFilter;
-  graphScope: GraphScope;
   incoming: DocumentLink[];
   onCompareVersionChange: (version: string | null) => void;
   onCreateDocumentFromLink: (link: DocumentLink) => void;
   onDiffCurrent: () => void;
-  onGraphDepthChange: (depth: GraphDepth) => void;
-  onGraphFolderChange: (folder: string) => void;
-  onGraphTagChange: (tag: string) => void;
-  onGraphLinkKindChange: (linkKind: GraphLinkKindFilter) => void;
-  onGraphResolutionChange: (resolution: GraphResolutionFilter) => void;
-  onGraphScopeChange: (scope: GraphScope) => void;
   onOpenDocument: (path: string) => void;
   onOpenConflict: (conflict: string) => void;
   onResolveConflict: (conflict: string) => void;
@@ -2518,8 +2352,6 @@ function RightPane({
   onToggleCollapsed: () => void;
   onViewVersion: (version: string) => void;
   outgoing: DocumentLink[];
-  selectedContentType: string;
-  selectedEntry?: DocumentListEntry;
   selectedVersionContent?: DocumentVersionContent;
   selectedVersionDiff?: VersionDiff;
   selectedVersionId: string | null;
@@ -2593,7 +2425,7 @@ function RightPane({
           <>
             <h2 className={rightHeading}>
               <Link2 size={14} />
-              {selectedTabLabel}
+              Outgoing
             </h2>
             <LinkList
               activeLibrary={activeLibrary}
@@ -2602,46 +2434,12 @@ function RightPane({
               onCreateDocument={onCreateDocumentFromLink}
               onOpenDocument={onOpenDocument}
             />
-          </>
-        ) : null}
-        {selectedTab === 'backlinks' ? (
-          <>
-            <h2 className={rightHeading}>{selectedTabLabel}</h2>
+            <h2 className={cn(rightHeading, 'mt-6')}>Backlinks</h2>
             <LinkList
               activeLibrary={activeLibrary}
               direction="incoming"
               links={incoming}
               onOpenDocument={onOpenDocument}
-            />
-          </>
-        ) : null}
-        {selectedTab === 'properties' ? (
-          <>
-            <h2 className={rightHeading}>{selectedTabLabel}</h2>
-            <DocumentProperties contentType={selectedContentType} entry={selectedEntry} />
-          </>
-        ) : null}
-        {selectedTab === 'graph' ? (
-          <>
-            <h2 className={rightHeading}>
-              <Network size={14} />
-              {selectedTabLabel}
-            </h2>
-            <GraphPanel
-              depth={graphDepth}
-              graphData={graphData}
-              folder={graphFolder}
-              tag={graphTag}
-              linkKind={graphLinkKind}
-              resolution={graphResolution}
-              scope={graphScope}
-              onDepthChange={onGraphDepthChange}
-              onFolderChange={onGraphFolderChange}
-              onTagChange={onGraphTagChange}
-              onLinkKindChange={onGraphLinkKindChange}
-              onOpenDocument={onOpenDocument}
-              onResolutionChange={onGraphResolutionChange}
-              onScopeChange={onGraphScopeChange}
             />
           </>
         ) : null}
@@ -2677,38 +2475,6 @@ function RightPane({
         ) : null}
       </section>
     </aside>
-  );
-}
-
-function DocumentProperties({
-  contentType,
-  entry,
-}: {
-  contentType: string;
-  entry?: DocumentListEntry;
-}) {
-  if (!entry) return <p className="text-xs text-muted">No document selected</p>;
-
-  const rows = [
-    { label: 'Path', value: entry.path },
-    { label: 'Type', value: contentType || entry.content_type },
-    { label: 'Size', value: formatBytes(entry.byte_size) },
-    { label: 'Version', value: entry.head_version_id },
-    { label: 'Updated', value: entry.updated_at },
-    ...metadataPropertyRows(entry.metadata),
-  ].filter((row) => row.value.trim().length > 0);
-
-  return (
-    <dl className="space-y-1 text-xs">
-      {rows.map((row) => (
-        <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2" key={row.label}>
-          <dt className="text-muted">{row.label}</dt>
-          <dd className="min-w-0 truncate font-mono text-body" title={row.value}>
-            {row.value}
-          </dd>
-        </div>
-      ))}
-    </dl>
   );
 }
 
@@ -2765,237 +2531,6 @@ function ConflictList({
         </li>
       ))}
     </ul>
-  );
-}
-
-function GraphPanel({
-  depth,
-  folder,
-  graphData,
-  tag,
-  linkKind,
-  resolution,
-  scope,
-  onDepthChange,
-  onFolderChange,
-  onTagChange,
-  onLinkKindChange,
-  onOpenDocument,
-  onResolutionChange,
-  onScopeChange,
-}: {
-  depth: GraphDepth;
-  folder: string;
-  graphData: GraphResponse;
-  tag: string;
-  linkKind: GraphLinkKindFilter;
-  resolution: GraphResolutionFilter;
-  scope: GraphScope;
-  onDepthChange: (depth: GraphDepth) => void;
-  onFolderChange: (folder: string) => void;
-  onTagChange: (tag: string) => void;
-  onLinkKindChange: (linkKind: GraphLinkKindFilter) => void;
-  onOpenDocument: (path: string) => void;
-  onResolutionChange: (resolution: GraphResolutionFilter) => void;
-  onScopeChange: (scope: GraphScope) => void;
-}) {
-  const visibleEdges = graphData.edges.slice(0, 6);
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <div aria-label="Graph scope" className="inline-flex rounded-md border border-line-strong bg-raised p-0.5">
-          {graphScopes.map((option) => (
-            <button
-              aria-pressed={scope === option.key}
-              className={cn(
-                'h-7 rounded px-2 text-xs font-medium text-muted hover:bg-well focus:outline-none focus:ring-1 focus:ring-accent-ring',
-                scope === option.key && 'bg-accent-tint text-accent-ink'
-              )}
-              key={option.key}
-              onClick={() => onScopeChange(option.key)}
-              type="button"
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-        {scope === 'focused' ? (
-          <label className="flex h-8 items-center gap-1 rounded-md border border-line-strong bg-raised px-2 text-xs text-muted">
-            Depth
-            <select
-              aria-label="Graph depth"
-              className="bg-transparent font-medium text-body outline-none"
-              onChange={(event) => onDepthChange(Number(event.target.value) as GraphDepth)}
-              value={depth}
-            >
-              {graphDepthOptions.map((option) => (
-                <option key={option} value={option}>
-                  {option} hop{option === 1 ? '' : 's'}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        <label className="flex h-8 min-w-[132px] items-center gap-1 rounded-md border border-line-strong bg-raised px-2 text-xs text-muted">
-          Folder
-          <input
-            aria-label="Graph folder"
-            className="min-w-0 flex-1 bg-transparent font-medium text-body outline-none placeholder:text-faint"
-            onChange={(event) => onFolderChange(event.target.value)}
-            placeholder="path"
-            value={folder}
-          />
-        </label>
-        <label className="flex h-8 min-w-[116px] items-center gap-1 rounded-md border border-line-strong bg-raised px-2 text-xs text-muted">
-          Tag
-          <input
-            aria-label="Graph tag"
-            className="min-w-0 flex-1 bg-transparent font-medium text-body outline-none placeholder:text-faint"
-            onChange={(event) => onTagChange(event.target.value)}
-            placeholder="tag"
-            value={tag}
-          />
-        </label>
-        <label className="flex h-8 items-center gap-1 rounded-md border border-line-strong bg-raised px-2 text-xs text-muted">
-          Kind
-          <select
-            aria-label="Graph link kind"
-            className="bg-transparent font-medium text-body outline-none"
-            onChange={(event) => onLinkKindChange(event.target.value as GraphLinkKindFilter)}
-            value={linkKind}
-          >
-            {graphLinkKindOptions.map((option) => (
-              <option key={option.key} value={option.key}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex h-8 items-center gap-1 rounded-md border border-line-strong bg-raised px-2 text-xs text-muted">
-          State
-          <select
-            aria-label="Graph resolution"
-            className="bg-transparent font-medium text-body outline-none"
-            onChange={(event) => onResolutionChange(event.target.value as GraphResolutionFilter)}
-            value={resolution}
-          >
-            {graphResolutionOptions.map((option) => (
-              <option key={option.key} value={option.key}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      {graphData.nodes.length ? (
-        <>
-          <GraphCanvas graphData={graphData} onOpenDocument={onOpenDocument} />
-          {graphData.truncated ? (
-            <p className="rounded border border-warn-line bg-warn-tint px-2 py-1 text-xs text-warn-ink">
-              Full graph is too large for the current limit; use focused mode or filters to narrow it.
-            </p>
-          ) : null}
-          {visibleEdges.length ? (
-            <ul className="space-y-1 text-xs">
-              {visibleEdges.map((edge) => (
-                <li
-                  className="flex items-center gap-2 rounded bg-raised px-2 py-1 text-body"
-                  key={edge.id}
-                >
-                  <button
-                    className="min-w-0 flex-1 truncate text-left hover:text-accent"
-                    onClick={() => edge.target_path && onOpenDocument(edge.target_path)}
-                    type="button"
-                  >
-                    {edge.source_path} -&gt; {edge.target_path ?? edge.target_text}
-                  </button>
-                  <span className="shrink-0 rounded border border-line px-1.5 py-0.5 text-[10px] uppercase text-muted">
-                    {linkKindLabel(edge.target_kind)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-xs text-muted">No document edges</p>
-          )}
-        </>
-      ) : (
-        <p className="text-xs text-muted">None</p>
-      )}
-    </div>
-  );
-}
-
-function GraphCanvas({
-  graphData,
-  onOpenDocument,
-}: {
-  graphData: GraphResponse;
-  onOpenDocument: (path: string) => void;
-}) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container || !graphData.nodes.length) return;
-    container.replaceChildren();
-    let cancelled = false;
-    let renderer: SigmaRenderer | null = null;
-    void (async () => {
-      try {
-        const [{ default: GraphologyGraph }, { default: Sigma }] = await Promise.all([
-          import('graphology'),
-          import('sigma'),
-        ]);
-        if (cancelled || !containerRef.current) return;
-        const positions = await layoutGraphNodes(graphData.nodes);
-        if (cancelled || !containerRef.current) return;
-        const positionById = new Map(positions.map((position) => [position.id, position]));
-        const graph = new GraphologyGraph();
-        for (const node of graphData.nodes) {
-          const position = positionById.get(node.id) ?? { x: 0, y: 0 };
-          graph.addNode(node.id, {
-            label: node.title || node.path,
-            path: node.path,
-            x: position.x,
-            y: position.y,
-            size: 7,
-            color: '#256f64',
-          });
-        }
-        for (const edge of graphData.edges) {
-          if (!edge.target || !graph.hasNode(edge.source) || !graph.hasNode(edge.target)) continue;
-          graph.addDirectedEdgeWithKey(edge.id, edge.source, edge.target, {
-            size: 2,
-            color: edge.resolved ? '#7aa69e' : '#b9804c',
-          });
-        }
-
-        renderer = new Sigma(graph, containerRef.current, {
-          allowInvalidContainer: true,
-          renderEdgeLabels: false,
-          renderLabels: true,
-        }) as SigmaRenderer;
-        renderer.on('clickNode', ({ node }) => {
-          const path = graph.getNodeAttribute(node, 'path');
-          if (typeof path === 'string') onOpenDocument(path);
-        });
-      } catch {
-        container.replaceChildren();
-      }
-    })();
-    return () => {
-      cancelled = true;
-      renderer?.kill();
-    };
-  }, [graphData, onOpenDocument]);
-
-  return (
-    <div
-      aria-label="Graph view"
-      className="h-36 overflow-hidden rounded border border-line bg-raised"
-      ref={containerRef}
-    />
   );
 }
 
@@ -3328,20 +2863,8 @@ function documentTitle(entry: DocumentListEntry) {
   return typeof title === 'string' && title.trim() ? title : entry.path.split('/').at(-1) ?? entry.path;
 }
 
-function documentDirname(path: string) {
-  return path.split('/').slice(0, -1).join('/');
-}
-
 function documentBasename(path: string) {
   return path.split('/').at(-1) ?? path;
-}
-
-function metadataPropertyRows(metadata: Record<string, unknown>) {
-  const hiddenMetadataKeys = new Set(['byte_size', 'content_type', 'head_version_id', 'id', 'path', 'updated_at']);
-  return Object.entries(metadata)
-    .filter(([key]) => !hiddenMetadataKeys.has(key))
-    .map(([key, value]) => ({ label: metadataLabel(key), value: formatMetadataValue(value) }))
-    .filter((row): row is { label: string; value: string } => typeof row.value === 'string' && row.value.length > 0);
 }
 
 function useDialogFocusTrap(open: boolean, onClose: () => void) {
@@ -3560,141 +3083,6 @@ function isRightPaneTab(value: unknown): value is RightPaneTab {
   return typeof value === 'string' && rightPaneTabs.some((tab) => tab.key === value);
 }
 
-function loadGraphScope(library: string): GraphScope {
-  if (!library) return 'focused';
-  const stored = localStorage.getItem(graphScopeStorageKey(library));
-  return isGraphScope(stored) ? stored : 'focused';
-}
-
-function persistGraphScope(library: string, scope: GraphScope) {
-  if (!library) return;
-  localStorage.setItem(graphScopeStorageKey(library), scope);
-}
-
-function graphScopeStorageKey(library: string) {
-  return `quarry:graph-scope:${library}`;
-}
-
-function isGraphScope(value: unknown): value is GraphScope {
-  return typeof value === 'string' && graphScopes.some((scope) => scope.key === value);
-}
-
-function loadGraphDepth(library: string): GraphDepth {
-  if (!library) return 1;
-  const stored = Number(localStorage.getItem(graphDepthStorageKey(library)));
-  return isGraphDepth(stored) ? stored : 1;
-}
-
-function persistGraphDepth(library: string, depth: GraphDepth) {
-  if (!library) return;
-  localStorage.setItem(graphDepthStorageKey(library), String(depth));
-}
-
-function graphDepthStorageKey(library: string) {
-  return `quarry:graph-depth:${library}`;
-}
-
-function isGraphDepth(value: unknown): value is GraphDepth {
-  return typeof value === 'number' && graphDepthOptions.includes(value as GraphDepth);
-}
-
-function loadGraphFolder(library: string) {
-  if (!library) return '';
-  return normalizeGraphTextFilter(localStorage.getItem(graphFolderStorageKey(library)) ?? '');
-}
-
-function persistGraphFolder(library: string, folder: string) {
-  if (!library) return;
-  localStorage.setItem(graphFolderStorageKey(library), folder);
-}
-
-function graphFolderStorageKey(library: string) {
-  return `quarry:graph-folder:${library}`;
-}
-
-function loadGraphTag(library: string) {
-  if (!library) return '';
-  return normalizeGraphTextFilter(localStorage.getItem(graphTagStorageKey(library)) ?? '').replace(/^#/, '');
-}
-
-function persistGraphTag(library: string, tag: string) {
-  if (!library) return;
-  localStorage.setItem(graphTagStorageKey(library), tag);
-}
-
-function graphTagStorageKey(library: string) {
-  return `quarry:graph-tag:${library}`;
-}
-
-function normalizeGraphTextFilter(value: string) {
-  return value.trim();
-}
-
-function loadGraphLinkKind(library: string): GraphLinkKindFilter {
-  if (!library) return 'all';
-  const stored = localStorage.getItem(graphLinkKindStorageKey(library));
-  return isGraphLinkKindFilter(stored) ? stored : 'all';
-}
-
-function persistGraphLinkKind(library: string, linkKind: GraphLinkKindFilter) {
-  if (!library) return;
-  localStorage.setItem(graphLinkKindStorageKey(library), linkKind);
-}
-
-function graphLinkKindStorageKey(library: string) {
-  return `quarry:graph-link-kind:${library}`;
-}
-
-function isGraphLinkKindFilter(value: unknown): value is GraphLinkKindFilter {
-  return typeof value === 'string' && graphLinkKindOptions.some((option) => option.key === value);
-}
-
-function loadGraphResolution(library: string): GraphResolutionFilter {
-  if (!library) return 'all';
-  const stored = localStorage.getItem(graphResolutionStorageKey(library));
-  return isGraphResolutionFilter(stored) ? stored : 'all';
-}
-
-function persistGraphResolution(library: string, resolution: GraphResolutionFilter) {
-  if (!library) return;
-  localStorage.setItem(graphResolutionStorageKey(library), resolution);
-}
-
-function graphResolutionStorageKey(library: string) {
-  return `quarry:graph-resolution:${library}`;
-}
-
-function isGraphResolutionFilter(value: unknown): value is GraphResolutionFilter {
-  return typeof value === 'string' && graphResolutionOptions.some((option) => option.key === value);
-}
-
-function graphCacheKey(
-  library: string,
-  scope: GraphScope,
-  path: string,
-  depth: GraphDepth,
-  folder: string,
-  tag: string,
-  linkKind: GraphLinkKindFilter,
-  resolution: GraphResolutionFilter
-) {
-  return [
-    '/v1/graph',
-    library,
-    scope === 'focused' ? path : '__full__',
-    scope === 'focused' ? depth : 0,
-    folder,
-    tag,
-    linkKind,
-    resolution,
-  ];
-}
-
-function isGraphCacheKey(key: unknown, library: string) {
-  return Array.isArray(key) && key[0] === '/v1/graph' && key[1] === library;
-}
-
-
 function eventStatusText(state: EventState) {
   const label: Record<EventState, string> = {
     idle: 'Events idle',
@@ -3767,7 +3155,7 @@ function gitExportSummary(result: GitExportResult) {
 
 function parseWorkspaceRoute(pathname: string) {
   const segments = pathname.split('/').filter(Boolean);
-  if (segments[0] !== 'libraries' || !segments[1]) {
+  if (segments[0] !== 'lib' || !segments[1]) {
     return { library: null, path: undefined };
   }
   const library = safeDecodeSegment(segments[1]);
@@ -3782,7 +3170,7 @@ function parseWorkspaceRoute(pathname: string) {
 
 function workspaceRoute(library: string, path: string) {
   if (!library) return '';
-  const libraryPath = `/libraries/${encodeURIComponent(library)}`;
+  const libraryPath = `/lib/${encodeURIComponent(library)}`;
   if (!path) return libraryPath;
   return `${libraryPath}/documents/${path.split('/').map(encodeURIComponent).join('/')}`;
 }
@@ -3814,6 +3202,10 @@ const ghostIconButton =
   'inline-flex h-8 w-8 items-center justify-center rounded-md text-muted transition-colors hover:bg-well hover:text-body';
 const iconButton =
   'inline-flex h-8 w-8 items-center justify-center rounded-md border border-line-strong bg-raised text-body transition-colors hover:bg-well';
+// Bordered field wrapper that delegates focus styling to a single focus-within
+// ring, so the inner input/select can safely use `outline-none`.
+const filterField =
+  'flex h-8 items-center gap-1 rounded-md border border-line-strong bg-raised px-2 text-xs text-muted transition-colors focus-within:border-accent focus-within:ring-2 focus-within:ring-accent-tint';
 const commandItem =
   'flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-body outline-none aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-selected:bg-accent-tint';
 const treeMenuItem =
@@ -3823,27 +3215,6 @@ const menuItem =
 const rightHeading = 'mb-2.5 flex items-center gap-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-faint';
 const rightPaneTabs: Array<{ key: RightPaneTab; label: string }> = [
   { key: 'links', label: 'Links' },
-  { key: 'backlinks', label: 'Backlinks' },
-  { key: 'properties', label: 'Properties' },
-  { key: 'graph', label: 'Graph' },
   { key: 'versions', label: 'Versions' },
   { key: 'conflicts', label: 'Conflicts' },
-];
-const graphScopes: Array<{ key: GraphScope; label: string }> = [
-  { key: 'focused', label: 'Focused' },
-  { key: 'full', label: 'Full library' },
-];
-const graphDepthOptions: GraphDepth[] = [1, 2, 3];
-const graphLinkKindOptions: Array<{ key: GraphLinkKindFilter; label: string }> = [
-  { key: 'all', label: 'All kinds' },
-  { key: 'wiki_link', label: 'Wiki links' },
-  { key: 'markdown_link', label: 'Markdown' },
-  { key: 'embed', label: 'Embeds' },
-  { key: 'heading', label: 'Headings' },
-  { key: 'tag', label: 'Tags' },
-];
-const graphResolutionOptions: Array<{ key: GraphResolutionFilter; label: string }> = [
-  { key: 'all', label: 'All states' },
-  { key: 'resolved', label: 'Resolved' },
-  { key: 'unresolved', label: 'Unresolved' },
 ];

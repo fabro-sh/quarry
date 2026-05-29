@@ -3,7 +3,6 @@ import type {
   DocumentListEntry,
   DocumentVersion,
   DocumentVersionContent,
-  GraphResponse,
   Library,
   LinkCollection,
   SearchResponse,
@@ -193,23 +192,6 @@ export async function restoreVersion(
     etag: response.headers.get('etag') ?? '',
   };
 }
-
-export const graph = (
-  library: string,
-  root?: string,
-  depth?: number,
-  filters: { folder?: string; tag?: string; linkKind?: string; resolution?: 'resolved' | 'unresolved' } = {}
-) => {
-  const params = new URLSearchParams();
-  if (root) params.set('root', root);
-  if (depth && depth !== 1) params.set('depth', String(depth));
-  if (filters.folder) params.set('folder', filters.folder);
-  if (filters.tag) params.set('tag', filters.tag);
-  if (filters.linkKind) params.set('link_kind', filters.linkKind);
-  if (filters.resolution) params.set('resolved', String(filters.resolution === 'resolved'));
-  const query = params.toString();
-  return jsonRequest<GraphResponse>(`/v1/libraries/${segment(library)}/graph${query ? `?${query}` : ''}`);
-};
 
 export const listGitPeers = (library: string) =>
   jsonRequest<GitPeer[]>(`/v1/libraries/${segment(library)}/git/peers`);

@@ -13,6 +13,7 @@
     "generate:api": "bun run scripts/generate-api.ts"
   },
   "dependencies": {
+    "@platejs/autoformat": "52.0.11",
     "@platejs/basic-nodes": "52.0.11",
     "@platejs/code-block": "52.0.11",
     "@platejs/floating": "52.0.11",
@@ -25,7 +26,6 @@
     "@radix-ui/react-tabs": "1.1.13",
     "@radix-ui/react-tooltip": "1.2.8",
     "cmdk": "1.1.1",
-    "graphology": "0.26.0",
     "lucide-react": "0.555.0",
     "mermaid": "^11.15.0",
     "platejs": "52.0.17",
@@ -35,7 +35,6 @@
     "react-resizable-panels": "3.0.6",
     "react-router-dom": "7.9.6",
     "remark-gfm": "4.0.1",
-    "sigma": "3.0.2",
     "swr": "2.3.6",
     "tailwind-merge": "3.4.0",
     "zustand": "5.0.9"
