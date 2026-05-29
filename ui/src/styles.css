@@ -49,7 +49,8 @@
   color: var(--color-body);
   background: var(--color-canvas);
   font-family: var(--font-sans);
-  font-synthesis: none;
+  /* Geist ships no italic face — let the browser synthesize the slant for <em>. */
+  font-synthesis: style;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
