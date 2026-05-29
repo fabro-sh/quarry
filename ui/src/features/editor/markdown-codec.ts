@@ -14,6 +14,7 @@ import { BaseLinkPlugin } from '@platejs/link';
 import { BaseListPlugin } from '@platejs/list';
 import { MarkdownPlugin } from '@platejs/markdown';
 import { BaseParagraphPlugin, createSlateEditor } from 'platejs';
+import remarkGfm from 'remark-gfm';
 
 export type PlateValue = Array<Record<string, unknown>>;
 
@@ -43,7 +44,7 @@ function editor() {
       BaseStrikethroughPlugin,
       BaseListPlugin,
       BaseLinkPlugin,
-      MarkdownPlugin,
+      MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm] } }),
     ],
   } as never) as ReturnType<typeof createSlateEditor> & {
     api: {

@@ -599,6 +599,43 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(page).toHaveURL(/\/libraries\/notes\/documents\/daily\.md$/);
   });
 
+  test('shows a floating formatting toolbar when text is selected', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: '# Heading\n\nSome body text to format.',
+          id: 'doc-fmt',
+          metadata: { title: 'Format' },
+          path: 'format.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Format/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Some body text');
+
+    await expect(page.getByRole('button', { name: 'Bold' })).toHaveCount(0);
+
+    await editor.click();
+    await page.keyboard.press('ControlOrMeta+a');
+
+    await expect(page.getByRole('button', { name: 'Bold' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Italic' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Strikethrough' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Inline code' })).toBeVisible();
+
+    // Each mark renders its formatting in the editor.
+    await page.getByRole('button', { name: 'Strikethrough' }).click();
+    await expect(editor.locator('s').first()).toBeVisible();
+    await editor.click();
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.getByRole('button', { name: 'Italic' }).click();
+    await expect(editor.locator('em').first()).toBeVisible();
+  });
+
   test('diffs selected historical versions from the version pane', async ({ page }) => {
     await installMockApi(page, {
       documents: [

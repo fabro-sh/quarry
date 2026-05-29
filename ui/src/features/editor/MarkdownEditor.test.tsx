@@ -11,13 +11,10 @@ describe('MarkdownEditor', () => {
     expect(editor).toHaveAttribute('data-slate-editor', 'true');
   });
 
-  it('offers a limited formatting toolbar', async () => {
+  it('shows no formatting toolbar until text is selected', async () => {
     render(<MarkdownEditor content="# Guide" status="Saved" onChange={() => {}} />);
 
     await screen.findByLabelText('Plate markdown editor');
-    expect(screen.getByRole('button', { name: 'Bold' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Italic' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Strikethrough' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Inline code' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Bold' })).not.toBeInTheDocument();
   });
 });

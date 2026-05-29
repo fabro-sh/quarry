@@ -22,4 +22,9 @@ describe('markdown codec', () => {
     expect(plateValueToMarkdown(value)).toContain('**bold**');
     expect(plateValueToMarkdown(value)).toContain('[a link](guide.md)');
   });
+
+  it('round-trips GFM strikethrough', () => {
+    const value = markdownToPlateValue('A ~~struck~~ word.');
+    expect(plateValueToMarkdown(value)).toContain('~~struck~~');
+  });
 });

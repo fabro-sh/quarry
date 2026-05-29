@@ -12,13 +12,17 @@ import { CodeBlockPlugin, CodeLinePlugin, CodeSyntaxPlugin } from '@platejs/code
 import { LinkPlugin } from '@platejs/link/react';
 import { ListPlugin } from '@platejs/list/react';
 import { MarkdownPlugin } from '@platejs/markdown';
+import { flip, offset, shift, useFloatingToolbar, useFloatingToolbarState } from '@platejs/floating';
 import { Bold, Code, Italic, Strikethrough } from 'lucide-react';
 import { KEYS } from 'platejs';
 import { useEffect, useRef, type ReactNode } from 'react';
+import remarkGfm from 'remark-gfm';
 import {
   ParagraphPlugin,
   Plate,
   PlateContent,
+  useEditorRef,
+  useEventEditorValue,
   useMarkToolbarButton,
   useMarkToolbarButtonState,
   usePlateEditor,
@@ -43,7 +47,7 @@ const plateMarkdownPlugins = [
   StrikethroughPlugin,
   ListPlugin,
   LinkPlugin,
-  MarkdownPlugin,
+  MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm] } }),
 ] as const;
 
 export function PlateMarkdownEditor({
@@ -93,22 +97,7 @@ export function PlateMarkdownEditor({
         onChange(nextMarkdown);
       }}
     >
-      {disabled ? null : (
-        <div className="sticky top-0 z-10 flex items-center gap-0.5 border-b border-line bg-surface px-3 py-1.5">
-          <MarkButton label="Bold" nodeType={KEYS.bold}>
-            <Bold size={15} />
-          </MarkButton>
-          <MarkButton label="Italic" nodeType={KEYS.italic}>
-            <Italic size={15} />
-          </MarkButton>
-          <MarkButton label="Strikethrough" nodeType={KEYS.strikethrough}>
-            <Strikethrough size={15} />
-          </MarkButton>
-          <MarkButton label="Inline code" nodeType={KEYS.code}>
-            <Code size={15} />
-          </MarkButton>
-        </div>
-      )}
+      {disabled ? null : <FloatingFormatToolbar />}
       <PlateContent
         aria-label="Plate markdown editor"
         className="mx-auto min-h-[420px] w-full max-w-[68ch] px-8 py-8 text-[15px] leading-7 text-ink outline-none [&_[data-slate-placeholder=true]]:text-faint"
@@ -117,6 +106,42 @@ export function PlateMarkdownEditor({
         spellCheck={false}
       />
     </Plate>
+  );
+}
+
+function FloatingFormatToolbar() {
+  const editor = useEditorRef();
+  const focusedEditorId = useEventEditorValue('focus');
+  const state = useFloatingToolbarState({
+    editorId: editor.id,
+    focusedEditorId,
+    floatingOptions: {
+      placement: 'top',
+      middleware: [offset(8), flip({ padding: 8 }), shift({ padding: 8 })],
+    },
+  });
+  const { hidden, props, ref } = useFloatingToolbar(state);
+  if (hidden) return null;
+  return (
+    <div
+      aria-label="Formatting"
+      className="z-50 flex items-center gap-0.5 rounded-md border border-line bg-raised p-1 shadow-lg"
+      ref={ref}
+      {...props}
+    >
+      <MarkButton label="Bold" nodeType={KEYS.bold}>
+        <Bold size={15} />
+      </MarkButton>
+      <MarkButton label="Italic" nodeType={KEYS.italic}>
+        <Italic size={15} />
+      </MarkButton>
+      <MarkButton label="Strikethrough" nodeType={KEYS.strikethrough}>
+        <Strikethrough size={15} />
+      </MarkButton>
+      <MarkButton label="Inline code" nodeType={KEYS.code}>
+        <Code size={15} />
+      </MarkButton>
+    </div>
   );
 }
 
