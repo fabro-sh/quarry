@@ -11,6 +11,7 @@ import {
   BaseHorizontalRulePlugin,
   BaseItalicPlugin,
   BaseStrikethroughPlugin,
+  BaseUnderlinePlugin,
 } from '@platejs/basic-nodes';
 import { BaseCodeBlockPlugin, BaseCodeLinePlugin, BaseCodeSyntaxPlugin } from '@platejs/code-block';
 import { BaseLinkPlugin } from '@platejs/link';
@@ -18,6 +19,8 @@ import { BaseListPlugin } from '@platejs/list';
 import { MarkdownPlugin } from '@platejs/markdown';
 import { BaseParagraphPlugin, createSlateEditor } from 'platejs';
 import remarkGfm from 'remark-gfm';
+
+import { remarkUnderline } from './remark-underline';
 
 export type PlateValue = Array<Record<string, unknown>>;
 
@@ -48,9 +51,10 @@ function editor() {
       BaseItalicPlugin,
       BaseCodePlugin,
       BaseStrikethroughPlugin,
+      BaseUnderlinePlugin,
       BaseListPlugin,
       BaseLinkPlugin,
-      MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm] } }),
+      MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm, remarkUnderline] } }),
     ],
   } as never) as ReturnType<typeof createSlateEditor> & {
     api: {

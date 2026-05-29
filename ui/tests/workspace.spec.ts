@@ -718,6 +718,113 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(bullet).toHaveAttribute('aria-pressed', 'false');
   });
 
+  test('creates a to-do list with a checkbox via markdown autoformat', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: '',
+          id: 'doc-todo',
+          metadata: { title: 'Todos' },
+          path: 'todos.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Todos/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await editor.click();
+
+    // GitHub-style `[ ]` (space inside the brackets) creates an unchecked to-do.
+    await page.keyboard.type('[ ] Buy milk');
+    const checkbox = editor.getByRole('checkbox', { name: 'Toggle to-do' });
+    await expect(checkbox).toBeVisible();
+    await expect(checkbox).not.toBeChecked();
+    await expect(editor).toContainText('Buy milk');
+
+    await checkbox.check();
+    await expect(checkbox).toBeChecked();
+  });
+
+  test('creates a checked to-do via [x] autoformat', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: '',
+          id: 'doc-todo-x',
+          metadata: { title: 'TodosX' },
+          path: 'todos-x.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /TodosX/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await editor.click();
+
+    await page.keyboard.type('[x] Done thing');
+    const checkbox = editor.getByRole('checkbox', { name: 'Toggle to-do' });
+    await expect(checkbox).toBeVisible();
+    await expect(checkbox).toBeChecked();
+    await expect(editor).toContainText('Done thing');
+  });
+
+  test('applies underline from the floating toolbar', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: 'Underline me',
+          id: 'doc-underline',
+          metadata: { title: 'Underliney' },
+          path: 'underliney.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Underliney/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Underline me');
+
+    await page.getByText('Underline me', { exact: false }).click({ clickCount: 3 });
+    const underline = page.getByRole('button', { name: 'Underline' });
+    await underline.click();
+
+    await expect(underline).toHaveAttribute('aria-pressed', 'true');
+    await expect(editor.locator('u, [style*="underline"]').first()).toBeVisible();
+  });
+
+  test('turns a paragraph into a to-do from the floating toolbar', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: 'Walk the dog',
+          id: 'doc-todobar',
+          metadata: { title: 'TodoBar' },
+          path: 'todobar.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /TodoBar/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Walk the dog');
+
+    await page.getByText('Walk the dog', { exact: false }).click({ clickCount: 3 });
+    await page.getByRole('button', { name: 'To-do list' }).click();
+
+    const checkbox = editor.getByRole('checkbox', { name: 'Toggle to-do' });
+    await expect(checkbox).toBeVisible();
+    await expect(checkbox).not.toBeChecked();
+    await expect(editor).toContainText('Walk the dog');
+  });
+
   test('turns a block into a code block from the Turn into dropdown', async ({ page }) => {
     await installMockApi(page, {
       documents: [

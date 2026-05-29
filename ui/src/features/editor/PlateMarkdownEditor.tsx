@@ -11,12 +11,21 @@ import {
   H6Plugin,
   ItalicPlugin,
   StrikethroughPlugin,
+  UnderlinePlugin,
 } from '@platejs/basic-nodes/react';
 import { CodeBlockPlugin, CodeLinePlugin, CodeSyntaxPlugin } from '@platejs/code-block/react';
 import { insertEmptyCodeBlock, toggleCodeBlock } from '@platejs/code-block';
 import { LinkPlugin } from '@platejs/link/react';
-import { ListPlugin, useListToolbarButton, useListToolbarButtonState } from '@platejs/list/react';
-import { toggleList } from '@platejs/list';
+import {
+  ListPlugin,
+  useIndentTodoToolBarButton,
+  useIndentTodoToolBarButtonState,
+  useListToolbarButton,
+  useListToolbarButtonState,
+  useTodoListElement,
+  useTodoListElementState,
+} from '@platejs/list/react';
+import { isOrderedList, toggleList } from '@platejs/list';
 import { MarkdownPlugin } from '@platejs/markdown';
 import { flip, offset, shift, useFloatingToolbar, useFloatingToolbarState } from '@platejs/floating';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
@@ -35,12 +44,14 @@ import {
   Italic,
   List,
   ListOrdered,
+  ListTodo,
   Pilcrow,
   Quote,
   SquareCode,
   Strikethrough,
+  Underline,
 } from 'lucide-react';
-import { KEYS, NodeApi, type TElement } from 'platejs';
+import { KEYS, NodeApi, type TElement, type TListElement } from 'platejs';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import remarkGfm from 'remark-gfm';
 import {
@@ -54,13 +65,16 @@ import {
   useMarkToolbarButton,
   useMarkToolbarButtonState,
   usePlateEditor,
+  useReadOnly,
   useSelectionFragmentProp,
   type PlateEditor,
   type PlateElementProps,
+  type RenderNodeWrapper,
 } from 'platejs/react';
 
 import { cn } from '../../lib/utils';
 import { markdownToPlateValue, plateValueToMarkdown, type PlateValue } from './markdown-codec';
+import { remarkUnderline } from './remark-underline';
 
 // Notion-style markdown shortcuts: typing the markdown prefix at the start of a
 // block (or wrapping marks) auto-converts it. Scoped to the surface Quarry
@@ -104,6 +118,25 @@ const autoformatRules: AutoformatRule[] = [
       });
     },
   },
+  {
+    // Notion-style `[]` and GitHub-style `[ ]` (with the space inside).
+    match: ['[] ', '[ ] '],
+    mode: 'block',
+    type: 'list',
+    format: (editor) => {
+      toggleList(editor, { listStyleType: KEYS.listTodo });
+      editor.tf.setNodes({ checked: false, listStyleType: KEYS.listTodo });
+    },
+  },
+  {
+    match: ['[x] ', '[X] '],
+    mode: 'block',
+    type: 'list',
+    format: (editor) => {
+      toggleList(editor, { listStyleType: KEYS.listTodo });
+      editor.tf.setNodes({ checked: true, listStyleType: KEYS.listTodo });
+    },
+  },
   { match: '***', mode: 'mark', type: [KEYS.bold, KEYS.italic] },
   { match: '**', mode: 'mark', type: KEYS.bold },
   { match: '*', mode: 'mark', type: KEYS.italic },
@@ -111,6 +144,13 @@ const autoformatRules: AutoformatRule[] = [
   { match: '~~', mode: 'mark', type: KEYS.strikethrough },
   { match: '`', mode: 'mark', type: KEYS.code },
 ];
+
+// Renders the list marker for an indent-list item: native disc/decimal markers
+// for bullet/numbered lists, and an interactive checkbox for to-do items.
+const BlockList: RenderNodeWrapper = (props) => {
+  if (!props.element.listStyleType) return undefined;
+  return (childProps) => <ListItemElement {...childProps} />;
+};
 
 const plateMarkdownPlugins = [
   ParagraphPlugin,
@@ -128,7 +168,8 @@ const plateMarkdownPlugins = [
   ItalicPlugin,
   CodePlugin,
   StrikethroughPlugin,
-  ListPlugin,
+  UnderlinePlugin,
+  ListPlugin.configure({ render: { belowNodes: BlockList } }),
   LinkPlugin,
   AutoformatPlugin.configure({
     options: {
@@ -140,7 +181,7 @@ const plateMarkdownPlugins = [
       })),
     },
   }),
-  MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm] } }),
+  MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm, remarkUnderline] } }),
 ] as const;
 
 export function PlateMarkdownEditor({
@@ -230,6 +271,9 @@ function FloatingFormatToolbar() {
       <MarkButton label="Italic" nodeType={KEYS.italic}>
         <Italic size={15} />
       </MarkButton>
+      <MarkButton label="Underline" nodeType={KEYS.underline}>
+        <Underline size={15} />
+      </MarkButton>
       <MarkButton label="Strikethrough" nodeType={KEYS.strikethrough}>
         <Strikethrough size={15} />
       </MarkButton>
@@ -243,7 +287,31 @@ function FloatingFormatToolbar() {
       <ListButton label="Numbered list" nodeType={KEYS.ol}>
         <ListOrdered size={15} />
       </ListButton>
+      <TodoListButton label="To-do list">
+        <ListTodo size={15} />
+      </TodoListButton>
     </div>
+  );
+}
+
+function TodoListButton({ label, children }: { label: string; children: ReactNode }) {
+  const state = useIndentTodoToolBarButtonState({ nodeType: KEYS.listTodo });
+  const { props } = useIndentTodoToolBarButton(state);
+  return (
+    <button
+      aria-label={label}
+      aria-pressed={state.pressed}
+      className={cn(
+        'inline-flex size-7 items-center justify-center rounded text-muted transition-colors hover:bg-well hover:text-body',
+        state.pressed && 'bg-well text-ink'
+      )}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => props.onClick()}
+      title={label}
+      type="button"
+    >
+      {children}
+    </button>
   );
 }
 
@@ -412,6 +480,42 @@ function CodeBlockElement(props: PlateElementProps) {
         {copied ? <Check size={13} /> : <Copy size={13} />}
       </button>
     </PlateElement>
+  );
+}
+
+function ListItemElement(props: PlateElementProps) {
+  const { listStart, listStyleType } = props.element as TListElement;
+  if (listStyleType === KEYS.listTodo) return <TodoListItem {...props} />;
+  const ListTag = isOrderedList(props.element) ? 'ol' : 'ul';
+  return (
+    <ListTag className="relative m-0 p-0" start={listStart} style={{ listStyleType }}>
+      <li>{props.children}</li>
+    </ListTag>
+  );
+}
+
+function TodoListItem(props: PlateElementProps) {
+  const state = useTodoListElementState({ element: props.element });
+  const { checkboxProps } = useTodoListElement(state);
+  const readOnly = useReadOnly();
+  const checked = props.element.checked === true;
+  return (
+    <ul className="relative m-0 list-none p-0">
+      <li className={cn('relative pl-6', checked && 'text-muted line-through')}>
+        <span className="absolute left-0 top-[0.2em]" contentEditable={false}>
+          <input
+            aria-label="Toggle to-do"
+            checked={checkboxProps.checked}
+            className="size-3.5 cursor-pointer accent-accent disabled:cursor-default"
+            disabled={readOnly}
+            onChange={(event) => checkboxProps.onCheckedChange(event.target.checked)}
+            onMouseDown={checkboxProps.onMouseDown}
+            type="checkbox"
+          />
+        </span>
+        {props.children}
+      </li>
+    </ul>
   );
 }
 

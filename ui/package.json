@@ -27,7 +27,9 @@
     "@radix-ui/react-tooltip": "1.2.8",
     "cmdk": "1.1.1",
     "lucide-react": "0.555.0",
+    "mdast-util-mdx-jsx": "^3.2.0",
     "mermaid": "^11.15.0",
+    "micromark-extension-mdx-jsx": "^3.0.2",
     "platejs": "52.0.17",
     "react": "19.2.1",
     "react-arborist": "3.4.3",
@@ -37,6 +39,7 @@
     "remark-gfm": "4.0.1",
     "swr": "2.3.6",
     "tailwind-merge": "3.4.0",
+    "unist-util-visit": "^5.1.0",
     "zustand": "5.0.9"
   },
   "devDependencies": {

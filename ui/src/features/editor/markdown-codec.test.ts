@@ -32,4 +32,21 @@ describe('markdown codec', () => {
     const markdown = '# One\n\n## Two\n\n### Three\n\n#### Four\n\n##### Five\n\n###### Six\n';
     expect(plateValueToMarkdown(markdownToPlateValue(markdown))).toContain('###### Six');
   });
+
+  it('round-trips GFM task lists', () => {
+    const value = markdownToPlateValue('- [ ] Todo 1\n- [x] Todo 2\n');
+    const serialized = plateValueToMarkdown(value);
+    expect(serialized).toContain('[ ] Todo 1');
+    expect(serialized).toContain('[x] Todo 2');
+  });
+
+  it('round-trips underline as <u> HTML', () => {
+    const value = markdownToPlateValue('Plain <u>under</u> text.\n');
+    expect(plateValueToMarkdown(value)).toContain('<u>under</u>');
+  });
+
+  it('leaves stray angle brackets and braces untouched', () => {
+    const markdown = 'if a < b and {x} then y\n';
+    expect(plateValueToMarkdown(markdownToPlateValue(markdown))).toBe(markdown);
+  });
 });
