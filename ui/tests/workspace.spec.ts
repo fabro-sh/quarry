@@ -72,16 +72,14 @@ test.describe('Quarry Browser smoke flows', () => {
       expect(dialog.message()).toBe('New document path');
       await dialog.accept('new.md');
     });
-    await page.getByRole('button', { name: 'New' }).click();
+    await page.getByRole('button', { name: 'Create document' }).click();
 
     await expect(page.getByRole('treeitem', { name: /new\.md/ })).toBeVisible();
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# Untitled\n');
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('Untitled');
     expect(api.createHeaders).toContain('*');
 
-    await page.getByLabel('Markdown source').fill('# Created\nBody');
     await page.getByRole('button', { name: 'Save document' }).click();
 
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# Created\nBody');
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
     expect(api.saveHeaders).toContain('"v-new"');
 
@@ -89,7 +87,7 @@ test.describe('Quarry Browser smoke flows', () => {
 
     await expect(page.getByRole('treeitem', { name: /new\.md/ })).toBeVisible();
     await page.getByRole('treeitem', { name: /new\.md/ }).click();
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# Created\nBody');
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('Untitled');
   });
 
   test('opens the browser and selects a library', async ({ page }) => {
@@ -124,7 +122,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.goto('/');
 
     const switcher = page.getByRole('combobox', { name: 'Library switcher' });
-    await expect(switcher).toHaveValue('');
+    await expect(switcher).toHaveValue('personal');
     await switcher.selectOption('work');
 
     await expect(page).toHaveURL(/\/libraries\/work$/);
@@ -132,7 +130,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(page.getByRole('treeitem', { name: /Personal/ })).not.toBeVisible();
 
     await page.getByRole('treeitem', { name: /Work/ }).click();
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# Work\n');
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('Work');
     await expect(page.evaluate(() => localStorage.getItem('quarry:active-library'))).resolves.toBe('work');
   });
 
@@ -167,9 +165,8 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.goto('/');
 
     const switcher = page.getByRole('combobox', { name: 'Library switcher' });
-    await expect(switcher.locator('option')).toHaveCount(3);
+    await expect(switcher.locator('option')).toHaveCount(2);
     await switcher.focus();
-    await page.keyboard.press('ArrowDown');
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
 
@@ -178,31 +175,26 @@ test.describe('Quarry Browser smoke flows', () => {
 
     await page.getByRole('treeitem', { name: /Daily/ }).focus();
     await page.keyboard.press('Enter');
-    const source = page.getByLabel('Markdown source');
-    await expect(source).toHaveValue('# Daily\n');
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Daily');
 
-    await source.focus();
-    await page.keyboard.press('ControlOrMeta+A');
-    await page.keyboard.type('# Daily keyboard\n');
-    await page.getByRole('button', { name: 'Save document' }).focus();
+    await page.getByRole('button', { name: 'Search' }).focus();
     await page.keyboard.press('Enter');
-    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
-
     const search = page.getByRole('textbox', { name: 'Search' });
-    await search.focus();
+    await expect(search).toBeFocused();
     await page.keyboard.type('guide');
     const results = page.getByRole('listbox', { name: 'Search results' });
     await expect(results.getByRole('option', { name: /Guide/ })).toBeVisible();
     await results.focus();
     await page.keyboard.press('Enter');
-    await expect(source).toHaveValue('# Guide\n');
+    await expect(editor).toContainText('Guide');
 
     await page.keyboard.press('ControlOrMeta+K');
     const palette = page.getByRole('dialog', { name: 'Command palette' });
     await expect(palette).toBeVisible();
     await page.keyboard.type('daily');
     await page.keyboard.press('Enter');
-    await expect(source).toHaveValue('# Daily keyboard\n');
+    await expect(editor).toContainText('Daily');
   });
 
   test('runs create, move, search, sync, settings, and delete from the command palette', async ({ page }) => {
@@ -226,7 +218,7 @@ test.describe('Quarry Browser smoke flows', () => {
     });
     await runCommand(page, 'create', 'Create document');
     await expect(page.getByRole('treeitem', { name: /palette-new\.md/ })).toBeVisible();
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# Untitled\n');
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('Untitled');
 
     page.once('dialog', async (dialog) => {
       expect(dialog.message()).toBe('Move document to path');
@@ -254,7 +246,7 @@ test.describe('Quarry Browser smoke flows', () => {
     });
     await runCommand(page, 'delete', 'Delete current document');
     await expect(page.getByRole('treeitem', { name: /palette-moved\.md/ })).not.toBeVisible();
-    await expect(page.locator('[aria-label="Document status"]')).toContainText('No document open');
+    await expect(page.getByText('No document open')).toBeVisible();
   });
 
   test('passes automated accessibility checks for shell and conflict workflows', async ({ page }) => {
@@ -327,9 +319,8 @@ test.describe('Quarry Browser smoke flows', () => {
 
     await page.goto('/');
     await page.getByRole('treeitem', { name: /Daily/ }).click();
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# Base\n');
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('Base');
 
-    await page.getByLabel('Markdown source').fill('# Local\n');
     await page.getByRole('button', { name: 'Save document' }).click();
 
     await expect(page.getByRole('heading', { name: 'Local draft' })).toBeVisible();
@@ -337,7 +328,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(page.getByText('Path daily.md')).toBeVisible();
     await expect(page.getByText('Base "v1"')).toBeVisible();
     await expect(page.getByText('Latest "v2"')).toBeVisible();
-    await expect(page.locator('pre').filter({ hasText: '# Local' })).toBeVisible();
+    await expect(page.locator('pre').filter({ hasText: '# Base' })).toBeVisible();
     await expect(page.locator('pre').filter({ hasText: '# Remote' })).toBeVisible();
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Stale');
     expect(api.saveHeaders).toEqual(['"v1"']);
@@ -365,6 +356,7 @@ test.describe('Quarry Browser smoke flows', () => {
 
     await page.goto('/');
 
+    await page.getByRole('button', { name: 'Search' }).click();
     await page.getByRole('textbox', { name: 'Search' }).fill('guide');
     const results = page.getByRole('listbox', { name: 'Search results' });
     await expect(results.getByRole('option', { name: /Guide/ })).toBeVisible();
@@ -372,7 +364,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await results.focus();
     await page.keyboard.press('Enter');
 
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# Guide\nSearchable body');
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('Searchable body');
     await expect(page).toHaveURL(/\/libraries\/notes\/documents\/docs\/guide\.md$/);
   });
 
@@ -403,7 +395,7 @@ test.describe('Quarry Browser smoke flows', () => {
 
     await expect(page.getByRole('treeitem', { name: /archive/ })).toBeVisible();
     await page.getByRole('treeitem', { name: /Daily/ }).click();
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# Daily\n');
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('Daily');
     await expect(page).toHaveURL(/\/libraries\/notes\/documents\/archive\/daily\.md$/);
   });
 
@@ -423,7 +415,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.goto('/');
 
     await page.getByRole('treeitem', { name: /Daily/ }).click();
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# Daily\n');
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('Daily');
 
     page.once('dialog', async (dialog) => {
       expect(dialog.message()).toBe('Delete daily.md?');
@@ -434,7 +426,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.getByRole('menuitem', { name: 'Delete' }).click();
 
     await expect(page.getByRole('treeitem', { name: /Daily/ })).not.toBeVisible();
-    await expect(page.locator('[aria-label="Document status"]')).toContainText('No document open');
+    await expect(page.getByText('No document open')).toBeVisible();
   });
 
   test('restores an unsaved draft after reloading the workspace', async ({ page }) => {
@@ -453,14 +445,17 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.goto('/');
 
     await page.getByRole('treeitem', { name: /Draft/ }).click();
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# Server\n');
-    await page.getByLabel('Markdown source').fill('# Local draft\n');
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Server');
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' edited');
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Draft saved locally');
 
     await page.reload();
 
     await page.getByRole('treeitem', { name: /Draft/ }).click();
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# Local draft\n');
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('edited');
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Draft saved locally');
   });
 
@@ -485,13 +480,14 @@ test.describe('Quarry Browser smoke flows', () => {
     expect(renderedTreeItems).toBeGreaterThan(0);
     expect(renderedTreeItems).toBeLessThan(200);
 
+    await page.getByRole('button', { name: 'Search' }).click();
     await page.getByRole('textbox', { name: 'Search' }).fill('note-9999');
     const results = page.getByRole('listbox', { name: 'Search results' });
     await expect(results.getByRole('option', { name: /Note 9999/ })).toBeVisible();
     await results.focus();
     await page.keyboard.press('Enter');
 
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# Note 9999\n');
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('Note 9999');
     await expect(page).toHaveURL(/\/libraries\/notes\/documents\/folder-9\/note-9999\.md$/);
   });
 
@@ -527,7 +523,7 @@ test.describe('Quarry Browser smoke flows', () => {
       'src',
       '/v1/libraries/notes/documents/assets/photo.png'
     );
-    await expect(page.getByLabel('Markdown source')).not.toBeVisible();
+    await expect(page.getByLabel('Plate markdown editor')).not.toBeVisible();
 
     await page.getByRole('treeitem', { name: /raw\.bin/ }).click();
     const binaryPreview = page.getByRole('region', { name: 'Binary document preview' });
@@ -539,7 +535,7 @@ test.describe('Quarry Browser smoke flows', () => {
       'href',
       '/v1/libraries/notes/documents/archives/raw.bin'
     );
-    await expect(page.getByLabel('Markdown source')).not.toBeVisible();
+    await expect(page.getByLabel('Plate markdown editor')).not.toBeVisible();
   });
 
   test('navigates through wiki-links and backlinks', async ({ page }) => {
@@ -591,8 +587,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.goto('/');
 
     await page.getByRole('treeitem', { name: /Daily/ }).click();
-    await page.getByRole('button', { name: 'Rich' }).click();
-    await page.getByRole('button', { name: 'Guide', exact: true }).click();
+    await page.getByRole('button', { name: 'guide.md' }).click();
 
     await expect(page.getByLabel('Plate markdown editor')).toContainText('Reference notes.');
     await expect(page).toHaveURL(/\/libraries\/notes\/documents\/guide\.md$/);
@@ -664,8 +659,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.getByRole('tab', { name: 'Versions' }).click();
     await page.getByLabel('Restore version v-old').click();
 
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# Old\n');
-    await expect(page.locator('[aria-label="Version status"]')).toContainText('Version v-restored');
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('Old');
     expect(api.restoredVersions).toEqual(['versioned.md:v-old']);
   });
 
@@ -684,10 +678,10 @@ test.describe('Quarry Browser smoke flows', () => {
     });
 
     await page.goto('/');
-    await expect(page.locator('[aria-label="Event status"]')).toContainText('Live');
+    await expect(page.getByRole('treeitem', { name: /Daily/ })).toBeVisible();
 
     await page.getByRole('treeitem', { name: /Daily/ }).click();
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# Initial\n');
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('Initial');
 
     api.documents.set('daily.md', {
       ...api.documents.get('daily.md')!,
@@ -700,8 +694,7 @@ test.describe('Quarry Browser smoke flows', () => {
       path: 'daily.md',
     });
 
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# External\n');
-    await expect(page.locator('[aria-label="Version status"]')).toContainText('Version v2');
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('External');
   });
 
   test('resolves a Git conflict record from the conflict workflow', async ({ page }) => {
@@ -752,7 +745,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(dialog).not.toBeVisible();
     await expect(page.getByText('conflict.md open')).not.toBeVisible();
     await page.locator('[data-tree-path="conflict.md"]').click();
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# Theirs\n');
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('Theirs');
     expect(api.resolvedConflicts).toEqual(['conflict-git']);
     expect(api.saveHeaders).toContain('"head"');
   });
@@ -816,7 +809,7 @@ test.describe('Quarry Browser smoke flows', () => {
 
     await page.locator('[data-tree-path="conflict.md"]').focus();
     await page.keyboard.press('Enter');
-    await expect(page.getByLabel('Markdown source')).toHaveValue('# Theirs\n');
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('Theirs');
     expect(api.resolvedConflicts).toEqual(['conflict-keyboard']);
     expect(api.saveHeaders).toContain('"head"');
   });

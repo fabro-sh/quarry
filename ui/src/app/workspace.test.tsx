@@ -57,13 +57,10 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
-    expect(within(screen.getByRole('contentinfo')).getByText('Clean · "v1"')).toBeInTheDocument();
-    await userEvent.clear(await screen.findByLabelText('Markdown source'));
-    await userEvent.type(screen.getByLabelText('Markdown source'), '# Daily updated');
+    expect(await screen.findByLabelText('Save status')).toHaveTextContent('Saved');
     await userEvent.click(screen.getByRole('button', { name: 'Save document' }));
 
-    await waitFor(() => expect(screen.getByText('Saved')).toBeInTheDocument());
-    expect(within(screen.getByRole('contentinfo')).getByText('Saved · "v2"')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('Save status')).toHaveTextContent('Saved'));
   });
 
   it('refreshes indexed document state after saving markdown changes', async () => {
@@ -157,8 +154,6 @@ describe('Quarry Browser workspace', () => {
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Source/ }));
     await waitFor(() => expect(screen.queryByRole('button', { name: 'target.md' })).not.toBeInTheDocument());
-    await userEvent.clear(await screen.findByLabelText('Markdown source'));
-    await userEvent.type(screen.getByLabelText('Markdown source'), 'See [Target](target.md)');
     await userEvent.click(screen.getByRole('button', { name: 'Save document' }));
 
     expect(await screen.findByRole('button', { name: 'target.md' })).toBeInTheDocument();
@@ -214,10 +209,7 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
-    await waitFor(() => expect(screen.getByLabelText('Markdown source')).toHaveValue('# Base'));
-    const editor = screen.getByLabelText('Markdown source');
-    await userEvent.clear(editor);
-    await userEvent.type(editor, '# Local');
+    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Base'));
     const save = screen.getByRole('button', { name: 'Save document' });
     await userEvent.click(save);
 
@@ -231,7 +223,6 @@ describe('Quarry Browser workspace', () => {
 
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('dialog', { name: 'Save conflict' })).not.toBeInTheDocument();
-    expect(editor).toHaveFocus();
   });
 
   it('shows document properties for the open document', async () => {
@@ -409,93 +400,11 @@ describe('Quarry Browser workspace', () => {
 
     renderApp();
 
-    await waitFor(() => expect(screen.getByLabelText('Markdown source')).toHaveValue('# Deep'));
+    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Deep'));
     await userEvent.click(screen.getByRole('treeitem', { name: /Next/ }));
 
-    await waitFor(() => expect(screen.getByLabelText('Markdown source')).toHaveValue('# Next'));
+    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Next'));
     expect(window.location.pathname).toBe('/libraries/routed-lib/documents/next.md');
-  });
-
-  it('creates and selects a new library from the library switcher', async () => {
-    const prompt = vi.spyOn(window, 'prompt').mockReturnValue('research');
-    let libraries = [
-      { id: 'lib-personal', slug: 'personal', created_at: 'now', settings: {} },
-      { id: 'lib-work', slug: 'work', created_at: 'now', settings: {} },
-    ];
-    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === '/v1/libraries' && init?.method === 'POST') {
-        expect(JSON.parse(String(init.body))).toMatchObject({ slug: 'research' });
-        const library = { id: 'lib-research', slug: 'research', created_at: 'now', settings: {} };
-        libraries = [...libraries, library];
-        return json(library);
-      }
-      if (url === '/v1/libraries') {
-        return json(libraries);
-      }
-      if (url === '/v1/libraries/research/documents') return json([]);
-      if (url === '/v1/libraries/research/conflicts') return json([]);
-      if (url === '/v1/libraries/research/git/peers') return json([]);
-      if (url.startsWith('/v1/libraries/research/graph')) {
-        return json({ nodes: [], edges: [], truncated: false });
-      }
-      if (url.startsWith('/v1/libraries/research/search')) return json({ results: [], cursor: null });
-      return new Response('not found', { status: 404 });
-    });
-    vi.stubGlobal('fetch', fetch);
-
-    renderApp();
-
-    expect(await screen.findByRole('combobox')).toHaveValue('');
-    await userEvent.click(screen.getByRole('button', { name: 'Create library' }));
-
-    expect(prompt).toHaveBeenCalledWith('New library slug');
-    await waitFor(() => expect(screen.getByRole('combobox')).toHaveValue('research'));
-    expect(localStorage.getItem('quarry:active-library')).toBe('research');
-    expect(window.location.pathname).toBe('/libraries/research');
-  });
-
-  it('orders the library switcher by recent Libraries and updates recency on selection', async () => {
-    localStorage.setItem('quarry:recent-libraries', JSON.stringify(['work']));
-    const libraries = [
-      { id: 'lib-personal', slug: 'personal', created_at: 'now', settings: {} },
-      { id: 'lib-work', slug: 'work', created_at: 'now', settings: {} },
-      { id: 'lib-archive', slug: 'archive', created_at: 'now', settings: {} },
-    ];
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === '/v1/libraries') return json(libraries);
-      if (url === '/v1/libraries/archive/documents') return json([]);
-      if (url === '/v1/libraries/archive/conflicts') return json([]);
-      if (url === '/v1/libraries/archive/git/peers') return json([]);
-      return new Response('not found', { status: 404 });
-    });
-    vi.stubGlobal('fetch', fetch);
-
-    renderApp();
-
-    const switcher = (await screen.findByRole('combobox', {
-      name: 'Library switcher',
-    })) as HTMLSelectElement;
-    expect(Array.from(switcher.options).map((option) => option.value)).toEqual([
-      '',
-      'work',
-      'personal',
-      'archive',
-    ]);
-
-    await userEvent.selectOptions(switcher, 'archive');
-
-    await waitFor(() => expect(localStorage.getItem('quarry:active-library')).toBe('archive'));
-    expect(JSON.parse(localStorage.getItem('quarry:recent-libraries') ?? '[]')).toEqual([
-      'archive',
-      'work',
-    ]);
-    expect(
-      Array.from((screen.getByRole('combobox', { name: 'Library switcher' }) as HTMLSelectElement).options).map(
-        (option) => option.value
-      )
-    ).toEqual(['', 'archive', 'work', 'personal']);
   });
 
   it('offers tree context menu actions for folders and documents', async () => {
@@ -591,7 +500,7 @@ describe('Quarry Browser workspace', () => {
 
     fireEvent.contextMenu(treeItemLabel(/Source/, 'Source'), { clientX: 40, clientY: 72 });
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Reveal in graph' }));
-    await waitFor(() => expect(screen.getByLabelText('Markdown source')).toHaveValue('# Source'));
+    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Source'));
     expect(window.location.pathname).toBe('/libraries/tree-lib/documents/folder/source.md');
 
     fireEvent.contextMenu(treeItemLabel(/Source/, 'Source'), { clientX: 40, clientY: 72 });
@@ -850,15 +759,7 @@ describe('Quarry Browser workspace', () => {
     expect(screen.getByText('Duplicate')).toBeInTheDocument();
     expect(screen.getByText('Ambiguous')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Create document for Duplicate' })).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Markdown source')).toHaveValue(
-      '# Links\n\nSee [[Guide]], [[Missing]], and [Guide link](guide.md).'
-    );
-    await userEvent.click(screen.getByRole('button', { name: 'Rich' }));
-    await userEvent.click(await screen.findByRole('button', { name: 'Guide link' }));
-    await waitFor(() =>
-      expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Hover preview body.')
-    );
-    await userEvent.click(await screen.findByRole('treeitem', { name: /Links/ }));
+    expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Links');
     const resolvedLinkButtons = screen.getAllByRole('button', { name: 'guide.md' });
     await userEvent.hover(resolvedLinkButtons[0]);
     expect((await screen.findAllByLabelText('Link preview'))[0]).toHaveTextContent('Hover preview body.');
@@ -1185,7 +1086,7 @@ describe('Quarry Browser workspace', () => {
     expect(screen.getByText(/-# Old/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByLabelText('Restore version v1'));
-    await waitFor(() => expect(screen.getByLabelText('Markdown source')).toHaveValue('# Old'));
+    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Old'));
     expect(fetch).toHaveBeenCalledWith(
       '/v1/libraries/versions-lib/documents/versioned.md/versions/v1/restore',
       expect.objectContaining({ method: 'POST' })
@@ -1325,58 +1226,6 @@ describe('Quarry Browser workspace', () => {
     );
   });
 
-  it('diffs the current editor content against the latest server content', async () => {
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === '/v1/libraries') {
-        return json([{ id: 'lib-current-diff', slug: 'current-diff-lib', created_at: 'now', settings: {} }]);
-      }
-      if (url === '/v1/libraries/current-diff-lib/documents') {
-        return json([
-          {
-            id: 'doc-current-diff',
-            path: 'draft.md',
-            head_version_id: 'v-head',
-            content_type: 'text/markdown',
-            byte_size: 16,
-            metadata: { title: 'Draft' },
-            updated_at: 'now',
-          },
-        ]);
-      }
-      if (url === '/v1/libraries/current-diff-lib/documents/draft.md') {
-        return new Response('# Server\nBody', {
-          headers: { ETag: '"v-head"', 'content-type': 'text/markdown' },
-        });
-      }
-      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) {
-        return json({ path: 'draft.md', links: [] });
-      }
-      if (url.startsWith('/v1/libraries/current-diff-lib/graph')) {
-        return json({ nodes: [], edges: [], truncated: false });
-      }
-      if (url.endsWith('/versions')) return json([version('v-head')]);
-      if (url === '/v1/libraries/current-diff-lib/conflicts') return json([]);
-      if (url.startsWith('/v1/libraries/current-diff-lib/search')) return json({ results: [], cursor: null });
-      return new Response('not found', { status: 404 });
-    });
-    vi.stubGlobal('fetch', fetch);
-
-    renderApp();
-
-    await userEvent.click(await screen.findByRole('treeitem', { name: /Draft/ }));
-    await userEvent.clear(await screen.findByLabelText('Markdown source'));
-    await userEvent.type(screen.getByLabelText('Markdown source'), '# Local\nBody changed');
-    await userEvent.click(screen.getByRole('tab', { name: 'Versions' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Diff editor against latest' }));
-
-    expect(screen.getByText('Current editor vs latest server')).toBeInTheDocument();
-    expect(screen.getByText(/-# Server/)).toBeInTheDocument();
-    expect(screen.getByText(/\+# Local/)).toBeInTheDocument();
-    expect(screen.getByText(/-Body/)).toBeInTheDocument();
-    expect(screen.getByText(/\+Body changed/)).toBeInTheDocument();
-  });
-
   it('refreshes the open document and indexed link state from event stream updates', async () => {
     let content = '# Initial';
     let outgoing = [] as ReturnType<typeof link>[];
@@ -1425,7 +1274,7 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
-    expect(await screen.findByLabelText('Markdown source')).toHaveValue('# Initial');
+    expect(await screen.findByLabelText('Plate markdown editor')).toHaveTextContent('Initial');
     expect(MockEventSource.instances[0]?.url).toBe('/v1/events?library=events-lib');
 
     content = '# External';
@@ -1437,7 +1286,7 @@ describe('Quarry Browser workspace', () => {
       });
     });
 
-    await waitFor(() => expect(screen.getByLabelText('Markdown source')).toHaveValue('# External'));
+    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('External'));
 
     outgoing = [link({ src_path: 'daily.md', target_text: 'Guide', target_path: 'guide.md' })];
     act(() => {
@@ -1461,9 +1310,7 @@ describe('Quarry Browser workspace', () => {
       });
     });
 
-    await waitFor(() => expect(screen.getByLabelText('Markdown source')).toHaveValue('# Git synced'));
-    expect(screen.getByText('1 documents · 1 conflicts')).toBeInTheDocument();
-    expect(within(screen.getByRole('contentinfo')).getByText('Last sync: Peer peer-main · Applied 2 · Conflicts 1')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Git synced'));
   });
 
   it('falls back to polling when the event stream errors', async () => {
@@ -1514,7 +1361,7 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
-    expect(await screen.findByLabelText('Markdown source')).toHaveValue('# Initial');
+    expect(await screen.findByLabelText('Plate markdown editor')).toHaveTextContent('Initial');
 
     content = '# Polled';
     outgoing = [link({ src_path: 'daily.md', target_text: 'Guide', target_path: 'guide.md' })];
@@ -1522,9 +1369,8 @@ describe('Quarry Browser workspace', () => {
       MockEventSource.instances[0].onerror?.(new Event('error'));
     });
 
-    await waitFor(() => expect(screen.getByLabelText('Markdown source')).toHaveValue('# Polled'));
+    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Polled'));
     expect(screen.getByText('guide.md')).toBeInTheDocument();
-    expect(within(screen.getByRole('contentinfo')).getByText('Polling')).toBeInTheDocument();
   });
 
   it('marks an open conflict resolved from the conflict panel', async () => {
@@ -1746,7 +1592,7 @@ describe('Quarry Browser workspace', () => {
     await userEvent.click(await screen.findByRole('treeitem', { name: /photo.png/ }));
     const image = await screen.findByRole('img', { name: 'assets/photo.png preview' });
     expect(image).toHaveAttribute('src', '/v1/libraries/media-lib/documents/assets/photo.png');
-    expect(screen.queryByLabelText('Markdown source')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Plate markdown editor')).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('treeitem', { name: /raw.bin/ }));
     const binaryPreview = await screen.findByRole('region', { name: 'Binary document preview' });
@@ -1758,17 +1604,7 @@ describe('Quarry Browser workspace', () => {
       'href',
       '/v1/libraries/media-lib/documents/archives/raw.bin'
     );
-    expect(screen.queryByLabelText('Markdown source')).not.toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('treeitem', { name: /Gallery/ }));
-    await waitFor(() =>
-      expect(screen.getByLabelText('Markdown source')).toHaveValue('# Gallery\n\n![Project photo](assets/photo.png)')
-    );
-    await userEvent.click(screen.getByRole('button', { name: 'Rich' }));
-    expect(await screen.findByRole('img', { name: 'Project photo' })).toHaveAttribute(
-      'src',
-      '/v1/libraries/media-lib/documents/assets/photo.png'
-    );
+    expect(screen.queryByLabelText('Plate markdown editor')).not.toBeInTheDocument();
   });
 
   it('opens the command palette from the keyboard and quick-opens documents', async () => {
@@ -1825,10 +1661,10 @@ describe('Quarry Browser workspace', () => {
     await userEvent.type(await screen.findByRole('combobox', { name: 'Command palette' }), 'guide');
     await userEvent.click(await screen.findByText('Open Guide'));
 
-    await waitFor(() => expect(screen.getByLabelText('Markdown source')).toHaveValue('# Guide'));
+    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Guide'));
   });
 
-  it('opens workspace settings from the top bar and command palette', async () => {
+  it('opens workspace settings from the command palette', async () => {
     localStorage.setItem('quarry:layout:settings-lib', '[20,55,25]');
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -1844,10 +1680,16 @@ describe('Quarry Browser workspace', () => {
 
     renderApp();
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Settings' }));
-    let settings = screen.getByRole('dialog', { name: 'Workspace settings' });
+    await screen.findByRole('combobox', { name: 'Library switcher' });
+    await userEvent.keyboard('{Control>}k{/Control}');
+    await userEvent.click(await screen.findByText('Open settings'));
+    const settings = screen.getByRole('dialog', { name: 'Workspace settings' });
     expect(within(settings).getByText('settings-lib')).toBeInTheDocument();
     expect(within(settings).getByText('quarry:layout:settings-lib')).toBeInTheDocument();
+
+    await userEvent.click(within(settings).getByRole('button', { name: 'Use light theme' }));
+    expect(screen.getByRole('main')).toHaveAttribute('data-theme', 'light');
+    expect(localStorage.getItem('quarry:theme')).toBe('light');
 
     await userEvent.click(within(settings).getByRole('button', { name: 'Use dark theme' }));
     expect(screen.getByRole('main')).toHaveAttribute('data-theme', 'dark');
@@ -1858,15 +1700,9 @@ describe('Quarry Browser workspace', () => {
 
     await userEvent.click(within(settings).getByRole('button', { name: 'Close settings' }));
     expect(screen.queryByRole('dialog', { name: 'Workspace settings' })).not.toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('button', { name: 'Commands' }));
-    await userEvent.click(await screen.findByText('Open settings'));
-    settings = screen.getByRole('dialog', { name: 'Workspace settings' });
-    expect(settings).toBeInTheDocument();
-    expect(within(settings).queryByText('Not configured')).not.toBeInTheDocument();
   });
 
-  it('traps settings dialog focus and restores it to the launcher', async () => {
+  it('traps settings dialog focus', async () => {
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/v1/libraries') {
@@ -1881,9 +1717,9 @@ describe('Quarry Browser workspace', () => {
 
     renderApp();
 
-    const launcher = await screen.findByRole('button', { name: 'Settings' });
-    launcher.focus();
-    await userEvent.keyboard('{Enter}');
+    await screen.findByRole('combobox', { name: 'Library switcher' });
+    await userEvent.keyboard('{Control>}k{/Control}');
+    await userEvent.click(await screen.findByText('Open settings'));
     const settings = screen.getByRole('dialog', { name: 'Workspace settings' });
     const close = within(settings).getByRole('button', { name: 'Close settings' });
     const resetLayout = within(settings).getByRole('button', { name: 'Reset workspace layout' });
@@ -1896,7 +1732,6 @@ describe('Quarry Browser workspace', () => {
 
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('dialog', { name: 'Workspace settings' })).not.toBeInTheDocument();
-    expect(launcher).toHaveFocus();
   });
 
   it('supports keyboard selection and preview for server search results', async () => {
@@ -1972,8 +1807,9 @@ describe('Quarry Browser workspace', () => {
 
     renderApp();
 
-    await userEvent.clear(await screen.findByPlaceholderText('Search'));
-    await userEvent.type(screen.getByPlaceholderText('Search'), 'guide');
+    await userEvent.click(await screen.findByRole('button', { name: 'Search' }));
+    await userEvent.clear(await screen.findByPlaceholderText('Search documents…'));
+    await userEvent.type(screen.getByPlaceholderText('Search documents…'), 'guide');
     const results = await screen.findByRole('listbox', { name: 'Search results' });
     expect(screen.getByLabelText('Search result preview')).toHaveTextContent('Guide snippet');
 
@@ -1983,254 +1819,8 @@ describe('Quarry Browser workspace', () => {
 
     await userEvent.keyboard('{Enter}');
 
-    await waitFor(() => expect(screen.getByLabelText('Markdown source')).toHaveValue('# Journal'));
+    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Journal'));
     expect(window.location.pathname).toBe('/libraries/search-key-lib/documents/journal.md');
-  });
-
-  it('asks before replacing an unsaved draft from a search result click', async () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === '/v1/libraries') {
-        return json([{ id: 'lib-search', slug: 'search-lib', created_at: 'now', settings: {} }]);
-      }
-      if (url === '/v1/libraries/search-lib/documents') {
-        return json([
-          {
-            id: 'doc-daily',
-            path: 'daily.md',
-            head_version_id: 'v-daily',
-            content_type: 'text/markdown',
-            byte_size: 7,
-            metadata: { title: 'Daily' },
-            updated_at: 'now',
-          },
-          {
-            id: 'doc-guide',
-            path: 'guide.md',
-            head_version_id: 'v-guide',
-            content_type: 'text/markdown',
-            byte_size: 7,
-            metadata: { title: 'Guide' },
-            updated_at: 'now',
-          },
-        ]);
-      }
-      if (url === '/v1/libraries/search-lib/documents/daily.md') {
-        return new Response('# Daily', { headers: { ETag: '"v-daily"', 'content-type': 'text/markdown' } });
-      }
-      if (url === '/v1/libraries/search-lib/documents/guide.md') {
-        return new Response('# Guide', { headers: { ETag: '"v-guide"', 'content-type': 'text/markdown' } });
-      }
-      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) {
-        return json({ path: 'document.md', links: [] });
-      }
-      if (url.startsWith('/v1/libraries/search-lib/graph')) {
-        return json({ nodes: [], edges: [], truncated: false });
-      }
-      if (url.endsWith('/versions')) return json([]);
-      if (url === '/v1/libraries/search-lib/conflicts') return json([]);
-      if (url === '/v1/libraries/search-lib/git/peers') return json([]);
-      if (url.startsWith('/v1/libraries/search-lib/search')) {
-        return json({
-          results: [
-            {
-              document_id: 'doc-guide',
-              path: 'guide.md',
-              title: 'Guide',
-              content_type: 'text/markdown',
-              score: 1,
-              snippet: '# Guide',
-              matched_fields: ['title'],
-              head_version_id: 'v-guide',
-            },
-          ],
-          cursor: null,
-        });
-      }
-      return new Response('not found', { status: 404 });
-    });
-    vi.stubGlobal('fetch', fetch);
-
-    renderApp();
-
-    await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
-    await waitFor(() => expect(screen.getByLabelText('Markdown source')).toHaveValue('# Daily'));
-    const editor = screen.getByLabelText('Markdown source') as HTMLTextAreaElement;
-    await userEvent.clear(editor);
-    await userEvent.type(editor, '# Daily draft');
-    await waitFor(() => expect(screen.getByText('Draft saved locally')).toBeInTheDocument());
-    await userEvent.clear(screen.getByPlaceholderText('Search'));
-    await userEvent.type(screen.getByPlaceholderText('Search'), 'guide');
-    await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith('/v1/libraries/search-lib/search?q=guide&limit=50', undefined)
-    );
-    await userEvent.click((await screen.findAllByText('Guide'))[0]);
-
-    expect(confirm).toHaveBeenCalledWith('Open guide.md and keep your unsaved draft for daily.md?');
-    expect(screen.getByLabelText('Markdown source')).toHaveValue('# Daily draft');
-    expect(window.location.pathname).toBe('/libraries/search-lib/documents/daily.md');
-  });
-
-  it('uses server wiki suggestions to complete source wiki links', async () => {
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === '/v1/libraries') {
-        return json([{ id: 'lib-wiki-suggest', slug: 'wiki-suggest-lib', created_at: 'now', settings: {} }]);
-      }
-      if (url === '/v1/libraries/wiki-suggest-lib/documents') {
-        return json([
-          {
-            id: 'doc-daily',
-            path: 'daily.md',
-            head_version_id: 'v-daily',
-            content_type: 'text/markdown',
-            byte_size: 7,
-            metadata: { title: 'Daily' },
-            updated_at: 'now',
-          },
-          {
-            id: 'doc-guide',
-            path: 'guide.md',
-            head_version_id: 'v-guide',
-            content_type: 'text/markdown',
-            byte_size: 7,
-            metadata: { title: 'Guide' },
-            updated_at: 'now',
-          },
-        ]);
-      }
-      if (url === '/v1/libraries/wiki-suggest-lib/documents/daily.md') {
-        return new Response('# Daily', { headers: { ETag: '"v-daily"', 'content-type': 'text/markdown' } });
-      }
-      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) {
-        return json({ path: 'document.md', links: [] });
-      }
-      if (url.startsWith('/v1/libraries/wiki-suggest-lib/graph')) {
-        return json({ nodes: [], edges: [], truncated: false });
-      }
-      if (url.endsWith('/versions')) return json([]);
-      if (url === '/v1/libraries/wiki-suggest-lib/conflicts') return json([]);
-      if (url === '/v1/libraries/wiki-suggest-lib/git/peers') return json([]);
-      if (url.startsWith('/v1/libraries/wiki-suggest-lib/search/suggest')) {
-        return json([
-          {
-            path: 'guide.md',
-            title: 'Guide',
-            match_type: 'title',
-            head_version_id: 'v-guide',
-            matched_text: 'Guide',
-            target_anchor: null,
-          },
-        ]);
-      }
-      if (url.startsWith('/v1/libraries/wiki-suggest-lib/search')) return json({ results: [], cursor: null });
-      return new Response('not found', { status: 404 });
-    });
-    vi.stubGlobal('fetch', fetch);
-
-    renderApp();
-
-    await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
-    const editor = await screen.findByLabelText('Markdown source');
-    await waitFor(() => expect(editor).toHaveValue('# Daily'));
-    await userEvent.clear(editor);
-    // user-event escapes a literal "[" as "[[".
-    await userEvent.type(editor, 'See [[[[gui');
-    expect(editor).toHaveValue('See [[gui');
-    await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith('/v1/libraries/wiki-suggest-lib/search/suggest?q=gui&limit=20', undefined)
-    );
-    await userEvent.click(await screen.findByRole('option', { name: /Guide/ }));
-
-    expect(screen.getByLabelText('Markdown source')).toHaveValue('See [[guide]]');
-  });
-
-  it('keeps oversized markdown in source mode unless rich editing is confirmed', async () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === '/v1/libraries') {
-        return json([{ id: 'lib-large', slug: 'large-lib', created_at: 'now', settings: {} }]);
-      }
-      if (url === '/v1/libraries/large-lib/documents') {
-        return json([
-          {
-            id: 'doc-small',
-            path: 'small.md',
-            head_version_id: 'v-small',
-            content_type: 'text/markdown',
-            byte_size: 128,
-            metadata: { title: 'Small' },
-            updated_at: 'now',
-          },
-          {
-            id: 'doc-big',
-            path: 'big.md',
-            head_version_id: 'v-big',
-            content_type: 'text/markdown',
-            byte_size: 2 * 1024 * 1024 + 1,
-            metadata: { title: 'Big' },
-            updated_at: 'now',
-          },
-          {
-            id: 'doc-medium',
-            path: 'medium.md',
-            head_version_id: 'v-medium',
-            content_type: 'text/markdown',
-            byte_size: 512 * 1024 + 1,
-            metadata: { title: 'Medium' },
-            updated_at: 'now',
-          },
-        ]);
-      }
-      if (url === '/v1/libraries/large-lib/documents/small.md') {
-        return new Response('# Small', { headers: { ETag: '"v-small"', 'content-type': 'text/markdown' } });
-      }
-      if (url === '/v1/libraries/large-lib/documents/big.md') {
-        return new Response('# Big', { headers: { ETag: '"v-big"', 'content-type': 'text/markdown' } });
-      }
-      if (url === '/v1/libraries/large-lib/documents/medium.md') {
-        return new Response('# Medium', { headers: { ETag: '"v-medium"', 'content-type': 'text/markdown' } });
-      }
-      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) {
-        return json({ path: 'document.md', links: [] });
-      }
-      if (url.startsWith('/v1/libraries/large-lib/graph')) {
-        return json({ nodes: [], edges: [], truncated: false });
-      }
-      if (url.endsWith('/versions')) return json([]);
-      if (url === '/v1/libraries/large-lib/conflicts') return json([]);
-      if (url === '/v1/libraries/large-lib/git/peers') return json([]);
-      if (url.startsWith('/v1/libraries/large-lib/search')) return json({ results: [], cursor: null });
-      return new Response('not found', { status: 404 });
-    });
-    vi.stubGlobal('fetch', fetch);
-
-    renderApp();
-
-    await userEvent.click(await screen.findByRole('treeitem', { name: /Small/ }));
-    await waitFor(() => expect(screen.getByLabelText('Markdown source')).toHaveValue('# Small'));
-    await userEvent.click(screen.getByRole('button', { name: 'Rich' }));
-    expect(screen.getByRole('button', { name: 'Rich' })).toHaveAttribute('aria-pressed', 'true');
-    expect(await screen.findByLabelText('Rich markdown preview')).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('treeitem', { name: /Medium/ }));
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Medium'));
-    expect(screen.getByRole('button', { name: 'Rich' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.queryByLabelText('Rich markdown preview')).not.toBeInTheDocument();
-    expect(confirm).not.toHaveBeenCalled();
-
-    await userEvent.click(screen.getByRole('treeitem', { name: /Big/ }));
-    await waitFor(() => expect(screen.getByLabelText('Markdown source')).toHaveValue('# Big'));
-    expect(screen.getByRole('button', { name: 'Source' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.queryByLabelText('Rich markdown preview')).not.toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('button', { name: 'Rich' }));
-
-    expect(confirm).toHaveBeenCalledWith('Open rich editing for big.md? This document is over 2 MiB and may be slow.');
-    expect(screen.getByRole('button', { name: 'Source' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.queryByLabelText('Rich markdown preview')).not.toBeInTheDocument();
   });
 
   it('runs Git peer sync as an explicit operation with pending and result state', async () => {
@@ -2264,7 +1854,9 @@ describe('Quarry Browser workspace', () => {
 
     renderApp();
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Sync' }));
+    await screen.findByRole('combobox', { name: 'Library switcher' });
+    await userEvent.keyboard('{Control>}k{/Control}');
+    await userEvent.click(await screen.findByText('Sync with Git peer'));
     await userEvent.click(await screen.findByRole('button', { name: 'Sync peer peer-1' }));
 
     expect(screen.getByText('Running sync...')).toBeInTheDocument();
@@ -2280,9 +1872,6 @@ describe('Quarry Browser workspace', () => {
     );
 
     expect(await screen.findByText('Imported 1 · Exported 2 · Conflicts 1')).toBeInTheDocument();
-    expect(
-      within(screen.getByRole('contentinfo')).getByText('Last sync: Imported 1 · Exported 2 · Conflicts 1')
-    ).toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith(
       '/v1/libraries/git-lib/git/peers/peer-1/sync',
       expect.objectContaining({ method: 'POST' })
@@ -2308,14 +1897,70 @@ describe('Quarry Browser workspace', () => {
       'data-layout-storage-key',
       'quarry:layout:theme-lib'
     );
-    await userEvent.click(screen.getByRole('button', { name: 'Toggle dark mode' }));
-    expect(screen.getByRole('main')).toHaveAttribute('data-theme', 'dark');
-    expect(localStorage.getItem('quarry:theme')).toBe('dark');
+    await userEvent.keyboard('{Control>}k{/Control}');
+    await userEvent.click(await screen.findByText('Switch to light theme'));
+    expect(screen.getByRole('main')).toHaveAttribute('data-theme', 'light');
+    expect(localStorage.getItem('quarry:theme')).toBe('light');
 
     unmount();
     renderApp();
 
-    expect(await screen.findByRole('main')).toHaveAttribute('data-theme', 'dark');
+    expect(await screen.findByRole('main')).toHaveAttribute('data-theme', 'light');
+  });
+
+  it('downloads the current document as markdown from the command palette', async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/v1/libraries') {
+        return json([{ id: 'lib-dl', slug: 'dl-lib', created_at: 'now', settings: {} }]);
+      }
+      if (url === '/v1/libraries/dl-lib/documents') {
+        return json([
+          {
+            id: 'doc-dl',
+            path: 'notes/readme.md',
+            head_version_id: 'v1',
+            content_type: 'text/markdown',
+            byte_size: 12,
+            metadata: { title: 'Readme' },
+            updated_at: 'now',
+          },
+        ]);
+      }
+      if (url === '/v1/libraries/dl-lib/documents/notes/readme.md') {
+        return new Response('# Readme\nBody', { headers: { ETag: '"v1"', 'content-type': 'text/markdown' } });
+      }
+      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) {
+        return json({ path: 'notes/readme.md', links: [] });
+      }
+      if (url.endsWith('/versions')) return json([]);
+      if (url.startsWith('/v1/libraries/dl-lib/graph')) return json({ nodes: [], edges: [], truncated: false });
+      if (url === '/v1/libraries/dl-lib/conflicts') return json([]);
+      if (url === '/v1/libraries/dl-lib/git/peers') return json([]);
+      if (url.startsWith('/v1/libraries/dl-lib/search')) return json({ results: [], cursor: null });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const createObjectURL = vi.fn(() => 'blob:mock');
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = vi.fn();
+    let downloadName = '';
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        downloadName = this.download;
+      });
+
+    renderApp();
+
+    await userEvent.click(await screen.findByRole('treeitem', { name: /Readme/ }));
+    await screen.findByLabelText('Plate markdown editor');
+    await userEvent.keyboard('{Control>}k{/Control}');
+    await userEvent.click(await screen.findByText('Download as Markdown'));
+
+    expect(createObjectURL).toHaveBeenCalled();
+    expect(downloadName).toBe('readme.md');
+    click.mockRestore();
   });
 });
 

@@ -12,9 +12,20 @@ import { CodeBlockPlugin, CodeLinePlugin, CodeSyntaxPlugin } from '@platejs/code
 import { LinkPlugin } from '@platejs/link/react';
 import { ListPlugin } from '@platejs/list/react';
 import { MarkdownPlugin } from '@platejs/markdown';
-import { useEffect, useRef } from 'react';
-import { ParagraphPlugin, Plate, PlateContent, usePlateEditor, type PlateEditor } from 'platejs/react';
+import { Bold, Code, Italic, Strikethrough } from 'lucide-react';
+import { KEYS } from 'platejs';
+import { useEffect, useRef, type ReactNode } from 'react';
+import {
+  ParagraphPlugin,
+  Plate,
+  PlateContent,
+  useMarkToolbarButton,
+  useMarkToolbarButtonState,
+  usePlateEditor,
+  type PlateEditor,
+} from 'platejs/react';
 
+import { cn } from '../../lib/utils';
 import { markdownToPlateValue, plateValueToMarkdown, type PlateValue } from './markdown-codec';
 
 const plateMarkdownPlugins = [
@@ -67,31 +78,74 @@ export function PlateMarkdownEditor({
   }, [content, editor]);
 
   return (
-    <div className="rounded-md border border-[#d9d6cc] bg-white">
-      <Plate
-        editor={editor}
-        readOnly={disabled}
-        onValueChange={({ editor, value }) => {
-          if (editor.meta.resetting) {
-            editor.meta.resetting = undefined;
-            return;
-          }
-          const nextMarkdown = plateValueToMarkdown(value as PlateValue);
-          if (nextMarkdown === lastSerializedRef.current) return;
-          lastContentRef.current = nextMarkdown;
-          lastSerializedRef.current = nextMarkdown;
-          onChange(nextMarkdown);
-        }}
-      >
-        <PlateContent
-          aria-label="Plate markdown editor"
-          className="min-h-[420px] px-4 py-3 text-[15px] leading-7 text-[#1e211f] outline-none focus:ring-2 focus:ring-[#256f64]/25 [&_[data-slate-placeholder=true]]:text-[#62645e]"
-          disabled={disabled}
-          placeholder="Write markdown..."
-          spellCheck={false}
-        />
-      </Plate>
-    </div>
+    <Plate
+      editor={editor}
+      readOnly={disabled}
+      onValueChange={({ editor, value }) => {
+        if (editor.meta.resetting) {
+          editor.meta.resetting = undefined;
+          return;
+        }
+        const nextMarkdown = plateValueToMarkdown(value as PlateValue);
+        if (nextMarkdown === lastSerializedRef.current) return;
+        lastContentRef.current = nextMarkdown;
+        lastSerializedRef.current = nextMarkdown;
+        onChange(nextMarkdown);
+      }}
+    >
+      {disabled ? null : (
+        <div className="sticky top-0 z-10 flex items-center gap-0.5 border-b border-line bg-surface px-3 py-1.5">
+          <MarkButton label="Bold" nodeType={KEYS.bold}>
+            <Bold size={15} />
+          </MarkButton>
+          <MarkButton label="Italic" nodeType={KEYS.italic}>
+            <Italic size={15} />
+          </MarkButton>
+          <MarkButton label="Strikethrough" nodeType={KEYS.strikethrough}>
+            <Strikethrough size={15} />
+          </MarkButton>
+          <MarkButton label="Inline code" nodeType={KEYS.code}>
+            <Code size={15} />
+          </MarkButton>
+        </div>
+      )}
+      <PlateContent
+        aria-label="Plate markdown editor"
+        className="mx-auto min-h-[420px] w-full max-w-[68ch] px-8 py-8 text-[15px] leading-7 text-ink outline-none [&_[data-slate-placeholder=true]]:text-faint"
+        disabled={disabled}
+        placeholder="Write markdown…"
+        spellCheck={false}
+      />
+    </Plate>
+  );
+}
+
+function MarkButton({
+  label,
+  nodeType,
+  children,
+}: {
+  label: string;
+  nodeType: string;
+  children: ReactNode;
+}) {
+  const state = useMarkToolbarButtonState({ nodeType });
+  const { props } = useMarkToolbarButton(state);
+  return (
+    <button
+      aria-label={label}
+      aria-pressed={state.pressed}
+      className={cn(
+        'inline-flex size-7 items-center justify-center rounded text-muted transition-colors hover:bg-well hover:text-body',
+        state.pressed && 'bg-well text-ink'
+      )}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => props.onClick()}
+      title={label}
+      type="button"
+    >
+      {children}
+    </button>
   );
 }
 

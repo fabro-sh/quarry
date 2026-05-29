@@ -1,4 +1,5 @@
 import { Dialog } from '@radix-ui/react-dialog';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { Command } from 'cmdk';
 import {
   AlertTriangle,
@@ -8,6 +9,7 @@ import {
   Eye,
   FileArchive,
   FilePlus2,
+  FileText,
   FolderTree,
   GitBranch,
   Hash,
@@ -16,7 +18,14 @@ import {
   Library,
   Link2,
   Moon,
+  MoreHorizontal,
   Network,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  Plus,
+  Save,
   RotateCcw,
   Search,
   Settings as SettingsIcon,
@@ -34,7 +43,12 @@ import {
   useState,
 } from 'react';
 import { Tree, type MoveHandler, type RowRendererProps } from 'react-arborist';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import {
+  Panel,
+  PanelGroup,
+  PanelResizeHandle,
+  type ImperativePanelHandle,
+} from 'react-resizable-panels';
 import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom';
 import useSWR, { useSWRConfig } from 'swr';
 
@@ -66,7 +80,6 @@ import {
   resolveConflict,
   restoreVersion,
   searchDocuments,
-  suggestDocuments,
   versions,
 } from '../api/client';
 import type {
@@ -102,8 +115,6 @@ type GraphScope = 'focused' | 'full';
 type GraphDepth = 1 | 2 | 3;
 type GraphLinkKindFilter = 'all' | 'wiki_link' | 'markdown_link' | 'embed' | 'heading' | 'tag';
 type GraphResolutionFilter = 'all' | 'resolved' | 'unresolved';
-const RICH_WIDGET_REDUCTION_BYTES = 512 * 1024;
-const RICH_EDIT_CONFIRM_BYTES = 2 * 1024 * 1024;
 const EVENT_POLL_INTERVAL_MS = 5_000;
 const RECENT_LIBRARY_LIMIT = 8;
 
@@ -165,8 +176,6 @@ function Workspace() {
   );
   const [selectedPath, setSelectedPath] = useState(routeSelection.path ?? '');
   const [searchQuery, setSearchQuery] = useState('');
-  const [wikiSuggestQuery, setWikiSuggestQuery] = useState('');
-  const [mode, setMode] = useState<'source' | 'rich'>('source');
   const [content, setContent] = useState('');
   const [etag, setEtag] = useState('');
   const [contentType, setContentType] = useState('text/markdown');
@@ -183,20 +192,24 @@ function Workspace() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lastSyncResult, setLastSyncResult] = useState('');
   const [theme, setTheme] = useState<ThemePreference>(() =>
-    localStorage.getItem('quarry:theme') === 'dark' ? 'dark' : 'light'
+    localStorage.getItem('quarry:theme') === 'light' ? 'light' : 'dark'
   );
   const [mergeConflictId, setMergeConflictId] = useState<string | null>(null);
   const [treeMenu, setTreeMenu] = useState<TreeMenuState | null>(null);
+  const leftPanelRef = useRef<ImperativePanelHandle>(null);
+  const rightPanelRef = useRef<ImperativePanelHandle>(null);
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [resizingPanels, setResizingPanels] = useState(false);
   const selectedPathRef = useRef(selectedPath);
   const saveStateRef = useRef(saveState);
   const loadedDocumentRef = useRef<{ library: string; path: string; etag: string } | null>(null);
-  const richEditingConfirmedRef = useRef<string | null>(null);
   const searchQueryRef = useRef(searchQuery);
   const appliedRouteRef = useRef(location.pathname);
 
   useEffect(() => {
-    if (!activeLibrary && libraries.length === 1) {
-      const nextLibrary = libraries[0].slug;
+    if (!activeLibrary && libraries.length >= 1) {
+      const nextLibrary = orderLibrariesByRecent(libraries, '')[0]?.slug ?? libraries[0].slug;
       setActiveLibrary(nextLibrary);
       setTreeOpenState(loadTreeOpenState(nextLibrary));
       setRightPaneTab(loadRightPaneTab(nextLibrary));
@@ -207,7 +220,7 @@ function Workspace() {
       setGraphLinkKind(loadGraphLinkKind(nextLibrary));
       setGraphResolution(loadGraphResolution(nextLibrary));
     }
-    if (activeLibrary && libraries.every((library) => library.slug !== activeLibrary)) {
+    if (activeLibrary && libraries.length > 0 && libraries.every((library) => library.slug !== activeLibrary)) {
       const nextLibrary = libraries[0]?.slug ?? '';
       setActiveLibrary(nextLibrary);
       setTreeOpenState(loadTreeOpenState(nextLibrary));
@@ -258,6 +271,7 @@ function Workspace() {
 
   useEffect(() => {
     localStorage.setItem('quarry:theme', theme);
+    window.document.documentElement.dataset.theme = theme;
   }, [theme]);
 
   useEffect(() => {
@@ -464,10 +478,6 @@ function Workspace() {
     activeLibrary && searchQuery ? ['/v1/search', activeLibrary, searchQuery] : null,
     () => searchDocuments(activeLibrary, searchQuery)
   );
-  const { data: wikiSuggestions = [] } = useSWR(
-    activeLibrary && wikiSuggestQuery ? ['/v1/search-suggest', activeLibrary, wikiSuggestQuery] : null,
-    () => suggestDocuments(activeLibrary, wikiSuggestQuery)
-  );
   const { data: outgoing = { path: selectedPath, links: [] } } = useSWR(
     activeLibrary && selectedPath ? ['/v1/outgoing', activeLibrary, selectedPath] : null,
     () => outgoingLinks(activeLibrary, selectedPath)
@@ -582,31 +592,13 @@ function Workspace() {
     [documents]
   );
 
-  const switcherLibraries = useMemo(
-    () => orderLibrariesByRecent(libraries, activeLibrary),
-    [activeLibrary, libraries]
-  );
   const activeLibraryRecord = libraries.find((library) => library.slug === activeLibrary);
   const selectedEntry = documents.find((entry) => entry.path === selectedPath);
   const loadedDocumentContentType = document?.path === selectedPath ? document.contentType : undefined;
   const selectedContentType = loadedDocumentContentType ?? selectedEntry?.content_type ?? contentType;
-  const selectedDocumentKey = selectedEntry
-    ? `${activeLibrary}:${selectedEntry.path}:${selectedEntry.head_version_id}`
-    : '';
   const layoutStorageKey = activeLibrary ? `quarry:layout:${activeLibrary}` : 'quarry:layout:workspace';
   const mergeConflict = conflicts.find((conflict) => conflict.id === mergeConflictId) ?? null;
   const saveConflictDialogRef = useDialogFocusTrap(Boolean(conflictRemote), closeSaveConflictDialog);
-
-  useEffect(() => {
-    if (
-      selectedEntry &&
-      isTextContentType(selectedEntry.content_type) &&
-      requiresRichEditingConfirmation(selectedEntry.byte_size) &&
-      richEditingConfirmedRef.current !== selectedDocumentKey
-    ) {
-      setMode('source');
-    }
-  }, [selectedDocumentKey, selectedEntry]);
 
   async function save() {
     if (!activeLibrary || !selectedPath || !etag) return;
@@ -654,14 +646,6 @@ function Workspace() {
     } else {
       transitionSaveState('dirty');
     }
-  }
-
-  async function createNewLibrary() {
-    const slug = window.prompt('New library slug')?.trim();
-    if (!slug) return;
-    const library = await createLibrary(slug);
-    await mutate('/v1/libraries');
-    changeActiveLibrary(library.slug);
   }
 
   async function createNewDocument(defaultPath = 'untitled.md') {
@@ -732,6 +716,17 @@ function Workspace() {
     await deleteDocument(activeLibrary, selectedPath);
     await mutate(['/v1/documents', activeLibrary]);
     setSelectedPath('');
+  }
+
+  function downloadCurrentMarkdown() {
+    if (!selectedPath) return;
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = window.document.createElement('a');
+    anchor.href = url;
+    anchor.download = documentBasename(selectedPath);
+    anchor.click();
+    URL.revokeObjectURL(url);
   }
 
   async function deleteDocumentPath(path: string) {
@@ -893,20 +888,18 @@ function Workspace() {
     return mutate((key) => isGraphCacheKey(key, activeLibrary));
   }
 
-  function changeEditorMode(nextMode: 'source' | 'rich') {
-    if (
-      nextMode === 'rich' &&
-      selectedEntry &&
-      requiresRichEditingConfirmation(selectedEntry.byte_size) &&
-      richEditingConfirmedRef.current !== selectedDocumentKey
-    ) {
-      const confirmed = window.confirm(
-        `Open rich editing for ${selectedPath}? This document is over 2 MiB and may be slow.`
-      );
-      if (!confirmed) return;
-      richEditingConfirmedRef.current = selectedDocumentKey;
-    }
-    setMode(nextMode);
+  function toggleLeftPane() {
+    const panel = leftPanelRef.current;
+    if (!panel) return;
+    if (panel.isCollapsed()) panel.expand();
+    else panel.collapse();
+  }
+
+  function toggleRightPane() {
+    const panel = rightPanelRef.current;
+    if (!panel) return;
+    if (panel.isCollapsed()) panel.expand();
+    else panel.collapse();
   }
 
   function closePalette() {
@@ -926,24 +919,10 @@ function Workspace() {
 
   return (
     <main
-      className="isolate flex h-screen min-h-0 flex-col overflow-hidden bg-[#f5f4ef] text-[#1d211f] antialiased"
+      className="isolate flex h-screen min-h-0 flex-col overflow-hidden bg-canvas text-ink antialiased"
       data-theme={theme}
     >
-      <h1 className="sr-only">Quarry Browser</h1>
-      <TopBar
-        active={activeLibraryRecord}
-        libraries={switcherLibraries}
-        onCreate={() => void createNewDocument()}
-        onCreateLibrary={() => void createNewLibrary()}
-        onLibraryChange={changeActiveLibrary}
-        onOpenGit={() => setGitOpen(true)}
-        onOpenPalette={() => setPaletteOpen(true)}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onSearchChange={setSearchQuery}
-        onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-        searchQuery={searchQuery}
-        theme={theme}
-      />
+      <h1 className="sr-only">Quarry</h1>
 
       <PanelGroup
         aria-label="Workspace layout"
@@ -952,15 +931,30 @@ function Workspace() {
         data-layout-storage-key={layoutStorageKey}
         direction="horizontal"
       >
-        <Panel defaultSize={22} minSize={16}>
+        <Panel
+          className={cn(!resizingPanels && 'transition-[flex] duration-200 ease-out')}
+          collapsedSize={3}
+          collapsible
+          defaultSize={22}
+          minSize={16}
+          onCollapse={() => setLeftCollapsed(true)}
+          onExpand={() => setLeftCollapsed(false)}
+          ref={leftPanelRef}
+        >
           <LeftPane
-            conflicts={conflicts.length}
-            documents={documents}
+            active={activeLibraryRecord}
+            collapsed={leftCollapsed}
+            libraries={libraries}
             onCreate={() => void createNewDocument()}
+            onCreateChild={(node) => void createNewDocument(defaultChildDocumentPath(node))}
+            onLibraryChange={changeActiveLibrary}
             onMove={moveDroppedTreeDocuments}
             onOpen={openDocument}
             onOpenContextMenu={openTreeContextMenu}
             onRename={moveDocumentPath}
+            onSearchChange={setSearchQuery}
+            onToggleCollapsed={toggleLeftPane}
+            searchQuery={searchQuery}
             searchResults={search.results}
             selectedPath={selectedPath}
             tree={tree}
@@ -969,15 +963,19 @@ function Workspace() {
             onTreeToggle={changeTreeOpenState}
           />
         </Panel>
-        <PanelResizeHandle className="w-px bg-[#d2cec2]" />
+        <PanelResizeHandle className="w-px bg-line" onDragging={setResizingPanels} />
         <Panel defaultSize={54} minSize={35}>
           {selectedPath ? (
             <div className="flex h-full min-h-0 flex-col">
               <DocumentToolbar
+                disabled={saveState === 'saving'}
+                isText={isTextContentType(selectedContentType)}
                 path={selectedPath}
                 saveState={saveState}
                 onDelete={deleteCurrent}
+                onDownload={downloadCurrentMarkdown}
                 onRename={renameCurrent}
+                onSave={save}
               />
               <DocumentBody
                 activeLibrary={activeLibrary}
@@ -986,28 +984,31 @@ function Workspace() {
                 content={content}
                 contentType={selectedContentType}
                 disabled={saveState === 'saving'}
-                etag={etag}
-                mode={mode}
-                outgoingLinks={outgoing.links}
                 path={selectedPath}
                 saveState={saveState}
-                wikiSuggestions={wikiSuggestions}
                 onChange={changeContent}
-                onModeChange={changeEditorMode}
-                onOpenDocument={openDocument}
-                onSave={save}
-                onWikiSuggestQueryChange={setWikiSuggestQuery}
               />
             </div>
           ) : (
             <EmptyDocument />
           )}
         </Panel>
-        <PanelResizeHandle className="w-px bg-[#d2cec2]" />
-        <Panel defaultSize={24} minSize={18}>
+        <PanelResizeHandle className="w-px bg-line" onDragging={setResizingPanels} />
+        <Panel
+          className={cn(!resizingPanels && 'transition-[flex] duration-200 ease-out')}
+          collapsedSize={3}
+          collapsible
+          defaultSize={24}
+          minSize={18}
+          onCollapse={() => setRightCollapsed(true)}
+          onExpand={() => setRightCollapsed(false)}
+          ref={rightPanelRef}
+        >
           <RightPane
             activeTab={rightPaneTab}
             activeLibrary={activeLibrary}
+            collapsed={rightCollapsed}
+            onToggleCollapsed={toggleRightPane}
             conflicts={conflicts}
             currentDiffOpen={currentDiffOpen}
             currentEditorDiff={currentEditorDiff}
@@ -1046,54 +1047,42 @@ function Workspace() {
         </Panel>
       </PanelGroup>
 
-      <footer className="flex h-7 shrink-0 items-center justify-between border-t border-[#d2cec2] bg-[#eeece4] px-3 text-xs text-[#62645e]">
-        <StatusStrip
-          activeLibrary={activeLibrary}
-          eventState={eventState}
-          lastSyncResult={lastSyncResult}
-          saveState={saveState}
-          selectedEntry={selectedEntry}
-          selectedPath={selectedPath}
-          etag={etag}
-        />
-      </footer>
-
       {conflictRemote ? (
         <Dialog open>
           <div className="fixed inset-0 z-40 bg-black/20" />
           <div
             aria-label="Save conflict"
             aria-modal="true"
-            className="fixed left-1/2 top-1/2 z-50 grid w-[min(900px,92vw)] -translate-x-1/2 -translate-y-1/2 grid-cols-2 gap-3 rounded-md border border-[#b8b3a7] bg-[#fbfaf7] p-4 shadow-xl"
+            className="fixed left-1/2 top-1/2 z-50 grid w-[min(900px,92vw)] -translate-x-1/2 -translate-y-1/2 grid-cols-2 gap-3 rounded-md border border-line-strong bg-surface p-4 shadow-xl"
             ref={saveConflictDialogRef}
             role="dialog"
             tabIndex={-1}
           >
             {conflictDetails ? (
-              <dl className="col-span-2 grid gap-2 rounded-md border border-[#d9d6cc] bg-white px-3 py-2 text-xs text-[#343832] sm:grid-cols-3">
+              <dl className="col-span-2 grid gap-2 rounded-md border border-line bg-raised px-3 py-2 text-xs text-body sm:grid-cols-3">
                 <div className="min-w-0 truncate">
-                  <dt className="inline font-semibold uppercase text-[#62645e]">Path</dt>{' '}
+                  <dt className="inline font-semibold uppercase text-muted">Path</dt>{' '}
                   <dd className="inline font-mono">{conflictDetails.path}</dd>
                 </div>
                 <div className="min-w-0 truncate">
-                  <dt className="inline font-semibold uppercase text-[#62645e]">Base</dt>{' '}
+                  <dt className="inline font-semibold uppercase text-muted">Base</dt>{' '}
                   <dd className="inline font-mono">{conflictDetails.baseEtag}</dd>
                 </div>
                 <div className="min-w-0 truncate">
-                  <dt className="inline font-semibold uppercase text-[#62645e]">Latest</dt>{' '}
+                  <dt className="inline font-semibold uppercase text-muted">Latest</dt>{' '}
                   <dd className="inline font-mono">{conflictDetails.remoteEtag}</dd>
                 </div>
               </dl>
             ) : null}
             <div>
               <h2 className="mb-2 text-sm font-semibold">Local draft</h2>
-              <pre className="max-h-[50vh] overflow-auto rounded border border-[#d9d6cc] bg-white p-3 text-xs">
+              <pre className="max-h-[50vh] overflow-auto rounded border border-line bg-raised p-3 text-xs">
                 {content}
               </pre>
             </div>
             <div>
               <h2 className="mb-2 text-sm font-semibold">Latest remote</h2>
-              <pre className="max-h-[50vh] overflow-auto rounded border border-[#d9d6cc] bg-white p-3 text-xs">
+              <pre className="max-h-[50vh] overflow-auto rounded border border-line bg-raised p-3 text-xs">
                 {conflictRemote}
               </pre>
             </div>
@@ -1120,12 +1109,15 @@ function Workspace() {
         onClose={closePalette}
         onCreate={() => void createNewDocument()}
         onDelete={deleteCurrent}
+        onDownload={downloadCurrentMarkdown}
         onOpenGit={() => setGitOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
         onMove={renameCurrent}
         onOpenDocument={openDocument}
         onQueryChange={setPaletteQuery}
         onSearch={setSearchQuery}
+        onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+        theme={theme}
       />
 
       <SettingsDialog
@@ -1174,17 +1166,9 @@ function DocumentBody({
   content,
   contentType,
   disabled,
-  etag,
-  mode,
-  outgoingLinks,
   path,
   saveState,
-  wikiSuggestions,
   onChange,
-  onModeChange,
-  onOpenDocument,
-  onSave,
-  onWikiSuggestQueryChange,
 }: {
   activeLibrary: string;
   byteSize?: number;
@@ -1192,34 +1176,17 @@ function DocumentBody({
   content: string;
   contentType: string;
   disabled: boolean;
-  etag: string;
-  mode: 'source' | 'rich';
-  outgoingLinks: DocumentLink[];
   path: string;
   saveState: SaveState;
-  wikiSuggestions: SearchSuggestion[];
   onChange: (content: string) => void;
-  onModeChange: (mode: 'source' | 'rich') => void;
-  onOpenDocument: (path: string) => void;
-  onSave: () => void;
-  onWikiSuggestQueryChange: (query: string) => void;
 }) {
   if (isTextContentType(contentType)) {
     return (
       <MarkdownEditor
         content={content}
         disabled={disabled}
-        links={outgoingLinks}
-        mode={mode}
-        resolveDocumentHref={(documentPath) => documentHref(activeLibrary, documentPath)}
-        richPreviewEnabled={!shouldReduceRichWidgets(byteSize)}
-        status={statusText(saveState, etag)}
-        wikiSuggestions={wikiSuggestions}
+        status={statusText(saveState)}
         onChange={onChange}
-        onModeChange={onModeChange}
-        onOpenDocument={onOpenDocument}
-        onSave={onSave}
-        onWikiSuggestQueryChange={onWikiSuggestQueryChange}
       />
     );
   }
@@ -1258,13 +1225,13 @@ function ImagePreview({
   path: string;
 }) {
   return (
-    <section aria-label="Image preview" className="flex min-h-0 flex-1 flex-col bg-[#fbfaf7]">
-      <div className="flex h-11 shrink-0 items-center gap-3 border-b border-[#d9d6cc] px-3 text-sm text-[#343832]">
-        <ImageIcon size={15} className="shrink-0 text-[#3d6760]" />
+    <section aria-label="Image preview" className="flex min-h-0 flex-1 flex-col bg-surface">
+      <div className="flex h-11 shrink-0 items-center gap-3 border-b border-line px-3 text-sm text-body">
+        <ImageIcon size={15} className="shrink-0 text-accent" />
         <span className="min-w-0 flex-1 truncate">{path}</span>
-        <span className="shrink-0 text-xs text-[#62645e]">{contentType}</span>
+        <span className="shrink-0 text-xs text-muted">{contentType}</span>
         {typeof byteSize === 'number' ? (
-          <span className="shrink-0 text-xs tabular-nums text-[#62645e]">{formatBytes(byteSize)}</span>
+          <span className="shrink-0 text-xs tabular-nums text-muted">{formatBytes(byteSize)}</span>
         ) : null}
       </div>
       <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-6">
@@ -1294,16 +1261,16 @@ function BinaryPreview({
   return (
     <section
       aria-label="Binary document preview"
-      className="flex min-h-0 flex-1 items-center justify-center bg-[#fbfaf7] p-6"
+      className="flex min-h-0 flex-1 items-center justify-center bg-surface p-6"
     >
-      <div className="w-full max-w-xl rounded-md border border-[#d9d6cc] bg-white p-5">
+      <div className="w-full max-w-xl rounded-md border border-line bg-raised p-5">
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-[#e3eee9] text-[#256f64]">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-accent-tint text-accent">
             <FileArchive size={20} />
           </div>
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-sm font-semibold text-[#1d211f]">{path}</h2>
-            <p className="mt-1 text-sm text-[#62645e]">This binary document is available for download.</p>
+            <h2 className="truncate text-sm font-semibold text-ink">{path}</h2>
+            <p className="mt-1 text-sm text-muted">This binary document is available for download.</p>
           </div>
           <a className={secondaryButton} download={path.split('/').at(-1)} href={href}>
             <Download size={15} />
@@ -1312,18 +1279,18 @@ function BinaryPreview({
         </div>
 
         <dl className="mt-5 grid grid-cols-[120px_1fr] gap-x-3 gap-y-2 text-sm">
-          <dt className="text-[#62645e]">Path</dt>
-          <dd className="min-w-0 truncate font-mono text-[#343832]">{path}</dd>
-          <dt className="text-[#62645e]">Content type</dt>
-          <dd className="min-w-0 truncate font-mono text-[#343832]">{contentType}</dd>
-          <dt className="text-[#62645e]">Size</dt>
-          <dd className="tabular-nums text-[#343832]">
+          <dt className="text-muted">Path</dt>
+          <dd className="min-w-0 truncate font-mono text-body">{path}</dd>
+          <dt className="text-muted">Content type</dt>
+          <dd className="min-w-0 truncate font-mono text-body">{contentType}</dd>
+          <dt className="text-muted">Size</dt>
+          <dd className="tabular-nums text-body">
             {typeof byteSize === 'number' ? formatBytes(byteSize) : 'Unknown'}
           </dd>
           {contentHash ? (
             <>
-              <dt className="text-[#62645e]">Hash</dt>
-              <dd className="min-w-0 truncate font-mono text-[#343832]">{contentHash}</dd>
+              <dt className="text-muted">Hash</dt>
+              <dd className="min-w-0 truncate font-mono text-body">{contentHash}</dd>
             </>
           ) : null}
         </dl>
@@ -1332,181 +1299,40 @@ function BinaryPreview({
   );
 }
 
-function TopBar({
-  active,
-  libraries,
-  searchQuery,
-  theme,
-  onCreate,
-  onCreateLibrary,
-  onLibraryChange,
-  onOpenGit,
-  onOpenPalette,
-  onOpenSettings,
-  onSearchChange,
-  onToggleTheme,
-}: {
-  active?: LibraryType;
-  libraries: LibraryType[];
-  searchQuery: string;
-  theme: ThemePreference;
-  onCreate: () => void;
-  onCreateLibrary: () => void;
-  onLibraryChange: (slug: string) => void;
-  onOpenGit: () => void;
-  onOpenPalette: () => void;
-  onOpenSettings: () => void;
-  onSearchChange: (query: string) => void;
-  onToggleTheme: () => void;
-}) {
-  const libraryValues = ['', ...libraries.map((library) => library.slug)];
-
-  function handleLibraryKeyDown(event: ReactKeyboardEvent<HTMLSelectElement>) {
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-
-    event.preventDefault();
-    const currentIndex = Math.max(0, libraryValues.indexOf(event.currentTarget.value));
-    let nextIndex = currentIndex;
-    if (event.key === 'ArrowDown') nextIndex = Math.min(currentIndex + 1, libraryValues.length - 1);
-    if (event.key === 'ArrowUp') nextIndex = Math.max(currentIndex - 1, 0);
-    if (event.key === 'Home') nextIndex = 0;
-    if (event.key === 'End') nextIndex = libraryValues.length - 1;
-
-    const nextLibrary = libraryValues[nextIndex];
-    if (nextLibrary !== event.currentTarget.value) {
-      onLibraryChange(nextLibrary);
-    }
-  }
-
-  return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-b border-[#d2cec2] bg-[#eeece4] px-3">
-      <div className="flex items-center gap-2 font-semibold">
-        <Braces size={18} />
-        Quarry
-      </div>
-      <label className="flex items-center gap-2 text-sm">
-        <Library size={15} />
-        <select
-          aria-label="Library switcher"
-          className="h-8 rounded-md border border-[#c8c3b7] bg-white px-2"
-          value={active?.slug ?? ''}
-          onChange={(event) => onLibraryChange(event.target.value)}
-          onKeyDown={handleLibraryKeyDown}
-        >
-          <option value="">Select Library</option>
-          {libraries.map((library) => (
-            <option key={library.id} value={library.slug}>
-              {library.slug}
-            </option>
-          ))}
-        </select>
-      </label>
-      <button aria-label="Create library" className={secondaryButton} onClick={onCreateLibrary} type="button">
-        <FilePlus2 size={15} />
-        Library
-      </button>
-      <label className="ml-auto flex h-8 w-[min(440px,42vw)] items-center gap-2 rounded-md border border-[#c8c3b7] bg-white px-2 text-sm">
-        <Search size={15} />
-        <input
-          aria-label="Search"
-          className="min-w-0 flex-1 border-0 bg-transparent outline-none"
-          placeholder="Search"
-          value={searchQuery}
-          onChange={(event) => onSearchChange(event.target.value)}
-        />
-      </label>
-      <button className={primaryButton} onClick={onCreate} type="button">
-        <FilePlus2 size={15} />
-        New
-      </button>
-      <button className={secondaryButton} onClick={onOpenPalette} type="button">
-        <Search size={15} />
-        Commands
-      </button>
-      <button aria-label="Toggle dark mode" className={iconButton} onClick={onToggleTheme} type="button">
-        {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
-      </button>
-      <button className={secondaryButton} onClick={onOpenGit} type="button">
-        <GitBranch size={15} />
-        Sync
-      </button>
-      <button className={secondaryButton} onClick={onOpenSettings} type="button">
-        <SettingsIcon size={15} />
-        Settings
-      </button>
-    </header>
-  );
-}
-
-function StatusStrip({
-  activeLibrary,
-  eventState,
-  lastSyncResult,
-  saveState,
-  selectedEntry,
-  selectedPath,
-  etag,
-}: {
-  activeLibrary: string;
-  eventState: EventState;
-  lastSyncResult: string;
-  saveState: SaveState;
-  selectedEntry?: DocumentListEntry;
-  selectedPath: string;
-  etag: string;
-}) {
-  return (
-    <>
-      <span aria-label="Library status" className="min-w-0 flex-1 truncate">
-        {activeLibrary ? `Library ${activeLibrary}` : 'No Library selected'}
-      </span>
-      <span aria-label="Document status" className="min-w-0 flex-1 truncate">
-        {selectedPath || 'No document open'}
-      </span>
-      <span aria-label="Save status" className="min-w-0 flex-1 truncate text-[#343832]">
-        {statusText(saveState, etag)}
-      </span>
-      <span aria-label="Version status" className="min-w-0 flex-1 truncate">
-        {selectedEntry?.head_version_id ? `Version ${selectedEntry.head_version_id}` : 'No version'}
-      </span>
-      <span aria-label="Event status" className="min-w-0 flex-1 truncate">
-        {eventStatusText(eventState)}
-      </span>
-      <span aria-label="Last sync result" className="min-w-0 flex-[1.4] truncate">
-        {lastSyncResult ? `Last sync: ${lastSyncResult}` : 'Last sync: None'}
-      </span>
-    </>
-  );
-}
-
 function CommandPalette({
   documents,
   open,
   query,
   selectedPath,
+  theme,
   onClose,
   onCreate,
   onDelete,
+  onDownload,
   onOpenGit,
   onOpenSettings,
   onMove,
   onOpenDocument,
   onQueryChange,
   onSearch,
+  onToggleTheme,
 }: {
   documents: DocumentListEntry[];
   open: boolean;
   query: string;
   selectedPath: string;
+  theme: ThemePreference;
   onClose: () => void;
   onCreate: () => void;
   onDelete: () => void;
+  onDownload: () => void;
   onOpenGit: () => void;
   onOpenSettings: () => void;
   onMove: () => void;
   onOpenDocument: (path: string) => void;
   onQueryChange: (query: string) => void;
   onSearch: (query: string) => void;
+  onToggleTheme: () => void;
 }) {
   const dialogRef = useDialogFocusTrap(open, onClose);
 
@@ -1525,7 +1351,7 @@ function CommandPalette({
       <div
         aria-label="Command palette"
         aria-modal="true"
-        className="mx-auto mt-[10vh] w-full max-w-2xl overflow-hidden rounded-md border border-[#b8b3a7] bg-[#fbfaf7] shadow-xl"
+        className="mx-auto mt-[10vh] w-full max-w-2xl overflow-hidden rounded-md border border-line-strong bg-surface shadow-xl"
         onMouseDown={(event) => event.stopPropagation()}
         ref={dialogRef}
         role="dialog"
@@ -1535,8 +1361,8 @@ function CommandPalette({
           className="flex max-h-[70vh] flex-col"
           label="Command palette"
         >
-          <div className="flex h-12 items-center gap-2 border-b border-[#d9d6cc] px-3">
-            <Search size={16} className="shrink-0 text-[#62645e]" />
+          <div className="flex h-12 items-center gap-2 border-b border-line px-3">
+            <Search size={16} className="shrink-0 text-muted" />
             <Command.Input
               aria-label="Command palette"
               autoFocus
@@ -1545,12 +1371,12 @@ function CommandPalette({
               value={query}
               onValueChange={onQueryChange}
             />
-            <kbd className="rounded border border-[#d9d6cc] px-1.5 py-0.5 text-xs text-[#62645e]">Esc</kbd>
+            <kbd className="rounded border border-line px-1.5 py-0.5 text-xs text-muted">Esc</kbd>
           </div>
           {trimmedQuery ? (
-            <div className="border-b border-[#d9d6cc] p-2">
+            <div className="border-b border-line p-2">
               <button
-                className={`${commandItem} w-full text-left hover:bg-[#e3eee9] focus:bg-[#e3eee9]`}
+                className={`${commandItem} w-full text-left hover:bg-accent-tint focus:bg-accent-tint`}
                 type="button"
                 onClick={() => run(() => onSearch(trimmedQuery))}
               >
@@ -1559,11 +1385,11 @@ function CommandPalette({
             </div>
           ) : null}
           <Command.List className="min-h-0 overflow-auto p-2">
-            <Command.Empty className="px-2 py-6 text-center text-sm text-[#62645e]">
+            <Command.Empty className="px-2 py-6 text-center text-sm text-muted">
               No matching commands
             </Command.Empty>
             <Command.Group
-              className="pb-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:text-[#62645e]"
+              className="pb-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:text-muted"
               heading="Documents"
             >
               {quickOpenDocuments.map((entry) => (
@@ -1574,14 +1400,14 @@ function CommandPalette({
                   onSelect={() => run(() => onOpenDocument(entry.path))}
                 >
                   <span className="min-w-0 flex-1 truncate">Open {documentTitle(entry)}</span>
-                  <span className="max-w-[45%] shrink-0 truncate font-mono text-xs text-[#62645e]">
+                  <span className="max-w-[45%] shrink-0 truncate font-mono text-xs text-muted">
                     {entry.path}
                   </span>
                 </Command.Item>
               ))}
             </Command.Group>
             <Command.Group
-              className="border-t border-[#e2dfd4] pt-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:text-[#62645e]"
+              className="border-t border-line pt-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:text-muted"
               heading="Actions"
             >
               <Command.Item className={commandItem} value="new create document" onSelect={() => run(onCreate)}>
@@ -1590,11 +1416,20 @@ function CommandPalette({
               <Command.Item
                 className={commandItem}
                 disabled={!selectedPath}
+                value="download export markdown current document"
+                onSelect={() => run(onDownload)}
+              >
+                <span className="min-w-0 flex-1 truncate">Download as Markdown</span>
+                {selectedPath ? <span className="shrink-0 truncate text-xs text-muted">{selectedPath}</span> : null}
+              </Command.Item>
+              <Command.Item
+                className={commandItem}
+                disabled={!selectedPath}
                 value="rename move current document"
                 onSelect={() => run(onMove)}
               >
                 <span className="min-w-0 flex-1 truncate">Move current document</span>
-                {selectedPath ? <span className="shrink-0 truncate text-xs text-[#62645e]">{selectedPath}</span> : null}
+                {selectedPath ? <span className="shrink-0 truncate text-xs text-muted">{selectedPath}</span> : null}
               </Command.Item>
               <Command.Item
                 className={commandItem}
@@ -1606,6 +1441,15 @@ function CommandPalette({
               </Command.Item>
               <Command.Item className={commandItem} value="sync git pull push peers" onSelect={() => run(onOpenGit)}>
                 <span className="min-w-0 flex-1 truncate">Sync with Git peer</span>
+              </Command.Item>
+              <Command.Item
+                className={commandItem}
+                value="theme dark light mode appearance toggle"
+                onSelect={() => run(onToggleTheme)}
+              >
+                <span className="min-w-0 flex-1 truncate">
+                  {theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+                </span>
               </Command.Item>
               <Command.Item
                 className={commandItem}
@@ -1648,15 +1492,15 @@ function SettingsDialog({
       <div
         aria-label="Workspace settings"
         aria-modal="true"
-        className="mx-auto mt-[12vh] w-full max-w-xl overflow-hidden rounded-md border border-[#b8b3a7] bg-[#fbfaf7] shadow-xl"
+        className="mx-auto mt-[12vh] w-full max-w-xl overflow-hidden rounded-md border border-line-strong bg-surface shadow-xl"
         onMouseDown={(event) => event.stopPropagation()}
         ref={dialogRef}
         role="dialog"
         tabIndex={-1}
       >
-        <div className="flex h-12 items-center gap-2 border-b border-[#d9d6cc] px-4">
-          <SettingsIcon size={16} className="text-[#256f64]" />
-          <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-[#1d211f]">
+        <div className="flex h-12 items-center gap-2 border-b border-line px-4">
+          <SettingsIcon size={16} className="text-accent" />
+          <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">
             Workspace settings
           </h2>
           <button className={secondaryButton} onClick={onClose} type="button">
@@ -1666,17 +1510,17 @@ function SettingsDialog({
 
         <div className="space-y-5 p-4">
           <section>
-            <h3 className="text-xs font-semibold uppercase text-[#62645e]">Library</h3>
+            <h3 className="text-xs font-semibold uppercase text-muted">Library</h3>
             <dl className="mt-2 grid grid-cols-[120px_1fr] gap-x-3 gap-y-2 text-sm">
-              <dt className="text-[#62645e]">Active library</dt>
-              <dd className="min-w-0 truncate font-mono text-[#30342f]">
+              <dt className="text-muted">Active library</dt>
+              <dd className="min-w-0 truncate font-mono text-body">
                 {activeLibrary || 'No library selected'}
               </dd>
             </dl>
           </section>
 
           <section>
-            <h3 className="text-xs font-semibold uppercase text-[#62645e]">Theme</h3>
+            <h3 className="text-xs font-semibold uppercase text-muted">Theme</h3>
             <div className="mt-2 flex flex-wrap gap-2">
               <button
                 className={theme === 'light' ? primaryButton : secondaryButton}
@@ -1700,10 +1544,10 @@ function SettingsDialog({
           </section>
 
           <section>
-            <h3 className="text-xs font-semibold uppercase text-[#62645e]">Layout</h3>
+            <h3 className="text-xs font-semibold uppercase text-muted">Layout</h3>
             <dl className="mt-2 grid grid-cols-[120px_1fr] gap-x-3 gap-y-2 text-sm">
-              <dt className="text-[#62645e]">Storage key</dt>
-              <dd className="min-w-0 truncate font-mono text-[#30342f]">{layoutStorageKey}</dd>
+              <dt className="text-muted">Storage key</dt>
+              <dd className="min-w-0 truncate font-mono text-body">{layoutStorageKey}</dd>
             </dl>
             <button className={`${secondaryButton} mt-3`} onClick={onResetLayout} type="button">
               <RotateCcw size={15} />
@@ -1800,14 +1644,14 @@ function ConflictMergeDialog({
       <div
         aria-label="Resolve conflict"
         aria-modal="true"
-        className="mx-auto mt-[5vh] flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border border-[#b8b3a7] bg-[#fbfaf7] shadow-xl"
+        className="mx-auto mt-[5vh] flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border border-line-strong bg-surface shadow-xl"
         onMouseDown={(event) => event.stopPropagation()}
         ref={dialogRef}
         role="dialog"
         tabIndex={-1}
       >
-        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-[#d9d6cc] px-4">
-          <AlertTriangle size={16} className="text-[#a45c23]" />
+        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-4">
+          <AlertTriangle size={16} className="text-warn-ink" />
           <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">Resolve {conflict.path}</h2>
           <button className={secondaryButton} onClick={onClose} type="button">
             Close
@@ -1815,7 +1659,7 @@ function ConflictMergeDialog({
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-4">
           {error ? (
-            <div className="mb-3 rounded-md border border-[#e5c4a7] bg-[#fff6ed] px-3 py-2 text-sm text-[#8a4a22]">
+            <div className="mb-3 rounded-md border border-warn-line bg-warn-tint px-3 py-2 text-sm text-warn-ink">
               {error}
             </div>
           ) : null}
@@ -1823,17 +1667,17 @@ function ConflictMergeDialog({
             <ConflictVersionPanel label="Ours" content={ours?.content} version={conflict.ours_version_id} />
             <ConflictVersionPanel label="Theirs" content={theirs?.content} version={conflict.theirs_version_id} />
           </div>
-          <label className="mt-4 block text-xs font-semibold uppercase text-[#62645e]">
+          <label className="mt-4 block text-xs font-semibold uppercase text-muted">
             Manual resolution
             <textarea
               aria-label="Manual resolution"
-              className="mt-2 min-h-40 w-full resize-y rounded-md border border-[#d9d6cc] bg-white p-3 font-mono text-[14px] leading-6 text-[#1e211f] outline-none focus:border-[#256f64]"
+              className="mt-2 min-h-40 w-full resize-y rounded-md border border-line bg-raised p-3 font-mono text-[14px] leading-6 text-ink outline-none focus:border-accent"
               value={manualContent}
               onChange={(event) => setManualContent(event.target.value)}
             />
           </label>
         </div>
-        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-[#d9d6cc] bg-[#fbfaf7] px-4 py-3">
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-line bg-surface px-4 py-3">
           <button
             className={secondaryButton}
             disabled={busy || !ours}
@@ -1882,12 +1726,12 @@ function ConflictVersionPanel({
   version: string | null;
 }) {
   return (
-    <section className="min-w-0 rounded-md border border-[#d9d6cc] bg-white">
-      <div className="border-b border-[#d9d6cc] px-3 py-2">
-        <h3 className="text-xs font-semibold uppercase text-[#62645e]">{label}</h3>
-        <div className="mt-1 truncate font-mono text-xs text-[#62645e]">{version ?? 'No version'}</div>
+    <section className="min-w-0 rounded-md border border-line bg-raised">
+      <div className="border-b border-line px-3 py-2">
+        <h3 className="text-xs font-semibold uppercase text-muted">{label}</h3>
+        <div className="mt-1 truncate font-mono text-xs text-muted">{version ?? 'No version'}</div>
       </div>
-      <pre className="max-h-64 min-h-32 overflow-auto p-3 text-sm text-[#343832]">
+      <pre className="max-h-64 min-h-32 overflow-auto p-3 text-sm text-body">
         {content ?? 'Loading...'}
       </pre>
     </section>
@@ -1995,14 +1839,14 @@ function GitPanel({
       <div
         aria-label="Git operations"
         aria-modal="true"
-        className="mx-auto mt-[6vh] flex max-h-[84vh] w-full max-w-4xl flex-col overflow-hidden rounded-md border border-[#b8b3a7] bg-[#fbfaf7] shadow-xl"
+        className="mx-auto mt-[6vh] flex max-h-[84vh] w-full max-w-4xl flex-col overflow-hidden rounded-md border border-line-strong bg-surface shadow-xl"
         onMouseDown={(event) => event.stopPropagation()}
         ref={dialogRef}
         role="dialog"
         tabIndex={-1}
       >
-        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-[#d9d6cc] px-4">
-          <GitBranch size={16} className="text-[#3d6760]" />
+        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-4">
+          <GitBranch size={16} className="text-accent" />
           <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">Git operations</h2>
           <button className={secondaryButton} onClick={onClose} type="button">
             Close
@@ -2010,34 +1854,34 @@ function GitPanel({
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-4">
           {busy ? (
-            <div className="mb-3 rounded-md border border-[#d9d6cc] bg-white px-3 py-2 text-sm text-[#343832]">
+            <div className="mb-3 rounded-md border border-line bg-raised px-3 py-2 text-sm text-body">
               Running {busy}...
             </div>
           ) : null}
           {result ? (
-            <div className="mb-3 rounded-md border border-[#b8d6cd] bg-[#eef7f4] px-3 py-2 text-sm text-[#123f38]">
+            <div className="mb-3 rounded-md border border-accent-line bg-accent-tint px-3 py-2 text-sm text-accent-ink">
               {result}
             </div>
           ) : null}
           {error ? (
-            <div className="mb-3 rounded-md border border-[#e5c4a7] bg-[#fff6ed] px-3 py-2 text-sm text-[#8a4a22]">
+            <div className="mb-3 rounded-md border border-warn-line bg-warn-tint px-3 py-2 text-sm text-warn-ink">
               {error}
             </div>
           ) : null}
 
-          <section className="border-b border-[#e2dfd4] pb-4">
-            <h3 className="mb-2 text-xs font-semibold uppercase text-[#62645e]">Peers</h3>
+          <section className="border-b border-line pb-4">
+            <h3 className="mb-2 text-xs font-semibold uppercase text-muted">Peers</h3>
             {peers.length ? (
               <ul className="space-y-2" role="list">
                 {peers.map((peer) => (
-                  <li className="rounded-md border border-[#d9d6cc] bg-white p-3" key={peer.id}>
+                  <li className="rounded-md border border-line bg-raised p-3" key={peer.id}>
                     <div className="flex items-start gap-3">
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-semibold text-[#343832]">{peer.id}</div>
-                        <div className="mt-1 truncate font-mono text-xs text-[#62645e]">
+                        <div className="truncate text-sm font-semibold text-body">{peer.id}</div>
+                        <div className="mt-1 truncate font-mono text-xs text-muted">
                           {gitPeerRepo(peer)}
                         </div>
-                        <div className="mt-1 text-xs text-[#62645e]">
+                        <div className="mt-1 text-xs text-muted">
                           Branch {gitPeerBranch(peer)}{gitPeerRemote(peer) ? ` · Remote ${gitPeerRemote(peer)}` : ''}
                         </div>
                       </div>
@@ -2093,13 +1937,13 @@ function GitPanel({
                 ))}
               </ul>
             ) : (
-              <p className="text-sm text-[#62645e]">No Git peers configured</p>
+              <p className="text-sm text-muted">No Git peers configured</p>
             )}
           </section>
 
           <div className="grid gap-4 pt-4 md:grid-cols-3">
             <form className="space-y-2" onSubmit={createPeer}>
-              <h3 className="text-xs font-semibold uppercase text-[#62645e]">Create peer</h3>
+              <h3 className="text-xs font-semibold uppercase text-muted">Create peer</h3>
               <GitTextInput label="Repo path" value={peerRepo} onChange={setPeerRepo} />
               <GitTextInput label="Branch" value={peerBranch} onChange={setPeerBranch} />
               <GitTextInput label="Remote" value={peerRemote} onChange={setPeerRemote} />
@@ -2108,14 +1952,14 @@ function GitPanel({
               </button>
             </form>
             <form className="space-y-2" onSubmit={importWorktree}>
-              <h3 className="text-xs font-semibold uppercase text-[#62645e]">Import</h3>
+              <h3 className="text-xs font-semibold uppercase text-muted">Import</h3>
               <GitTextInput label="Import repo path" value={importRepo} onChange={setImportRepo} />
               <button className={secondaryButton} disabled={Boolean(busy) || !importRepo.trim()} type="submit">
                 Import
               </button>
             </form>
             <form className="space-y-2" onSubmit={exportWorktree}>
-              <h3 className="text-xs font-semibold uppercase text-[#62645e]">Export</h3>
+              <h3 className="text-xs font-semibold uppercase text-muted">Export</h3>
               <GitTextInput label="Export repo path" value={exportRepo} onChange={setExportRepo} />
               <GitTextInput label="Export branch" value={exportBranch} onChange={setExportBranch} />
               <button className={secondaryButton} disabled={Boolean(busy) || !exportRepo.trim()} type="submit">
@@ -2139,10 +1983,10 @@ function GitTextInput({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="block text-xs font-medium text-[#62645e]">
+    <label className="block text-xs font-medium text-muted">
       {label}
       <input
-        className="mt-1 h-8 w-full rounded-md border border-[#c8c3b7] bg-white px-2 text-sm text-[#30342f] outline-none focus:border-[#256f64]"
+        className="mt-1 h-8 w-full rounded-md border border-line-strong bg-raised px-2 text-sm text-body outline-none focus:border-accent"
         value={value}
         onChange={(event) => onChange(event.target.value)}
       />
@@ -2180,36 +2024,90 @@ function findTreeNodeByPath(nodes: TreeNode[], path: string): TreeNode | null {
 }
 
 function LeftPane({
-  conflicts,
-  documents,
+  active,
+  collapsed,
+  libraries,
+  searchQuery,
   searchResults,
   selectedPath,
   tree,
   treeKey,
   treeOpenState,
   onCreate,
+  onCreateChild,
+  onLibraryChange,
   onMove,
   onOpen,
   onOpenContextMenu,
   onRename,
+  onSearchChange,
+  onToggleCollapsed,
   onTreeToggle,
 }: {
-  conflicts: number;
-  documents: DocumentListEntry[];
+  active?: LibraryType;
+  collapsed: boolean;
+  libraries: LibraryType[];
+  searchQuery: string;
   searchResults: SearchResult[];
   selectedPath: string;
   tree: TreeNode[];
   treeKey: string;
   treeOpenState: TreeOpenState;
   onCreate: () => void;
+  onCreateChild: (node: TreeNode) => void;
+  onLibraryChange: (slug: string) => void;
   onMove: MoveHandler<TreeNode>;
   onOpen: (path: string) => void;
   onOpenContextMenu: (node: TreeNode, event: ReactKeyboardEvent | ReactMouseEvent) => void;
   onRename: (path: string) => void;
+  onSearchChange: (query: string) => void;
+  onToggleCollapsed: () => void;
   onTreeToggle: (id: string) => void;
 }) {
+  if (collapsed) {
+    return (
+      <aside
+        aria-label="Document tree"
+        className="flex h-full flex-col items-center border-r border-line bg-surface py-2"
+      >
+        <button
+          aria-label="Expand sidebar"
+          className={cn(ghostIconButton, 'size-8')}
+          onClick={onToggleCollapsed}
+          type="button"
+        >
+          <PanelLeftOpen size={16} />
+        </button>
+      </aside>
+    );
+  }
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const activeSearchResult = searchResults[Math.min(activeSearchIndex, searchResults.length - 1)];
+
+  function toggleSearch() {
+    setSearchOpen((open) => {
+      const next = !open;
+      if (!next) onSearchChange('');
+      else window.requestAnimationFrame(() => searchInputRef.current?.focus());
+      return next;
+    });
+  }
+
+  function handleLibraryKeyDown(event: ReactKeyboardEvent<HTMLSelectElement>) {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const values = [...(active ? [] : ['']), ...libraries.map((library) => library.slug)];
+    const currentIndex = Math.max(0, values.indexOf(active?.slug ?? ''));
+    let nextIndex = currentIndex;
+    if (event.key === 'ArrowDown') nextIndex = Math.min(currentIndex + 1, values.length - 1);
+    if (event.key === 'ArrowUp') nextIndex = Math.max(currentIndex - 1, 0);
+    if (event.key === 'Home') nextIndex = 0;
+    if (event.key === 'End') nextIndex = values.length - 1;
+    const next = values[nextIndex];
+    if (next !== (active?.slug ?? '')) onLibraryChange(next);
+  }
 
   useEffect(() => {
     setActiveSearchIndex(0);
@@ -2271,18 +2169,68 @@ function LeftPane({
   }
 
   return (
-    <aside aria-label="Document tree" className="flex h-full min-h-0 flex-col border-r border-[#d2cec2] bg-[#f8f7f2]">
-      <div className="flex h-10 items-center justify-between border-b border-[#d9d6cc] px-3">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <FolderTree size={15} />
-          Documents
-        </div>
-        <button aria-label="Create document" className="rounded p-1 hover:bg-[#e9e6dc]" onClick={onCreate}>
-          <FilePlus2 size={15} />
-        </button>
+    <aside aria-label="Document tree" className="flex h-full min-h-0 flex-col border-r border-line bg-surface">
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-2.5">
+        <select
+          aria-label="Library switcher"
+          className="h-8 min-w-0 flex-1 rounded-md border border-line-strong bg-raised px-2 text-sm font-medium text-body"
+          value={active?.slug ?? ''}
+          onChange={(event) => onLibraryChange(event.target.value)}
+          onKeyDown={handleLibraryKeyDown}
+        >
+          {active ? null : <option value="">Select library…</option>}
+          {libraries.map((library) => (
+            <option key={library.id} value={library.slug}>
+              {library.slug}
+            </option>
+          ))}
+        </select>
       </div>
+      <div className="flex h-9 shrink-0 items-center justify-between pr-1.5 pl-3">
+        <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-faint">Documents</span>
+        <div className="flex items-center gap-0.5">
+          <button
+            aria-expanded={searchOpen}
+            aria-label="Search"
+            className={cn(ghostIconButton, 'size-7', searchOpen && 'bg-well text-body')}
+            onClick={toggleSearch}
+            type="button"
+          >
+            <Search size={15} />
+          </button>
+          <button aria-label="Create document" className={cn(ghostIconButton, 'size-7')} onClick={onCreate} type="button">
+            <FilePlus2 size={15} />
+          </button>
+          <button
+            aria-label="Collapse sidebar"
+            className={cn(ghostIconButton, 'size-7')}
+            onClick={onToggleCollapsed}
+            type="button"
+          >
+            <PanelLeftClose size={15} />
+          </button>
+        </div>
+      </div>
+      {searchOpen ? (
+        <div className="px-2.5 pb-2">
+          <label className="flex h-8 items-center gap-2 rounded-md border border-line-strong bg-raised px-2.5 text-sm transition-colors focus-within:border-accent focus-within:ring-2 focus-within:ring-accent-tint">
+            <Search className="shrink-0 text-muted" size={15} />
+            <input
+              aria-label="Search"
+              className="min-w-0 flex-1 border-0 bg-transparent text-body outline-none placeholder:text-faint"
+              placeholder="Search documents…"
+              ref={searchInputRef}
+              value={searchQuery}
+              onChange={(event) => onSearchChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') toggleSearch();
+              }}
+            />
+          </label>
+        </div>
+      ) : null}
       {searchResults.length ? (
-        <section className="border-b border-[#d9d6cc] p-2">
+        <section className="border-b border-line p-2">
           <div
             aria-label="Search results"
             className="space-y-1 outline-none"
@@ -2295,8 +2243,8 @@ function LeftPane({
                 aria-selected={result.path === activeSearchResult?.path}
                 key={result.path}
                 className={cn(
-                  'block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-[#ece9df]',
-                  result.path === activeSearchResult?.path && 'bg-[#e3eee9] text-[#123f38]'
+                  'block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-well',
+                  result.path === activeSearchResult?.path && 'bg-accent-tint text-accent-ink'
                 )}
                 role="option"
                 type="button"
@@ -2305,16 +2253,16 @@ function LeftPane({
                 onMouseEnter={() => selectSearchResult(searchResults.indexOf(result))}
               >
                 <span className="block truncate font-medium">{result.title || result.path}</span>
-                <span className="block truncate text-xs text-[#62645e]">{result.path}</span>
+                <span className="block truncate text-xs text-muted">{result.path}</span>
               </button>
             ))}
           </div>
           {activeSearchResult ? (
             <div
               aria-label="Search result preview"
-              className="mt-2 rounded border border-[#d9d6cc] bg-white px-2 py-1.5 text-xs text-[#343832]"
+              className="mt-2 rounded border border-line bg-raised px-2 py-1.5 text-xs text-body"
             >
-              <div className="truncate font-mono text-[#62645e]">{activeSearchResult.path}</div>
+              <div className="truncate font-mono text-muted">{activeSearchResult.path}</div>
               <p className="mt-1 line-clamp-3">
                 {activeSearchResult.snippet ||
                   activeSearchResult.matched_fields.join(', ') ||
@@ -2346,22 +2294,30 @@ function LeftPane({
           {({ node, style }) => (
             <div
               className={cn(
-                'flex cursor-default items-center gap-1 truncate px-2 text-sm hover:bg-[#ece9df]',
-                node.data.path === selectedPath && 'bg-[#dcebe6] text-[#123f38]'
+                'group/row flex cursor-default items-center gap-1 truncate pr-1 pl-2 text-sm hover:bg-well',
+                node.data.path === selectedPath && 'bg-accent-tint text-accent-ink'
               )}
               style={style}
               onContextMenu={(event) => {
                 onOpenContextMenu(node.data, event);
               }}
             >
-              <span className="text-[#8a877d]">{node.data.kind === 'folder' ? '▸' : '·'}</span>
-              <span className="truncate">{node.data.name}</span>
+              <span className="shrink-0 text-faint">{node.data.kind === 'folder' ? '▸' : '·'}</span>
+              <span className="min-w-0 flex-1 truncate">{node.data.name}</span>
+              <button
+                aria-label={`Add page in ${node.data.name}`}
+                className="hidden shrink-0 rounded p-0.5 text-muted hover:bg-line-strong hover:text-body focus-visible:block group-hover/row:block"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onCreateChild(node.data);
+                }}
+                type="button"
+              >
+                <Plus size={14} />
+              </button>
             </div>
           )}
         </Tree>
-      </div>
-      <div className="border-t border-[#d9d6cc] px-3 py-2 text-xs text-[#62645e]">
-        {documents.length} documents · {conflicts} conflicts
       </div>
     </aside>
   );
@@ -2389,7 +2345,7 @@ function TreeContextMenu({
     <div className="fixed inset-0 z-40" onMouseDown={onClose}>
       <div
         aria-label={`Actions for ${menu.node.path}`}
-        className="fixed z-50 min-w-44 overflow-hidden rounded-md border border-[#b8b3a7] bg-[#fbfaf7] py-1 text-sm shadow-lg"
+        className="fixed z-50 min-w-44 overflow-hidden rounded-md border border-line-strong bg-surface py-1 text-sm shadow-lg"
         role="menu"
         style={{ left: menu.x, top: menu.y }}
         onMouseDown={(event) => event.stopPropagation()}
@@ -2408,7 +2364,7 @@ function TreeContextMenu({
             <button className={treeMenuItem} role="menuitem" type="button" onClick={() => onMoveDocument(menu.node)}>
               Move
             </button>
-            <button className={cn(treeMenuItem, 'text-[#8a2f1f]')} role="menuitem" type="button" onClick={() => onDeleteDocument(menu.node)}>
+            <button className={cn(treeMenuItem, 'text-warn-ink')} role="menuitem" type="button" onClick={() => onDeleteDocument(menu.node)}>
               Delete
             </button>
           </>
@@ -2419,26 +2375,74 @@ function TreeContextMenu({
 }
 
 function DocumentToolbar({
+  disabled,
+  isText,
   path,
   saveState,
   onDelete,
+  onDownload,
   onRename,
+  onSave,
 }: {
+  disabled: boolean;
+  isText: boolean;
   path: string;
   saveState: SaveState;
   onDelete: () => void;
+  onDownload: () => void;
   onRename: () => void;
+  onSave: () => void;
 }) {
   return (
-    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-[#d2cec2] bg-[#fbfaf7] px-3">
-      <h1 className="min-w-0 flex-1 truncate text-sm font-semibold">{path}</h1>
-      {saveState === 'stale' ? <AlertTriangle className="text-[#a45c23]" size={16} /> : null}
-      <button className={secondaryButton} onClick={onRename} type="button">
-        Move
-      </button>
-      <button aria-label="Delete document" className={iconButton} onClick={onDelete} type="button">
-        <Trash2 size={15} />
-      </button>
+    <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line bg-surface px-3">
+      <h1 className="min-w-0 flex-1 truncate text-sm">
+        {documentDirname(path) ? (
+          <span className="text-muted">{documentDirname(path)}/</span>
+        ) : null}
+        <span className="font-semibold text-ink">{documentBasename(path)}</span>
+      </h1>
+      {saveState === 'stale' ? <AlertTriangle className="shrink-0 text-warn-ink" size={16} /> : null}
+      {isText ? (
+        <button
+          aria-label="Save document"
+          className="inline-flex h-8 items-center gap-1.5 rounded-md bg-accent py-2 pr-3 pl-2.5 text-sm font-medium text-on-accent shadow-sm transition-colors hover:bg-accent-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={disabled}
+          onClick={onSave}
+          type="button"
+        >
+          <Save size={16} />
+          Save
+        </button>
+      ) : null}
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild>
+          <button aria-label="Document actions" className={iconButton} type="button">
+            <MoreHorizontal size={16} />
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            align="end"
+            className="z-50 min-w-40 rounded-md border border-line bg-raised p-1 shadow-lg"
+            sideOffset={6}
+          >
+            {isText ? (
+              <DropdownMenu.Item className={menuItem} onSelect={onDownload}>
+                <Download className="shrink-0" size={15} />
+                Download as Markdown
+              </DropdownMenu.Item>
+            ) : null}
+            <DropdownMenu.Item className={menuItem} onSelect={onRename}>
+              Move…
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator className="my-1 h-px bg-line" />
+            <DropdownMenu.Item className={cn(menuItem, 'text-danger')} onSelect={onDelete}>
+              <Trash2 className="shrink-0" size={15} />
+              Delete
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
     </div>
   );
 }
@@ -2446,6 +2450,7 @@ function DocumentToolbar({
 function RightPane({
   activeTab,
   activeLibrary,
+  collapsed,
   compareVersionId,
   conflicts,
   currentDiffOpen,
@@ -2471,6 +2476,7 @@ function RightPane({
   onOpenConflict,
   onResolveConflict,
   onRestoreVersion,
+  onToggleCollapsed,
   onViewVersion,
   outgoing,
   selectedContentType,
@@ -2483,6 +2489,7 @@ function RightPane({
 }: {
   activeTab: RightPaneTab;
   activeLibrary: string;
+  collapsed: boolean;
   compareVersionId: string | null;
   conflicts: ConflictRecord[];
   currentDiffOpen: boolean;
@@ -2508,6 +2515,7 @@ function RightPane({
   onOpenConflict: (conflict: string) => void;
   onResolveConflict: (conflict: string) => void;
   onRestoreVersion: (version: string) => void;
+  onToggleCollapsed: () => void;
   onViewVersion: (version: string) => void;
   outgoing: DocumentLink[];
   selectedContentType: string;
@@ -2521,20 +2529,47 @@ function RightPane({
   const selectedTab = rightPaneTabs.some((tab) => tab.key === activeTab) ? activeTab : 'links';
   const selectedTabLabel = rightPaneTabs.find((tab) => tab.key === selectedTab)?.label ?? 'Links';
 
-  return (
-    <aside aria-label="Document details" className="flex h-full min-h-0 flex-col bg-[#f8f7f2]">
-      <div
-        aria-label="Right pane sections"
-        className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-[#d9d6cc] bg-[#eeece4] px-2"
-        role="tablist"
+  if (collapsed) {
+    return (
+      <aside
+        aria-label="Document details"
+        className="flex h-full flex-col items-center border-l border-line bg-surface py-2"
       >
-        {rightPaneTabs.map((tab) => (
+        <button
+          aria-label="Expand details"
+          className={cn(ghostIconButton, 'size-8')}
+          onClick={onToggleCollapsed}
+          type="button"
+        >
+          <PanelRightOpen size={16} />
+        </button>
+      </aside>
+    );
+  }
+
+  return (
+    <aside aria-label="Document details" className="flex h-full min-h-0 flex-col bg-surface">
+      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line bg-panel px-2">
+        <button
+          aria-label="Collapse details"
+          className={cn(ghostIconButton, 'size-7 shrink-0')}
+          onClick={onToggleCollapsed}
+          type="button"
+        >
+          <PanelRightClose size={15} />
+        </button>
+        <div
+          aria-label="Right pane sections"
+          className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+          role="tablist"
+        >
+          {rightPaneTabs.map((tab) => (
           <button
             aria-controls={`right-pane-panel-${tab.key}`}
             aria-selected={selectedTab === tab.key}
             className={cn(
-              'h-7 shrink-0 rounded px-2 text-xs font-medium text-[#62645e] hover:bg-[#f8f7f2] focus:outline-none focus:ring-1 focus:ring-[#7aa69e]',
-              selectedTab === tab.key && 'bg-[#f8f7f2] text-[#143f39] shadow-sm'
+              'h-7 shrink-0 rounded-md px-2.5 text-xs font-medium transition-colors hover:text-body focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-tint',
+              selectedTab === tab.key ? 'bg-raised text-ink shadow-sm' : 'text-muted'
             )}
             id={`right-pane-tab-${tab.key}`}
             key={tab.key}
@@ -2545,7 +2580,8 @@ function RightPane({
           >
             {tab.label}
           </button>
-        ))}
+          ))}
+        </div>
       </div>
       <section
         aria-labelledby={`right-pane-tab-${selectedTab}`}
@@ -2651,7 +2687,7 @@ function DocumentProperties({
   contentType: string;
   entry?: DocumentListEntry;
 }) {
-  if (!entry) return <p className="text-xs text-[#62645e]">No document selected</p>;
+  if (!entry) return <p className="text-xs text-muted">No document selected</p>;
 
   const rows = [
     { label: 'Path', value: entry.path },
@@ -2666,8 +2702,8 @@ function DocumentProperties({
     <dl className="space-y-1 text-xs">
       {rows.map((row) => (
         <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2" key={row.label}>
-          <dt className="text-[#62645e]">{row.label}</dt>
-          <dd className="min-w-0 truncate font-mono text-[#343832]" title={row.value}>
+          <dt className="text-muted">{row.label}</dt>
+          <dd className="min-w-0 truncate font-mono text-body" title={row.value}>
             {row.value}
           </dd>
         </div>
@@ -2685,18 +2721,18 @@ function ConflictList({
   onOpen: (conflict: string) => void;
   onResolve: (conflict: string) => void;
 }) {
-  if (!conflicts.length) return <p className="text-xs text-[#62645e]">None</p>;
+  if (!conflicts.length) return <p className="text-xs text-muted">None</p>;
   return (
     <ul className="space-y-1 text-xs">
       {conflicts.map((conflict) => (
-        <li className="rounded bg-white px-2 py-1 text-[#343832]" key={conflict.id}>
+        <li className="rounded bg-raised px-2 py-1 text-body" key={conflict.id}>
           <div className="flex items-center gap-2">
             <span className="min-w-0 flex-1 truncate">
               {conflict.path} {conflict.status}
             </span>
             <button
               aria-label={`Open conflict ${conflict.id}`}
-              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-[#d9d6cc] text-[#30342f] hover:bg-[#f1f0ea] disabled:opacity-40"
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-line text-body hover:bg-well disabled:opacity-40"
               disabled={conflict.status !== 'open'}
               onClick={() => onOpen(conflict.id)}
               type="button"
@@ -2705,7 +2741,7 @@ function ConflictList({
             </button>
             <button
               aria-label={`Resolve conflict ${conflict.id}`}
-              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-[#d9d6cc] text-[#30342f] hover:bg-[#f1f0ea] disabled:opacity-40"
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-line text-body hover:bg-well disabled:opacity-40"
               disabled={conflict.status !== 'open'}
               onClick={() => onResolve(conflict.id)}
               type="button"
@@ -2714,16 +2750,16 @@ function ConflictList({
             </button>
           </div>
           {(conflict.ours_version_id || conflict.theirs_version_id) && (
-            <div className="mt-1 truncate text-[10px] uppercase text-[#62645e]">
+            <div className="mt-1 truncate text-[10px] uppercase text-muted">
               {conflict.ours_version_id ?? 'ours?'} / {conflict.theirs_version_id ?? 'theirs?'}
             </div>
           )}
           {conflict.conflict_path ? (
-            <div className="mt-1 truncate text-[10px] text-[#62645e]">
+            <div className="mt-1 truncate text-[10px] text-muted">
               Sibling {conflict.conflict_path}
             </div>
           ) : null}
-          <div className="mt-1 truncate text-[10px] text-[#62645e]">
+          <div className="mt-1 truncate text-[10px] text-muted">
             Discovered {conflict.discovered_at}
           </div>
         </li>
@@ -2767,13 +2803,13 @@ function GraphPanel({
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <div aria-label="Graph scope" className="inline-flex rounded-md border border-[#c8c3b7] bg-white p-0.5">
+        <div aria-label="Graph scope" className="inline-flex rounded-md border border-line-strong bg-raised p-0.5">
           {graphScopes.map((option) => (
             <button
               aria-pressed={scope === option.key}
               className={cn(
-                'h-7 rounded px-2 text-xs font-medium text-[#62645e] hover:bg-[#f1f0ea] focus:outline-none focus:ring-1 focus:ring-[#7aa69e]',
-                scope === option.key && 'bg-[#e3eee9] text-[#143f39]'
+                'h-7 rounded px-2 text-xs font-medium text-muted hover:bg-well focus:outline-none focus:ring-1 focus:ring-accent-ring',
+                scope === option.key && 'bg-accent-tint text-accent-ink'
               )}
               key={option.key}
               onClick={() => onScopeChange(option.key)}
@@ -2784,11 +2820,11 @@ function GraphPanel({
           ))}
         </div>
         {scope === 'focused' ? (
-          <label className="flex h-8 items-center gap-1 rounded-md border border-[#c8c3b7] bg-white px-2 text-xs text-[#62645e]">
+          <label className="flex h-8 items-center gap-1 rounded-md border border-line-strong bg-raised px-2 text-xs text-muted">
             Depth
             <select
               aria-label="Graph depth"
-              className="bg-transparent font-medium text-[#30342f] outline-none"
+              className="bg-transparent font-medium text-body outline-none"
               onChange={(event) => onDepthChange(Number(event.target.value) as GraphDepth)}
               value={depth}
             >
@@ -2800,31 +2836,31 @@ function GraphPanel({
             </select>
           </label>
         ) : null}
-        <label className="flex h-8 min-w-[132px] items-center gap-1 rounded-md border border-[#c8c3b7] bg-white px-2 text-xs text-[#62645e]">
+        <label className="flex h-8 min-w-[132px] items-center gap-1 rounded-md border border-line-strong bg-raised px-2 text-xs text-muted">
           Folder
           <input
             aria-label="Graph folder"
-            className="min-w-0 flex-1 bg-transparent font-medium text-[#30342f] outline-none placeholder:text-[#aaa69b]"
+            className="min-w-0 flex-1 bg-transparent font-medium text-body outline-none placeholder:text-faint"
             onChange={(event) => onFolderChange(event.target.value)}
             placeholder="path"
             value={folder}
           />
         </label>
-        <label className="flex h-8 min-w-[116px] items-center gap-1 rounded-md border border-[#c8c3b7] bg-white px-2 text-xs text-[#62645e]">
+        <label className="flex h-8 min-w-[116px] items-center gap-1 rounded-md border border-line-strong bg-raised px-2 text-xs text-muted">
           Tag
           <input
             aria-label="Graph tag"
-            className="min-w-0 flex-1 bg-transparent font-medium text-[#30342f] outline-none placeholder:text-[#aaa69b]"
+            className="min-w-0 flex-1 bg-transparent font-medium text-body outline-none placeholder:text-faint"
             onChange={(event) => onTagChange(event.target.value)}
             placeholder="tag"
             value={tag}
           />
         </label>
-        <label className="flex h-8 items-center gap-1 rounded-md border border-[#c8c3b7] bg-white px-2 text-xs text-[#62645e]">
+        <label className="flex h-8 items-center gap-1 rounded-md border border-line-strong bg-raised px-2 text-xs text-muted">
           Kind
           <select
             aria-label="Graph link kind"
-            className="bg-transparent font-medium text-[#30342f] outline-none"
+            className="bg-transparent font-medium text-body outline-none"
             onChange={(event) => onLinkKindChange(event.target.value as GraphLinkKindFilter)}
             value={linkKind}
           >
@@ -2835,11 +2871,11 @@ function GraphPanel({
             ))}
           </select>
         </label>
-        <label className="flex h-8 items-center gap-1 rounded-md border border-[#c8c3b7] bg-white px-2 text-xs text-[#62645e]">
+        <label className="flex h-8 items-center gap-1 rounded-md border border-line-strong bg-raised px-2 text-xs text-muted">
           State
           <select
             aria-label="Graph resolution"
-            className="bg-transparent font-medium text-[#30342f] outline-none"
+            className="bg-transparent font-medium text-body outline-none"
             onChange={(event) => onResolutionChange(event.target.value as GraphResolutionFilter)}
             value={resolution}
           >
@@ -2855,7 +2891,7 @@ function GraphPanel({
         <>
           <GraphCanvas graphData={graphData} onOpenDocument={onOpenDocument} />
           {graphData.truncated ? (
-            <p className="rounded border border-[#e3b57e] bg-[#fff4e5] px-2 py-1 text-xs text-[#8a4a22]">
+            <p className="rounded border border-warn-line bg-warn-tint px-2 py-1 text-xs text-warn-ink">
               Full graph is too large for the current limit; use focused mode or filters to narrow it.
             </p>
           ) : null}
@@ -2863,28 +2899,28 @@ function GraphPanel({
             <ul className="space-y-1 text-xs">
               {visibleEdges.map((edge) => (
                 <li
-                  className="flex items-center gap-2 rounded bg-white px-2 py-1 text-[#343832]"
+                  className="flex items-center gap-2 rounded bg-raised px-2 py-1 text-body"
                   key={edge.id}
                 >
                   <button
-                    className="min-w-0 flex-1 truncate text-left hover:text-[#256f64]"
+                    className="min-w-0 flex-1 truncate text-left hover:text-accent"
                     onClick={() => edge.target_path && onOpenDocument(edge.target_path)}
                     type="button"
                   >
                     {edge.source_path} -&gt; {edge.target_path ?? edge.target_text}
                   </button>
-                  <span className="shrink-0 rounded border border-[#d9d6cc] px-1.5 py-0.5 text-[10px] uppercase text-[#62645e]">
+                  <span className="shrink-0 rounded border border-line px-1.5 py-0.5 text-[10px] uppercase text-muted">
                     {linkKindLabel(edge.target_kind)}
                   </span>
                 </li>
               ))}
             </ul>
           ) : (
-            <p className="text-xs text-[#62645e]">No document edges</p>
+            <p className="text-xs text-muted">No document edges</p>
           )}
         </>
       ) : (
-        <p className="text-xs text-[#62645e]">None</p>
+        <p className="text-xs text-muted">None</p>
       )}
     </div>
   );
@@ -2957,7 +2993,7 @@ function GraphCanvas({
   return (
     <div
       aria-label="Graph view"
-      className="h-36 overflow-hidden rounded border border-[#d9d6cc] bg-white"
+      className="h-36 overflow-hidden rounded border border-line bg-raised"
       ref={containerRef}
     />
   );
@@ -2974,7 +3010,7 @@ function VersionList({
   onView: (version: string) => void;
   onRestore: (version: string) => void;
 }) {
-  if (!versions.length) return <p className="text-xs text-[#62645e]">None</p>;
+  if (!versions.length) return <p className="text-xs text-muted">None</p>;
   return (
     <ul className="space-y-1 text-xs">
       {versions.map((version) => {
@@ -2982,8 +3018,8 @@ function VersionList({
         return (
           <li
             className={cn(
-              'flex min-h-10 items-start gap-2 rounded bg-white px-2 py-1 text-[#343832]',
-              selectedVersionId === version.id && 'outline outline-1 outline-[#7aa69e]'
+              'flex min-h-10 items-start gap-2 rounded bg-raised px-2 py-1 text-body',
+              selectedVersionId === version.id && 'outline outline-1 outline-accent-ring'
             )}
             key={version.id}
           >
@@ -2991,14 +3027,14 @@ function VersionList({
               <span className="block truncate">
                 <span className="font-mono">{version.id.slice(0, 8)}</span> {version.created_at}
               </span>
-              <span className="block truncate text-[#62645e]">
+              <span className="block truncate text-muted">
                 {version.content_type} · {formatBytes(version.byte_size)} · {versionTransactionLabel(version)}
               </span>
-              {metadataSummary ? <span className="block truncate text-[#62645e]">{metadataSummary}</span> : null}
+              {metadataSummary ? <span className="block truncate text-muted">{metadataSummary}</span> : null}
             </span>
             <button
               aria-label={`View version ${version.id}`}
-              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-[#d9d6cc] text-[#30342f] hover:bg-[#f1f0ea]"
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-line text-body hover:bg-well"
               onClick={() => onView(version.id)}
               type="button"
             >
@@ -3006,7 +3042,7 @@ function VersionList({
             </button>
             <button
               aria-label={`Restore version ${version.id}`}
-              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-[#d9d6cc] text-[#30342f] hover:bg-[#f1f0ea]"
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-line text-body hover:bg-well"
               onClick={() => onRestore(version.id)}
               type="button"
             >
@@ -3065,8 +3101,8 @@ function VersionDetails({
   if (currentDiffOpen) {
     return (
       <div className="mt-3 space-y-2 text-xs">
-        <h3 className="font-semibold text-[#343832]">Current editor vs latest server</h3>
-        <pre className="max-h-52 overflow-auto rounded border border-[#d9d6cc] bg-[#fbfaf7] p-2 text-[#343832]">
+        <h3 className="font-semibold text-body">Current editor vs latest server</h3>
+        <pre className="max-h-52 overflow-auto rounded border border-line bg-surface p-2 text-body">
           {currentEditorDiff}
         </pre>
       </div>
@@ -3075,13 +3111,13 @@ function VersionDetails({
   if (!selectedVersionId) return null;
   return (
     <div className="mt-3 space-y-2 text-xs">
-      <h3 className="font-semibold text-[#343832]">Version {selectedVersionId.slice(0, 8)}</h3>
+      <h3 className="font-semibold text-body">Version {selectedVersionId.slice(0, 8)}</h3>
       {versions.length > 1 ? (
-        <label className="flex items-center gap-2 text-[#62645e]">
+        <label className="flex items-center gap-2 text-muted">
           <span className="shrink-0">Compare against</span>
           <select
             aria-label="Compare version against"
-            className="h-7 min-w-0 flex-1 rounded border border-[#d9d6cc] bg-white px-2 text-[#343832]"
+            className="h-7 min-w-0 flex-1 rounded border border-line bg-raised px-2 text-body"
             onChange={(event) => onCompareVersionChange(event.target.value || null)}
             value={compareVersionId ?? ''}
           >
@@ -3096,10 +3132,10 @@ function VersionDetails({
           </select>
         </label>
       ) : null}
-      <pre className="max-h-28 overflow-auto rounded border border-[#d9d6cc] bg-white p-2 text-[#343832]">
+      <pre className="max-h-28 overflow-auto rounded border border-line bg-raised p-2 text-body">
         {content?.content ?? 'Loading version...'}
       </pre>
-      <pre className="max-h-36 overflow-auto rounded border border-[#d9d6cc] bg-[#fbfaf7] p-2 text-[#343832]">
+      <pre className="max-h-36 overflow-auto rounded border border-line bg-surface p-2 text-body">
         {diff?.unified_diff ?? 'Loading diff...'}
       </pre>
     </div>
@@ -3125,7 +3161,7 @@ function LinkList({
     () => getDocument(activeLibrary, previewPath!)
   );
 
-  if (!links.length) return <p className="text-xs text-[#62645e]">None</p>;
+  if (!links.length) return <p className="text-xs text-muted">None</p>;
   return (
     <ul className="space-y-1 text-xs">
       {links.map((link) => {
@@ -3134,14 +3170,14 @@ function LinkList({
         const visiblePreviewDocument = destination && previewPath === destination ? previewDocument : undefined;
         return (
           <li
-            className="rounded bg-white px-2 py-1 text-[#343832]"
+            className="rounded bg-raised px-2 py-1 text-body"
             key={`${link.src_doc_id}:${link.start_offset}:${link.end_offset}:${link.target_kind}`}
           >
             <div className="flex min-h-6 items-center gap-2">
               <LinkKindIcon kind={link.target_kind} resolved={link.resolved} />
               {destination ? (
                 <button
-                  className="min-w-0 flex-1 truncate text-left hover:text-[#256f64]"
+                  className="min-w-0 flex-1 truncate text-left hover:text-accent"
                   onBlur={() => setPreviewPath(null)}
                   onClick={() => onOpenDocument(destination)}
                   onFocus={() => setPreviewPath(destination)}
@@ -3157,7 +3193,7 @@ function LinkList({
               {!destination && direction === 'outgoing' && onCreateDocument && canCreateDocumentFromLink(link) ? (
                 <button
                   aria-label={`Create document for ${label}`}
-                  className="inline-flex h-6 shrink-0 items-center gap-1 rounded border border-[#d9d6cc] px-1.5 text-[10px] uppercase text-[#30342f] hover:bg-[#f1f0ea]"
+                  className="inline-flex h-6 shrink-0 items-center gap-1 rounded border border-line px-1.5 text-[10px] uppercase text-body hover:bg-well"
                   type="button"
                   onClick={() => onCreateDocument(link)}
                 >
@@ -3165,11 +3201,11 @@ function LinkList({
                   Create
                 </button>
               ) : null}
-              <span className="shrink-0 rounded border border-[#d9d6cc] px-1.5 py-0.5 text-[10px] uppercase text-[#62645e]">
+              <span className="shrink-0 rounded border border-line px-1.5 py-0.5 text-[10px] uppercase text-muted">
                 {linkKindLabel(link.target_kind)}
               </span>
               {linkStatus(link) ? (
-                <span className="shrink-0 rounded bg-[#f5e5d4] px-1.5 py-0.5 text-[10px] uppercase text-[#8a4a22]">
+                <span className="shrink-0 rounded bg-warn-tint px-1.5 py-0.5 text-[10px] uppercase text-warn-ink">
                   {linkStatus(link)}
                 </span>
               ) : null}
@@ -3177,13 +3213,13 @@ function LinkList({
             {visiblePreviewDocument ? (
               <div
                 aria-label="Link preview"
-                className="mt-1 rounded border border-[#d9d6cc] bg-[#fbfaf7] p-2 text-[#62645e]"
+                className="mt-1 rounded border border-line bg-surface p-2 text-muted"
                 role="tooltip"
               >
-                <div className="truncate font-mono text-[10px] uppercase text-[#62645e]">
+                <div className="truncate font-mono text-[10px] uppercase text-muted">
                   {visiblePreviewDocument.path}
                 </div>
-                <p className="mt-1 line-clamp-3 text-[#343832]">
+                <p className="mt-1 line-clamp-3 text-body">
                   {linkPreviewText(visiblePreviewDocument.content)}
                 </p>
               </div>
@@ -3207,10 +3243,10 @@ function linkPreviewText(content: string) {
 }
 
 function LinkKindIcon({ kind, resolved }: { kind: string; resolved: boolean }) {
-  if (!resolved && kind !== 'tag') return <Unlink aria-hidden size={13} className="shrink-0 text-[#a45c23]" />;
-  if (kind === 'tag') return <Hash aria-hidden size={13} className="shrink-0 text-[#3d6760]" />;
-  if (kind === 'heading') return <Heading1 aria-hidden size={13} className="shrink-0 text-[#3d6760]" />;
-  return <Link2 aria-hidden size={13} className="shrink-0 text-[#3d6760]" />;
+  if (!resolved && kind !== 'tag') return <Unlink aria-hidden size={13} className="shrink-0 text-warn-ink" />;
+  if (kind === 'tag') return <Hash aria-hidden size={13} className="shrink-0 text-accent" />;
+  if (kind === 'heading') return <Heading1 aria-hidden size={13} className="shrink-0 text-accent" />;
+  return <Link2 aria-hidden size={13} className="shrink-0 text-accent" />;
 }
 
 function linkLabel(link: DocumentLink, direction: 'incoming' | 'outgoing') {
@@ -3256,18 +3292,30 @@ function linkStatus(link: DocumentLink) {
 
 function EmptyDocument() {
   return (
-    <div className="flex h-full items-center justify-center bg-[#fbfaf7] text-sm text-[#62645e]">
-      Select a document
+    <div className="flex h-full flex-col items-center justify-center gap-3 bg-surface px-6 text-center">
+      <div className="flex size-12 items-center justify-center rounded-xl bg-well text-faint">
+        <FileText size={22} />
+      </div>
+      <div>
+        <p className="text-sm font-medium text-body">No document open</p>
+        <p className="mt-1 text-sm text-muted">
+          Select a document from the tree, or press{' '}
+          <kbd className="rounded border border-line-strong bg-raised px-1.5 py-0.5 font-mono text-xs text-body">
+            ⌘K
+          </kbd>{' '}
+          to search.
+        </p>
+      </div>
     </div>
   );
 }
 
 function List({ items }: { items: string[] }) {
-  if (!items.length) return <p className="text-xs text-[#62645e]">None</p>;
+  if (!items.length) return <p className="text-xs text-muted">None</p>;
   return (
     <ul className="space-y-1 text-xs">
       {items.map((item) => (
-        <li className="truncate rounded bg-white px-2 py-1 text-[#343832]" key={item}>
+        <li className="truncate rounded bg-raised px-2 py-1 text-body" key={item}>
           {item}
         </li>
       ))}
@@ -3278,6 +3326,14 @@ function List({ items }: { items: string[] }) {
 function documentTitle(entry: DocumentListEntry) {
   const title = entry.metadata.title;
   return typeof title === 'string' && title.trim() ? title : entry.path.split('/').at(-1) ?? entry.path;
+}
+
+function documentDirname(path: string) {
+  return path.split('/').slice(0, -1).join('/');
+}
+
+function documentBasename(path: string) {
+  return path.split('/').at(-1) ?? path;
 }
 
 function metadataPropertyRows(metadata: Record<string, unknown>) {
@@ -3409,17 +3465,17 @@ function unifiedLineDiff(base: string, against: string, baseLabel = 'base', agai
   return lines.join('\n');
 }
 
-function statusText(state: SaveState, etag: string) {
+function statusText(state: SaveState) {
   const label: Record<SaveState, string> = {
-    clean: 'Clean',
-    dirty: 'Dirty',
+    clean: 'Saved',
+    dirty: 'Unsaved changes',
     drafted: 'Draft saved locally',
-    saving: 'Saving',
+    saving: 'Saving…',
     saved: 'Saved',
     stale: 'Stale',
     failed: 'Failed',
   };
-  return `${label[state]}${etag ? ` · ${etag}` : ''}`;
+  return label[state];
 }
 
 function hasUnsavedEditorState(state: SaveState) {
@@ -3638,13 +3694,6 @@ function isGraphCacheKey(key: unknown, library: string) {
   return Array.isArray(key) && key[0] === '/v1/graph' && key[1] === library;
 }
 
-function requiresRichEditingConfirmation(byteSize?: number) {
-  return typeof byteSize === 'number' && byteSize > RICH_EDIT_CONFIRM_BYTES;
-}
-
-function shouldReduceRichWidgets(byteSize?: number) {
-  return typeof byteSize === 'number' && byteSize > RICH_WIDGET_REDUCTION_BYTES;
-}
 
 function eventStatusText(state: EventState) {
   const label: Record<EventState, string> = {
@@ -3756,16 +3805,22 @@ function parseBrowserEvent(event: MessageEvent): BrowserEventPayload | null {
 }
 
 const primaryButton =
-  'inline-flex h-8 items-center gap-2 rounded-md bg-[#256f64] px-3 text-sm font-medium text-white hover:bg-[#1d5b52]';
+  'inline-flex h-8 items-center gap-1.5 rounded-md bg-accent py-2 pr-3 pl-2.5 text-sm font-medium text-on-accent shadow-sm transition-colors hover:bg-accent-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
 const secondaryButton =
-  'inline-flex h-8 items-center gap-2 rounded-md border border-[#c8c3b7] bg-white px-3 text-sm text-[#30342f] hover:bg-[#f1f0ea]';
+  'inline-flex h-8 items-center gap-1.5 rounded-md border border-line-strong bg-raised px-3 text-sm text-body transition-colors hover:bg-well';
+const ghostButton =
+  'inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-muted transition-colors hover:bg-well hover:text-body';
+const ghostIconButton =
+  'inline-flex h-8 w-8 items-center justify-center rounded-md text-muted transition-colors hover:bg-well hover:text-body';
 const iconButton =
-  'inline-flex h-8 w-8 items-center justify-center rounded-md border border-[#c8c3b7] bg-white text-[#30342f] hover:bg-[#f1f0ea]';
+  'inline-flex h-8 w-8 items-center justify-center rounded-md border border-line-strong bg-raised text-body transition-colors hover:bg-well';
 const commandItem =
-  'flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-[#30342f] outline-none aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-selected:bg-[#e3eee9]';
+  'flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-body outline-none aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-selected:bg-accent-tint';
 const treeMenuItem =
-  'block w-full px-3 py-1.5 text-left text-sm text-[#30342f] hover:bg-[#e3eee9] focus:bg-[#e3eee9] focus:outline-none';
-const rightHeading = 'mb-2 flex items-center gap-2 text-xs font-semibold uppercase text-[#62645e]';
+  'block w-full px-3 py-1.5 text-left text-sm text-body hover:bg-accent-tint focus:bg-accent-tint focus:outline-none';
+const menuItem =
+  'flex w-full cursor-pointer items-center gap-2 rounded px-2.5 py-1.5 text-left text-sm text-body outline-none select-none data-highlighted:bg-well';
+const rightHeading = 'mb-2.5 flex items-center gap-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-faint';
 const rightPaneTabs: Array<{ key: RightPaneTab; label: string }> = [
   { key: 'links', label: 'Links' },
   { key: 'backlinks', label: 'Backlinks' },

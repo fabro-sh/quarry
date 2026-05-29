@@ -1,12 +1,57 @@
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=JetBrains+Mono:wght@400..600&display=swap");
 @import "tailwindcss";
 
+/*
+ * Quarry design tokens — themed to match Fabro (fabro-sh/fabro):
+ * Geist + JetBrains Mono, a navy canvas with a teal/sky-blue primary, and
+ * mint/amber/coral accents. Colors are semantic (`bg-surface`, `text-muted`,
+ * `border-line`, …); dark mode is a single block of variable overrides.
+ */
+@theme {
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Cool "ice" neutrals (light) */
+  --color-canvas: #eef2f7;
+  --color-panel: #e3e9f1;
+  --color-surface: #ffffff;
+  --color-raised: #ffffff;
+  --color-well: #e7edf4;
+  --color-line: rgba(15, 23, 41, 0.08);
+  --color-line-strong: rgba(15, 23, 41, 0.14);
+
+  /* Navy ink */
+  --color-ink: #0f1729;
+  --color-body: #252c3d;
+  --color-muted: #4b5768;
+  --color-faint: #8493a6;
+
+  /* Teal / sky-blue primary */
+  --color-accent: #2a6c84;
+  --color-accent-strong: #225a6f;
+  --color-accent-ink: #226781;
+  --color-accent-tint: #d8ecf4;
+  --color-accent-line: #a3d0e3;
+  --color-accent-ring: #2a6c84;
+  --color-on-accent: #ffffff;
+
+  /* Amber — unresolved / warning */
+  --color-warn-ink: #9a5a1f;
+  --color-warn-tint: #fbeede;
+  --color-warn-line: #ecc89e;
+
+  /* Coral — destructive */
+  --color-danger: #c43d3d;
+}
+
 :root {
-  color: #1d211f;
-  background: #f5f4ef;
-  font-family:
-    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--color-body);
+  background: var(--color-canvas);
+  font-family: var(--font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
@@ -30,7 +75,7 @@ button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 [role="treeitem"]:focus-visible {
-  outline: 2px solid #256f64;
+  outline: 2px solid var(--color-accent-ring);
   outline-offset: 2px;
 }
 
@@ -38,90 +83,35 @@ textarea:focus-visible,
   min-height: 100vh;
 }
 
+/* Dark mode — Fabro navy. Redefine the tokens; everything follows. */
+:root[data-theme="dark"],
 [data-theme="dark"] {
   color-scheme: dark;
-}
 
-[data-theme="dark"].bg-\[\#f5f4ef\],
-[data-theme="dark"] .bg-\[\#f5f4ef\] {
-  background-color: #111412;
-}
+  --color-canvas: #0f1729;
+  --color-panel: #252c3d;
+  --color-surface: #0f1729;
+  --color-raised: #252c3d;
+  --color-well: #1a2133;
+  --color-line: rgba(255, 255, 255, 0.07);
+  --color-line-strong: rgba(255, 255, 255, 0.13);
 
-[data-theme="dark"] .bg-\[\#eeece4\],
-[data-theme="dark"] .bg-\[\#f8f7f2\],
-[data-theme="dark"] .bg-\[\#fbfaf7\] {
-  background-color: #171b18;
-}
+  --color-ink: #ffffff;
+  --color-body: #e8edf3;
+  --color-muted: #a8b5c5;
+  --color-faint: #8d99ab;
 
-[data-theme="dark"] .bg-white {
-  background-color: #1f241f;
-}
+  --color-accent: #67b2d7;
+  --color-accent-strong: #82c5e6;
+  --color-accent-ink: #b5ddef;
+  --color-accent-tint: #1d3045;
+  --color-accent-line: #357f9e;
+  --color-accent-ring: #67b2d7;
+  --color-on-accent: #0f1729;
 
-[data-theme="dark"] .bg-\[\#e3eee9\],
-[data-theme="dark"] .bg-\[\#dcebe6\] {
-  background-color: #20362f;
-}
+  --color-warn-ink: #f0a45b;
+  --color-warn-tint: #33291c;
+  --color-warn-line: #6b4f2f;
 
-[data-theme="dark"] .bg-\[\#f1f0ea\],
-[data-theme="dark"] .bg-\[\#ece9df\],
-[data-theme="dark"] .bg-\[\#e9e6dc\] {
-  background-color: #242a25;
-}
-
-[data-theme="dark"] .bg-\[\#f5e5d4\],
-[data-theme="dark"] .bg-\[\#fff6ed\] {
-  background-color: #37291f;
-}
-
-[data-theme="dark"] .bg-\[\#eef7f4\] {
-  background-color: #1e332d;
-}
-
-[data-theme="dark"] .border-\[\#d2cec2\],
-[data-theme="dark"] .border-\[\#d9d6cc\],
-[data-theme="dark"] .border-\[\#c8c3b7\],
-[data-theme="dark"] .border-\[\#b8b3a7\],
-[data-theme="dark"] .border-\[\#e2dfd4\],
-[data-theme="dark"] .border-\[\#b8d6cd\],
-[data-theme="dark"] .border-\[\#e5c4a7\] {
-  border-color: #343a34;
-}
-
-[data-theme="dark"] .text-\[\#1d211f\],
-[data-theme="dark"] .text-\[\#1e211f\],
-[data-theme="dark"] .text-\[\#30342f\],
-[data-theme="dark"] .text-\[\#343832\],
-[data-theme="dark"] .text-\[\#123f38\],
-[data-theme="dark"] .text-\[\#143f39\] {
-  color: #e7ece8;
-}
-
-[data-theme="dark"] .text-\[\#62645e\],
-[data-theme="dark"] .text-\[\#747168\],
-[data-theme="dark"] .text-\[\#8a877d\] {
-  color: #aeb7ae;
-}
-
-[data-theme="dark"] .text-\[\#256f64\],
-[data-theme="dark"] .text-\[\#3d6760\] {
-  color: #7ac7b7;
-}
-
-[data-theme="dark"] .text-\[\#a45c23\],
-[data-theme="dark"] .text-\[\#8a4a22\] {
-  color: #e1a36c;
-}
-
-[data-theme="dark"] .hover\:bg-\[\#f1f0ea\]:hover,
-[data-theme="dark"] .hover\:bg-\[\#ece9df\]:hover,
-[data-theme="dark"] .hover\:bg-\[\#e9e6dc\]:hover {
-  background-color: #2b332d;
-}
-
-[data-theme="dark"] .hover\:text-\[\#256f64\]:hover {
-  color: #8fd8ca;
-}
-
-[data-theme="dark"] .outline-\[\#7aa69e\] {
-  outline-color: #77beb0;
+  --color-danger: #e86b6b;
 }
