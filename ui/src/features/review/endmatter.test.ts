@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { splitEndmatter } from './endmatter';
+import { serializeReviewMeta, splitEndmatter } from './endmatter';
+import { emptyReviewMeta } from './rfm-types';
 
 describe('splitEndmatter', () => {
   it('returns null meta when there is no trailing endmatter', () => {
@@ -27,5 +28,44 @@ describe('splitEndmatter', () => {
     const result = splitEndmatter(md);
     expect(result.body).toBe('Intro.\n\n---\n\nMore prose with a divider above.');
     expect(result.meta?.suggestions.s1).toEqual({ by: 'AI', at: '2026-04-28T12:00:00.000Z' });
+  });
+});
+
+describe('serializeReviewMeta', () => {
+  it('returns an empty string when there is no review data', () => {
+    expect(serializeReviewMeta(emptyReviewMeta())).toBe('');
+  });
+
+  it('emits comments and suggestions with deterministic, sorted keys', () => {
+    const yaml = serializeReviewMeta({
+      comments: {
+        c2: { body: 'reply', by: 'AI', at: '2026-04-28T12:05:00.000Z', re: 'c1' },
+        c1: { by: 'user', at: '2026-04-28T12:00:00.000Z' },
+      },
+      suggestions: { s1: { by: 'AI', at: '2026-04-28T12:10:00.000Z' } },
+    });
+    expect(yaml).toBe(
+      [
+        'comments:',
+        '  c1:',
+        '    at: 2026-04-28T12:00:00.000Z',
+        '    by: user',
+        '  c2:',
+        '    at: 2026-04-28T12:05:00.000Z',
+        '    body: reply',
+        '    by: AI',
+        '    re: c1',
+        'suggestions:',
+        '  s1:',
+        '    at: 2026-04-28T12:10:00.000Z',
+        '    by: AI',
+        '',
+      ].join('\n')
+    );
+  });
+
+  it('is idempotent: serialize is stable across repeated calls', () => {
+    const meta = { comments: { c1: { by: 'user', at: '2026-04-28T12:00:00.000Z' } }, suggestions: {} };
+    expect(serializeReviewMeta(meta)).toBe(serializeReviewMeta(meta));
   });
 });

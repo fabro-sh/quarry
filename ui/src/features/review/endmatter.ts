@@ -1,5 +1,5 @@
-import { parse as parseYaml } from 'yaml';
-import { emptyReviewMeta, type ReviewMeta, type ReviewMetaEntry } from './rfm-types';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { emptyReviewMeta, isEmptyReviewMeta, type ReviewMeta, type ReviewMetaEntry } from './rfm-types';
 
 const ENDMATTER_DELIMITER = /\n---[ \t]*\r?\n/g;
 
@@ -69,4 +69,17 @@ function toEntryMap(value: unknown): Record<string, ReviewMetaEntry> {
     out[id] = next;
   }
   return out;
+}
+
+/**
+ * Serialize review metadata to deterministic YAML (sorted keys), or "" when
+ * empty. Empty `comments`/`suggestions` maps are omitted. Deterministic output
+ * is required so re-saving an unchanged document does not churn the file.
+ */
+export function serializeReviewMeta(meta: ReviewMeta): string {
+  if (isEmptyReviewMeta(meta)) return '';
+  const root: Record<string, unknown> = {};
+  if (Object.keys(meta.comments).length > 0) root.comments = meta.comments;
+  if (Object.keys(meta.suggestions).length > 0) root.suggestions = meta.suggestions;
+  return stringifyYaml(root, { sortMapEntries: true });
 }
