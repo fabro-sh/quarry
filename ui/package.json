@@ -16,6 +16,7 @@
     "@platejs/autoformat": "52.0.11",
     "@platejs/basic-nodes": "52.0.11",
     "@platejs/code-block": "52.0.11",
+    "@platejs/dnd": "52.0.11",
     "@platejs/floating": "52.0.11",
     "@platejs/link": "52.0.11",
     "@platejs/list": "52.0.11",

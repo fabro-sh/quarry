@@ -15,6 +15,9 @@ import {
 } from '@platejs/basic-nodes/react';
 import { CodeBlockPlugin, CodeLinePlugin, CodeSyntaxPlugin } from '@platejs/code-block/react';
 import { insertEmptyCodeBlock, toggleCodeBlock } from '@platejs/code-block';
+import { DndPlugin, useDraggable, useDropLine } from '@platejs/dnd';
+import { DndProvider } from 'react-dnd';
+import { HTML5Backend } from 'react-dnd-html5-backend';
 import { LinkPlugin } from '@platejs/link/react';
 import {
   ListPlugin,
@@ -38,6 +41,7 @@ import {
   Heading1,
   Heading2,
   Heading3,
+  GripVertical,
   Heading4,
   Heading5,
   Heading6,
@@ -152,6 +156,22 @@ const BlockList: RenderNodeWrapper = (props) => {
   return (childProps) => <ListItemElement {...childProps} />;
 };
 
+// WebKit/Safari won't run a native HTML5 drag for a draggable element inside a
+// contentEditable region (it fires dragstart then immediately dragend, with no
+// dragover/drop), so block dragging can't work there. Hide the handle rather
+// than show a dead affordance. `navigator.vendor` is "Apple Computer, Inc." in
+// Safari/WebKit and "Google Inc."/"" in Chrome/Firefox.
+const supportsBlockDrag =
+  typeof navigator !== 'undefined' && !/apple/i.test(navigator.vendor);
+
+// Notion-style drag handle for reordering top-level blocks (Chrome/Firefox).
+const BlockDraggable: RenderNodeWrapper = (props) => {
+  if (!supportsBlockDrag) return undefined;
+  if (props.editor.dom.readOnly) return undefined;
+  if (props.path.length !== 1) return undefined;
+  return (childProps) => <DraggableBlock {...childProps} />;
+};
+
 const plateMarkdownPlugins = [
   ParagraphPlugin,
   H1Plugin,
@@ -171,6 +191,9 @@ const plateMarkdownPlugins = [
   UnderlinePlugin,
   ListPlugin.configure({ render: { belowNodes: BlockList } }),
   LinkPlugin,
+  DndPlugin.configure({
+    render: { aboveNodes: BlockDraggable, aboveSlate: EditorDndProvider },
+  }),
   AutoformatPlugin.configure({
     options: {
       enableUndoOnDelete: true,
@@ -516,6 +539,78 @@ function TodoListItem(props: PlateElementProps) {
         {props.children}
       </li>
     </ul>
+  );
+}
+
+// Provides the editor's react-dnd context. react-dnd v14 keeps a single global
+// manager/backend, so this coexists with the document tree's own DndProvider
+// (react-arborist) without a second HTML5 backend.
+function EditorDndProvider({ children }: { children?: ReactNode }) {
+  return <DndProvider backend={HTML5Backend}>{children}</DndProvider>;
+}
+
+const HANDLE_SIZE = 24;
+
+function DraggableBlock(props: PlateElementProps) {
+  const { children, element } = props;
+  const editor = useEditorRef();
+  // Disable the drag preview (transparent image) — otherwise Chrome renders its
+  // default globe icon for the empty preview element. The dragged block fades
+  // (opacity-50) and the drop-line shows the target, which is feedback enough.
+  const { isDragging, nodeRef, handleRef } = useDraggable({ element, preview: { disable: true } });
+  // Center the handle on the block's first line. Blocks (esp. headings) have
+  // their own margin-top and line-height, so measure the rendered element rather
+  // than assuming a fixed offset. The handle lives in a small left padding
+  // *inside* the drop target (nodeRef) — out in the centered-layout margin it
+  // would never sit over a drop target, and the drop would never fire.
+  const [handleTop, setHandleTop] = useState(0);
+  const alignHandle = () => {
+    const dom = editor.api.toDOMNode(element);
+    if (!dom) return;
+    const style = getComputedStyle(dom);
+    const marginTop = Number.parseFloat(style.marginTop) || 0;
+    const lineHeight = Number.parseFloat(style.lineHeight) || 0;
+    setHandleTop(marginTop + Math.max(0, (lineHeight - HANDLE_SIZE) / 2));
+  };
+  return (
+    <div
+      className={cn('group relative flow-root pl-7', isDragging && 'opacity-50')}
+      onMouseEnter={alignHandle}
+      ref={nodeRef}
+    >
+      <div
+        className="absolute left-0 flex w-7 items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
+        contentEditable={false}
+        style={{ height: HANDLE_SIZE, top: handleTop }}
+      >
+        <button
+          aria-label="Drag to move block"
+          className="flex size-6 cursor-grab items-center justify-center rounded text-faint transition-colors hover:bg-well hover:text-muted active:cursor-grabbing"
+          data-plate-prevent-deselect
+          ref={handleRef}
+          title="Drag to move"
+          type="button"
+        >
+          <GripVertical size={15} />
+        </button>
+      </div>
+      {children}
+      <BlockDropLine />
+    </div>
+  );
+}
+
+function BlockDropLine() {
+  const { dropLine } = useDropLine();
+  if (!dropLine) return null;
+  return (
+    <div
+      className={cn(
+        'absolute inset-x-0 z-10 h-0.5 bg-accent',
+        dropLine === 'top' ? '-top-px' : '-bottom-px'
+      )}
+      contentEditable={false}
+    />
   );
 }
 

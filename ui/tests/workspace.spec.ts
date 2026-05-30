@@ -772,6 +772,103 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(editor).toContainText('Done thing');
   });
 
+  test('shows a drag handle for editor blocks', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: '# Title\n\nFirst paragraph.\n\nSecond paragraph.',
+          id: 'doc-drag',
+          metadata: { title: 'Draggy' },
+          path: 'draggy.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Draggy/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('First paragraph');
+
+    const para = page.getByText('First paragraph.', { exact: false });
+    await para.hover();
+    const handle = editor.getByRole('button', { name: 'Drag to move block' }).first();
+    await expect(handle).toBeVisible();
+
+    // The document tree's own drag-and-drop still works alongside the editor's
+    // (shared react-dnd manager — no second HTML5 backend crash).
+    await expect(page.getByRole('treeitem', { name: /Draggy/ })).toBeVisible();
+  });
+
+  test('reorders blocks by dragging the block handle', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: 'Alpha block\n\nBravo block\n\nCharlie block',
+          id: 'doc-reorder',
+          metadata: { title: 'Reorder' },
+          path: 'reorder.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Reorder/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Charlie block');
+
+    const blockOrder = () => editor.evaluate((el) => (el as HTMLElement).innerText.replace(/\n+/g, '|'));
+    expect(await blockOrder()).toBe('Alpha block|Bravo block|Charlie block');
+
+    await page.getByText('Charlie block', { exact: false }).hover();
+    const charlieHandle = editor.getByRole('button', { name: 'Drag to move block' }).last();
+    await charlieHandle.dragTo(page.getByText('Alpha block', { exact: false }));
+
+    await expect.poll(blockOrder).toBe('Charlie block|Alpha block|Bravo block');
+  });
+
+  // Regression: with the editor's centered layout, the handle must sit inside
+  // the block's drop target. If it's out in the gutter, dragging straight up/down
+  // (cursor staying at the handle's x) never hovers a drop target and the drop
+  // never fires. This drags vertically at the handle's x to catch that.
+  test('reorders when dragging straight down the handle gutter', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: 'Alpha block\n\nBravo block\n\nCharlie block',
+          id: 'doc-gutter',
+          metadata: { title: 'Gutter' },
+          path: 'gutter.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Gutter/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Charlie block');
+
+    const firstBox = await editor.locator('[data-block-id]').first().boundingBox();
+    await page.getByText('Charlie block', { exact: false }).hover();
+    const handleBox = await editor.getByRole('button', { name: 'Drag to move block' }).last().boundingBox();
+    if (!handleBox || !firstBox) throw new Error('missing bounding boxes');
+
+    const x = handleBox.x + handleBox.width / 2;
+    await page.mouse.move(x, handleBox.y + handleBox.height / 2);
+    await page.mouse.down();
+    for (let step = 1; step <= 10; step += 1) {
+      await page.mouse.move(x, handleBox.y + ((firstBox.y - handleBox.y) * step) / 10, { steps: 2 });
+    }
+    await page.mouse.move(x, firstBox.y + 3);
+    await page.mouse.up();
+
+    await expect
+      .poll(() => editor.evaluate((el) => (el as HTMLElement).innerText.replace(/\n+/g, '|')))
+      .toBe('Charlie block|Alpha block|Bravo block');
+  });
+
   test('applies underline from the floating toolbar', async ({ page }) => {
     await installMockApi(page, {
       documents: [
