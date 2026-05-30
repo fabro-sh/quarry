@@ -6,7 +6,7 @@
 
 **Architecture:** One chokepoint module, `rfm-codec.ts`, exposes `markdownToReview(md) → {value, meta}` and `reviewToMarkdown(value, meta) → md`. It composes small, single-purpose helpers: endmatter split/serialize, a Plate→CriticMarkup serialize ruleset, a substitution-collapse string pass, and a CriticMarkup→Plate value transform. No editor, store, UI, or backend code — this layer is testable in isolation.
 
-**Tech Stack:** TypeScript (ESM), Vitest, `platejs` + `@platejs/markdown` (already present), `remark-gfm` (present), `yaml` + `nanoid` (new). Tests run from `ui/`.
+**Tech Stack:** TypeScript (ESM), Vitest, `platejs` + `@platejs/markdown` (already present), `remark-gfm` (present), `yaml` + `nanoid` (new). Tests run from `ui/`. **The `ui/` package uses `bun`, not pnpm** (only `ui/bun.lock` exists; pnpm is not installed) — use `bun add` / `bunx vitest` / `bun run typecheck` and stage `ui/bun.lock`.
 
 **Reference design:** `docs/superpowers/specs/2026-05-30-review-markup-layer-design.md`.
 
@@ -42,7 +42,7 @@ All review IDs are **nanoid** (collision-resistant, collab-agnostic). The Plate 
 `yaml` and `nanoid` are long-established packages (well past the 24h-age policy); no postinstall scripts to review. Run from `ui/`:
 
 ```bash
-cd ui && pnpm add yaml nanoid
+cd ui && bun add yaml nanoid
 ```
 
 Expected: `package.json` gains `"yaml"` and `"nanoid"` under `dependencies`; lockfile updates.
@@ -69,7 +69,7 @@ describe('rfm-types', () => {
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `cd ui && pnpm exec vitest run src/features/review/rfm-types.test.ts`
+Run: `cd ui && bunx vitest run src/features/review/rfm-types.test.ts`
 Expected: FAIL — `Failed to resolve import './rfm-types'`.
 
 - [ ] **Step 4: Write minimal implementation**
@@ -110,13 +110,13 @@ export function isEmptyReviewMeta(meta: ReviewMeta): boolean {
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cd ui && pnpm exec vitest run src/features/review/rfm-types.test.ts`
+Run: `cd ui && bunx vitest run src/features/review/rfm-types.test.ts`
 Expected: PASS (2 tests).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add ui/package.json ui/pnpm-lock.yaml ui/src/features/review/rfm-types.ts ui/src/features/review/rfm-types.test.ts
+git add ui/package.json ui/bun.lock ui/src/features/review/rfm-types.ts ui/src/features/review/rfm-types.test.ts
 git commit -m "feat(review): add RFM review-metadata types and deps
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
@@ -169,7 +169,7 @@ describe('splitEndmatter', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd ui && pnpm exec vitest run src/features/review/endmatter.test.ts`
+Run: `cd ui && bunx vitest run src/features/review/endmatter.test.ts`
 Expected: FAIL — `Failed to resolve import './endmatter'`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -252,7 +252,7 @@ function toEntryMap(value: unknown): Record<string, ReviewMetaEntry> {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd ui && pnpm exec vitest run src/features/review/endmatter.test.ts`
+Run: `cd ui && bunx vitest run src/features/review/endmatter.test.ts`
 Expected: PASS (4 tests).
 
 - [ ] **Step 5: Commit**
@@ -322,7 +322,7 @@ describe('serializeReviewMeta', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd ui && pnpm exec vitest run src/features/review/endmatter.test.ts -t serializeReviewMeta`
+Run: `cd ui && bunx vitest run src/features/review/endmatter.test.ts -t serializeReviewMeta`
 Expected: FAIL — `serializeReviewMeta is not a function`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -353,7 +353,7 @@ export function serializeReviewMeta(meta: ReviewMeta): string {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd ui && pnpm exec vitest run src/features/review/endmatter.test.ts`
+Run: `cd ui && bunx vitest run src/features/review/endmatter.test.ts`
 Expected: PASS (all endmatter tests). If the `yaml` library quotes the bare `by`/`re` values differently than the fixture expects, adjust the fixture to match the library's canonical output — the contract that matters is **determinism and round-trip**, not exact quoting. (Re-run after adjusting.)
 
 - [ ] **Step 5: Commit**
@@ -413,7 +413,7 @@ describe('serializeReviewBody', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd ui && pnpm exec vitest run src/features/review/review-md-rules.test.ts`
+Run: `cd ui && bunx vitest run src/features/review/review-md-rules.test.ts`
 Expected: FAIL — `Failed to resolve import './review-md-rules'`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -513,7 +513,7 @@ export function serializeReviewBody(value: Descendant[], meta: ReviewMeta): stri
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd ui && pnpm exec vitest run src/features/review/review-md-rules.test.ts`
+Run: `cd ui && bunx vitest run src/features/review/review-md-rules.test.ts`
 Expected: PASS (4 tests). This is a high-integration task: if `@platejs/markdown` wraps the marked run differently (e.g. extra spaces or escaping), adjust the rule's emitted `value` and/or the trailing-newline trim so the output matches the fixtures, keeping the CriticMarkup shape exact.
 
 - [ ] **Step 5: Commit**
@@ -570,7 +570,7 @@ describe('collapseSubstitutions', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd ui && pnpm exec vitest run src/features/review/collapse-substitutions.test.ts`
+Run: `cd ui && bunx vitest run src/features/review/collapse-substitutions.test.ts`
 Expected: FAIL — `Failed to resolve import './collapse-substitutions'`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -594,7 +594,7 @@ export function collapseSubstitutions(markdown: string): string {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd ui && pnpm exec vitest run src/features/review/collapse-substitutions.test.ts`
+Run: `cd ui && bunx vitest run src/features/review/collapse-substitutions.test.ts`
 Expected: PASS (4 tests).
 
 - [ ] **Step 5: Commit**
@@ -682,7 +682,7 @@ describe('applyCriticMarkup', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd ui && pnpm exec vitest run src/features/review/apply-critic-markup.test.ts`
+Run: `cd ui && bunx vitest run src/features/review/apply-critic-markup.test.ts`
 Expected: FAIL — `Failed to resolve import './apply-critic-markup'`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -797,7 +797,7 @@ export function applyCriticMarkup(value: Node[], meta: ReviewMeta): { value: Nod
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd ui && pnpm exec vitest run src/features/review/apply-critic-markup.test.ts`
+Run: `cd ui && bunx vitest run src/features/review/apply-critic-markup.test.ts`
 Expected: PASS (7 tests). This is the highest-risk task. If a fixture's leaf-shape expectation is off (e.g. property ordering, the `createdAt` placeholder), align the implementation to the **contract the test asserts** (mark keys + text + type), not the other way around. Adjust `createdAt` handling if downstream tasks need real timestamps.
 
 - [ ] **Step 5: Commit**
@@ -890,7 +890,7 @@ describe('rfm-codec round-trip', () => {
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `cd ui && pnpm exec vitest run src/features/review/rfm-codec.test.ts`
+Run: `cd ui && bunx vitest run src/features/review/rfm-codec.test.ts`
 Expected: FAIL — `Failed to resolve import './rfm-codec'`.
 
 - [ ] **Step 4: Write minimal implementation**
@@ -975,12 +975,12 @@ export function reviewToMarkdown(value: Descendant[], meta: ReviewMeta): string 
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cd ui && pnpm exec vitest run src/features/review/rfm-codec.test.ts`
+Run: `cd ui && bunx vitest run src/features/review/rfm-codec.test.ts`
 Expected: PASS (4 tests). If idempotence fails, the usual causes are (a) non-deterministic YAML key order — confirm `sortMapEntries`, and (b) trailing-whitespace differences between the endmatter and no-endmatter branches — normalize the body's trailing newline in `reviewToMarkdown`. Fix and re-run.
 
 - [ ] **Step 6: Run the full review suite + typecheck**
 
-Run: `cd ui && pnpm exec vitest run src/features/review && pnpm typecheck`
+Run: `cd ui && bunx vitest run src/features/review && bun run typecheck`
 Expected: all review tests PASS; `tsc -b` reports no errors.
 
 - [ ] **Step 7: Commit**
@@ -1069,7 +1069,7 @@ describe('RFM conformance', () => {
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `cd ui && pnpm exec vitest run src/features/review/rfm-conformance.test.ts`
+Run: `cd ui && bunx vitest run src/features/review/rfm-conformance.test.ts`
 Expected: FAIL — module/fixtures not found, or assertions fail.
 
 - [ ] **Step 4: Make it pass**
@@ -1078,12 +1078,12 @@ These exercise existing code paths. Expected real fixes if they fail:
 - **Code-literal**: confirm `applyCriticMarkup`'s `inCode` propagation covers fenced blocks (`code_block`/`code_line` types) and the `code` leaf mark. If `@platejs/markdown` represents inline code with a different leaf key, add it to the skip check in `apply-critic-markup.ts`.
 - **Unclosed marker**: the `TOKEN` regex requires a closing delimiter, so an unclosed `{++` simply never matches and stays literal — verify, and add the leaf to the skip path only if needed.
 
-Re-run: `cd ui && pnpm exec vitest run src/features/review/rfm-conformance.test.ts`
+Re-run: `cd ui && bunx vitest run src/features/review/rfm-conformance.test.ts`
 Expected: PASS (3 tests).
 
 - [ ] **Step 5: Full suite + typecheck**
 
-Run: `cd ui && pnpm exec vitest run src/features/review && pnpm typecheck`
+Run: `cd ui && bunx vitest run src/features/review && bun run typecheck`
 Expected: all PASS; no type errors.
 
 - [ ] **Step 6: Commit**
