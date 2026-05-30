@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { markdownToReview, reviewToMarkdown } from './rfm-codec';
+import { emptyReviewMeta } from './rfm-types';
 
+// Hoist import.meta.url: Vitest's transform mishandles it as an inline new URL() second arg, breaking fixture path resolution.
 const here = import.meta.url;
 const fixture = (name: string) =>
   readFileSync(fileURLToPath(new URL(`./__fixtures__/${name}`, here)), 'utf-8');
@@ -18,7 +20,7 @@ describe('RFM conformance', () => {
 
   it('treats CriticMarkup inside inline code and fenced blocks as literal text', () => {
     const { value } = markdownToReview(fixture('code-literal.md'));
-    const out = reviewToMarkdown(value, { comments: {}, suggestions: {} });
+    const out = reviewToMarkdown(value, emptyReviewMeta());
     expect(out).toContain('`{==not a comment==}`');
     expect(out).toContain('{++not a suggestion++}');
   });

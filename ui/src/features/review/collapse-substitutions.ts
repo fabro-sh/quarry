@@ -1,7 +1,7 @@
 import { nanoid } from 'nanoid';
 
 // Matches "{--old--}{#id}{++new++}{#id}" or the insert-first variant, requiring
-// the same id on both halves (backreference \2 / \5). Inner text excludes the
+// the same id on both halves (backreference \2). Inner text excludes the
 // relevant close delimiter so spans stay tight.
 const DEL_THEN_INS = /\{--((?:(?!--\}).)*)--\}\{#([A-Za-z0-9_-]+)\}\{\+\+((?:(?!\+\+\}).)*)\+\+\}\{#\2\}/g;
 const INS_THEN_DEL = /\{\+\+((?:(?!\+\+\}).)*)\+\+\}\{#([A-Za-z0-9_-]+)\}\{--((?:(?!--\}).)*)--\}\{#\2\}/g;

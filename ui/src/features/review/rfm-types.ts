@@ -1,5 +1,3 @@
-// ui/src/features/review/rfm-types.ts
-
 /** Metadata for one review item, stored in YAML endmatter, keyed by id. */
 export interface ReviewMetaEntry {
   /** Free-form author label: "user", "AI", or an agent name. */

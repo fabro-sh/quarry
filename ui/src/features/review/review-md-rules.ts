@@ -1,28 +1,9 @@
-import {
-  BaseBlockquotePlugin,
-  BaseBoldPlugin,
-  BaseCodePlugin,
-  BaseH1Plugin,
-  BaseH2Plugin,
-  BaseH3Plugin,
-  BaseH4Plugin,
-  BaseH5Plugin,
-  BaseH6Plugin,
-  BaseHighlightPlugin,
-  BaseHorizontalRulePlugin,
-  BaseItalicPlugin,
-  BaseStrikethroughPlugin,
-  BaseSubscriptPlugin,
-  BaseSuperscriptPlugin,
-  BaseUnderlinePlugin,
-} from '@platejs/basic-nodes';
-import { BaseCodeBlockPlugin, BaseCodeLinePlugin, BaseCodeSyntaxPlugin } from '@platejs/code-block';
-import { BaseLinkPlugin } from '@platejs/link';
-import { BaseListPlugin } from '@platejs/list';
+import { BaseHighlightPlugin } from '@platejs/basic-nodes';
 import { MarkdownPlugin } from '@platejs/markdown';
-import { BaseParagraphPlugin, createSlateEditor, type Descendant } from 'platejs';
+import { createSlateEditor, type Descendant } from 'platejs';
 import remarkGfm from 'remark-gfm';
 
+import { baseMarkdownPlugins } from '../editor/markdown-codec';
 import { remarkInlineMarks } from '../editor/remark-inline-marks';
 import type { ReviewMeta } from './rfm-types';
 
@@ -85,28 +66,8 @@ export function reviewMdRules(meta: ReviewMeta) {
 function serializerEditor(meta: ReviewMeta) {
   return createSlateEditor({
     plugins: [
-      BaseParagraphPlugin,
-      BaseH1Plugin,
-      BaseH2Plugin,
-      BaseH3Plugin,
-      BaseH4Plugin,
-      BaseH5Plugin,
-      BaseH6Plugin,
-      BaseBlockquotePlugin,
-      BaseHorizontalRulePlugin,
-      BaseCodeBlockPlugin,
-      BaseCodeLinePlugin,
-      BaseCodeSyntaxPlugin,
-      BaseBoldPlugin,
-      BaseItalicPlugin,
-      BaseCodePlugin,
-      BaseStrikethroughPlugin,
-      BaseUnderlinePlugin,
-      BaseSubscriptPlugin,
-      BaseSuperscriptPlugin,
+      ...baseMarkdownPlugins,
       BaseHighlightPlugin,
-      BaseListPlugin,
-      BaseLinkPlugin,
       MarkdownPlugin.configure({
         options: { remarkPlugins: [remarkGfm, remarkInlineMarks], rules: reviewMdRules(meta) },
       }),
