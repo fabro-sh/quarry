@@ -895,6 +895,37 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(editor.locator('u, [style*="underline"]').first()).toBeVisible();
   });
 
+  test('applies superscript and subscript from the floating toolbar', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: 'Format me',
+          id: 'doc-sup',
+          metadata: { title: 'SupSub' },
+          path: 'supsub.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /SupSub/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Format me');
+
+    await page.getByText('Format me', { exact: false }).click({ clickCount: 3 });
+    const superscript = page.getByRole('button', { name: 'Superscript' });
+    await superscript.click();
+    await expect(superscript).toHaveAttribute('aria-pressed', 'true');
+
+    // Toggling superscript off then subscript on (they're mutually exclusive marks).
+    await superscript.click();
+    const subscript = page.getByRole('button', { name: 'Subscript' });
+    await subscript.click();
+    await expect(subscript).toHaveAttribute('aria-pressed', 'true');
+    await expect(editor).toContainText('Format me');
+  });
+
   test('turns a paragraph into a to-do from the floating toolbar', async ({ page }) => {
     await installMockApi(page, {
       documents: [

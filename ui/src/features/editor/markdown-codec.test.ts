@@ -45,6 +45,13 @@ describe('markdown codec', () => {
     expect(plateValueToMarkdown(value)).toContain('<u>under</u>');
   });
 
+  it('round-trips subscript and superscript as <sub>/<sup> HTML', () => {
+    const value = markdownToPlateValue('H<sub>2</sub>O and x<sup>2</sup>\n');
+    const serialized = plateValueToMarkdown(value);
+    expect(serialized).toContain('<sub>2</sub>');
+    expect(serialized).toContain('<sup>2</sup>');
+  });
+
   it('leaves stray angle brackets and braces untouched', () => {
     const markdown = 'if a < b and {x} then y\n';
     expect(plateValueToMarkdown(markdownToPlateValue(markdown))).toBe(markdown);

@@ -11,6 +11,8 @@ import {
   H6Plugin,
   ItalicPlugin,
   StrikethroughPlugin,
+  SubscriptPlugin,
+  SuperscriptPlugin,
   UnderlinePlugin,
 } from '@platejs/basic-nodes/react';
 import { CodeBlockPlugin, CodeLinePlugin, CodeSyntaxPlugin } from '@platejs/code-block/react';
@@ -54,6 +56,8 @@ import {
   Quote,
   SquareCode,
   Strikethrough,
+  Subscript,
+  Superscript,
   Trash2,
   Type,
   Underline,
@@ -82,7 +86,7 @@ import {
 
 import { cn } from '../../lib/utils';
 import { markdownToPlateValue, plateValueToMarkdown, type PlateValue } from './markdown-codec';
-import { remarkUnderline } from './remark-underline';
+import { remarkInlineMarks } from './remark-inline-marks';
 
 // Notion-style markdown shortcuts: typing the markdown prefix at the start of a
 // block (or wrapping marks) auto-converts it. Scoped to the surface Quarry
@@ -193,6 +197,8 @@ const plateMarkdownPlugins = [
   CodePlugin,
   StrikethroughPlugin,
   UnderlinePlugin,
+  SubscriptPlugin,
+  SuperscriptPlugin,
   ListPlugin.configure({ render: { belowNodes: BlockList } }),
   LinkPlugin,
   DndPlugin.configure({
@@ -208,7 +214,7 @@ const plateMarkdownPlugins = [
       })),
     },
   }),
-  MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm, remarkUnderline] } }),
+  MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm, remarkInlineMarks] } }),
 ] as const;
 
 export function PlateMarkdownEditor({
@@ -303,6 +309,12 @@ function FloatingFormatToolbar() {
       </MarkButton>
       <MarkButton label="Strikethrough" nodeType={KEYS.strikethrough}>
         <Strikethrough size={15} />
+      </MarkButton>
+      <MarkButton label="Superscript" nodeType={KEYS.sup}>
+        <Superscript size={15} />
+      </MarkButton>
+      <MarkButton label="Subscript" nodeType={KEYS.sub}>
+        <Subscript size={15} />
       </MarkButton>
       <MarkButton label="Inline code" nodeType={KEYS.code}>
         <Code size={15} />
