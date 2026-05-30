@@ -26,6 +26,31 @@ import { remarkInlineMarks } from './remark-inline-marks';
 
 export type PlateValue = Array<Record<string, unknown>>;
 
+/** The shared Base* plugins for Markdown (de)serialization, without the MarkdownPlugin. */
+export const baseMarkdownPlugins = [
+  BaseParagraphPlugin,
+  BaseH1Plugin,
+  BaseH2Plugin,
+  BaseH3Plugin,
+  BaseH4Plugin,
+  BaseH5Plugin,
+  BaseH6Plugin,
+  BaseBlockquotePlugin,
+  BaseHorizontalRulePlugin,
+  BaseCodeBlockPlugin,
+  BaseCodeLinePlugin,
+  BaseCodeSyntaxPlugin,
+  BaseBoldPlugin,
+  BaseItalicPlugin,
+  BaseCodePlugin,
+  BaseStrikethroughPlugin,
+  BaseUnderlinePlugin,
+  BaseSubscriptPlugin,
+  BaseSuperscriptPlugin,
+  BaseListPlugin,
+  BaseLinkPlugin,
+];
+
 export function markdownToPlateValue(markdown: string): PlateValue {
   return editor().api.markdown.deserialize(markdown) as PlateValue;
 }
@@ -37,35 +62,8 @@ export function plateValueToMarkdown(value: PlateValue): string {
 function editor() {
   return createSlateEditor({
     plugins: [
-      BaseParagraphPlugin,
-      BaseH1Plugin,
-      BaseH2Plugin,
-      BaseH3Plugin,
-      BaseH4Plugin,
-      BaseH5Plugin,
-      BaseH6Plugin,
-      BaseBlockquotePlugin,
-      BaseHorizontalRulePlugin,
-      BaseCodeBlockPlugin,
-      BaseCodeLinePlugin,
-      BaseCodeSyntaxPlugin,
-      BaseBoldPlugin,
-      BaseItalicPlugin,
-      BaseCodePlugin,
-      BaseStrikethroughPlugin,
-      BaseUnderlinePlugin,
-      BaseSubscriptPlugin,
-      BaseSuperscriptPlugin,
-      BaseListPlugin,
-      BaseLinkPlugin,
+      ...baseMarkdownPlugins,
       MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm, remarkInlineMarks] } }),
     ],
-  } as never) as ReturnType<typeof createSlateEditor> & {
-    api: {
-      markdown: {
-        deserialize: (markdown: string) => unknown;
-        serialize: (options: { value: never }) => string;
-      };
-    };
-  };
+  });
 }

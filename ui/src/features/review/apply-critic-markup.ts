@@ -1,8 +1,9 @@
 import { nanoid } from 'nanoid';
+import type { Descendant, TElement, TText } from 'platejs';
 
 import type { ReviewMeta } from './rfm-types';
 
-type Node = Record<string, unknown>;
+type Props = Record<string, unknown>;
 
 const CODE_BLOCK_TYPES = new Set(['code_block', 'code_line']);
 
@@ -31,19 +32,19 @@ function ensureComment(meta: ReviewMeta, id: string, body?: string): void {
   meta.comments[id] = entry;
 }
 
-/** Build a leaf from carried props (`rest`), mark props (`extra`), and text. */
-function leaf(rest: Node, extra: Node, text: string): Node {
+/** Build a text leaf from carried props (`rest`), mark props (`extra`), and text. */
+function leaf(rest: Props, extra: Props, text: string): TText {
   return { ...rest, ...extra, text };
 }
 
-function suggestionExtra(id: string, type: 'insert' | 'remove', userId: string): Node {
-  const extra: Node = { suggestion: true };
+function suggestionExtra(id: string, type: 'insert' | 'remove', userId: string): Props {
+  const extra: Props = { suggestion: true };
   extra[`suggestion_${id}`] = { id, type, userId, createdAt: 0 };
   return extra;
 }
 
-function commentExtra(id: string): Node {
-  const extra: Node = { comment: true };
+function commentExtra(id: string): Props {
+  const extra: Props = { comment: true };
   extra[`comment_${id}`] = true;
   return extra;
 }
@@ -53,9 +54,9 @@ function commentExtra(id: string): Node {
  * props (e.g. bold) onto each produced segment. Emits no zero-length plain
  * segments. Returns the original leaf unchanged when no token matches.
  */
-function expandLeaf(node: Node, text: string, meta: ReviewMeta): Node[] {
-  const { text: _omit, ...rest } = node;
-  const out: Node[] = [];
+function expandLeaf(node: TText, meta: ReviewMeta): TText[] {
+  const { text, ...rest } = node;
+  const out: TText[] = [];
   let last = 0;
 
   const pushPlain = (slice: string) => {
@@ -102,30 +103,27 @@ function expandLeaf(node: Node, text: string, meta: ReviewMeta): Node[] {
   return out;
 }
 
-function isTextLeaf(node: Node): node is Node & { text: string } {
+function isTextLeaf(node: Descendant): node is TText {
   return typeof node.text === 'string';
 }
 
-function childNodes(node: Node): Node[] | null {
-  const children = node.children;
-  if (!Array.isArray(children)) return null;
-  return children.filter((child): child is Node => typeof child === 'object' && child !== null);
+function isElement(node: Descendant): node is TElement {
+  return Array.isArray(node.children);
 }
 
-function walk(node: Node, inCode: boolean, meta: ReviewMeta): Node {
-  const children = childNodes(node);
-  if (children === null) return node;
-
-  const nextInCode = inCode || CODE_BLOCK_TYPES.has(typeof node.type === 'string' ? node.type : '');
-  const nextChildren: Node[] = [];
-  for (const child of children) {
-    if (isTextLeaf(child) && !nextInCode && child.code !== true) {
-      nextChildren.push(...expandLeaf(child, child.text, meta));
+function walkChildren(value: Descendant[], inCode: boolean, meta: ReviewMeta): Descendant[] {
+  const out: Descendant[] = [];
+  for (const child of value) {
+    if (isElement(child)) {
+      const nextInCode = inCode || CODE_BLOCK_TYPES.has(typeof child.type === 'string' ? child.type : '');
+      out.push({ ...child, children: walkChildren(child.children, nextInCode, meta) });
+    } else if (isTextLeaf(child) && !inCode && child.code !== true) {
+      out.push(...expandLeaf(child, meta));
     } else {
-      nextChildren.push(walk(child, nextInCode, meta));
+      out.push(child);
     }
   }
-  return { ...node, children: nextChildren };
+  return out;
 }
 
 /**
@@ -134,9 +132,7 @@ function walk(node: Node, inCode: boolean, meta: ReviewMeta): Node {
  * synthesized ids and lifted inline comment bodies. Leaves inside code blocks or
  * marked `code` are left literal.
  */
-export function applyCriticMarkup(value: Node[], meta: ReviewMeta): { value: Node[]; meta: ReviewMeta } {
+export function applyCriticMarkup(value: Descendant[], meta: ReviewMeta): { value: Descendant[]; meta: ReviewMeta } {
   const nextMeta: ReviewMeta = { comments: { ...meta.comments }, suggestions: { ...meta.suggestions } };
-  const root = walk({ type: 'root', children: value }, false, nextMeta);
-  const children = childNodes(root);
-  return { value: children ?? value, meta: nextMeta };
+  return { value: walkChildren(value, false, nextMeta), meta: nextMeta };
 }

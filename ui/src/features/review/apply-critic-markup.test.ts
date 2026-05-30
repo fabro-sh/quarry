@@ -1,8 +1,9 @@
+import type { Descendant } from 'platejs';
 import { describe, expect, it } from 'vitest';
 import { applyCriticMarkup } from './apply-critic-markup';
 import { emptyReviewMeta } from './rfm-types';
 
-const p = (children: unknown[]) => ({ type: 'p', children });
+const p = (children: unknown[]): Descendant => ({ type: 'p', children }) as Descendant;
 
 describe('applyCriticMarkup', () => {
   it('parses an insert suggestion and reads metadata from meta', () => {

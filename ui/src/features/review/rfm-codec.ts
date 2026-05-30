@@ -1,0 +1,107 @@
+import { MarkdownPlugin } from '@platejs/markdown';
+import { createSlateEditor, type Descendant } from 'platejs';
+import remarkGfm from 'remark-gfm';
+
+import { baseMarkdownPlugins } from '../editor/markdown-codec';
+import { remarkInlineMarks } from '../editor/remark-inline-marks';
+import { applyCriticMarkup } from './apply-critic-markup';
+import { collapseSubstitutions, expandSubstitutions } from './collapse-substitutions';
+import { serializeReviewMeta, splitEndmatter } from './endmatter';
+import { emptyReviewMeta, type ReviewMeta, type ReviewMetaEntry } from './rfm-types';
+import { serializeReviewBody } from './review-md-rules';
+
+interface ReviewDocument {
+  value: Descendant[];
+  meta: ReviewMeta;
+}
+
+interface LiveIds {
+  comments: Set<string>;
+  suggestions: Set<string>;
+}
+
+function deserializeEditor() {
+  return createSlateEditor({
+    plugins: [
+      ...baseMarkdownPlugins,
+      MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm, remarkInlineMarks] } }),
+    ],
+  });
+}
+
+/** Markdown (RFM) → Plate value with review marks + parsed metadata. */
+export function markdownToReview(markdown: string): ReviewDocument {
+  const { body, meta } = splitEndmatter(markdown);
+  const rawValue = deserializeEditor().api.markdown.deserialize(expandSubstitutions(body));
+  return applyCriticMarkup(rawValue, meta ?? emptyReviewMeta());
+}
+
+/** Collect the comment/suggestion ids still present as marks in the value. */
+function liveIds(value: Descendant[]): LiveIds {
+  const live: LiveIds = { comments: new Set(), suggestions: new Set() };
+  collectIds(value, live);
+  return live;
+}
+
+function collectIds(nodes: Descendant[], live: LiveIds): void {
+  for (const node of nodes) {
+    for (const key of Object.keys(node)) {
+      if (key === 'comment_draft') continue;
+      if (key.startsWith('comment_') && node[key] === true) {
+        live.comments.add(key.slice('comment_'.length));
+      } else if (key.startsWith('suggestion_')) {
+        const id = suggestionId(node[key]);
+        if (id) live.suggestions.add(id);
+      }
+    }
+    const children = node.children;
+    if (Array.isArray(children)) collectIds(children, live);
+  }
+}
+
+function suggestionId(raw: unknown): string | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const data: Record<string, unknown> = { ...raw };
+  return typeof data.id === 'string' ? data.id : null;
+}
+
+/** Drop metadata whose anchor mark no longer exists (replies survive while their parent does). */
+function pruneMeta(meta: ReviewMeta, live: LiveIds): ReviewMeta {
+  const comments: Record<string, ReviewMetaEntry> = {};
+  for (const [id, entry] of Object.entries(meta.comments)) {
+    const parentLive = entry.re !== undefined && live.comments.has(entry.re);
+    if (live.comments.has(id) || parentLive) comments[id] = entry;
+  }
+  const suggestions: Record<string, ReviewMetaEntry> = {};
+  for (const [id, entry] of Object.entries(meta.suggestions)) {
+    if (live.suggestions.has(id)) suggestions[id] = entry;
+  }
+  return { comments, suggestions };
+}
+
+/**
+ * Strip the `body` of root comments (they are emitted inline by
+ * `serializeReviewBody`); replies keep their body. Constructs new entries so
+ * the input is left untouched.
+ */
+function endmatterMeta(pruned: ReviewMeta): ReviewMeta {
+  const comments: Record<string, ReviewMetaEntry> = {};
+  for (const [id, entry] of Object.entries(pruned.comments)) {
+    if (entry.re === undefined) {
+      const { body: _body, ...rest } = entry;
+      comments[id] = rest;
+    } else {
+      comments[id] = entry;
+    }
+  }
+  return { comments, suggestions: pruned.suggestions };
+}
+
+/** Plate value + metadata → Markdown (RFM). */
+export function reviewToMarkdown(value: Descendant[], meta: ReviewMeta): string {
+  const live = liveIds(value);
+  const pruned = pruneMeta(meta, live);
+  const body = collapseSubstitutions(serializeReviewBody(value, pruned));
+  const endmatter = serializeReviewMeta(endmatterMeta(pruned));
+  return endmatter ? `${body}\n\n---\n${endmatter}` : `${body}\n`;
+}
