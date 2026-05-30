@@ -36,6 +36,7 @@ import {
   Bold,
   Check,
   ChevronDown,
+  ChevronRight,
   Code,
   Copy,
   Heading1,
@@ -53,10 +54,13 @@ import {
   Quote,
   SquareCode,
   Strikethrough,
+  Trash2,
+  Type,
   Underline,
 } from 'lucide-react';
-import { KEYS, NodeApi, type TElement, type TListElement } from 'platejs';
+import { ElementApi, KEYS, NodeApi, PathApi, type Descendant, type TElement, type TListElement } from 'platejs';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import remarkGfm from 'remark-gfm';
 import {
   ParagraphPlugin,
@@ -416,6 +420,21 @@ function setBlockType(editor: PlateEditor, type: string) {
   });
 }
 
+// Convert the current selection's block(s) to `type`, handling the code-block
+// wrap/unwrap (a code block holds code_line children, so it can't be a plain
+// setNodes). Used by both the floating toolbar and the block handle menu.
+function applyBlockType(editor: PlateEditor, type: string) {
+  const inCodeBlock = editor.api.some({ match: { type: editor.getType(KEYS.codeBlock) } });
+  if (type === KEYS.codeBlock) {
+    if (!inCodeBlock) toggleCodeBlock(editor);
+  } else if (inCodeBlock) {
+    toggleCodeBlock(editor);
+    if (type !== KEYS.p) setBlockType(editor, type);
+  } else {
+    setBlockType(editor, type);
+  }
+}
+
 function TurnIntoButton() {
   const editor = useEditorRef();
   const inCodeBlock = useEditorSelector(
@@ -456,15 +475,7 @@ function TurnIntoButton() {
               )}
               key={item.value}
               onSelect={() => {
-                if (item.value === KEYS.codeBlock) {
-                  if (!inCodeBlock) toggleCodeBlock(editor);
-                } else if (inCodeBlock) {
-                  // Unwrap to paragraphs first, then apply the target block type.
-                  toggleCodeBlock(editor);
-                  if (item.value !== KEYS.p) setBlockType(editor, item.value);
-                } else {
-                  setBlockType(editor, item.value);
-                }
+                applyBlockType(editor, item.value);
                 editor.tf.focus();
               }}
             >
@@ -510,8 +521,10 @@ function ListItemElement(props: PlateElementProps) {
   const { listStart, listStyleType } = props.element as TListElement;
   if (listStyleType === KEYS.listTodo) return <TodoListItem {...props} />;
   const ListTag = isOrderedList(props.element) ? 'ol' : 'ul';
+  // ps-6 keeps the marker clear of the drag handle in the block's left gutter
+  // and aligns list content with the to-do checkbox indent.
   return (
-    <ListTag className="relative m-0 p-0" start={listStart} style={{ listStyleType }}>
+    <ListTag className="relative m-0 ps-6" start={listStart} style={{ listStyleType }}>
       <li>{props.children}</li>
     </ListTag>
   );
@@ -564,6 +577,9 @@ function DraggableBlock(props: PlateElementProps) {
   // *inside* the drop target (nodeRef) — out in the centered-layout margin it
   // would never sit over a drop target, and the drop would never fire.
   const [handleTop, setHandleTop] = useState(0);
+  // Clicking the handle (no drag) opens a block-actions menu. A native HTML5
+  // drag never fires `click`, so drag and menu don't conflict.
+  const [menuRect, setMenuRect] = useState<{ left: number; top: number } | null>(null);
   const alignHandle = () => {
     const dom = editor.api.toDOMNode(element);
     if (!dom) return;
@@ -587,8 +603,12 @@ function DraggableBlock(props: PlateElementProps) {
           aria-label="Drag to move block"
           className="flex size-6 cursor-grab items-center justify-center rounded text-faint transition-colors hover:bg-well hover:text-muted active:cursor-grabbing"
           data-plate-prevent-deselect
+          onClick={(event) => {
+            const box = event.currentTarget.getBoundingClientRect();
+            setMenuRect({ left: box.left, top: box.bottom + 4 });
+          }}
           ref={handleRef}
-          title="Drag to move"
+          title="Drag to move · click for actions"
           type="button"
         >
           <GripVertical size={15} />
@@ -596,7 +616,148 @@ function DraggableBlock(props: PlateElementProps) {
       </div>
       {children}
       <BlockDropLine />
+      {menuRect ? (
+        <BlockActionsMenu
+          editor={editor}
+          element={element}
+          onClose={() => setMenuRect(null)}
+          rect={menuRect}
+        />
+      ) : null}
     </div>
+  );
+}
+
+const blockMenuItem =
+  'flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-body outline-none hover:bg-well';
+
+function cloneWithoutIds(node: Descendant): Descendant {
+  if (!ElementApi.isElement(node)) return { ...node };
+  const { id, ...rest } = node;
+  void id;
+  return { ...rest, children: node.children.map(cloneWithoutIds) };
+}
+
+// Normalize to a paragraph first (unwrap code, drop heading), then toggle the
+// list — so any block can become a list cleanly.
+function turnIntoList(editor: PlateEditor, listStyleType: string, checked?: boolean) {
+  applyBlockType(editor, KEYS.p);
+  toggleList(editor, { listStyleType });
+  if (checked !== undefined) editor.tf.setNodes({ checked, listStyleType });
+}
+
+const BLOCK_TURN_INTO: ReadonlyArray<{
+  icon: typeof Pilcrow;
+  label: string;
+  apply: (editor: PlateEditor) => void;
+}> = [
+  { icon: Pilcrow, label: 'Text', apply: (editor) => applyBlockType(editor, KEYS.p) },
+  { icon: Heading1, label: 'Heading 1', apply: (editor) => applyBlockType(editor, KEYS.h1) },
+  { icon: Heading2, label: 'Heading 2', apply: (editor) => applyBlockType(editor, KEYS.h2) },
+  { icon: Heading3, label: 'Heading 3', apply: (editor) => applyBlockType(editor, KEYS.h3) },
+  { icon: List, label: 'Bulleted list', apply: (editor) => turnIntoList(editor, KEYS.ul) },
+  { icon: ListOrdered, label: 'Numbered list', apply: (editor) => turnIntoList(editor, KEYS.ol) },
+  { icon: ListTodo, label: 'To-do list', apply: (editor) => turnIntoList(editor, KEYS.listTodo, false) },
+  { icon: Quote, label: 'Quote', apply: (editor) => applyBlockType(editor, KEYS.blockquote) },
+  { icon: SquareCode, label: 'Code', apply: (editor) => applyBlockType(editor, KEYS.codeBlock) },
+];
+
+function turnBlockInto(editor: PlateEditor, element: TElement, apply: (editor: PlateEditor) => void) {
+  const at = editor.api.findPath(element);
+  if (!at) return;
+  editor.tf.select(at);
+  apply(editor);
+  editor.tf.focus();
+}
+
+function duplicateBlock(editor: PlateEditor, element: TElement) {
+  const at = editor.api.findPath(element);
+  if (!at) return;
+  editor.tf.insertNodes(cloneWithoutIds(element), { at: PathApi.next(at), select: true });
+  editor.tf.focus();
+}
+
+function deleteBlock(editor: PlateEditor, element: TElement) {
+  const at = editor.api.findPath(element);
+  if (!at) return;
+  editor.tf.removeNodes({ at });
+  editor.tf.focus();
+}
+
+function BlockActionsMenu({
+  editor,
+  element,
+  onClose,
+  rect,
+}: {
+  editor: PlateEditor;
+  element: TElement;
+  onClose: () => void;
+  rect: { left: number; top: number };
+}) {
+  return createPortal(
+    <div className="fixed inset-0 z-50" onMouseDown={onClose}>
+      <div
+        aria-label="Block actions"
+        className="fixed z-50 min-w-44 rounded-md border border-line bg-raised p-1 shadow-lg"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="menu"
+        style={{ left: rect.left, top: rect.top }}
+      >
+        <div className="group/turninto relative">
+          <button className={cn(blockMenuItem, 'justify-between')} role="menuitem" type="button">
+            <span className="flex items-center gap-2">
+              <Type className="shrink-0 text-muted" size={15} />
+              Turn into
+            </span>
+            <ChevronRight className="shrink-0 text-muted" size={14} />
+          </button>
+          <div className="absolute -top-1 left-full z-50 hidden min-w-44 rounded-md border border-line bg-raised p-1 shadow-lg group-hover/turninto:block">
+            {BLOCK_TURN_INTO.map((item) => (
+              <button
+                className={blockMenuItem}
+                key={item.label}
+                onClick={() => {
+                  turnBlockInto(editor, element, item.apply);
+                  onClose();
+                }}
+                role="menuitem"
+                type="button"
+              >
+                <item.icon className="shrink-0 text-muted" size={15} />
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="my-1 h-px bg-line" />
+        <button
+          className={blockMenuItem}
+          onClick={() => {
+            duplicateBlock(editor, element);
+            onClose();
+          }}
+          role="menuitem"
+          type="button"
+        >
+          <Copy className="shrink-0 text-muted" size={15} />
+          Duplicate
+        </button>
+        <button
+          className={cn(blockMenuItem, 'text-danger')}
+          onClick={() => {
+            deleteBlock(editor, element);
+            onClose();
+          }}
+          role="menuitem"
+          type="button"
+        >
+          <Trash2 className="shrink-0 text-danger" size={15} />
+          Delete
+        </button>
+      </div>
+    </div>,
+    document.body
   );
 }
 

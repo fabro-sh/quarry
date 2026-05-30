@@ -922,6 +922,51 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(editor).toContainText('Walk the dog');
   });
 
+  test('opens a block menu from the handle with turn-into, duplicate, delete', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: 'Alpha block\n\nBravo block',
+          id: 'doc-blockmenu',
+          metadata: { title: 'BlockMenu' },
+          path: 'blockmenu.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /BlockMenu/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Alpha block');
+    const blockText = () => editor.evaluate((el) => (el as HTMLElement).innerText.replace(/\n+/g, '|'));
+
+    // Click the handle (a native drag would never fire click) to open the menu.
+    await page.getByText('Alpha block', { exact: false }).hover();
+    await editor.getByRole('button', { name: 'Drag to move block' }).first().click();
+    const menu = page.getByRole('menu', { name: 'Block actions' });
+    await expect(menu).toBeVisible();
+    await expect(menu.getByRole('menuitem', { name: 'Turn into' })).toBeVisible();
+
+    await menu.getByRole('menuitem', { name: 'Duplicate' }).click();
+    await expect.poll(blockText).toBe('Alpha block|Alpha block|Bravo block');
+
+    // Turn into opens a hover sub-list that includes the list options.
+    await page.getByText('Alpha block', { exact: false }).first().hover();
+    await editor.getByRole('button', { name: 'Drag to move block' }).first().click();
+    const reopened = page.getByRole('menu', { name: 'Block actions' });
+    await reopened.getByRole('menuitem', { name: 'Turn into' }).hover();
+    await expect(reopened.getByRole('menuitem', { name: 'Bulleted list' })).toBeVisible();
+    await expect(reopened.getByRole('menuitem', { name: 'To-do list' })).toBeVisible();
+    await reopened.getByRole('menuitem', { name: 'Heading 1' }).click();
+    await expect(editor.locator('h1')).toHaveText('Alpha block');
+
+    await page.getByText('Alpha block', { exact: false }).first().hover();
+    await editor.getByRole('button', { name: 'Drag to move block' }).first().click();
+    await page.getByRole('menu', { name: 'Block actions' }).getByRole('menuitem', { name: 'Delete' }).click();
+    await expect.poll(blockText).toBe('Alpha block|Bravo block');
+  });
+
   test('turns a block into a code block from the Turn into dropdown', async ({ page }) => {
     await installMockApi(page, {
       documents: [
