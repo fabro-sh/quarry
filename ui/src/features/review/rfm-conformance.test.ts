@@ -30,4 +30,13 @@ describe('RFM conformance', () => {
     expect(meta.suggestions).toEqual({});
     expect(reviewToMarkdown(value, meta)).toContain('{++ open marker.');
   });
+
+  it('leaves a substitution inside a code block literal (no id injected)', () => {
+    const md = 'Example:\n\n```text\n{~~old~>new~~}\n```\n';
+    const { value, meta } = markdownToReview(md);
+    const out = reviewToMarkdown(value, meta);
+    expect(out).toContain('{~~old~>new~~}');
+    expect(out).not.toContain('{#');
+    expect(meta.suggestions).toEqual({});
+  });
 });

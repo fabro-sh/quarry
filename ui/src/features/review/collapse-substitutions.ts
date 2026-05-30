@@ -10,11 +10,23 @@ const INS_THEN_DEL = /\{\+\+((?:(?!\+\+\}).)*)\+\+\}\{#([A-Za-z0-9_-]+)\}\{--((?
 // delimiters so they stay tight.
 const SUBSTITUTION = /\{~~((?:(?!~>).)*)~>((?:(?!~~\}).)*)~~\}(?:\{#([A-Za-z0-9_-]+)\})?/g;
 
+// Apply `transform` to the markdown OUTSIDE fenced code blocks and inline code
+// spans, leaving code regions byte-for-byte untouched (CriticMarkup in code is
+// literal). NOTE: covers ``` fences and `inline` code — the common cases. It
+// does NOT mask indented (4-space) code blocks or ~~~ fences; substitutions in
+// those rare forms are still rewritten (documented limitation).
+function transformOutsideCode(markdown: string, transform: (segment: string) => string): string {
+  const segments = markdown.split(/(```[\s\S]*?```|`[^`\n]*`)/g);
+  return segments.map((segment, index) => (index % 2 === 0 ? transform(segment) : segment)).join('');
+}
+
 /** Collapse adjacent delete+insert pairs sharing an id into `{~~old~>new~~}{#id}`. */
 export function collapseSubstitutions(markdown: string): string {
-  return markdown
-    .replace(DEL_THEN_INS, (_m, oldText, id, newText) => `{~~${oldText}~>${newText}~~}{#${id}}`)
-    .replace(INS_THEN_DEL, (_m, newText, id, oldText) => `{~~${oldText}~>${newText}~~}{#${id}}`);
+  return transformOutsideCode(markdown, (segment) =>
+    segment
+      .replace(DEL_THEN_INS, (_m, oldText, id, newText) => `{~~${oldText}~>${newText}~~}{#${id}}`)
+      .replace(INS_THEN_DEL, (_m, newText, id, oldText) => `{~~${oldText}~>${newText}~~}{#${id}}`)
+  );
 }
 
 /**
@@ -25,8 +37,10 @@ export function collapseSubstitutions(markdown: string): string {
  * halves stay paired.
  */
 export function expandSubstitutions(markdown: string): string {
-  return markdown.replace(SUBSTITUTION, (_m, oldText, newText, id) => {
-    const sharedId = id ?? nanoid();
-    return `{--${oldText}--}{#${sharedId}}{++${newText}++}{#${sharedId}}`;
-  });
+  return transformOutsideCode(markdown, (segment) =>
+    segment.replace(SUBSTITUTION, (_m, oldText, newText, id) => {
+      const sharedId = id ?? nanoid();
+      return `{--${oldText}--}{#${sharedId}}{++${newText}++}{#${sharedId}}`;
+    })
+  );
 }

@@ -29,6 +29,11 @@ describe('collapseSubstitutions', () => {
     const input = '{++new++}{#s1}{--old--}{#s2}';
     expect(collapseSubstitutions(input)).toBe(input);
   });
+
+  it('does not expand or collapse substitution syntax inside code spans', () => {
+    expect(collapseSubstitutions('`{--a--}{#s1}{++b++}{#s1}`')).toBe('`{--a--}{#s1}{++b++}{#s1}`');
+    expect(expandSubstitutions('`{~~a~>b~~}`')).toBe('`{~~a~>b~~}`');
+  });
 });
 
 describe('expandSubstitutions', () => {
