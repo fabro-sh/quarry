@@ -17,6 +17,8 @@ import {
 } from '@platejs/basic-nodes/react';
 import { CodeBlockPlugin, CodeLinePlugin, CodeSyntaxPlugin } from '@platejs/code-block/react';
 import { insertEmptyCodeBlock, toggleCodeBlock } from '@platejs/code-block';
+import { CommentPlugin } from '@platejs/comment/react';
+import { getCommentKey, getDraftCommentKey } from '@platejs/comment';
 import { DndPlugin, useDraggable, useDropLine } from '@platejs/dnd';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
@@ -48,10 +50,12 @@ import {
   Heading4,
   Heading5,
   Heading6,
+  Highlighter,
   Italic,
   List,
   ListOrdered,
   ListTodo,
+  MessageSquarePlus,
   Pilcrow,
   Quote,
   SquareCode,
@@ -62,6 +66,7 @@ import {
   Type,
   Underline,
 } from 'lucide-react';
+import { nanoid } from 'nanoid';
 import { ElementApi, KEYS, NodeApi, PathApi, type Descendant, type TElement, type TListElement } from 'platejs';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
@@ -92,7 +97,7 @@ import { remarkInlineMarks } from './remark-inline-marks';
 import { reviewKit } from './review-kit';
 import { currentAuthor } from '../review/identity';
 import { markdownToReview, reviewToMarkdown } from '../review/rfm-codec';
-import { syncSuggestionsFromValue, useReviewStore } from '../review/review-store';
+import { addComment, syncSuggestionsFromValue, useReviewStore } from '../review/review-store';
 
 // Notion-style markdown shortcuts: typing the markdown prefix at the start of a
 // block (or wrapping marks) auto-converts it. Scoped to the surface Quarry
@@ -375,7 +380,52 @@ function FloatingFormatToolbar() {
       <TodoListButton label="To-do list">
         <ListTodo size={15} />
       </TodoListButton>
+      <div aria-hidden="true" className="mx-0.5 h-5 w-px bg-line" />
+      <MarkButton label="Highlight" nodeType={KEYS.highlight}>
+        <Highlighter size={15} />
+      </MarkButton>
+      <CommentButton />
     </div>
+  );
+}
+
+// Wraps the current selection in a comment mark and records the comment in the
+// review store. Exported so the behavior can be tested directly: jsdom's
+// selection is unreliable, so tests drive this command against a real editor
+// with an explicit selection rather than clicking the toolbar button.
+export function createCommentOnSelection(editor: PlateEditor) {
+  editor.getTransforms(CommentPlugin).comment.setDraft();
+  const id = nanoid();
+  const drafts = editor.getApi(CommentPlugin).comment.nodes({ at: [], isDraft: true });
+  if (drafts.length === 0) return;
+  editor.tf.withoutNormalizing(() => {
+    for (const [, path] of drafts) {
+      editor.tf.setNodes({ [getCommentKey(id)]: true }, { at: path, split: true });
+      editor.tf.unsetNodes([getDraftCommentKey()], { at: path });
+    }
+  });
+  const meta = addComment(useReviewStore.getState().getMeta(), id, {
+    by: currentAuthor(),
+    at: new Date().toISOString(),
+  });
+  useReviewStore.getState().setMeta(meta);
+  editor.tf.focus();
+}
+
+function CommentButton() {
+  const editor = useEditorRef();
+  return (
+    <button
+      aria-label="Comment"
+      className="inline-flex size-7 items-center justify-center rounded text-muted transition-colors hover:bg-well hover:text-body"
+      data-testid="comment-button"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => createCommentOnSelection(editor)}
+      title="Comment"
+      type="button"
+    >
+      <MessageSquarePlus size={15} />
+    </button>
   );
 }
 
