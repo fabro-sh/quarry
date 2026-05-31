@@ -63,7 +63,7 @@ import {
   Underline,
 } from 'lucide-react';
 import { ElementApi, KEYS, NodeApi, PathApi, type Descendant, type TElement, type TListElement } from 'platejs';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import remarkGfm from 'remark-gfm';
 import {
@@ -84,9 +84,15 @@ import {
   type RenderNodeWrapper,
 } from 'platejs/react';
 
+import { SuggestionPlugin } from '@platejs/suggestion/react';
+
 import { cn } from '../../lib/utils';
-import { markdownToPlateValue, plateValueToMarkdown, type PlateValue } from './markdown-codec';
+import { type PlateValue } from './markdown-codec';
 import { remarkInlineMarks } from './remark-inline-marks';
+import { reviewKit } from './review-kit';
+import { currentAuthor } from '../review/identity';
+import { markdownToReview, reviewToMarkdown } from '../review/rfm-codec';
+import { syncSuggestionsFromValue, useReviewStore } from '../review/review-store';
 
 // Notion-style markdown shortcuts: typing the markdown prefix at the start of a
 // block (or wrapping marks) auto-converts it. Scoped to the surface Quarry
@@ -214,6 +220,7 @@ const plateMarkdownPlugins = [
       })),
     },
   }),
+  ...reviewKit,
   MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm, remarkInlineMarks] } }),
 ] as const;
 
@@ -226,12 +233,27 @@ export function PlateMarkdownEditor({
   disabled?: boolean;
   onChange: (content: string) => void;
 }) {
+  const storeHydrate = useReviewStore((s) => s.hydrate);
+  const storeGetMeta = useReviewStore((s) => s.getMeta);
+
+  // The review codec serializes both the value (inline CriticMarkup) and the
+  // store's metadata (YAML endmatter). `syncSuggestionsFromValue` mirrors any
+  // suggestion marks Plate created (via withSuggestion) into the metadata so
+  // they survive the round-trip. Shared by every save path.
+  const serialize = useCallback(
+    (value: PlateValue): string =>
+      reviewToMarkdown(value as never, syncSuggestionsFromValue(storeGetMeta(), value as never)),
+    [storeGetMeta]
+  );
+
   const initialValueRef = useRef<PlateValue | null>(null);
   if (!initialValueRef.current) {
-    initialValueRef.current = markdownToPlateValue(content);
+    const { value, meta } = markdownToReview(content);
+    initialValueRef.current = value as PlateValue;
+    storeHydrate(meta);
   }
   const lastContentRef = useRef(content);
-  const lastSerializedRef = useRef(plateValueToMarkdown(initialValueRef.current));
+  const lastSerializedRef = useRef(serialize(initialValueRef.current));
   const editor = usePlateEditor(
     {
       plugins: plateMarkdownPlugins as never,
@@ -240,13 +262,32 @@ export function PlateMarkdownEditor({
     []
   );
 
+  // Set the suggesting author before any suggesting can happen; withSuggestion
+  // normalizes away suggestion marks that lack a currentUserId.
+  useEffect(() => {
+    editor.setOption(SuggestionPlugin, 'currentUserId', currentAuthor());
+  }, [editor]);
+
   useEffect(() => {
     if (content === lastContentRef.current) return;
-    const nextValue = markdownToPlateValue(content);
-    resetPlateEditor(editor, nextValue);
+    const { value, meta } = markdownToReview(content);
+    resetPlateEditor(editor, value as PlateValue);
+    storeHydrate(meta);
     lastContentRef.current = content;
-    lastSerializedRef.current = plateValueToMarkdown(nextValue);
-  }, [content, editor]);
+    lastSerializedRef.current = reviewToMarkdown(value as never, meta);
+  }, [content, editor, storeHydrate]);
+
+  // Replies/resolves and synced suggestions live in the store, not the editor
+  // value, so an editor-value change won't fire. Save on store changes too.
+  useEffect(() => {
+    return useReviewStore.subscribe(() => {
+      const md = serialize(editor.children as PlateValue);
+      if (md === lastSerializedRef.current) return;
+      lastContentRef.current = md;
+      lastSerializedRef.current = md;
+      onChange(md);
+    });
+  }, [editor, onChange, serialize]);
 
   return (
     <Plate
@@ -257,7 +298,7 @@ export function PlateMarkdownEditor({
           editor.meta.resetting = undefined;
           return;
         }
-        const nextMarkdown = plateValueToMarkdown(value as PlateValue);
+        const nextMarkdown = serialize(value as PlateValue);
         if (nextMarkdown === lastSerializedRef.current) return;
         lastContentRef.current = nextMarkdown;
         lastSerializedRef.current = nextMarkdown;
