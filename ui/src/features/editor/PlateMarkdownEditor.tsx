@@ -56,6 +56,7 @@ import {
   ListOrdered,
   ListTodo,
   MessageSquarePlus,
+  PencilLine,
   Pilcrow,
   Quote,
   SquareCode,
@@ -82,6 +83,7 @@ import {
   useMarkToolbarButton,
   useMarkToolbarButtonState,
   usePlateEditor,
+  usePluginOption,
   useReadOnly,
   useSelectionFragmentProp,
   type PlateEditor,
@@ -384,8 +386,36 @@ function FloatingFormatToolbar() {
       <MarkButton label="Highlight" nodeType={KEYS.highlight}>
         <Highlighter size={15} />
       </MarkButton>
+      <div aria-hidden="true" className="mx-0.5 h-5 w-px bg-line" />
+      <SuggestToggle />
       <CommentButton />
     </div>
+  );
+}
+
+// Toggles Plate's live Suggesting mode: while on, typing and deletions become
+// suggestion marks (handled by withSuggestion) instead of direct edits. The
+// suggesting author (currentUserId) is set on the editor at mount, so marks
+// created here survive normalization.
+function SuggestToggle() {
+  const editor = useEditorRef();
+  const isSuggesting = usePluginOption(SuggestionPlugin, 'isSuggesting');
+  return (
+    <button
+      aria-label="Suggest edits"
+      aria-pressed={isSuggesting}
+      className={cn(
+        'inline-flex size-7 items-center justify-center rounded text-muted transition-colors hover:bg-well hover:text-body',
+        isSuggesting && 'bg-well text-accent-ink'
+      )}
+      data-testid="suggest-toggle"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => editor.setOption(SuggestionPlugin, 'isSuggesting', !isSuggesting)}
+      title={isSuggesting ? 'Stop suggesting' : 'Suggest edits'}
+      type="button"
+    >
+      <PencilLine size={15} />
+    </button>
   );
 }
 
