@@ -2,9 +2,11 @@ import { useEditorSelector, type PlateEditor } from 'platejs/react';
 import { useMemo } from 'react';
 
 import { acceptSuggestionById, rejectSuggestionById } from '../accept-reject';
+import { draftAnchorText, hasCommentDraft } from '../comment-draft';
 import { resolveSuggestions } from '../resolve-suggestions';
 import { buildThreads, useReviewStore } from '../review-store';
 import { CommentThreadCard } from './CommentThreadCard';
+import { DraftCommentComposer } from './DraftCommentComposer';
 import { SuggestionCard } from './SuggestionCard';
 
 // The review rail lists every open comment thread and suggestion for the
@@ -18,8 +20,10 @@ export function ReviewRail({ editor }: { editor: PlateEditor }) {
   const meta = useReviewStore((s) => s.meta);
   const threads = useMemo(() => buildThreads(meta), [meta]);
   const suggestions = useEditorSelector((ed) => resolveSuggestions(ed.children), []);
+  const hasDraft = useEditorSelector((ed) => hasCommentDraft(ed), []);
+  const draftText = useEditorSelector((ed) => draftAnchorText(ed), []);
 
-  if (threads.length === 0 && suggestions.length === 0) return null;
+  if (threads.length === 0 && suggestions.length === 0 && !hasDraft) return null;
 
   return (
     <aside
@@ -27,6 +31,7 @@ export function ReviewRail({ editor }: { editor: PlateEditor }) {
       className="flex h-full w-80 shrink-0 flex-col gap-2 overflow-auto border-l border-line bg-surface p-3"
       data-testid="review-rail"
     >
+      {hasDraft ? <DraftCommentComposer editor={editor} anchorText={draftText} /> : null}
       {threads.map((thread) => (
         <CommentThreadCard key={thread.id} thread={thread} editor={editor} />
       ))}

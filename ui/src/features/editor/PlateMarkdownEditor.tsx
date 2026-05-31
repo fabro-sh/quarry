@@ -17,8 +17,6 @@ import {
 } from '@platejs/basic-nodes/react';
 import { CodeBlockPlugin, CodeLinePlugin, CodeSyntaxPlugin } from '@platejs/code-block/react';
 import { insertEmptyCodeBlock, toggleCodeBlock } from '@platejs/code-block';
-import { CommentPlugin } from '@platejs/comment/react';
-import { getCommentKey, getDraftCommentKey } from '@platejs/comment';
 import { DndPlugin, useDraggable, useDropLine } from '@platejs/dnd';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
@@ -67,7 +65,6 @@ import {
   Underline,
   X,
 } from 'lucide-react';
-import { nanoid } from 'nanoid';
 import { ElementApi, KEYS, NodeApi, PathApi, type Descendant, type TElement, type TListElement } from 'platejs';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
@@ -97,9 +94,10 @@ import { cn } from '../../lib/utils';
 import { type PlateValue } from './markdown-codec';
 import { remarkInlineMarks } from './remark-inline-marks';
 import { reviewKit } from './review-kit';
+import { startCommentDraft } from '../review/comment-draft';
 import { currentAuthor } from '../review/identity';
 import { markdownToReview, reviewToMarkdown } from '../review/rfm-codec';
-import { addComment, syncSuggestionsFromValue, useReviewStore } from '../review/review-store';
+import { syncSuggestionsFromValue, useReviewStore } from '../review/review-store';
 import { acceptSuggestionById, rejectSuggestionById } from '../review/accept-reject';
 import { ReviewRail } from '../review/ui/ReviewRail';
 
@@ -506,29 +504,6 @@ export function SuggestingPill() {
   );
 }
 
-// Wraps the current selection in a comment mark and records the comment in the
-// review store. Exported so the behavior can be tested directly: jsdom's
-// selection is unreliable, so tests drive this command against a real editor
-// with an explicit selection rather than clicking the toolbar button.
-export function createCommentOnSelection(editor: PlateEditor) {
-  editor.getTransforms(CommentPlugin).comment.setDraft();
-  const id = nanoid();
-  const drafts = editor.getApi(CommentPlugin).comment.nodes({ at: [], isDraft: true });
-  if (drafts.length === 0) return;
-  editor.tf.withoutNormalizing(() => {
-    for (const [, path] of drafts) {
-      editor.tf.setNodes({ [getCommentKey(id)]: true }, { at: path, split: true });
-      editor.tf.unsetNodes([getDraftCommentKey()], { at: path });
-    }
-  });
-  const meta = addComment(useReviewStore.getState().getMeta(), id, {
-    by: currentAuthor(),
-    at: new Date().toISOString(),
-  });
-  useReviewStore.getState().setMeta(meta);
-  editor.tf.focus();
-}
-
 function CommentButton() {
   const editor = useEditorRef();
   return (
@@ -536,8 +511,10 @@ function CommentButton() {
       aria-label="Comment"
       className="inline-flex size-7 items-center justify-center rounded text-muted transition-colors hover:bg-well hover:text-body"
       data-testid="comment-button"
+      // Preserve the text selection through the click: setDraft marks the
+      // selected range, so the selection must survive the mousedown.
       onMouseDown={(event) => event.preventDefault()}
-      onClick={() => createCommentOnSelection(editor)}
+      onClick={() => startCommentDraft(editor)}
       title="Comment"
       type="button"
     >

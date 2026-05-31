@@ -117,6 +117,74 @@ test.describe('Review rail', () => {
     expect(saved).not.toContain('{#c1}');
   });
 
+  test('commenting opens a draft composer that only persists on submit', async ({ page }) => {
+    const saves = await installMockApi(page, [
+      { content: 'Comment this word here.\n', id: 'doc-draft', metadata: { title: 'Draft' }, path: 'draft.md', version: 'v1' },
+    ]);
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Draft/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Comment this word');
+
+    // Select a word and raise the floating toolbar, then click Comment. This
+    // sets a comment_draft mark (ignored by the codec) and opens the rail
+    // composer — nothing is committed yet.
+    await page.getByText('Comment this word here.', { exact: false }).dblclick();
+    await page.getByTestId('comment-button').click();
+
+    await expect(page.getByTestId('draft-composer')).toBeVisible();
+    await expect(page.getByTestId('comment-card')).toHaveCount(0);
+
+    // Saving now must NOT include any comment markup: the draft is transient.
+    await page.getByRole('button', { name: 'Save document' }).click();
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
+    expect(saves.lastBody('draft.md')).not.toContain('{#');
+    expect(saves.lastBody('draft.md')).not.toContain('{==');
+
+    // Type a body and submit: the draft is promoted to a real comment card and,
+    // on save, the CriticMarkup comment + endmatter reach the persisted Markdown.
+    await page.getByTestId('draft-input').fill('Please clarify');
+    await page.getByTestId('draft-submit').click();
+
+    await expect(page.getByTestId('draft-composer')).toHaveCount(0);
+    await expect(page.getByTestId('comment-card')).toBeVisible();
+    await expect(page.getByTestId('comment-card')).toContainText('Please clarify');
+
+    await page.getByRole('button', { name: 'Save document' }).click();
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
+
+    const saved = saves.lastBody('draft.md');
+    expect(saved).toContain('{==');
+    expect(saved).toMatch(/\{#[^}]+\}/);
+  });
+
+  test('cancelling a draft discards it and persists no comment', async ({ page }) => {
+    const saves = await installMockApi(page, [
+      { content: 'Cancel this draft please.\n', id: 'doc-cancel', metadata: { title: 'Cancel' }, path: 'cancel.md', version: 'v1' },
+    ]);
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Cancel/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Cancel this draft');
+
+    await page.getByText('Cancel this draft please.', { exact: false }).dblclick();
+    await page.getByTestId('comment-button').click();
+    await expect(page.getByTestId('draft-composer')).toBeVisible();
+
+    await page.getByTestId('draft-cancel').click();
+    await expect(page.getByTestId('draft-composer')).toHaveCount(0);
+    await expect(page.getByTestId('comment-card')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Save document' }).click();
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
+
+    const saved = saves.lastBody('cancel.md');
+    expect(saved).not.toContain('{==');
+    expect(saved).not.toContain('{#');
+  });
+
   test('accept from the rail applies the suggestion and drops the markup', async ({ page }) => {
     const saves = await installMockApi(page, [
       { content: 'Base sentence.\n', id: 'doc-acc', metadata: { title: 'AccRail' }, path: 'acc.md', version: 'v1' },

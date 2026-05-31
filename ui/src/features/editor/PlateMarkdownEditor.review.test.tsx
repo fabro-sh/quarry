@@ -1,11 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { isCommentKey } from '@platejs/comment';
-import { CommentPlugin } from '@platejs/comment/react';
 import { SuggestionPlugin } from '@platejs/suggestion/react';
-import { NodeApi } from 'platejs';
 import { Plate, ParagraphPlugin, createPlateEditor } from 'platejs/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createCommentOnSelection, PlateMarkdownEditor, SuggestingPill } from './PlateMarkdownEditor';
+import { PlateMarkdownEditor, SuggestingPill } from './PlateMarkdownEditor';
 import { reviewKit } from './review-kit';
 import { useReviewStore } from '../review/review-store';
 import { currentAuthor } from '../review/identity';
@@ -22,9 +19,10 @@ const DOC_B = 'A different document with no review marks.\n';
 const DOC_C = 'See {==here==}{>>fix this<<}{#c1}.\n\n---\ncomments:\n  c1:\n    at: "2026-01-01T00:00:00.000Z"\n    by: user\n';
 const DOC_D = 'Look {==there==}{>>change me<<}{#c9}.\n\n---\ncomments:\n  c9:\n    at: "2026-02-02T00:00:00.000Z"\n    by: user\n';
 
-// These tests render <PlateMarkdownEditor> / call createCommentOnSelection, both
-// of which write to the global useReviewStore singleton. Reset it around every
-// test so they neither leave nor depend on dirty shared state.
+// These tests render <PlateMarkdownEditor>, which writes to the global
+// useReviewStore singleton. Reset it around every test so they neither leave nor
+// depend on dirty shared state. The comment-draft flow itself is covered as a
+// unit in features/review/comment-draft.test.ts.
 function resetReviewStore() {
   useReviewStore.getState().hydrate(emptyReviewMeta());
   useReviewStore.getState().setActiveId(null);
@@ -69,37 +67,6 @@ describe('PlateMarkdownEditor review round-trip', () => {
     onChange.mockClear();
     rerender(<PlateMarkdownEditor content={DOC_D} onChange={onChange} />);
     expect(onChange).not.toHaveBeenCalled();
-  });
-});
-
-describe('createCommentOnSelection', () => {
-  it('marks the selected text with a comment id and records a store entry', () => {
-    useReviewStore.getState().hydrate({ comments: {}, suggestions: {} });
-    const editor = createPlateEditor({
-      plugins: [ParagraphPlugin, CommentPlugin, SuggestionPlugin],
-      value: [{ type: 'p', children: [{ text: 'Comment this word.' }] }],
-    });
-    // Select the word "word" (offsets 13–17 of "Comment this word.").
-    editor.tf.select({
-      anchor: { path: [0, 0], offset: 13 },
-      focus: { path: [0, 0], offset: 17 },
-    });
-
-    createCommentOnSelection(editor);
-
-    // (a) A comment_<id> mark now covers the selected text.
-    const commented = editor.api.nodes({
-      at: [],
-      match: (node) => Object.keys(node).some((key) => isCommentKey(key)),
-    });
-    const commentedText = Array.from(commented, ([node]) => NodeApi.string(node));
-    expect(commentedText).toEqual(['word']);
-
-    // (b) The store gained one comment entry authored by the local user.
-    const comments = useReviewStore.getState().getMeta().comments;
-    const ids = Object.keys(comments);
-    expect(ids).toHaveLength(1);
-    expect(comments[ids[0]].by).toBe('user');
   });
 });
 
