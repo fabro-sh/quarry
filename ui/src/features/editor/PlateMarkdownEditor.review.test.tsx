@@ -2,7 +2,6 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { isCommentKey } from '@platejs/comment';
 import { CommentPlugin } from '@platejs/comment/react';
 import { SuggestionPlugin } from '@platejs/suggestion/react';
-import { HighlightPlugin } from '@platejs/basic-nodes/react';
 import { NodeApi } from 'platejs';
 import { Plate, ParagraphPlugin, createPlateEditor } from 'platejs/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -77,7 +76,7 @@ describe('createCommentOnSelection', () => {
   it('marks the selected text with a comment id and records a store entry', () => {
     useReviewStore.getState().hydrate({ comments: {}, suggestions: {} });
     const editor = createPlateEditor({
-      plugins: [ParagraphPlugin, CommentPlugin, SuggestionPlugin, HighlightPlugin],
+      plugins: [ParagraphPlugin, CommentPlugin, SuggestionPlugin],
       value: [{ type: 'p', children: [{ text: 'Comment this word.' }] }],
     });
     // Select the word "word" (offsets 13–17 of "Comment this word.").

@@ -1,8 +1,8 @@
 import { expect, test, type Page, type Route } from 'playwright/test';
 
 // End-to-end proof of the review round-trip: a document with CriticMarkup review
-// marks loads with the right editor marks, and the highlight / comment / suggest /
-// accept controls (added in Tasks 6/7/9) persist back to Markdown through the RFM
+// marks loads with the right editor marks, and the comment / suggest / accept
+// controls (added in Tasks 6/7/9) persist back to Markdown through the RFM
 // codec. This mirrors tests/workspace.spec.ts: a mocked /v1 API serves and stores
 // documents, and the workspace loads them by clicking the tree item. The save flow
 // is a conditional PUT, so we capture the last PUT body to assert against the
@@ -39,29 +39,6 @@ test.describe('Review round-trip', () => {
     // Plate's CommentPlugin styles the commented leaf with `slate-comment`.
     const commented = editor.locator('.slate-comment');
     await expect(commented).toHaveText('here');
-  });
-
-  test('highlights a selected word and persists {==word==}', async ({ page }) => {
-    const saves = await installMockApi(page, [
-      { content: 'Highlight target here.\n', id: 'doc-hl', metadata: { title: 'HL' }, path: 'hl.md', version: 'v1' },
-    ]);
-
-    await page.goto('/');
-    await page.getByRole('treeitem', { name: /HL/ }).click();
-    const editor = page.getByLabel('Plate markdown editor');
-    await expect(editor).toContainText('Highlight target');
-
-    // Selecting a word raises the floating toolbar with the review controls.
-    await page.getByText('target', { exact: false }).dblclick();
-    await page.getByRole('button', { name: 'Highlight', exact: true }).click();
-
-    // The highlight leaf renders as a <mark> in the editor (Plate's default
-    // highlight leaf), and the saved Markdown gains the CriticMarkup highlight.
-    await expect(editor.locator('mark')).toHaveText('target');
-
-    await page.getByRole('button', { name: 'Save document' }).click();
-    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
-    expect(saves.lastBody('hl.md')).toContain('{==target==}');
   });
 
   test('suggests inserted text that persists as {++…++}{#id} with a suggestions endmatter', async ({ page }) => {

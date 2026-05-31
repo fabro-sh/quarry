@@ -1,4 +1,3 @@
-import { BaseHighlightPlugin } from '@platejs/basic-nodes';
 import { MarkdownPlugin } from '@platejs/markdown';
 import { createSlateEditor, type Descendant } from 'platejs';
 import remarkGfm from 'remark-gfm';
@@ -21,10 +20,6 @@ function commentId(leaf: Record<string, unknown>): string | null {
 /** Build the Plate MdRules that serialize review marks to CriticMarkup. */
 export function reviewMdRules(meta: ReviewMeta) {
   return {
-    highlight: {
-      mark: true,
-      serialize: (leaf: { text: string }) => ({ type: 'text', value: `{==${leaf.text}==}` }),
-    },
     suggestion: {
       mark: true,
       serialize: (leaf: Record<string, unknown> & { text: string }) => {
@@ -52,7 +47,6 @@ function serializerEditor(meta: ReviewMeta) {
   return createSlateEditor({
     plugins: [
       ...baseMarkdownPlugins,
-      BaseHighlightPlugin,
       MarkdownPlugin.configure({
         options: { remarkPlugins: [remarkGfm, remarkInlineMarks], rules: reviewMdRules(meta) },
       }),

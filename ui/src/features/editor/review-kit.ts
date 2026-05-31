@@ -1,6 +1,5 @@
 import { CommentPlugin } from '@platejs/comment/react';
 import { SuggestionPlugin } from '@platejs/suggestion/react';
-import { HighlightPlugin } from '@platejs/basic-nodes/react';
 import { CommentLeaf, SuggestionLeaf } from './review-leaves';
 
 // Review-layer marks for the live editor. Rendering/UI (leaf styling, rail,
@@ -15,5 +14,4 @@ export const reviewKit = [
   SuggestionPlugin.configure({
     render: { node: SuggestionLeaf },
   }),
-  HighlightPlugin,
 ];

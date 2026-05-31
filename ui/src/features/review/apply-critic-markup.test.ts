@@ -39,9 +39,9 @@ describe('applyCriticMarkup', () => {
     expect(outMeta.comments.c1.body).toBe('fix this');
   });
 
-  it('parses a bare highlight as a highlight mark (no comment)', () => {
+  it('unwraps a bare {==..==} (no comment) to plain text', () => {
     const { value } = applyCriticMarkup([p([{ text: 'pick {==this==} please' }])], emptyReviewMeta());
-    expect(value).toEqual([p([{ text: 'pick ' }, { text: 'this', highlight: true }, { text: ' please' }])]);
+    expect(value).toEqual([p([{ text: 'pick ' }, { text: 'this' }, { text: ' please' }])]);
   });
 
   it('synthesizes an id when a marker has none', () => {

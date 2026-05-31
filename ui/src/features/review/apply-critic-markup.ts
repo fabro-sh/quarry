@@ -82,7 +82,7 @@ function expandLeaf(node: TText, meta: ReviewMeta): TText[] {
         ensureComment(meta, id, g.cbody);
         out.push(leaf(rest, commentExtra(id), g.hl));
       } else {
-        out.push(leaf(rest, { highlight: true }, g.hl));
+        out.push(leaf(rest, {}, g.hl));
       }
     } else if (g.sold !== undefined && g.snew !== undefined) {
       const id = g.subid ?? nanoid();

@@ -50,7 +50,6 @@ import {
   Heading4,
   Heading5,
   Heading6,
-  Highlighter,
   Italic,
   List,
   ListOrdered,
@@ -404,10 +403,6 @@ function FloatingFormatToolbar() {
       <TodoListButton label="To-do list">
         <ListTodo size={15} />
       </TodoListButton>
-      <div aria-hidden="true" className="mx-0.5 h-5 w-px bg-line" />
-      <MarkButton label="Highlight" nodeType={KEYS.highlight}>
-        <Highlighter size={15} />
-      </MarkButton>
       <div aria-hidden="true" className="mx-0.5 h-5 w-px bg-line" />
       <SuggestToggle />
       <CommentButton />

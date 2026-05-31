@@ -3,11 +3,6 @@ import { serializeReviewBody } from './review-md-rules';
 import { emptyReviewMeta } from './rfm-types';
 
 describe('serializeReviewBody', () => {
-  it('emits a highlight mark as {==text==}', () => {
-    const value = [{ type: 'p', children: [{ text: 'pick ' }, { text: 'this', highlight: true }, { text: '.' }] }];
-    expect(serializeReviewBody(value, emptyReviewMeta())).toBe('pick {==this==}.');
-  });
-
   it('emits an insert suggestion as {++text++}{#id}', () => {
     const value = [
       { type: 'p', children: [{ text: 'add ' }, { text: 'more', suggestion: true, suggestion_s1: { id: 's1', type: 'insert', userId: 'AI', createdAt: 0 } }] },
