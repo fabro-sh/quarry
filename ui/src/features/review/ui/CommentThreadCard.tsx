@@ -1,11 +1,13 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { Check, MoreHorizontal, Trash2 } from 'lucide-react';
 import { nanoid } from 'nanoid';
+import type { PlateEditor } from 'platejs/react';
 import { useEffect, useRef, useState } from 'react';
 
 import { cn } from '../../../lib/utils';
 import { currentAuthor } from '../identity';
 import { formatRelativeTime, initials } from '../format';
+import { removeCommentMark } from '../remove-comment';
 import type { ReviewMeta, ReviewMetaEntry } from '../rfm-types';
 import { addReply, deleteComment, resolveComment, useReviewStore, type ReviewThread } from '../review-store';
 
@@ -36,7 +38,7 @@ function CommentHeader({ entry, badge }: { entry: ReviewMetaEntry; badge?: boole
   );
 }
 
-export function CommentThreadCard({ thread }: { thread: ReviewThread }) {
+export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; editor: PlateEditor }) {
   const activeId = useReviewStore((state) => state.activeId);
   const hoverId = useReviewStore((state) => state.hoverId);
   const setHoverId = useReviewStore((state) => state.setHoverId);
@@ -70,6 +72,7 @@ export function CommentThreadCard({ thread }: { thread: ReviewThread }) {
   }
 
   function remove() {
+    removeCommentMark(editor, thread.id);
     applyMeta((meta) => deleteComment(meta, thread.id));
   }
 

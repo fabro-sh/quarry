@@ -86,6 +86,37 @@ test.describe('Review rail', () => {
     expect(saved).toContain('status: resolved');
   });
 
+  test('delete removes the in-text mark and drops the comment from saved Markdown', async ({ page }) => {
+    const saves = await installMockApi(page, [
+      { content: COMMENTED_DOC, id: 'doc-rail', metadata: { title: 'Rail' }, path: 'rail.md', version: 'v1' },
+    ]);
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Rail/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('here');
+    await expect(editor.locator('[data-comment-id="c1"]')).toBeVisible();
+
+    // Delete lives behind the card's actions dropdown (Radix). Open it, then
+    // select the Delete item.
+    await page.getByRole('button', { name: 'Comment actions' }).click();
+    await page.getByRole('menuitem', { name: 'Delete' }).click();
+
+    // The in-text comment mark is gone (no more warn decoration) and so is the
+    // rail card.
+    await expect(editor.locator('[data-comment-id="c1"]')).toHaveCount(0);
+    await expect(page.getByTestId('comment-card')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Save document' }).click();
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
+
+    // Removing the mark drops the CriticMarkup comment markup from the persisted
+    // Markdown, so it won't reappear on reload.
+    const saved = saves.lastBody('rail.md');
+    expect(saved).not.toContain('{==');
+    expect(saved).not.toContain('{#c1}');
+  });
+
   test('accept from the rail applies the suggestion and drops the markup', async ({ page }) => {
     const saves = await installMockApi(page, [
       { content: 'Base sentence.\n', id: 'doc-acc', metadata: { title: 'AccRail' }, path: 'acc.md', version: 'v1' },

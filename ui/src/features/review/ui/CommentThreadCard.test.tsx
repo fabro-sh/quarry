@@ -1,12 +1,23 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { ParagraphPlugin, createPlateEditor } from 'platejs/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { reviewKit } from '../../editor/review-kit';
 import { addComment, addReply, buildThreads, useReviewStore } from '../review-store';
 import { emptyReviewMeta } from '../rfm-types';
 import { CommentThreadCard } from './CommentThreadCard';
 
 const at = '2026-01-01T00:00:00.000Z';
+
+// A real editor whose value carries the comment_c1 leaf mark, matching the
+// seeded thread id. Deleting the comment must clear this mark from the editor.
+function makeEditor() {
+  return createPlateEditor({
+    plugins: [ParagraphPlugin, ...reviewKit],
+    value: [{ type: 'p', children: [{ text: 'see ' }, { text: 'here', comment: true, comment_c1: true }, { text: '.' }] }],
+  });
+}
 
 function seedThread() {
   let meta = addComment(emptyReviewMeta(), 'c1', { by: 'reviewer', at, body: 'Please tighten this paragraph.' });
@@ -29,7 +40,7 @@ describe('CommentThreadCard', () => {
   });
 
   it('renders the root author and body and the reply body', () => {
-    render(<CommentThreadCard thread={seedThread()} />);
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
 
     expect(screen.getByText('reviewer')).toBeInTheDocument();
     expect(screen.getByText('Please tighten this paragraph.')).toBeInTheDocument();
@@ -37,7 +48,7 @@ describe('CommentThreadCard', () => {
   });
 
   it('adds a reply through the composer', async () => {
-    render(<CommentThreadCard thread={seedThread()} />);
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
 
     await userEvent.type(screen.getByTestId('reply-input'), 'Sounds good');
     await userEvent.click(screen.getByTestId('reply-submit'));
@@ -51,7 +62,7 @@ describe('CommentThreadCard', () => {
   });
 
   it('submits a reply on Enter without shift', async () => {
-    render(<CommentThreadCard thread={seedThread()} />);
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
 
     await userEvent.type(screen.getByTestId('reply-input'), 'Quick reply{Enter}');
 
@@ -60,13 +71,13 @@ describe('CommentThreadCard', () => {
   });
 
   it('disables submit when the composer is empty', () => {
-    render(<CommentThreadCard thread={seedThread()} />);
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
 
     expect(screen.getByTestId('reply-submit')).toBeDisabled();
   });
 
   it('marks the comment active on card click', async () => {
-    render(<CommentThreadCard thread={seedThread()} />);
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
 
     act(() => {
       fireEvent.click(screen.getByText('Please tighten this paragraph.'));
@@ -76,7 +87,7 @@ describe('CommentThreadCard', () => {
   });
 
   it('reflects the active id with data-active and the active ring', () => {
-    render(<CommentThreadCard thread={seedThread()} />);
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
     const card = screen.getByTestId('comment-card');
 
     expect(card).toHaveAttribute('data-active', 'false');
@@ -90,7 +101,7 @@ describe('CommentThreadCard', () => {
   });
 
   it('reflects the hover id with data-hover', () => {
-    render(<CommentThreadCard thread={seedThread()} />);
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
     const card = screen.getByTestId('comment-card');
 
     expect(card).toHaveAttribute('data-hover', 'false');
@@ -103,7 +114,7 @@ describe('CommentThreadCard', () => {
   });
 
   it('sets the hover id on card mouse enter and clears it on leave', () => {
-    render(<CommentThreadCard thread={seedThread()} />);
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
     const card = screen.getByTestId('comment-card');
 
     fireEvent.mouseEnter(card);
@@ -115,7 +126,7 @@ describe('CommentThreadCard', () => {
 
   it('scrolls into view when it becomes active', () => {
     const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
-    render(<CommentThreadCard thread={seedThread()} />);
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
 
     expect(scrollIntoView).not.toHaveBeenCalled();
 
@@ -128,7 +139,7 @@ describe('CommentThreadCard', () => {
   });
 
   it('resolves the comment from the actions menu', async () => {
-    render(<CommentThreadCard thread={seedThread()} />);
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
 
     await userEvent.click(screen.getByRole('button', { name: 'Comment actions' }));
     await userEvent.click(await screen.findByTestId('resolve-comment'));
@@ -136,13 +147,15 @@ describe('CommentThreadCard', () => {
     expect(useReviewStore.getState().getMeta().comments.c1.status).toBe('resolved');
   });
 
-  it('deletes the comment and its replies from the actions menu', async () => {
-    render(<CommentThreadCard thread={seedThread()} />);
+  it('deletes the comment from the store and clears its leaf mark from the editor', async () => {
+    const editor = makeEditor();
+    render(<CommentThreadCard thread={seedThread()} editor={editor} />);
 
     await userEvent.click(screen.getByRole('button', { name: 'Comment actions' }));
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
 
     expect(useReviewStore.getState().getMeta().comments).toEqual({});
+    expect(JSON.stringify(editor.children)).not.toContain('comment_c1');
   });
 
   it('shows a Resolved badge and hides the resolve action when resolved', async () => {
@@ -151,7 +164,7 @@ describe('CommentThreadCard', () => {
     useReviewStore.getState().hydrate(meta);
     const thread = buildThreads(useReviewStore.getState().getMeta())[0];
 
-    render(<CommentThreadCard thread={thread} />);
+    render(<CommentThreadCard thread={thread} editor={makeEditor()} />);
 
     expect(screen.getByText('Resolved')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Comment actions' }));

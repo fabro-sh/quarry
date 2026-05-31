@@ -28,7 +28,7 @@ export function ReviewRail({ editor }: { editor: PlateEditor }) {
       data-testid="review-rail"
     >
       {threads.map((thread) => (
-        <CommentThreadCard key={thread.id} thread={thread} />
+        <CommentThreadCard key={thread.id} thread={thread} editor={editor} />
       ))}
       {suggestions.map((suggestion) => (
         <SuggestionCard
