@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addComment, addReply, resolveComment, deleteComment, buildThreads, syncSuggestionsFromValue } from './review-store';
+import { addComment, addReply, resolveComment, deleteComment, buildThreads, syncSuggestionsFromValue, useReviewStore } from './review-store';
 import { emptyReviewMeta } from './rfm-types';
 
 const at = '2026-01-01T00:00:00.000Z';
@@ -55,5 +55,16 @@ describe('review-store reducers', () => {
     const value = [{ type: 'p', children: [{ text: 'x', suggestion: true, suggestion_s1: { id: 's1', type: 'insert', userId: 'someone-else', createdAt: 0 } }] }];
     const meta = syncSuggestionsFromValue({ comments: {}, suggestions: { s1: { by: 'AI', at } } }, value);
     expect(meta.suggestions.s1).toEqual({ by: 'AI', at });
+  });
+});
+
+describe('review-store active/hover', () => {
+  it('sets and clears activeId / hoverId', () => {
+    useReviewStore.getState().setActiveId('c1');
+    expect(useReviewStore.getState().activeId).toBe('c1');
+    useReviewStore.getState().setHoverId('s1');
+    expect(useReviewStore.getState().hoverId).toBe('s1');
+    useReviewStore.getState().setActiveId(null);
+    expect(useReviewStore.getState().activeId).toBeNull();
   });
 });

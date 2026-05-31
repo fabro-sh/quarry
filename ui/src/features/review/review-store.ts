@@ -90,6 +90,10 @@ interface ReviewStoreState {
   hydrate: (meta: ReviewMeta) => void;
   setMeta: (meta: ReviewMeta) => void;
   getMeta: () => ReviewMeta;
+  activeId: string | null;
+  hoverId: string | null;
+  setActiveId: (id: string | null) => void;
+  setHoverId: (id: string | null) => void;
 }
 
 export const useReviewStore = create<ReviewStoreState>((set, get) => ({
@@ -97,4 +101,8 @@ export const useReviewStore = create<ReviewStoreState>((set, get) => ({
   hydrate: (meta) => set({ meta }),
   setMeta: (meta) => set({ meta }),
   getMeta: () => get().meta,
+  activeId: null,
+  hoverId: null,
+  setActiveId: (id) => set({ activeId: id }),
+  setHoverId: (id) => set({ hoverId: id }),
 }));
