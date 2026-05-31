@@ -5,7 +5,7 @@ import { SuggestionPlugin } from '@platejs/suggestion/react';
 import { HighlightPlugin } from '@platejs/basic-nodes/react';
 import { NodeApi } from 'platejs';
 import { Plate, ParagraphPlugin, createPlateEditor } from 'platejs/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createCommentOnSelection, PlateMarkdownEditor, SuggestingPill } from './PlateMarkdownEditor';
 import { reviewKit } from './review-kit';
 import { useReviewStore } from '../review/review-store';
@@ -22,6 +22,18 @@ const DOC_B = 'A different document with no review marks.\n';
 // store meta.
 const DOC_C = 'See {==here==}{>>fix this<<}{#c1}.\n\n---\ncomments:\n  c1:\n    at: "2026-01-01T00:00:00.000Z"\n    by: user\n';
 const DOC_D = 'Look {==there==}{>>change me<<}{#c9}.\n\n---\ncomments:\n  c9:\n    at: "2026-02-02T00:00:00.000Z"\n    by: user\n';
+
+// These tests render <PlateMarkdownEditor> / call createCommentOnSelection, both
+// of which write to the global useReviewStore singleton. Reset it around every
+// test so they neither leave nor depend on dirty shared state.
+function resetReviewStore() {
+  useReviewStore.getState().hydrate(emptyReviewMeta());
+  useReviewStore.getState().setActiveId(null);
+  useReviewStore.getState().setHoverId(null);
+}
+
+beforeEach(resetReviewStore);
+afterEach(resetReviewStore);
 
 describe('PlateMarkdownEditor review round-trip', () => {
   it('renders a commented range as a comment mark', () => {

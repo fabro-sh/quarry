@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { addComment, addReply, resolveComment, deleteComment, buildThreads, syncSuggestionsFromValue, useReviewStore } from './review-store';
 import { emptyReviewMeta } from './rfm-types';
 
@@ -59,6 +59,11 @@ describe('review-store reducers', () => {
 });
 
 describe('review-store active/hover', () => {
+  afterEach(() => {
+    useReviewStore.getState().setActiveId(null);
+    useReviewStore.getState().setHoverId(null);
+  });
+
   it('sets and clears activeId / hoverId', () => {
     useReviewStore.getState().setActiveId('c1');
     expect(useReviewStore.getState().activeId).toBe('c1');
