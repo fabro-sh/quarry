@@ -22,6 +22,13 @@ describe('serializeReviewBody', () => {
     expect(serializeReviewBody(value, emptyReviewMeta())).toBe('drop {--this--}{#s2}');
   });
 
+  it('emits an update suggestion as plain text (no CriticMarkup)', () => {
+    const value = [
+      { type: 'p', children: [{ text: 'keep ' }, { text: 'this', suggestion: true, suggestion_s3: { id: 's3', type: 'update', userId: 'AI', createdAt: 0 } }] },
+    ];
+    expect(serializeReviewBody(value, emptyReviewMeta())).toBe('keep this');
+  });
+
   it('emits a comment as {==anchor==}{>>body<<}{#id} using the body from meta', () => {
     const value = [{ type: 'p', children: [{ text: 'see ' }, { text: 'here', comment: true, comment_c1: true }] }];
     const meta = { comments: { c1: { by: 'user', at: 'x', body: 'fix this' } }, suggestions: {} };

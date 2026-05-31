@@ -29,7 +29,7 @@ export function reviewMdRules(meta: ReviewMeta) {
       mark: true,
       serialize: (leaf: Record<string, unknown> & { text: string }) => {
         const data = readSuggestionMark(leaf);
-        if (!data) return { type: 'text', value: leaf.text };
+        if (!data || data.type === 'update') return { type: 'text', value: leaf.text };
         const open = data.type === 'remove' ? '{--' : '{++';
         const close = data.type === 'remove' ? '--}' : '++}';
         return { type: 'text', value: `${open}${leaf.text}${close}{#${data.id}}` };
