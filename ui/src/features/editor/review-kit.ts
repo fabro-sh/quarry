@@ -1,6 +1,7 @@
 import { CommentPlugin } from '@platejs/comment/react';
 import { SuggestionPlugin } from '@platejs/suggestion/react';
 import { HighlightPlugin } from '@platejs/basic-nodes/react';
+import { CommentLeaf, SuggestionLeaf } from './review-leaves';
 
 // Review-layer marks for the live editor. Rendering/UI (leaf styling, rail,
 // toolbar) is a later plan; this only registers the marks + the comment
@@ -9,7 +10,10 @@ import { HighlightPlugin } from '@platejs/basic-nodes/react';
 export const reviewKit = [
   CommentPlugin.configure({
     shortcuts: { setDraft: { keys: 'mod+shift+m' } },
+    render: { node: CommentLeaf },
   }),
-  SuggestionPlugin,
+  SuggestionPlugin.configure({
+    render: { node: SuggestionLeaf },
+  }),
   HighlightPlugin,
 ];
