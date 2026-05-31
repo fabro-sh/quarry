@@ -102,6 +102,7 @@ import { currentAuthor } from '../review/identity';
 import { markdownToReview, reviewToMarkdown } from '../review/rfm-codec';
 import { addComment, syncSuggestionsFromValue, useReviewStore } from '../review/review-store';
 import { acceptSuggestionById, rejectSuggestionById } from '../review/accept-reject';
+import { ReviewRail } from '../review/ui/ReviewRail';
 
 // Notion-style markdown shortcuts: typing the markdown prefix at the start of a
 // block (or wrapping marks) auto-converts it. Scoped to the surface Quarry
@@ -320,13 +321,18 @@ export function PlateMarkdownEditor({
       }}
     >
       {disabled ? null : <FloatingFormatToolbar />}
-      <PlateContent
-        aria-label="Plate markdown editor"
-        className="min-h-full w-full px-[max(2rem,calc((100%-68ch)/2))] pt-16 pb-8 text-[15px] leading-7 text-ink outline-none [&_[data-slate-placeholder=true]]:text-faint"
-        disabled={disabled}
-        placeholder="Write markdown…"
-        spellCheck={false}
-      />
+      <div className="flex h-full min-h-0">
+        <div className="min-w-0 flex-1 overflow-auto">
+          <PlateContent
+            aria-label="Plate markdown editor"
+            className="min-h-full w-full px-[max(2rem,calc((100%-68ch)/2))] pt-16 pb-8 text-[15px] leading-7 text-ink outline-none [&_[data-slate-placeholder=true]]:text-faint"
+            disabled={disabled}
+            placeholder="Write markdown…"
+            spellCheck={false}
+          />
+        </div>
+        <ReviewRail editor={editor} />
+      </div>
     </Plate>
   );
 }
