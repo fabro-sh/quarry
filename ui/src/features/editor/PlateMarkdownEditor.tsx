@@ -66,6 +66,7 @@ import {
   Trash2,
   Type,
   Underline,
+  X,
 } from 'lucide-react';
 import { nanoid } from 'nanoid';
 import { ElementApi, KEYS, NodeApi, PathApi, type Descendant, type TElement, type TListElement } from 'platejs';
@@ -100,6 +101,7 @@ import { reviewKit } from './review-kit';
 import { currentAuthor } from '../review/identity';
 import { markdownToReview, reviewToMarkdown } from '../review/rfm-codec';
 import { addComment, syncSuggestionsFromValue, useReviewStore } from '../review/review-store';
+import { acceptSuggestionById, rejectSuggestionById } from '../review/accept-reject';
 
 // Notion-style markdown shortcuts: typing the markdown prefix at the start of a
 // block (or wrapping marks) auto-converts it. Scoped to the surface Quarry
@@ -389,7 +391,55 @@ function FloatingFormatToolbar() {
       <div aria-hidden="true" className="mx-0.5 h-5 w-px bg-line" />
       <SuggestToggle />
       <CommentButton />
+      <SuggestionActions />
     </div>
+  );
+}
+
+// When the selection sits inside a suggestion, expose minimal Accept/Reject
+// controls that apply or revert it. Plan 3 builds the full per-card review rail;
+// this is the minimal reachable surface so the accept/reject behavior exists in
+// the editor. The id under the selection drives `acceptSuggestionById` /
+// `rejectSuggestionById` from the tested command layer.
+function SuggestionActions() {
+  const editor = useEditorRef();
+  const suggestionId = useEditorSelector((ed) => {
+    const entry = ed.getApi(SuggestionPlugin).suggestion.node({ isText: true });
+    return entry ? ed.getApi(SuggestionPlugin).suggestion.nodeId(entry[0]) : undefined;
+  }, []);
+  if (!suggestionId) return null;
+  return (
+    <>
+      <div aria-hidden="true" className="mx-0.5 h-5 w-px bg-line" />
+      <button
+        aria-label="Accept suggestion"
+        className="inline-flex size-7 items-center justify-center rounded text-muted transition-colors hover:bg-well hover:text-body"
+        data-testid="accept-suggestion"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => {
+          acceptSuggestionById(editor, suggestionId);
+          editor.tf.focus();
+        }}
+        title="Accept suggestion"
+        type="button"
+      >
+        <Check size={15} />
+      </button>
+      <button
+        aria-label="Reject suggestion"
+        className="inline-flex size-7 items-center justify-center rounded text-muted transition-colors hover:bg-well hover:text-body"
+        data-testid="reject-suggestion"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => {
+          rejectSuggestionById(editor, suggestionId);
+          editor.tf.focus();
+        }}
+        title="Reject suggestion"
+        type="button"
+      >
+        <X size={15} />
+      </button>
+    </>
   );
 }
 
