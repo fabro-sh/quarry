@@ -1,10 +1,7 @@
 import { create } from 'zustand';
 import type { Descendant } from 'platejs';
-import { emptyReviewMeta, type ReviewMeta, type ReviewMetaEntry } from './rfm-types';
-
-function cloneMeta(meta: ReviewMeta): ReviewMeta {
-  return { comments: { ...meta.comments }, suggestions: { ...meta.suggestions } };
-}
+import { cloneMeta, emptyReviewMeta, type ReviewMeta, type ReviewMetaEntry } from './rfm-types';
+import { readSuggestionMark } from './suggestion-mark';
 
 export function addComment(meta: ReviewMeta, id: string, fields: { by: string; at: string; body?: string }): ReviewMeta {
   const next = cloneMeta(meta);
@@ -72,18 +69,10 @@ export function buildThreads(meta: ReviewMeta): ReviewThread[] {
 export function syncSuggestionsFromValue(meta: ReviewMeta, value: Descendant[]): ReviewMeta {
   const next = cloneMeta(meta);
   const visit = (node: Record<string, unknown>) => {
-    for (const key of Object.keys(node)) {
-      if (!key.startsWith('suggestion_')) continue;
-      const raw = node[key];
-      if (typeof raw !== 'object' || raw === null) continue;
-      const data: Record<string, unknown> = { ...raw };
-      const id = data.id;
-      const userId = data.userId;
-      const createdAt = data.createdAt;
-      if (typeof id === 'string' && !next.suggestions[id]) {
-        const at = typeof createdAt === 'number' && createdAt > 0 ? new Date(createdAt).toISOString() : new Date().toISOString();
-        next.suggestions[id] = { by: typeof userId === 'string' ? userId : 'user', at };
-      }
+    const mark = readSuggestionMark(node);
+    if (mark && !next.suggestions[mark.id]) {
+      const at = mark.createdAt > 0 ? new Date(mark.createdAt).toISOString() : new Date().toISOString();
+      next.suggestions[mark.id] = { by: mark.userId, at };
     }
     const children = node.children;
     if (Array.isArray(children)) {

@@ -1,7 +1,7 @@
 import { nanoid } from 'nanoid';
 import type { Descendant, TElement, TText } from 'platejs';
 
-import type { ReviewMeta } from './rfm-types';
+import { cloneMeta, type ReviewMeta } from './rfm-types';
 
 type Props = Record<string, unknown>;
 
@@ -139,6 +139,6 @@ function walkChildren(value: Descendant[], inCode: boolean, meta: ReviewMeta): D
  * marked `code` are left literal.
  */
 export function applyCriticMarkup(value: Descendant[], meta: ReviewMeta): { value: Descendant[]; meta: ReviewMeta } {
-  const nextMeta: ReviewMeta = { comments: { ...meta.comments }, suggestions: { ...meta.suggestions } };
+  const nextMeta = cloneMeta(meta);
   return { value: walkChildren(value, false, nextMeta), meta: nextMeta };
 }

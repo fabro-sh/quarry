@@ -1,6 +1,8 @@
 import { getSuggestionKey, keyId2SuggestionId, type TResolvedSuggestion } from '@platejs/suggestion';
 import type { Descendant } from 'platejs';
 
+import { readSuggestionMark } from './suggestion-mark';
+
 interface Acc { newText: string; text: string; userId: string; createdAt: number; }
 
 export function resolveSuggestions(value: Descendant[]): TResolvedSuggestion[] {
@@ -8,18 +10,12 @@ export function resolveSuggestions(value: Descendant[]): TResolvedSuggestion[] {
   const visit = (node: Record<string, unknown>) => {
     const text = node.text;
     if (typeof text === 'string') {
-      for (const key of Object.keys(node)) {
-        if (!key.startsWith('suggestion_')) continue;
-        const raw = node[key];
-        if (typeof raw !== 'object' || raw === null) continue;
-        const data: Record<string, unknown> = { ...raw };
-        const id = data.id;
-        const type = data.type;
-        if (typeof id !== 'string') continue;
-        const acc = byId.get(id) ?? { newText: '', text: '', userId: typeof data.userId === 'string' ? data.userId : 'user', createdAt: typeof data.createdAt === 'number' ? data.createdAt : 0 };
-        if (type === 'insert') acc.newText += text;
-        else if (type === 'remove') acc.text += text;
-        byId.set(id, acc);
+      const mark = readSuggestionMark(node);
+      if (mark) {
+        const acc = byId.get(mark.id) ?? { newText: '', text: '', userId: mark.userId, createdAt: mark.createdAt };
+        if (mark.type === 'insert') acc.newText += text;
+        else if (mark.type === 'remove') acc.text += text;
+        byId.set(mark.id, acc);
       }
     }
     const children = node.children;

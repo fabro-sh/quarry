@@ -24,6 +24,10 @@ export function emptyReviewMeta(): ReviewMeta {
   return { comments: {}, suggestions: {} };
 }
 
+export function cloneMeta(meta: ReviewMeta): ReviewMeta {
+  return { comments: { ...meta.comments }, suggestions: { ...meta.suggestions } };
+}
+
 export function isEmptyReviewMeta(meta: ReviewMeta): boolean {
   return Object.keys(meta.comments).length === 0 && Object.keys(meta.suggestions).length === 0;
 }

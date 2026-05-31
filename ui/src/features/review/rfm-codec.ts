@@ -9,6 +9,7 @@ import { collapseSubstitutions, expandSubstitutions } from './collapse-substitut
 import { serializeReviewMeta, splitEndmatter } from './endmatter';
 import { emptyReviewMeta, type ReviewMeta, type ReviewMetaEntry } from './rfm-types';
 import { serializeReviewBody } from './review-md-rules';
+import { readSuggestionMark } from './suggestion-mark';
 
 interface ReviewDocument {
   value: Descendant[];
@@ -49,20 +50,13 @@ function collectIds(nodes: Descendant[], live: LiveIds): void {
       if (key === 'comment_draft') continue;
       if (key.startsWith('comment_') && node[key] === true) {
         live.comments.add(key.slice('comment_'.length));
-      } else if (key.startsWith('suggestion_')) {
-        const id = suggestionId(node[key]);
-        if (id) live.suggestions.add(id);
       }
     }
+    const mark = readSuggestionMark(node);
+    if (mark) live.suggestions.add(mark.id);
     const children = node.children;
     if (Array.isArray(children)) collectIds(children, live);
   }
-}
-
-function suggestionId(raw: unknown): string | null {
-  if (typeof raw !== 'object' || raw === null) return null;
-  const data: Record<string, unknown> = { ...raw };
-  return typeof data.id === 'string' ? data.id : null;
 }
 
 /** Drop metadata whose anchor mark no longer exists (replies survive while their parent does). */
