@@ -1,12 +1,12 @@
 import { expect, test, type Page, type Route } from 'playwright/test';
 
-// End-to-end proof of the review round-trip: a document with CriticMarkup review
-// marks loads with the right editor marks, and the highlight / comment / suggest /
-// accept controls (added in Tasks 6/7/9) persist back to Markdown through the RFM
-// codec. This mirrors tests/workspace.spec.ts: a mocked /v1 API serves and stores
-// documents, and the workspace loads them by clicking the tree item. The save flow
-// is a conditional PUT, so we capture the last PUT body to assert against the
-// persisted Markdown — the actual round-trip contract.
+// End-to-end proof of the review rail (Plan 3): the rail lists comment threads
+// and live suggestions for the document, and its controls (reply, resolve,
+// accept) persist back to Markdown through the RFM codec, while hovering a card
+// syncs to the in-text mark. This mirrors tests/review-round-trip.spec.ts: a
+// mocked /v1 API serves and stores documents, the workspace loads them by
+// clicking the tree item, and the save flow is a conditional PUT whose body we
+// capture to assert against the persisted Markdown.
 
 interface MockDocument {
   content: string;
@@ -16,67 +16,88 @@ interface MockDocument {
   version: string;
 }
 
-// The seed document from the review unit tests: a commented "here" range plus the
-// matching `comments:` endmatter so the comment mark survives the codec.
+// A commented "here" range plus the matching `comments:` endmatter so the
+// comment mark survives the codec and the rail hydrates `c1` from the store.
 const COMMENTED_DOC =
   'See {==here==}{>>fix this<<}{#c1}.\n\n---\ncomments:\n  c1:\n    at: "2026-01-01T00:00:00.000Z"\n    by: user\n';
 
-test.describe('Review round-trip', () => {
+test.describe('Review rail', () => {
   test.beforeEach(async ({ page }) => {
     await disableEventSource(page);
   });
 
-  test('renders the commented range with the comment mark on load', async ({ page }) => {
+  test('shows a comment card for the document thread', async ({ page }) => {
     await installMockApi(page, [
-      { content: COMMENTED_DOC, id: 'doc-review', metadata: { title: 'Review' }, path: 'review.md', version: 'v1' },
+      { content: COMMENTED_DOC, id: 'doc-rail', metadata: { title: 'Rail' }, path: 'rail.md', version: 'v1' },
     ]);
 
     await page.goto('/');
-    await page.getByRole('treeitem', { name: /Review/ }).click();
+    await page.getByRole('treeitem', { name: /Rail/ }).click();
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('here');
 
-    const editor = page.getByLabel('Plate markdown editor');
-    await expect(editor).toContainText('here');
-    // Plate's CommentPlugin styles the commented leaf with `slate-comment`.
-    const commented = editor.locator('.slate-comment');
-    await expect(commented).toHaveText('here');
+    await expect(page.getByTestId('review-rail')).toBeVisible();
+    const card = page.getByTestId('comment-card');
+    await expect(card).toBeVisible();
+    await expect(card).toContainText('fix this');
   });
 
-  test('highlights a selected word and persists {==word==}', async ({ page }) => {
+  test('reply persists the new comment with a `re:` parent and body', async ({ page }) => {
     const saves = await installMockApi(page, [
-      { content: 'Highlight target here.\n', id: 'doc-hl', metadata: { title: 'HL' }, path: 'hl.md', version: 'v1' },
+      { content: COMMENTED_DOC, id: 'doc-rail', metadata: { title: 'Rail' }, path: 'rail.md', version: 'v1' },
     ]);
 
     await page.goto('/');
-    await page.getByRole('treeitem', { name: /HL/ }).click();
-    const editor = page.getByLabel('Plate markdown editor');
-    await expect(editor).toContainText('Highlight target');
+    await page.getByRole('treeitem', { name: /Rail/ }).click();
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('here');
 
-    // Selecting a word raises the floating toolbar with the review controls.
-    await page.getByText('target', { exact: false }).dblclick();
-    await page.getByRole('button', { name: 'Highlight', exact: true }).click();
-
-    // The highlight leaf renders as a <mark> in the editor (Plate's default
-    // highlight leaf), and the saved Markdown gains the CriticMarkup highlight.
-    await expect(editor.locator('mark')).toHaveText('target');
+    await page.getByTestId('reply-input').fill('Looks good now');
+    await page.getByTestId('reply-submit').click();
 
     await page.getByRole('button', { name: 'Save document' }).click();
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
-    expect(saves.lastBody('hl.md')).toContain('{==target==}');
+
+    // The reply serializes as a sibling comment entry pointing back at c1 via
+    // `re:`, carrying the reply body — the store's reply round-trip.
+    const saved = saves.lastBody('rail.md');
+    expect(saved).toContain('re: c1');
+    expect(saved).toContain('Looks good now');
   });
 
-  test('suggests inserted text that persists as {++…++}{#id} with a suggestions endmatter', async ({ page }) => {
+  test('resolve persists `status: resolved` for the thread', async ({ page }) => {
     const saves = await installMockApi(page, [
-      { content: 'Base sentence.\n', id: 'doc-sg', metadata: { title: 'SG' }, path: 'sg.md', version: 'v1' },
+      { content: COMMENTED_DOC, id: 'doc-rail', metadata: { title: 'Rail' }, path: 'rail.md', version: 'v1' },
     ]);
 
     await page.goto('/');
-    await page.getByRole('treeitem', { name: /SG/ }).click();
+    await page.getByRole('treeitem', { name: /Rail/ }).click();
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('here');
+
+    // Resolve lives behind the card's actions dropdown (Radix). Open it, then
+    // select the Resolve item.
+    await page.getByRole('button', { name: 'Comment actions' }).click();
+    const resolve = page.getByTestId('resolve-comment');
+    await expect(resolve).toBeVisible();
+    await resolve.click();
+
+    await page.getByRole('button', { name: 'Save document' }).click();
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
+
+    const saved = saves.lastBody('rail.md');
+    expect(saved).toContain('status: resolved');
+  });
+
+  test('accept from the rail applies the suggestion and drops the markup', async ({ page }) => {
+    const saves = await installMockApi(page, [
+      { content: 'Base sentence.\n', id: 'doc-acc', metadata: { title: 'AccRail' }, path: 'acc.md', version: 'v1' },
+    ]);
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /AccRail/ }).click();
     const editor = page.getByLabel('Plate markdown editor');
     await expect(editor).toContainText('Base sentence');
 
-    // Enter suggesting mode via the toolbar toggle (it lives in the same floating
-    // toolbar, so raise the toolbar with a selection first), then type. While
-    // suggesting, typed text becomes a suggestion (insertion) mark.
+    // Enter suggesting mode via the toolbar toggle (raise the toolbar with a
+    // selection first), then type so the inserted text becomes a suggestion.
     await page.getByText('Base sentence', { exact: false }).dblclick();
     const suggest = page.getByTestId('suggest-toggle');
     await suggest.click();
@@ -87,51 +108,44 @@ test.describe('Review round-trip', () => {
     await page.keyboard.type(' added');
     await expect(editor).toContainText('added');
 
+    // The new suggestion appears in the rail; accept it from there.
+    const card = page.getByTestId('suggestion-card');
+    await expect(card).toBeVisible();
+    await page.getByTestId('rail-accept').click();
+
+    // The suggestion card is gone and the inserted text remains as plain prose.
+    // Accepting via `withoutSuggestions` strips the mark; suggesting mode staying
+    // on only affects future edits, so no plain text is re-decorated.
+    await expect(page.getByTestId('suggestion-card')).toHaveCount(0);
+    await expect(editor).toContainText('added');
+
     await page.getByRole('button', { name: 'Save document' }).click();
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
 
-    // The insertion serializes to `{++…++}{#id}` and records a `suggestions:`
-    // endmatter entry — the codec's round-trip for a live suggestion.
-    const saved = saves.lastBody('sg.md');
-    expect(saved).toMatch(/\{\+\+[^}]*added[^}]*\+\+\}\{#[^}]+\}/);
-    expect(saved).toContain('suggestions:');
+    // Accepting an insertion keeps the text but removes the CriticMarkup
+    // insertion marker from the persisted Markdown.
+    const saved = saves.lastBody('acc.md');
+    expect(saved).toContain('added');
+    expect(saved).not.toContain('{++');
   });
 
-  test('accepts a suggestion: applies the text and drops the markup', async ({ page }) => {
-    // Load a document that already carries an insertion suggestion plus its
-    // endmatter, so the Accept control is reachable from a selection inside it.
-    const suggestedDoc =
-      'Keep {++this++}{#s1} text.\n\n---\nsuggestions:\n  s1:\n    at: "2026-01-01T00:00:00.000Z"\n    by: user\n';
-    const saves = await installMockApi(page, [
-      { content: suggestedDoc, id: 'doc-acc', metadata: { title: 'ACC' }, path: 'acc.md', version: 'v1' },
+  test('hovering a comment card highlights the matching in-text mark', async ({ page }) => {
+    await installMockApi(page, [
+      { content: COMMENTED_DOC, id: 'doc-rail', metadata: { title: 'Rail' }, path: 'rail.md', version: 'v1' },
     ]);
 
     await page.goto('/');
-    await page.getByRole('treeitem', { name: /ACC/ }).click();
+    await page.getByRole('treeitem', { name: /Rail/ }).click();
     const editor = page.getByLabel('Plate markdown editor');
-    await expect(editor).toContainText('this');
+    await expect(editor).toContainText('here');
 
-    // Put the selection inside the suggested word so the Accept control renders.
-    // Scope to the editor: the rail's suggestion card also renders this word.
-    await editor.getByText('this', { exact: false }).dblclick();
-    const accept = page.getByTestId('accept-suggestion');
-    await expect(accept).toBeVisible();
-    await accept.click();
+    const mark = editor.locator('[data-comment-id="c1"]');
+    await expect(mark).toHaveAttribute('data-hover', 'false');
 
-    // The Accept control disappears (no suggestion under the selection) and the
-    // suggested text remains in the editor.
-    await expect(page.getByTestId('accept-suggestion')).toHaveCount(0);
-    await expect(editor).toContainText('Keep this text');
-
-    await page.getByRole('button', { name: 'Save document' }).click();
-    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
-
-    // Accepting an insertion keeps the text but removes the CriticMarkup and the
-    // suggestion endmatter from the persisted Markdown.
-    const saved = saves.lastBody('acc.md');
-    expect(saved).toContain('Keep this text.');
-    expect(saved).not.toContain('{++');
-    expect(saved).not.toContain('suggestions:');
+    // Hovering the card sets the shared store hoverId, which the in-text leaf
+    // reads to flip its data-hover.
+    await page.getByTestId('comment-card').hover();
+    await expect(mark).toHaveAttribute('data-hover', 'true');
   });
 });
 
