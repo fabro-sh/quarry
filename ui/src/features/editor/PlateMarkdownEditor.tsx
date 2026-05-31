@@ -288,12 +288,14 @@ export function PlateMarkdownEditor({
     // that notification short-circuit on the equality guard, so a pure document
     // load doesn't spuriously fire `onChange` and mark the doc dirty.
     lastContentRef.current = content;
-    // Reseed via the shared `serialize` so the baseline matches what the save
-    // paths produce. For a freshly-loaded value `syncSuggestionsFromValue` is a
-    // no-op, so this equals `reviewToMarkdown(value, meta)` — behavior-identical.
-    lastSerializedRef.current = serialize(value as PlateValue);
+    // Reseed from the INCOMING doc's freshly-parsed `meta` — NOT the shared
+    // `serialize`, which reads `storeGetMeta()` (still the OUTGOING doc's meta
+    // until `storeHydrate` runs on the next line). The store subscription fires
+    // synchronously inside `storeHydrate` with the new meta; the baseline must
+    // match that, or a pure load spuriously fires onChange.
+    lastSerializedRef.current = reviewToMarkdown(value as never, meta);
     storeHydrate(meta);
-  }, [content, editor, serialize, storeHydrate]);
+  }, [content, editor, storeHydrate]);
 
   // Replies/resolves and synced suggestions live in the store, not the editor
   // value, so an editor-value change won't fire. Save on store changes too.

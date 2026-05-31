@@ -16,6 +16,12 @@ import { syncSuggestionsFromValue } from '../review/review-store';
 
 const DOC = 'See {==here==}{>>fix this<<}{#c1}.\n\n---\ncomments:\n  c1:\n    at: "2026-01-01T00:00:00.000Z"\n    by: user\n';
 const DOC_B = 'A different document with no review marks.\n';
+// Two distinct documents that BOTH carry review marks + endmatter. Swapping
+// between them is the case that exposes the reseed bug: the baseline must be
+// computed from the INCOMING doc's freshly-parsed meta, not the outgoing doc's
+// store meta.
+const DOC_C = 'See {==here==}{>>fix this<<}{#c1}.\n\n---\ncomments:\n  c1:\n    at: "2026-01-01T00:00:00.000Z"\n    by: user\n';
+const DOC_D = 'Look {==there==}{>>change me<<}{#c9}.\n\n---\ncomments:\n  c9:\n    at: "2026-02-02T00:00:00.000Z"\n    by: user\n';
 
 describe('PlateMarkdownEditor review round-trip', () => {
   it('renders a commented range as a comment mark', () => {
@@ -38,6 +44,19 @@ describe('PlateMarkdownEditor review round-trip', () => {
     // fix this fired onChange once with DOC_B's serialized text.)
     onChange.mockClear();
     rerender(<PlateMarkdownEditor content={DOC_B} onChange={onChange} />);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('does not fire onChange when swapping between two docs that both carry review marks', () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<PlateMarkdownEditor content={DOC_C} onChange={onChange} />);
+    // The reseed baseline must be derived from the INCOMING doc's freshly-parsed
+    // meta. If it instead serializes using the outgoing doc's store meta (which
+    // `storeHydrate` only replaces on the next line), the store subscription —
+    // fired synchronously inside `storeHydrate` with the new meta — diverges
+    // from the stale baseline and spuriously fires onChange on a pure load.
+    onChange.mockClear();
+    rerender(<PlateMarkdownEditor content={DOC_D} onChange={onChange} />);
     expect(onChange).not.toHaveBeenCalled();
   });
 });
