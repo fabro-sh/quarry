@@ -288,12 +288,17 @@ export function PlateMarkdownEditor({
     // that notification short-circuit on the equality guard, so a pure document
     // load doesn't spuriously fire `onChange` and mark the doc dirty.
     lastContentRef.current = content;
-    lastSerializedRef.current = reviewToMarkdown(value as never, meta);
+    // Reseed via the shared `serialize` so the baseline matches what the save
+    // paths produce. For a freshly-loaded value `syncSuggestionsFromValue` is a
+    // no-op, so this equals `reviewToMarkdown(value, meta)` — behavior-identical.
+    lastSerializedRef.current = serialize(value as PlateValue);
     storeHydrate(meta);
-  }, [content, editor, storeHydrate]);
+  }, [content, editor, serialize, storeHydrate]);
 
   // Replies/resolves and synced suggestions live in the store, not the editor
   // value, so an editor-value change won't fire. Save on store changes too.
+  // The review store is a module-global singleton; safe because Quarry mounts
+  // exactly one editor at a time (this subscription assumes a single editor).
   useEffect(() => {
     return useReviewStore.subscribe(() => {
       const md = serialize(editor.children as PlateValue);
@@ -322,7 +327,14 @@ export function PlateMarkdownEditor({
     >
       {disabled ? null : <FloatingFormatToolbar />}
       <div className="flex h-full min-h-0">
-        <div className="min-w-0 flex-1 overflow-auto">
+        <div className="relative min-w-0 flex-1 overflow-auto">
+          {/* Floats over the top-right of the scroll area, clear of the
+              centered column, so it doesn't shift the writing surface. */}
+          <div className="pointer-events-none absolute right-2 top-2 z-10 flex justify-end">
+            <span className="pointer-events-auto">
+              <SuggestingPill />
+            </span>
+          </div>
           <PlateContent
             aria-label="Plate markdown editor"
             className="min-h-full w-full px-[max(2rem,calc((100%-68ch)/2))] pt-16 pb-8 text-[15px] leading-7 text-ink outline-none [&_[data-slate-placeholder=true]]:text-faint"
@@ -471,6 +483,28 @@ function SuggestToggle() {
       type="button"
     >
       <PencilLine size={15} />
+    </button>
+  );
+}
+
+// Always-visible affordance that the editor is in Suggesting mode (the floating
+// toolbar's SuggestToggle is only reachable on selection). Click to leave
+// Suggesting mode. Exported for a focused test that renders it inside <Plate>.
+export function SuggestingPill() {
+  const editor = useEditorRef();
+  const isSuggesting = usePluginOption(SuggestionPlugin, 'isSuggesting');
+  if (!isSuggesting) return null;
+  return (
+    <button
+      aria-label="Stop suggesting"
+      data-testid="suggesting-pill"
+      className="inline-flex items-center gap-1.5 rounded-full border border-accent-line bg-accent-tint px-2.5 py-1 text-xs font-medium text-accent-ink transition-colors hover:bg-accent-tint/70"
+      onClick={() => editor.setOption(SuggestionPlugin, 'isSuggesting', false)}
+      type="button"
+    >
+      <PencilLine size={13} />
+      Suggesting
+      <X size={13} />
     </button>
   );
 }
