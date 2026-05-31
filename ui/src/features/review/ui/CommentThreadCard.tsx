@@ -1,7 +1,7 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { Check, MoreHorizontal, Trash2 } from 'lucide-react';
 import { nanoid } from 'nanoid';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { cn } from '../../../lib/utils';
 import { currentAuthor } from '../identity';
@@ -38,10 +38,18 @@ function CommentHeader({ entry, badge }: { entry: ReviewMetaEntry; badge?: boole
 
 export function CommentThreadCard({ thread }: { thread: ReviewThread }) {
   const activeId = useReviewStore((state) => state.activeId);
+  const hoverId = useReviewStore((state) => state.hoverId);
+  const setHoverId = useReviewStore((state) => state.setHoverId);
   const [draft, setDraft] = useState('');
+  const ref = useRef<HTMLDivElement>(null);
 
   const resolved = thread.entry.status === 'resolved';
   const isActive = activeId === thread.id;
+  const isHover = hoverId === thread.id;
+
+  useEffect(() => {
+    if (isActive) ref.current?.scrollIntoView({ block: 'nearest' });
+  }, [isActive]);
 
   function submitReply() {
     const body = draft.trim();
@@ -68,11 +76,18 @@ export function CommentThreadCard({ thread }: { thread: ReviewThread }) {
   return (
     <div
       className={cn(
-        'rounded-lg border bg-raised p-3',
+        'rounded-lg border bg-raised p-3 transition-colors',
         resolved ? 'border-line' : 'border-warn-line',
+        isHover && !isActive && 'bg-well',
         isActive && 'ring-2 ring-accent-ring'
       )}
+      data-active={isActive ? 'true' : 'false'}
+      data-hover={isHover ? 'true' : 'false'}
+      data-testid="comment-card"
       onClick={() => useReviewStore.getState().setActiveId(thread.id)}
+      onMouseEnter={() => setHoverId(thread.id)}
+      onMouseLeave={() => setHoverId(null)}
+      ref={ref}
     >
       <div className="flex items-start justify-between gap-2">
         <CommentHeader entry={thread.entry} badge={resolved} />

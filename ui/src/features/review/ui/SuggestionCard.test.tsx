@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TResolvedSuggestion } from '@platejs/suggestion';
@@ -6,13 +6,24 @@ import type { TResolvedSuggestion } from '@platejs/suggestion';
 import { useReviewStore } from '../review-store';
 import { SuggestionCard } from './SuggestionCard';
 
+const insert: TResolvedSuggestion = {
+  keyId: 'suggestion_s1',
+  suggestionId: 's1',
+  type: 'insert',
+  newText: 'more',
+  userId: 'user',
+  createdAt: new Date(0),
+};
+
 describe('SuggestionCard', () => {
   beforeEach(() => {
     useReviewStore.getState().setActiveId(null);
+    useReviewStore.getState().setHoverId(null);
   });
 
   afterEach(() => {
     useReviewStore.getState().setActiveId(null);
+    useReviewStore.getState().setHoverId(null);
   });
 
   it('renders an insert summary and fires accept/reject with the suggestion id', async () => {
@@ -55,5 +66,57 @@ describe('SuggestionCard', () => {
     expect(screen.getByText('Replace')).toBeInTheDocument();
     expect(screen.getByText('old')).toBeInTheDocument();
     expect(screen.getByText('new')).toBeInTheDocument();
+  });
+
+  it('reflects the active id with data-active and the active ring', () => {
+    render(<SuggestionCard suggestion={insert} onAccept={vi.fn()} onReject={vi.fn()} />);
+    const card = screen.getByTestId('suggestion-card');
+
+    expect(card).toHaveAttribute('data-active', 'false');
+
+    act(() => {
+      useReviewStore.getState().setActiveId('s1');
+    });
+
+    expect(card).toHaveAttribute('data-active', 'true');
+    expect(card.className).toContain('ring-accent-ring');
+  });
+
+  it('reflects the hover id with data-hover', () => {
+    render(<SuggestionCard suggestion={insert} onAccept={vi.fn()} onReject={vi.fn()} />);
+    const card = screen.getByTestId('suggestion-card');
+
+    expect(card).toHaveAttribute('data-hover', 'false');
+
+    act(() => {
+      useReviewStore.getState().setHoverId('s1');
+    });
+
+    expect(card).toHaveAttribute('data-hover', 'true');
+  });
+
+  it('sets the hover id on card mouse enter and clears it on leave', () => {
+    render(<SuggestionCard suggestion={insert} onAccept={vi.fn()} onReject={vi.fn()} />);
+    const card = screen.getByTestId('suggestion-card');
+
+    fireEvent.mouseEnter(card);
+    expect(useReviewStore.getState().hoverId).toBe('s1');
+
+    fireEvent.mouseLeave(card);
+    expect(useReviewStore.getState().hoverId).toBeNull();
+  });
+
+  it('scrolls into view when it becomes active', () => {
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+    render(<SuggestionCard suggestion={insert} onAccept={vi.fn()} onReject={vi.fn()} />);
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    act(() => {
+      useReviewStore.getState().setActiveId('s1');
+    });
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+    scrollIntoView.mockRestore();
   });
 });

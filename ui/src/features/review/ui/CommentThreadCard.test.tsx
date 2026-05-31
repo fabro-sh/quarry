@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { addComment, addReply, buildThreads, useReviewStore } from '../review-store';
 import { emptyReviewMeta } from '../rfm-types';
@@ -19,11 +19,13 @@ describe('CommentThreadCard', () => {
   beforeEach(() => {
     useReviewStore.getState().hydrate(emptyReviewMeta());
     useReviewStore.getState().setActiveId(null);
+    useReviewStore.getState().setHoverId(null);
   });
 
   afterEach(() => {
     useReviewStore.getState().hydrate(emptyReviewMeta());
     useReviewStore.getState().setActiveId(null);
+    useReviewStore.getState().setHoverId(null);
   });
 
   it('renders the root author and body and the reply body', () => {
@@ -71,6 +73,58 @@ describe('CommentThreadCard', () => {
     });
 
     expect(useReviewStore.getState().activeId).toBe('c1');
+  });
+
+  it('reflects the active id with data-active and the active ring', () => {
+    render(<CommentThreadCard thread={seedThread()} />);
+    const card = screen.getByTestId('comment-card');
+
+    expect(card).toHaveAttribute('data-active', 'false');
+
+    act(() => {
+      useReviewStore.getState().setActiveId('c1');
+    });
+
+    expect(card).toHaveAttribute('data-active', 'true');
+    expect(card.className).toContain('ring-accent-ring');
+  });
+
+  it('reflects the hover id with data-hover', () => {
+    render(<CommentThreadCard thread={seedThread()} />);
+    const card = screen.getByTestId('comment-card');
+
+    expect(card).toHaveAttribute('data-hover', 'false');
+
+    act(() => {
+      useReviewStore.getState().setHoverId('c1');
+    });
+
+    expect(card).toHaveAttribute('data-hover', 'true');
+  });
+
+  it('sets the hover id on card mouse enter and clears it on leave', () => {
+    render(<CommentThreadCard thread={seedThread()} />);
+    const card = screen.getByTestId('comment-card');
+
+    fireEvent.mouseEnter(card);
+    expect(useReviewStore.getState().hoverId).toBe('c1');
+
+    fireEvent.mouseLeave(card);
+    expect(useReviewStore.getState().hoverId).toBeNull();
+  });
+
+  it('scrolls into view when it becomes active', () => {
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+    render(<CommentThreadCard thread={seedThread()} />);
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    act(() => {
+      useReviewStore.getState().setActiveId('c1');
+    });
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+    scrollIntoView.mockRestore();
   });
 
   it('resolves the comment from the actions menu', async () => {

@@ -1,4 +1,5 @@
 import { Check, X } from 'lucide-react';
+import { useEffect, useRef } from 'react';
 import type { TResolvedSuggestion } from '@platejs/suggestion';
 
 import { cn } from '../../../lib/utils';
@@ -59,17 +60,33 @@ function Summary({ suggestion }: { suggestion: TResolvedSuggestion }) {
 
 export function SuggestionCard({ suggestion, onAccept, onReject }: SuggestionCardProps) {
   const activeId = useReviewStore((state) => state.activeId);
+  const hoverId = useReviewStore((state) => state.hoverId);
   const setActiveId = useReviewStore((state) => state.setActiveId);
+  const setHoverId = useReviewStore((state) => state.setHoverId);
+  const ref = useRef<HTMLDivElement>(null);
 
-  const isActive = activeId === suggestion.suggestionId;
+  const id = suggestion.suggestionId;
+  const isActive = activeId === id;
+  const isHover = hoverId === id;
+
+  useEffect(() => {
+    if (isActive) ref.current?.scrollIntoView({ block: 'nearest' });
+  }, [isActive]);
 
   return (
     <div
       className={cn(
-        'rounded-lg border border-line bg-raised p-3',
+        'rounded-lg border border-line bg-raised p-3 transition-colors',
+        isHover && !isActive && 'bg-well',
         isActive && 'ring-2 ring-accent-ring'
       )}
-      onClick={() => setActiveId(suggestion.suggestionId)}
+      data-active={isActive ? 'true' : 'false'}
+      data-hover={isHover ? 'true' : 'false'}
+      data-testid="suggestion-card"
+      onClick={() => setActiveId(id)}
+      onMouseEnter={() => setHoverId(id)}
+      onMouseLeave={() => setHoverId(null)}
+      ref={ref}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">
