@@ -26,6 +26,14 @@ function seedThread() {
   return buildThreads(useReviewStore.getState().getMeta())[0];
 }
 
+// A freshly created comment: the root exists (committed with the mark) but has
+// no body yet and no replies, exactly as createCommentOnSelection leaves it.
+function seedEmptyThread() {
+  const meta = addComment(emptyReviewMeta(), 'c1', { by: 'user', at });
+  useReviewStore.getState().hydrate(meta);
+  return buildThreads(useReviewStore.getState().getMeta())[0];
+}
+
 describe('CommentThreadCard', () => {
   beforeEach(() => {
     useReviewStore.getState().hydrate(emptyReviewMeta());
@@ -59,6 +67,38 @@ describe('CommentThreadCard', () => {
       body: 'Sounds good',
       re: 'c1',
     });
+  });
+
+  it('fills the empty root body on first submit instead of adding a reply', async () => {
+    render(<CommentThreadCard thread={seedEmptyThread()} editor={makeEditor()} />);
+
+    await userEvent.type(screen.getByTestId('reply-input'), 'hello');
+    await userEvent.click(screen.getByTestId('reply-submit'));
+
+    const comments = useReviewStore.getState().getMeta().comments;
+    expect(comments.c1.body).toBe('hello');
+    const replies = Object.values(comments).filter((entry) => entry.re === 'c1');
+    expect(replies).toHaveLength(0);
+  });
+
+  it('adds a reply once the root already has a body', async () => {
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
+
+    await userEvent.type(screen.getByTestId('reply-input'), 're');
+    await userEvent.click(screen.getByTestId('reply-submit'));
+
+    const replies = Object.values(useReviewStore.getState().getMeta().comments).filter((entry) => entry.re === 'c1');
+    expect(replies.map((entry) => entry.body)).toContain('re');
+  });
+
+  it('discards an empty new comment from the store and clears its leaf mark', async () => {
+    const editor = makeEditor();
+    render(<CommentThreadCard thread={seedEmptyThread()} editor={editor} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Discard comment' }));
+
+    expect(useReviewStore.getState().getMeta().comments).toEqual({});
+    expect(JSON.stringify(editor.children)).not.toContain('comment_c1');
   });
 
   it('submits a reply on Enter without shift', async () => {

@@ -9,7 +9,7 @@ import { currentAuthor } from '../identity';
 import { formatRelativeTime, initials } from '../format';
 import { removeCommentMark } from '../remove-comment';
 import type { ReviewMeta, ReviewMetaEntry } from '../rfm-types';
-import { addReply, deleteComment, resolveComment, useReviewStore, type ReviewThread } from '../review-store';
+import { addReply, deleteComment, editComment, resolveComment, useReviewStore, type ReviewThread } from '../review-store';
 
 const menuItem =
   'flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-body outline-none hover:bg-well data-highlighted:bg-well';
@@ -48,22 +48,29 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
   const resolved = thread.entry.status === 'resolved';
   const isActive = activeId === thread.id;
   const isHover = hoverId === thread.id;
+  // A freshly created comment has no body yet: the first submit fills the root,
+  // and only later submissions are replies.
+  const rootHasBody = !!thread.entry.body;
 
   useEffect(() => {
     if (isActive) ref.current?.scrollIntoView({ block: 'nearest' });
   }, [isActive]);
 
-  function submitReply() {
+  function submit() {
     const body = draft.trim();
     if (!body) return;
-    applyMeta((meta) =>
-      addReply(meta, nanoid(), {
-        parentId: thread.id,
-        body,
-        by: currentAuthor(),
-        at: new Date().toISOString(),
-      })
-    );
+    if (rootHasBody) {
+      applyMeta((meta) =>
+        addReply(meta, nanoid(), {
+          parentId: thread.id,
+          body,
+          by: currentAuthor(),
+          at: new Date().toISOString(),
+        })
+      );
+    } else {
+      applyMeta((meta) => editComment(meta, thread.id, body));
+    }
     setDraft('');
   }
 
@@ -71,7 +78,7 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
     applyMeta((meta) => resolveComment(meta, thread.id));
   }
 
-  function remove() {
+  function discard() {
     removeCommentMark(editor, thread.id);
     applyMeta((meta) => deleteComment(meta, thread.id));
   }
@@ -112,13 +119,13 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
               onClick={(event) => event.stopPropagation()}
               sideOffset={6}
             >
-              {resolved ? null : (
+              {resolved || !rootHasBody ? null : (
                 <DropdownMenu.Item className={menuItem} data-testid="resolve-comment" onSelect={resolve}>
                   <Check className="shrink-0" size={15} />
                   Resolve
                 </DropdownMenu.Item>
               )}
-              <DropdownMenu.Item className={cn(menuItem, 'text-danger')} onSelect={remove}>
+              <DropdownMenu.Item className={cn(menuItem, 'text-danger')} onSelect={discard}>
                 <Trash2 className="shrink-0" size={15} />
                 Delete
               </DropdownMenu.Item>
@@ -127,7 +134,7 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
         </DropdownMenu.Root>
       </div>
 
-      <p className="mt-2 text-sm whitespace-pre-wrap text-body">{thread.entry.body ?? ''}</p>
+      {rootHasBody ? <p className="mt-2 text-sm whitespace-pre-wrap text-body">{thread.entry.body}</p> : null}
 
       {thread.replies.length > 0 ? (
         <div className="mt-3 flex flex-col gap-3 border-l border-line pl-3">
@@ -142,7 +149,8 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
 
       <div className="mt-3 flex flex-col gap-2">
         <textarea
-          aria-label="Reply"
+          aria-label={rootHasBody ? 'Reply' : 'Comment'}
+          autoFocus={!rootHasBody}
           className="min-h-9 w-full resize-y rounded-md border border-line bg-raised p-2 text-sm text-ink outline-none focus:border-accent"
           data-testid="reply-input"
           onChange={(event) => setDraft(event.target.value)}
@@ -150,25 +158,41 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
-              submitReply();
+              submit();
             }
           }}
-          placeholder="Reply…"
+          placeholder={rootHasBody ? 'Reply…' : 'Comment…'}
           value={draft}
         />
-        <button
-          aria-label="Submit reply"
-          className="self-end rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-accent transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-50"
-          data-testid="reply-submit"
-          disabled={draft.trim().length === 0}
-          onClick={(event) => {
-            event.stopPropagation();
-            submitReply();
-          }}
-          type="button"
-        >
-          Reply
-        </button>
+        <div className="flex justify-end gap-2">
+          {rootHasBody ? null : (
+            <button
+              aria-label="Discard comment"
+              className="rounded-md px-3 py-1.5 text-sm font-medium text-muted transition-colors hover:bg-well"
+              data-testid="reply-cancel"
+              onClick={(event) => {
+                event.stopPropagation();
+                discard();
+              }}
+              type="button"
+            >
+              Cancel
+            </button>
+          )}
+          <button
+            aria-label={rootHasBody ? 'Submit reply' : 'Submit comment'}
+            className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-accent transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-50"
+            data-testid="reply-submit"
+            disabled={draft.trim().length === 0}
+            onClick={(event) => {
+              event.stopPropagation();
+              submit();
+            }}
+            type="button"
+          >
+            {rootHasBody ? 'Reply' : 'Comment'}
+          </button>
+        </div>
       </div>
     </div>
   );
