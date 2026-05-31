@@ -52,6 +52,19 @@ describe('applyCriticMarkup', () => {
     expect(Object.keys(meta.suggestions)).toHaveLength(1);
   });
 
+  it('derives suggestion createdAt (epoch ms) from the endmatter at timestamp', () => {
+    const meta = { comments: {}, suggestions: { s1: { by: 'AI', at: '2026-01-01T00:00:00.000Z' } } };
+    const { value } = applyCriticMarkup([p([{ text: 'add {++more++}{#s1}' }])], meta);
+    const leaf = (value[0] as { children: Record<string, unknown>[] }).children[1];
+    expect((leaf.suggestion_s1 as { createdAt: number }).createdAt).toBe(Date.parse('2026-01-01T00:00:00.000Z'));
+  });
+
+  it('falls back to createdAt 0 when at is missing or unparseable', () => {
+    const { value } = applyCriticMarkup([p([{ text: 'add {++x++}{#s9}' }])], { comments: {}, suggestions: { s9: { by: 'AI', at: 'not-a-date' } } });
+    const leaf = (value[0] as { children: Record<string, unknown>[] }).children[1];
+    expect((leaf.suggestion_s9 as { createdAt: number }).createdAt).toBe(0);
+  });
+
   it('leaves CriticMarkup inside a code leaf literal', () => {
     const { value } = applyCriticMarkup([p([{ text: '{++x++}', code: true }])], emptyReviewMeta());
     expect(value).toEqual([p([{ text: '{++x++}', code: true }])]);

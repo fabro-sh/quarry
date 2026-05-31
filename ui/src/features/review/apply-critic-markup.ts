@@ -7,6 +7,12 @@ type Props = Record<string, unknown>;
 
 const CODE_BLOCK_TYPES = new Set(['code_block', 'code_line']);
 
+function createdAtFromEntry(at: string | undefined): number {
+  if (!at) return 0;
+  const ms = Date.parse(at);
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
 // One regex with named groups for each marker family, plus an optional {#id}.
 const TOKEN = new RegExp(
   [
@@ -37,9 +43,9 @@ function leaf(rest: Props, extra: Props, text: string): TText {
   return { ...rest, ...extra, text };
 }
 
-function suggestionExtra(id: string, type: 'insert' | 'remove', userId: string): Props {
+function suggestionExtra(id: string, type: 'insert' | 'remove', entry: { by: string; at: string }): Props {
   const extra: Props = { suggestion: true };
-  extra[`suggestion_${id}`] = { id, type, userId, createdAt: 0 };
+  extra[`suggestion_${id}`] = { id, type, userId: entry.by, createdAt: createdAtFromEntry(entry.at) };
   return extra;
 }
 
@@ -81,16 +87,16 @@ function expandLeaf(node: TText, meta: ReviewMeta): TText[] {
     } else if (g.sold !== undefined && g.snew !== undefined) {
       const id = g.subid ?? nanoid();
       const entry = ensureSuggestion(meta, id);
-      out.push(leaf(rest, suggestionExtra(id, 'remove', entry.by), g.sold));
-      out.push(leaf(rest, suggestionExtra(id, 'insert', entry.by), g.snew));
+      out.push(leaf(rest, suggestionExtra(id, 'remove', entry), g.sold));
+      out.push(leaf(rest, suggestionExtra(id, 'insert', entry), g.snew));
     } else if (g.ins !== undefined) {
       const id = g.insid ?? nanoid();
       const entry = ensureSuggestion(meta, id);
-      out.push(leaf(rest, suggestionExtra(id, 'insert', entry.by), g.ins));
+      out.push(leaf(rest, suggestionExtra(id, 'insert', entry), g.ins));
     } else if (g.del !== undefined) {
       const id = g.delid ?? nanoid();
       const entry = ensureSuggestion(meta, id);
-      out.push(leaf(rest, suggestionExtra(id, 'remove', entry.by), g.del));
+      out.push(leaf(rest, suggestionExtra(id, 'remove', entry), g.del));
     } else if (g.conly !== undefined) {
       const id = g.conlyid ?? nanoid();
       ensureComment(meta, id, g.conly);
