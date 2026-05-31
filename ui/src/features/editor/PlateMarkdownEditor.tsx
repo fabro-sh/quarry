@@ -272,9 +272,14 @@ export function PlateMarkdownEditor({
     if (content === lastContentRef.current) return;
     const { value, meta } = markdownToReview(content);
     resetPlateEditor(editor, value as PlateValue);
-    storeHydrate(meta);
+    // Reseed the refs BEFORE hydrating: `storeHydrate` is a Zustand `set` that
+    // synchronously runs the store subscription, which serializes the new
+    // editor value and compares it to `lastSerializedRef`. Reseeding first lets
+    // that notification short-circuit on the equality guard, so a pure document
+    // load doesn't spuriously fire `onChange` and mark the doc dirty.
     lastContentRef.current = content;
     lastSerializedRef.current = reviewToMarkdown(value as never, meta);
+    storeHydrate(meta);
   }, [content, editor, storeHydrate]);
 
   // Replies/resolves and synced suggestions live in the store, not the editor
