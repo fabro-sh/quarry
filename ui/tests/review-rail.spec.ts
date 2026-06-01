@@ -53,7 +53,7 @@ test.describe('Review rail', () => {
     await page.getByTestId('reply-input').fill('Looks good now');
     await page.getByTestId('reply-submit').click();
 
-    await page.getByRole('button', { name: 'Save document' }).click();
+    // Autosave persists the change a beat after the edit — there is no Save button.
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
 
     // The reply serializes as a sibling comment entry pointing back at c1 via
@@ -79,7 +79,7 @@ test.describe('Review rail', () => {
     await expect(resolve).toBeVisible();
     await resolve.click();
 
-    await page.getByRole('button', { name: 'Save document' }).click();
+    // Autosave persists the change a beat after the edit — there is no Save button.
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
 
     const saved = saves.lastBody('rail.md');
@@ -107,7 +107,7 @@ test.describe('Review rail', () => {
     await expect(editor.locator('[data-comment-id="c1"]')).toHaveCount(0);
     await expect(page.getByTestId('comment-card')).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Save document' }).click();
+    // Autosave persists the change a beat after the edit — there is no Save button.
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
 
     // Removing the mark drops the CriticMarkup comment markup from the persisted
@@ -137,7 +137,7 @@ test.describe('Review rail', () => {
     await expect(page.getByTestId('comment-card')).toHaveCount(0);
 
     // Saving now must NOT include any comment markup: the draft is transient.
-    await page.getByRole('button', { name: 'Save document' }).click();
+    // Autosave persists the change a beat after the edit — there is no Save button.
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
     expect(saves.lastBody('draft.md')).not.toContain('{#');
     expect(saves.lastBody('draft.md')).not.toContain('{==');
@@ -151,7 +151,7 @@ test.describe('Review rail', () => {
     await expect(page.getByTestId('comment-card')).toBeVisible();
     await expect(page.getByTestId('comment-card')).toContainText('Please clarify');
 
-    await page.getByRole('button', { name: 'Save document' }).click();
+    // Autosave persists the change a beat after the edit — there is no Save button.
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
 
     const saved = saves.lastBody('draft.md');
@@ -177,12 +177,10 @@ test.describe('Review rail', () => {
     await expect(page.getByTestId('draft-composer')).toHaveCount(0);
     await expect(page.getByTestId('comment-card')).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Save document' }).click();
+    // Cancelling leaves the document unchanged, so it stays "Saved" and autosave
+    // never persists anything.
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
-
-    const saved = saves.lastBody('cancel.md');
-    expect(saved).not.toContain('{==');
-    expect(saved).not.toContain('{#');
+    expect(saves.lastBody('cancel.md')).toBe('');
   });
 
   test('accept from the rail applies the suggestion and drops the markup', async ({ page }) => {
@@ -218,7 +216,7 @@ test.describe('Review rail', () => {
     await expect(page.getByTestId('suggestion-card')).toHaveCount(0);
     await expect(editor).toContainText('added');
 
-    await page.getByRole('button', { name: 'Save document' }).click();
+    // Autosave persists the change a beat after the edit — there is no Save button.
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
 
     // Accepting an insertion keeps the text but removes the CriticMarkup

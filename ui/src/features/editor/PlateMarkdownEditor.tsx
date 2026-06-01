@@ -235,12 +235,10 @@ export type EditorMode = 'editing' | 'suggesting' | 'viewing';
 
 export function PlateMarkdownEditor({
   content,
-  disabled,
   mode = 'editing',
   onChange,
 }: {
   content: string;
-  disabled?: boolean;
   mode?: EditorMode;
   onChange: (content: string) => void;
 }) {
@@ -318,8 +316,8 @@ export function PlateMarkdownEditor({
     });
   }, [editor, onChange, serialize]);
 
-  // Viewing is a user-chosen read-only; the save guard (`disabled`) forces it too.
-  const readOnly = disabled || mode === 'viewing';
+  // Viewing is the only read-only mode; autosave never freezes the surface.
+  const readOnly = mode === 'viewing';
 
   return (
     <Plate

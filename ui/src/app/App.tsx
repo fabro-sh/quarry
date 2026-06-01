@@ -28,7 +28,6 @@ import {
   PanelRightOpen,
   PencilLine,
   Plus,
-  Save,
   RotateCcw,
   Search,
   Settings as SettingsIcon,
@@ -112,6 +111,13 @@ type ThemePreference = 'light' | 'dark';
 type TreeOpenState = Record<string, boolean>;
 type RightPaneTab = 'links' | 'versions' | 'conflicts';
 const EVENT_POLL_INTERVAL_MS = 5_000;
+// How long after the last edit autosave pushes the draft to the server. Long
+// enough to coalesce a burst of typing into one version, short enough to feel
+// automatic.
+const AUTOSAVE_DEBOUNCE_MS = 1_500;
+// How long the settled "Saved" status lingers before it fades away, so the
+// header confirms the save and then gets out of the way.
+const SAVED_STATUS_LINGER_MS = 2_000;
 const RECENT_LIBRARY_LIMIT = 8;
 
 interface BrowserEventPayload {
@@ -186,6 +192,8 @@ function Workspace() {
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [resizingPanels, setResizingPanels] = useState(false);
   const selectedPathRef = useRef(selectedPath);
+  const activeLibraryRef = useRef(activeLibrary);
+  const contentRef = useRef(content);
   const saveStateRef = useRef(saveState);
   const loadedDocumentRef = useRef<{ library: string; path: string; etag: string } | null>(null);
   const searchQueryRef = useRef(searchQuery);
@@ -247,6 +255,14 @@ function Workspace() {
   useEffect(() => {
     selectedPathRef.current = selectedPath;
   }, [selectedPath]);
+
+  useEffect(() => {
+    activeLibraryRef.current = activeLibrary;
+  }, [activeLibrary]);
+
+  useEffect(() => {
+    contentRef.current = content;
+  }, [content]);
 
   useEffect(() => {
     saveStateRef.current = saveState;
@@ -534,34 +550,56 @@ function Workspace() {
   const saveConflictDialogRef = useDialogFocusTrap(Boolean(conflictRemote), closeSaveConflictDialog);
 
   async function save() {
-    if (!activeLibrary || !selectedPath || !etag) return;
+    const savingLibrary = activeLibrary;
+    const savingPath = selectedPath;
+    const savingEtag = etag;
+    const savingContent = content;
+    if (!savingLibrary || !savingPath || !savingEtag) return;
     if (!isTextContentType(contentType)) return;
+    if (saveStateRef.current === 'saving') return;
+
+    // Autosave can resolve after you've kept typing or switched documents. Gate
+    // every post-await state write on still viewing the document we saved, so a
+    // late response never clobbers a different document's state.
+    const onSameDocument = () =>
+      selectedPathRef.current === savingPath && activeLibraryRef.current === savingLibrary;
+
     transitionSaveState('saving');
     try {
-      const saved = await putDocument(activeLibrary, selectedPath, content, etag, contentType);
+      const saved = await putDocument(savingLibrary, savingPath, savingContent, savingEtag, contentType);
       const savedEtag = saved.etag || `"${saved.outcome.version.id}"`;
-      clearDraft(activeLibrary, selectedPath, etag);
-      loadedDocumentRef.current = { library: activeLibrary, path: selectedPath, etag: savedEtag };
+      clearDraft(savingLibrary, savingPath, savingEtag);
+      if (!onSameDocument()) return;
+      loadedDocumentRef.current = { library: savingLibrary, path: savingPath, etag: savedEtag };
       setEtag(savedEtag);
-      transitionSaveState('saved');
+      // If edits landed while the request was in flight, the newer text still
+      // needs saving: re-draft under the new ETag and drop back to `drafted` so
+      // autosave fires again. Otherwise we're caught up.
+      if (contentRef.current === savingContent) {
+        transitionSaveState('saved');
+      } else {
+        saveDraft(savingLibrary, savingPath, savedEtag, contentRef.current);
+        transitionSaveState('drafted');
+      }
       await Promise.all([
         mutate(
-          ['/v1/document', activeLibrary, selectedPath],
-          { content, contentType, etag: savedEtag, path: selectedPath },
+          ['/v1/document', savingLibrary, savingPath],
+          { content: savingContent, contentType, etag: savedEtag, path: savingPath },
           { revalidate: false }
         ),
-        mutate(['/v1/documents', activeLibrary]),
-        mutate(['/v1/versions', activeLibrary, selectedPath]),
-        mutate(['/v1/outgoing', activeLibrary, selectedPath]),
-        mutate(['/v1/backlinks', activeLibrary, selectedPath]),
-        searchQuery ? mutate(['/v1/search', activeLibrary, searchQuery]) : Promise.resolve(),
+        mutate(['/v1/documents', savingLibrary]),
+        mutate(['/v1/versions', savingLibrary, savingPath]),
+        mutate(['/v1/outgoing', savingLibrary, savingPath]),
+        mutate(['/v1/backlinks', savingLibrary, savingPath]),
+        searchQuery ? mutate(['/v1/search', savingLibrary, searchQuery]) : Promise.resolve(),
       ]);
     } catch (error) {
+      if (!onSameDocument()) return;
       if (error instanceof ApiPreconditionError) {
-        const baseEtag = etag;
         transitionSaveState('stale');
-        const remote = await getDocument(activeLibrary, selectedPath);
-        setConflictDetails({ baseEtag, path: selectedPath, remoteEtag: remote.etag });
+        const remote = await getDocument(savingLibrary, savingPath);
+        if (!onSameDocument()) return;
+        setConflictDetails({ baseEtag: savingEtag, path: savingPath, remoteEtag: remote.etag });
         setConflictRemote(remote.content);
         setEtag(remote.etag);
         return;
@@ -570,7 +608,24 @@ function Workspace() {
     }
   }
 
+  // Debounced autosave: every edit writes a local draft and marks `drafted`; a
+  // beat after typing stops, that draft is pushed to the server. Only an editable
+  // draft autosaves — Viewing has nothing to save, `stale`/`failed` waits for the
+  // next edit, and an open conflict dialog blocks until it's resolved.
+  const saveRef = useRef(save);
+  useEffect(() => {
+    saveRef.current = save;
+  });
+  useEffect(() => {
+    if (editorMode === 'viewing') return;
+    if (conflictRemote) return;
+    if (saveState !== 'drafted') return;
+    const timer = window.setTimeout(() => void saveRef.current(), AUTOSAVE_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [content, saveState, editorMode, conflictRemote]);
+
   function changeContent(next: string) {
+    contentRef.current = next;
     setContent(next);
     if (activeLibrary && selectedPath && etag) {
       saveDraft(activeLibrary, selectedPath, etag, next);
@@ -594,12 +649,8 @@ function Workspace() {
     const defaultPath = defaultDocumentPathForLink(link);
     const path = window.prompt('New document path', defaultPath);
     if (!path) return;
-    if (path !== selectedPath && selectedPath && hasUnsavedEditorState(saveState)) {
-      const confirmed = window.confirm(
-        `Create ${path} and keep your unsaved draft for ${selectedPath}?`
-      );
-      if (!confirmed) return;
-    }
+    // Flush the pending draft before creating + switching (see openDocument).
+    if (saveStateRef.current === 'drafted') void save();
     await createDocument(activeLibrary, path, '# Untitled\n');
     await Promise.all([
       mutate(['/v1/documents', activeLibrary]),
@@ -692,12 +743,9 @@ function Workspace() {
 
   function openDocument(path: string) {
     if (!path || path === selectedPath) return;
-    if (hasUnsavedEditorState(saveState) && selectedPath) {
-      const confirmed = window.confirm(
-        `Open ${path} and keep your unsaved draft for ${selectedPath}?`
-      );
-      if (!confirmed) return;
-    }
+    // Flush the pending draft before leaving; `save` is guarded on the
+    // originating document, so a late response won't disturb the next one.
+    if (saveStateRef.current === 'drafted') void save();
     setSelectedPath(path);
   }
 
@@ -850,7 +898,6 @@ function Workspace() {
           {selectedPath ? (
             <div className="flex h-full min-h-0 flex-col">
               <DocumentToolbar
-                disabled={saveState === 'saving'}
                 isText={isTextContentType(selectedContentType)}
                 mode={editorMode}
                 onModeChange={setEditorMode}
@@ -859,7 +906,6 @@ function Workspace() {
                 onDelete={deleteCurrent}
                 onDownload={downloadCurrentMarkdown}
                 onRename={renameCurrent}
-                onSave={save}
               />
               <DocumentBody
                 activeLibrary={activeLibrary}
@@ -867,10 +913,8 @@ function Workspace() {
                 contentHash={selectedEntry?.content_hash}
                 content={content}
                 contentType={selectedContentType}
-                disabled={saveState === 'saving'}
                 mode={editorMode}
                 path={selectedPath}
-                saveState={saveState}
                 onChange={changeContent}
               />
             </div>
@@ -1034,10 +1078,8 @@ function DocumentBody({
   contentHash,
   content,
   contentType,
-  disabled,
   mode,
   path,
-  saveState,
   onChange,
 }: {
   activeLibrary: string;
@@ -1045,22 +1087,12 @@ function DocumentBody({
   contentHash?: string | null;
   content: string;
   contentType: string;
-  disabled: boolean;
   mode: EditorMode;
   path: string;
-  saveState: SaveState;
   onChange: (content: string) => void;
 }) {
   if (isTextContentType(contentType)) {
-    return (
-      <MarkdownEditor
-        content={content}
-        disabled={disabled}
-        mode={mode}
-        status={statusText(saveState)}
-        onChange={onChange}
-      />
-    );
+    return <MarkdownEditor content={content} mode={mode} onChange={onChange} />;
   }
 
   if (isImageContentType(contentType)) {
@@ -2249,6 +2281,33 @@ const editorModes: ReadonlyArray<{ value: EditorMode; label: string; icon: typeo
   { value: 'viewing', label: 'Viewing', icon: Eye },
 ];
 
+// Header save status. The settled "Saved" state fades out after a beat so the
+// header doesn't stay labelled; active states (saving, drafting, stale, failed)
+// persist until they resolve. The element stays mounted and keeps its text so it
+// remains a stable query target and the layout never jumps.
+function SaveStatusIndicator({ saveState }: { saveState: SaveState }) {
+  const settled = saveState === 'clean' || saveState === 'saved';
+  const [faded, setFaded] = useState(false);
+  useEffect(() => {
+    setFaded(false);
+    if (!settled) return;
+    const timer = window.setTimeout(() => setFaded(true), SAVED_STATUS_LINGER_MS);
+    return () => window.clearTimeout(timer);
+  }, [settled, saveState]);
+  return (
+    <span
+      aria-label="Save status"
+      className={cn(
+        'inline-flex shrink-0 items-center gap-1.5 text-xs text-muted transition-opacity duration-500',
+        faded && 'opacity-0'
+      )}
+    >
+      {saveState === 'stale' ? <AlertTriangle className="shrink-0 text-warn-ink" size={14} /> : null}
+      {statusText(saveState)}
+    </span>
+  );
+}
+
 // Viewing/Editing/Suggesting selector in the document header (à la Google Docs).
 // The mode is plain React state; the editor reacts to it, so this control needs
 // no editor context.
@@ -2300,7 +2359,6 @@ function DocumentModeSelect({
 }
 
 function DocumentToolbar({
-  disabled,
   isText,
   mode,
   onModeChange,
@@ -2309,9 +2367,7 @@ function DocumentToolbar({
   onDelete,
   onDownload,
   onRename,
-  onSave,
 }: {
-  disabled: boolean;
   isText: boolean;
   mode: EditorMode;
   onModeChange: (mode: EditorMode) => void;
@@ -2320,7 +2376,6 @@ function DocumentToolbar({
   onDelete: () => void;
   onDownload: () => void;
   onRename: () => void;
-  onSave: () => void;
 }) {
   return (
     <div className="flex h-12 shrink-0 items-center gap-2 bg-surface px-3">
@@ -2334,20 +2389,8 @@ function DocumentToolbar({
           </span>
         ))}
       </h1>
-      {saveState === 'stale' ? <AlertTriangle className="shrink-0 text-warn-ink" size={16} /> : null}
+      {isText ? <SaveStatusIndicator saveState={saveState} /> : null}
       {isText ? <DocumentModeSelect mode={mode} onModeChange={onModeChange} /> : null}
-      {isText ? (
-        <button
-          aria-label="Save document"
-          className="inline-flex h-8 items-center gap-1.5 rounded-md bg-accent py-2 pr-3 pl-2.5 text-sm font-medium text-on-accent shadow-sm transition-colors hover:bg-accent-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={disabled}
-          onClick={onSave}
-          type="button"
-        >
-          <Save size={16} />
-          Save
-        </button>
-      ) : null}
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
           <button aria-label="Document actions" className={iconButton} type="button">

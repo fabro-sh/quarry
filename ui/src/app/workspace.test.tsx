@@ -12,7 +12,7 @@ describe('Quarry Browser workspace', () => {
     window.history.pushState({}, '', '/');
   });
 
-  it('loads a library, opens a markdown document, and saves with the current ETag', async () => {
+  it('shows the autosave header for a loaded document with no manual Save button', async () => {
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/v1/libraries') {
@@ -57,170 +57,12 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
+    // Autosave: a freshly loaded document reads "Saved", there is no manual Save
+    // button, and the mode selector is the header's document control. (Autosave's
+    // round-trip and stale-conflict flows need real typing, so they live in e2e.)
     expect(await screen.findByLabelText('Save status')).toHaveTextContent('Saved');
-    await userEvent.click(screen.getByRole('button', { name: 'Save document' }));
-
-    await waitFor(() => expect(screen.getByLabelText('Save status')).toHaveTextContent('Saved'));
-  });
-
-  it('refreshes indexed document state after saving markdown changes', async () => {
-    let saved = false;
-    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === '/v1/libraries') {
-        return json([{ id: 'lib-save-index', slug: 'save-index-lib', created_at: 'now', settings: {} }]);
-      }
-      if (url === '/v1/libraries/save-index-lib/documents') {
-        return json([
-          {
-            id: 'doc-source',
-            path: 'source.md',
-            head_version_id: saved ? 'v2' : 'v1',
-            content_type: 'text/markdown',
-            byte_size: saved ? 26 : 9,
-            metadata: { title: 'Source' },
-            updated_at: 'now',
-          },
-          {
-            id: 'doc-target',
-            path: 'target.md',
-            head_version_id: 'v-target',
-            content_type: 'text/markdown',
-            byte_size: 8,
-            metadata: { title: 'Target' },
-            updated_at: 'now',
-          },
-        ]);
-      }
-      if (url === '/v1/libraries/save-index-lib/documents/source.md' && init?.method === 'PUT') {
-        saved = true;
-        return json({ version: { id: 'v2' } }, { ETag: '"v2"' });
-      }
-      if (url === '/v1/libraries/save-index-lib/documents/source.md') {
-        return new Response(saved ? 'See [Target](target.md)' : 'No links.', {
-          headers: { ETag: saved ? '"v2"' : '"v1"', 'content-type': 'text/markdown' },
-        });
-      }
-      if (url.endsWith('/outgoing-links')) {
-        return json({
-          path: 'source.md',
-          links: saved
-            ? [
-                link({
-                  target_kind: 'markdown_link',
-                  target_text: 'target.md',
-                  target_path: 'target.md',
-                  resolved: true,
-                }),
-              ]
-            : [],
-        });
-      }
-      if (url.endsWith('/backlinks')) return json({ path: 'source.md', links: [] });
-      if (url.startsWith('/v1/libraries/save-index-lib/graph')) {
-        return json({
-          nodes: saved
-            ? [
-                { id: 'doc-source', path: 'source.md', title: 'Source', content_type: 'text/markdown' },
-                { id: 'doc-target', path: 'target.md', title: 'Target', content_type: 'text/markdown' },
-              ]
-            : [],
-          edges: saved
-            ? [
-                {
-                  id: 'edge-source-target',
-                  source: 'doc-source',
-                  source_path: 'source.md',
-                  target: 'doc-target',
-                  target_path: 'target.md',
-                  target_kind: 'markdown_link',
-                  target_text: 'target.md',
-                  resolved: true,
-                },
-              ]
-            : [],
-          truncated: false,
-        });
-      }
-      if (url.endsWith('/versions')) return json(saved ? [version('v2'), version('v1')] : [version('v1')]);
-      if (url === '/v1/libraries/save-index-lib/conflicts') return json([]);
-      if (url === '/v1/libraries/save-index-lib/git/peers') return json([]);
-      if (url.startsWith('/v1/libraries/save-index-lib/search')) return json({ results: [], cursor: null });
-      return new Response('not found', { status: 404 });
-    });
-    vi.stubGlobal('fetch', fetch);
-
-    renderApp();
-
-    await userEvent.click(await screen.findByRole('treeitem', { name: /Source/ }));
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'target.md' })).not.toBeInTheDocument());
-    await userEvent.click(screen.getByRole('button', { name: 'Save document' }));
-
-    expect(await screen.findByRole('button', { name: 'target.md' })).toBeInTheDocument();
-  });
-
-  it('traps stale-save conflict dialog focus and restores focus after closing', async () => {
-    let remoteChanged = false;
-    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === '/v1/libraries') {
-        return json([{ id: 'lib-stale-focus', slug: 'stale-focus', created_at: 'now', settings: {} }]);
-      }
-      if (url === '/v1/libraries/stale-focus/documents') {
-        return json([
-          {
-            id: 'doc-stale-focus',
-            path: 'daily.md',
-            head_version_id: remoteChanged ? 'v2' : 'v1',
-            content_type: 'text/markdown',
-            byte_size: 8,
-            metadata: { title: 'Daily' },
-            updated_at: 'now',
-          },
-        ]);
-      }
-      if (url === '/v1/libraries/stale-focus/documents/daily.md' && init?.method === 'PUT') {
-        remoteChanged = true;
-        return new Response(JSON.stringify({ error: 'stale' }), {
-          headers: { 'content-type': 'application/json', ETag: '"v2"' },
-          status: 412,
-        });
-      }
-      if (url === '/v1/libraries/stale-focus/documents/daily.md') {
-        return new Response(remoteChanged ? '# Remote' : '# Base', {
-          headers: { ETag: remoteChanged ? '"v2"' : '"v1"', 'content-type': 'text/markdown' },
-        });
-      }
-      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks') || url.endsWith('/versions')) {
-        return json(url.endsWith('/versions') ? [] : { path: 'daily.md', links: [] });
-      }
-      if (url.startsWith('/v1/libraries/stale-focus/graph')) {
-        return json({ nodes: [], edges: [], truncated: false });
-      }
-      if (url === '/v1/libraries/stale-focus/conflicts') return json([]);
-      if (url === '/v1/libraries/stale-focus/git/peers') return json([]);
-      if (url.startsWith('/v1/libraries/stale-focus/search')) return json({ results: [], cursor: null });
-      return new Response('not found', { status: 404 });
-    });
-    vi.stubGlobal('fetch', fetch);
-
-    renderApp();
-
-    await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Base'));
-    const save = screen.getByRole('button', { name: 'Save document' });
-    await userEvent.click(save);
-
-    const dialog = await screen.findByRole('dialog', { name: 'Save conflict' });
-    const useRemote = within(dialog).getByRole('button', { name: 'Use remote' });
-    const keepEditing = within(dialog).getByRole('button', { name: 'Keep editing local draft' });
-    await waitFor(() => expect(useRemote).toHaveFocus());
-
-    await userEvent.tab({ shift: true });
-    expect(keepEditing).toHaveFocus();
-
-    await userEvent.keyboard('{Escape}');
-    expect(screen.queryByRole('dialog', { name: 'Save conflict' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save document' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Document mode' })).toHaveTextContent('Editing');
   });
 
   it('persists the selected right pane tab per library', async () => {

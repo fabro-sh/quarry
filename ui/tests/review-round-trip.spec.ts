@@ -63,7 +63,7 @@ test.describe('Review round-trip', () => {
     await page.keyboard.type(' added');
     await expect(editor).toContainText('added');
 
-    await page.getByRole('button', { name: 'Save document' }).click();
+    // Autosave persists the change a beat after the edit — there is no Save button.
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
 
     // The insertion serializes to `{++…++}{#id}` and records a `suggestions:`
@@ -99,7 +99,7 @@ test.describe('Review round-trip', () => {
     await expect(page.getByTestId('accept-suggestion')).toHaveCount(0);
     await expect(editor).toContainText('Keep this text');
 
-    await page.getByRole('button', { name: 'Save document' }).click();
+    // Autosave persists the change a beat after the edit — there is no Save button.
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
 
     // Accepting an insertion keeps the text but removes the CriticMarkup and the

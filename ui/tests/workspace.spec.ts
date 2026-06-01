@@ -78,8 +78,11 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(page.getByLabel('Plate markdown editor')).toContainText('Untitled');
     expect(api.createHeaders).toContain('*');
 
-    await page.getByRole('button', { name: 'Save document' }).click();
-
+    // Autosave persists the edit a beat after typing — there is no Save button.
+    const editor = page.getByLabel('Plate markdown editor');
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' edited');
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
     expect(api.saveHeaders).toContain('"v-new"');
 
@@ -87,7 +90,7 @@ test.describe('Quarry Browser smoke flows', () => {
 
     await expect(page.getByRole('treeitem', { name: /new\.md/ })).toBeVisible();
     await page.getByRole('treeitem', { name: /new\.md/ }).click();
-    await expect(page.getByLabel('Plate markdown editor')).toContainText('Untitled');
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('edited');
   });
 
   test('opens the browser and selects a library', async ({ page }) => {
@@ -321,7 +324,12 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.getByRole('treeitem', { name: /Daily/ }).click();
     await expect(page.getByLabel('Plate markdown editor')).toContainText('Base');
 
-    await page.getByRole('button', { name: 'Save document' }).click();
+    // Autosave attempts one conditional PUT; the stale rejection opens the
+    // conflict dialog (focus trapped on the primary action) and is not retried.
+    const editor = page.getByLabel('Plate markdown editor');
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' edit');
 
     await expect(page.getByRole('heading', { name: 'Local draft' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Latest remote' })).toBeVisible();
@@ -330,6 +338,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(page.getByText('Latest "v2"')).toBeVisible();
     await expect(page.locator('pre').filter({ hasText: '# Base' })).toBeVisible();
     await expect(page.locator('pre').filter({ hasText: '# Remote' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Use remote' })).toBeFocused();
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Stale');
     expect(api.saveHeaders).toEqual(['"v1"']);
   });
@@ -429,7 +438,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(page.getByText('No document open')).toBeVisible();
   });
 
-  test('restores an unsaved draft after reloading the workspace', async ({ page }) => {
+  test('preserves edits across a reload', async ({ page }) => {
     await installMockApi(page, {
       documents: [
         {
@@ -450,13 +459,12 @@ test.describe('Quarry Browser smoke flows', () => {
     await editor.click();
     await page.keyboard.press('End');
     await page.keyboard.type(' edited');
-    await expect(page.locator('[aria-label="Save status"]')).toContainText('Draft saved locally');
 
     await page.reload();
 
+    // The edit survives a reload — via the server (autosave) or the local draft.
     await page.getByRole('treeitem', { name: /Draft/ }).click();
     await expect(page.getByLabel('Plate markdown editor')).toContainText('edited');
-    await expect(page.locator('[aria-label="Save status"]')).toContainText('Draft saved locally');
   });
 
   test('keeps a ten-thousand document tree virtualized and usable', async ({ page }) => {

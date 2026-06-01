@@ -4,7 +4,7 @@ import { MarkdownEditor } from './MarkdownEditor';
 
 describe('MarkdownEditor', () => {
   it('uses a Plate editor as the editing surface', async () => {
-    render(<MarkdownEditor content="# Guide" mode="editing" status="Saved" onChange={() => {}} />);
+    render(<MarkdownEditor content="# Guide" mode="editing" onChange={() => {}} />);
 
     const editor = await screen.findByLabelText('Plate markdown editor');
     expect(editor).toHaveAttribute('contenteditable', 'true');
@@ -12,7 +12,7 @@ describe('MarkdownEditor', () => {
   });
 
   it('shows no formatting toolbar until text is selected', async () => {
-    render(<MarkdownEditor content="# Guide" mode="editing" status="Saved" onChange={() => {}} />);
+    render(<MarkdownEditor content="# Guide" mode="editing" onChange={() => {}} />);
 
     await screen.findByLabelText('Plate markdown editor');
     expect(screen.queryByRole('button', { name: 'Bold' })).not.toBeInTheDocument();
