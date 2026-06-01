@@ -1,4 +1,7 @@
 import { lazy, Suspense } from 'react';
+import type { EditorMode } from './PlateMarkdownEditor';
+
+export type { EditorMode };
 
 const PlateMarkdownEditor = lazy(() =>
   import('./PlateMarkdownEditor').then((module) => ({ default: module.PlateMarkdownEditor }))
@@ -7,16 +10,17 @@ const PlateMarkdownEditor = lazy(() =>
 interface MarkdownEditorProps {
   content: string;
   disabled?: boolean;
+  mode: EditorMode;
   status: string;
   onChange: (content: string) => void;
 }
 
-export function MarkdownEditor({ content, disabled, status, onChange }: MarkdownEditorProps) {
+export function MarkdownEditor({ content, disabled, mode, status, onChange }: MarkdownEditorProps) {
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-surface" aria-label="Editor">
       <div className="min-h-0 flex-1 overflow-auto">
         <Suspense fallback={<div className="px-8 py-7 text-sm text-muted">Loading editor…</div>}>
-          <PlateMarkdownEditor content={content} disabled={disabled} onChange={onChange} />
+          <PlateMarkdownEditor content={content} disabled={disabled} mode={mode} onChange={onChange} />
         </Suspense>
       </div>
       <div

@@ -53,7 +53,6 @@ import {
   ListOrdered,
   ListTodo,
   MessageSquarePlus,
-  PencilLine,
   Pilcrow,
   Quote,
   SquareCode,
@@ -80,7 +79,6 @@ import {
   useMarkToolbarButton,
   useMarkToolbarButtonState,
   usePlateEditor,
-  usePluginOption,
   useReadOnly,
   useSelectionFragmentProp,
   type PlateEditor,
@@ -231,13 +229,19 @@ const plateMarkdownPlugins = [
   MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm, remarkInlineMarks] } }),
 ] as const;
 
+// The document interaction mode chosen from the header selector. Viewing is
+// read-only; Editing edits directly; Suggesting tracks edits as suggestion marks.
+export type EditorMode = 'editing' | 'suggesting' | 'viewing';
+
 export function PlateMarkdownEditor({
   content,
   disabled,
+  mode = 'editing',
   onChange,
 }: {
   content: string;
   disabled?: boolean;
+  mode?: EditorMode;
   onChange: (content: string) => void;
 }) {
   const storeHydrate = useReviewStore((s) => s.hydrate);
@@ -275,6 +279,12 @@ export function PlateMarkdownEditor({
     editor.setOption(SuggestionPlugin, 'currentUserId', currentAuthor());
   }, [editor]);
 
+  // The mode selector is the single source of truth for Suggesting: only that
+  // mode tracks edits as suggestion marks (via withSuggestion).
+  useEffect(() => {
+    editor.setOption(SuggestionPlugin, 'isSuggesting', mode === 'suggesting');
+  }, [editor, mode]);
+
   useEffect(() => {
     if (content === lastContentRef.current) return;
     const { value, meta } = markdownToReview(content);
@@ -308,10 +318,13 @@ export function PlateMarkdownEditor({
     });
   }, [editor, onChange, serialize]);
 
+  // Viewing is a user-chosen read-only; the save guard (`disabled`) forces it too.
+  const readOnly = disabled || mode === 'viewing';
+
   return (
     <Plate
       editor={editor}
-      readOnly={disabled}
+      readOnly={readOnly}
       onValueChange={({ editor, value }) => {
         if (editor.meta.resetting) {
           editor.meta.resetting = undefined;
@@ -324,20 +337,13 @@ export function PlateMarkdownEditor({
         onChange(nextMarkdown);
       }}
     >
-      {disabled ? null : <FloatingFormatToolbar />}
+      {readOnly ? null : <FloatingFormatToolbar />}
       <div className="flex h-full min-h-0">
-        <div className="relative min-w-0 flex-1 overflow-auto">
-          {/* Floats over the top-right of the scroll area, clear of the
-              centered column, so it doesn't shift the writing surface. */}
-          <div className="pointer-events-none absolute right-2 top-2 z-10 flex justify-end">
-            <span className="pointer-events-auto">
-              <SuggestingPill />
-            </span>
-          </div>
+        <div className="min-w-0 flex-1 overflow-auto">
           <PlateContent
             aria-label="Plate markdown editor"
             className="min-h-full w-full px-[max(2rem,calc((100%-68ch)/2))] pt-16 pb-8 text-[15px] leading-7 text-ink outline-none [&_[data-slate-placeholder=true]]:text-faint"
-            disabled={disabled}
+            disabled={readOnly}
             placeholder="Write markdown…"
             spellCheck={false}
           />
@@ -402,7 +408,6 @@ function FloatingFormatToolbar() {
         <ListTodo size={15} />
       </TodoListButton>
       <div aria-hidden="true" className="mx-0.5 h-5 w-px bg-line" />
-      <SuggestToggle />
       <CommentButton />
       <SuggestionActions />
     </div>
@@ -453,54 +458,6 @@ function SuggestionActions() {
         <X size={15} />
       </button>
     </>
-  );
-}
-
-// Toggles Plate's live Suggesting mode: while on, typing and deletions become
-// suggestion marks (handled by withSuggestion) instead of direct edits. The
-// suggesting author (currentUserId) is set on the editor at mount, so marks
-// created here survive normalization.
-function SuggestToggle() {
-  const editor = useEditorRef();
-  const isSuggesting = usePluginOption(SuggestionPlugin, 'isSuggesting');
-  return (
-    <button
-      aria-label="Suggest edits"
-      aria-pressed={isSuggesting}
-      className={cn(
-        'inline-flex size-7 items-center justify-center rounded text-muted transition-colors hover:bg-well hover:text-body',
-        isSuggesting && 'bg-well text-accent-ink'
-      )}
-      data-testid="suggest-toggle"
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={() => editor.setOption(SuggestionPlugin, 'isSuggesting', !isSuggesting)}
-      title={isSuggesting ? 'Stop suggesting' : 'Suggest edits'}
-      type="button"
-    >
-      <PencilLine size={15} />
-    </button>
-  );
-}
-
-// Always-visible affordance that the editor is in Suggesting mode (the floating
-// toolbar's SuggestToggle is only reachable on selection). Click to leave
-// Suggesting mode. Exported for a focused test that renders it inside <Plate>.
-export function SuggestingPill() {
-  const editor = useEditorRef();
-  const isSuggesting = usePluginOption(SuggestionPlugin, 'isSuggesting');
-  if (!isSuggesting) return null;
-  return (
-    <button
-      aria-label="Stop suggesting"
-      data-testid="suggesting-pill"
-      className="inline-flex items-center gap-1.5 rounded-full border border-accent-line bg-accent-tint px-2.5 py-1 text-xs font-medium text-accent-ink transition-colors hover:bg-accent-tint/70"
-      onClick={() => editor.setOption(SuggestionPlugin, 'isSuggesting', false)}
-      type="button"
-    >
-      <PencilLine size={13} />
-      Suggesting
-      <X size={13} />
-    </button>
   );
 }
 

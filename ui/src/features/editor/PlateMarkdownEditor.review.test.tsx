@@ -1,8 +1,8 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { SuggestionPlugin } from '@platejs/suggestion/react';
-import { Plate, ParagraphPlugin, createPlateEditor } from 'platejs/react';
+import { ParagraphPlugin, createPlateEditor } from 'platejs/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PlateMarkdownEditor, SuggestingPill } from './PlateMarkdownEditor';
+import { PlateMarkdownEditor } from './PlateMarkdownEditor';
 import { reviewKit } from './review-kit';
 import { useReviewStore } from '../review/review-store';
 import { currentAuthor } from '../review/identity';
@@ -116,38 +116,5 @@ describe('Suggesting mode', () => {
     expect(markdown).toMatch(/\{\+\+X\+\+\}\{#[^}]+\}/);
     expect(markdown).toContain('suggestions:');
     expect(markdown).toContain('by: user');
-  });
-});
-
-describe('SuggestingPill', () => {
-  function renderPill(isSuggesting: boolean) {
-    const editor = createPlateEditor({
-      plugins: [ParagraphPlugin, ...reviewKit],
-      value: [{ type: 'p', children: [{ text: 'hello' }] }],
-    });
-    editor.setOption(SuggestionPlugin, 'isSuggesting', isSuggesting);
-    render(
-      <Plate editor={editor}>
-        <SuggestingPill />
-      </Plate>
-    );
-    return editor;
-  }
-
-  it('renders nothing while suggesting is off', () => {
-    renderPill(false);
-    expect(screen.queryByTestId('suggesting-pill')).toBeNull();
-  });
-
-  it('renders the pill while suggesting is on', () => {
-    renderPill(true);
-    expect(screen.getByTestId('suggesting-pill')).toBeInTheDocument();
-  });
-
-  it('turns suggesting off when clicked', () => {
-    const editor = renderPill(true);
-    fireEvent.click(screen.getByTestId('suggesting-pill'));
-    expect(editor.getOption(SuggestionPlugin, 'isSuggesting')).toBe(false);
-    expect(screen.queryByTestId('suggesting-pill')).toBeNull();
   });
 });

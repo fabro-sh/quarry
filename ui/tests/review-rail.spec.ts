@@ -195,12 +195,12 @@ test.describe('Review rail', () => {
     const editor = page.getByLabel('Plate markdown editor');
     await expect(editor).toContainText('Base sentence');
 
-    // Enter suggesting mode via the toolbar toggle (raise the toolbar with a
-    // selection first), then type so the inserted text becomes a suggestion.
-    await page.getByText('Base sentence', { exact: false }).dblclick();
-    const suggest = page.getByTestId('suggest-toggle');
-    await suggest.click();
-    await expect(suggest).toHaveAttribute('aria-pressed', 'true');
+    // Switch to Suggesting mode via the document mode selector, then type so the
+    // inserted text becomes a suggestion.
+    const mode = page.getByRole('button', { name: 'Document mode' });
+    await mode.click();
+    await page.getByRole('menuitem', { name: 'Suggesting' }).click();
+    await expect(mode).toContainText('Suggesting');
 
     await editor.click();
     await page.keyboard.press('End');

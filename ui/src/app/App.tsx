@@ -4,7 +4,9 @@ import { Command } from 'cmdk';
 import {
   AlertTriangle,
   Braces,
+  Check,
   CheckCircle2,
+  ChevronDown,
   Download,
   Eye,
   FileArchive,
@@ -17,12 +19,14 @@ import {
   Image as ImageIcon,
   Library,
   Link2,
+  MessageSquarePlus,
   Moon,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  PencilLine,
   Plus,
   Save,
   RotateCcw,
@@ -98,7 +102,7 @@ import type {
   GitSyncResult,
 } from '../api/client';
 import { clearDraft, loadDraft, saveDraft } from '../features/editor/drafts';
-import { MarkdownEditor } from '../features/editor/MarkdownEditor';
+import { MarkdownEditor, type EditorMode } from '../features/editor/MarkdownEditor';
 import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../features/tree/tree-model';
 import { cn } from '../lib/utils';
 
@@ -159,6 +163,7 @@ function Workspace() {
   const [etag, setEtag] = useState('');
   const [contentType, setContentType] = useState('text/markdown');
   const [saveState, setSaveState] = useState<SaveState>('clean');
+  const [editorMode, setEditorMode] = useState<EditorMode>('editing');
   const [conflictRemote, setConflictRemote] = useState<string | null>(null);
   const [conflictDetails, setConflictDetails] = useState<SaveConflictDetails | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
@@ -847,6 +852,8 @@ function Workspace() {
               <DocumentToolbar
                 disabled={saveState === 'saving'}
                 isText={isTextContentType(selectedContentType)}
+                mode={editorMode}
+                onModeChange={setEditorMode}
                 path={selectedPath}
                 saveState={saveState}
                 onDelete={deleteCurrent}
@@ -861,6 +868,7 @@ function Workspace() {
                 content={content}
                 contentType={selectedContentType}
                 disabled={saveState === 'saving'}
+                mode={editorMode}
                 path={selectedPath}
                 saveState={saveState}
                 onChange={changeContent}
@@ -1027,6 +1035,7 @@ function DocumentBody({
   content,
   contentType,
   disabled,
+  mode,
   path,
   saveState,
   onChange,
@@ -1037,6 +1046,7 @@ function DocumentBody({
   content: string;
   contentType: string;
   disabled: boolean;
+  mode: EditorMode;
   path: string;
   saveState: SaveState;
   onChange: (content: string) => void;
@@ -1046,6 +1056,7 @@ function DocumentBody({
       <MarkdownEditor
         content={content}
         disabled={disabled}
+        mode={mode}
         status={statusText(saveState)}
         onChange={onChange}
       />
@@ -2232,9 +2243,67 @@ function TreeContextMenu({
   );
 }
 
+const editorModes: ReadonlyArray<{ value: EditorMode; label: string; icon: typeof Eye }> = [
+  { value: 'editing', label: 'Editing', icon: PencilLine },
+  { value: 'suggesting', label: 'Suggesting', icon: MessageSquarePlus },
+  { value: 'viewing', label: 'Viewing', icon: Eye },
+];
+
+// Viewing/Editing/Suggesting selector in the document header (à la Google Docs).
+// The mode is plain React state; the editor reacts to it, so this control needs
+// no editor context.
+function DocumentModeSelect({
+  mode,
+  onModeChange,
+}: {
+  mode: EditorMode;
+  onModeChange: (mode: EditorMode) => void;
+}) {
+  const active = editorModes.find((option) => option.value === mode) ?? editorModes[0];
+  const ActiveIcon = active.icon;
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button
+          aria-label="Document mode"
+          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-line-strong bg-raised pl-2.5 pr-2 text-sm text-body transition-colors hover:bg-well"
+          type="button"
+        >
+          <ActiveIcon className="text-muted" size={15} />
+          {active.label}
+          <ChevronDown className="text-muted" size={14} />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          className="z-50 min-w-44 rounded-md border border-line bg-raised p-1 shadow-lg"
+          sideOffset={6}
+        >
+          {editorModes.map((option) => (
+            <DropdownMenu.Item
+              className={cn(menuItem, 'justify-between', option.value === mode && 'text-accent-ink')}
+              key={option.value}
+              onSelect={() => onModeChange(option.value)}
+            >
+              <span className="flex items-center gap-2">
+                <option.icon className="shrink-0 text-muted" size={15} />
+                {option.label}
+              </span>
+              {option.value === mode ? <Check className="shrink-0 text-accent-ink" size={15} /> : null}
+            </DropdownMenu.Item>
+          ))}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
 function DocumentToolbar({
   disabled,
   isText,
+  mode,
+  onModeChange,
   path,
   saveState,
   onDelete,
@@ -2244,6 +2313,8 @@ function DocumentToolbar({
 }: {
   disabled: boolean;
   isText: boolean;
+  mode: EditorMode;
+  onModeChange: (mode: EditorMode) => void;
   path: string;
   saveState: SaveState;
   onDelete: () => void;
@@ -2264,6 +2335,7 @@ function DocumentToolbar({
         ))}
       </h1>
       {saveState === 'stale' ? <AlertTriangle className="shrink-0 text-warn-ink" size={16} /> : null}
+      {isText ? <DocumentModeSelect mode={mode} onModeChange={onModeChange} /> : null}
       {isText ? (
         <button
           aria-label="Save document"

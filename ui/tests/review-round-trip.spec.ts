@@ -51,13 +51,12 @@ test.describe('Review round-trip', () => {
     const editor = page.getByLabel('Plate markdown editor');
     await expect(editor).toContainText('Base sentence');
 
-    // Enter suggesting mode via the toolbar toggle (it lives in the same floating
-    // toolbar, so raise the toolbar with a selection first), then type. While
-    // suggesting, typed text becomes a suggestion (insertion) mark.
-    await page.getByText('Base sentence', { exact: false }).dblclick();
-    const suggest = page.getByTestId('suggest-toggle');
-    await suggest.click();
-    await expect(suggest).toHaveAttribute('aria-pressed', 'true');
+    // Switch to Suggesting mode via the document mode selector in the header.
+    // While suggesting, typed text becomes a suggestion (insertion) mark.
+    const mode = page.getByRole('button', { name: 'Document mode' });
+    await mode.click();
+    await page.getByRole('menuitem', { name: 'Suggesting' }).click();
+    await expect(mode).toContainText('Suggesting');
 
     await editor.click();
     await page.keyboard.press('End');
