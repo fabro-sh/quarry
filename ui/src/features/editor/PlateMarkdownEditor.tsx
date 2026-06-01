@@ -124,6 +124,8 @@ import { cn } from '../../lib/utils';
 import { type PlateValue } from './markdown-codec';
 import { remarkInlineMarks } from './remark-inline-marks';
 import { reviewKit } from './review-kit';
+import { wikiLinkMdRules } from './wiki-link';
+import { WikiLinkPlugin, WikiLinkProvider, type WikiLinkApi } from './wiki-link-element';
 import { startCommentDraft } from '../review/comment-draft';
 import { currentAuthor } from '../review/identity';
 import { markdownToReview, reviewToMarkdown } from '../review/rfm-codec';
@@ -246,6 +248,7 @@ const plateMarkdownPlugins = [
   LinkPlugin.configure({
     render: { node: LinkElement, afterEditable: () => <LinkFloatingToolbar /> },
   }),
+  WikiLinkPlugin,
   DndPlugin.configure({
     render: { aboveNodes: BlockDraggable, aboveSlate: EditorDndProvider },
   }),
@@ -260,7 +263,9 @@ const plateMarkdownPlugins = [
     },
   }),
   ...reviewKit,
-  MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm, remarkInlineMarks] } }),
+  MarkdownPlugin.configure({
+    options: { remarkPlugins: [remarkGfm, remarkInlineMarks], rules: wikiLinkMdRules },
+  }),
 ] as const;
 
 // The document interaction mode chosen from the header selector. Viewing is
@@ -270,10 +275,12 @@ export type EditorMode = 'editing' | 'suggesting' | 'viewing';
 export function PlateMarkdownEditor({
   content,
   mode = 'editing',
+  wikiLink,
   onChange,
 }: {
   content: string;
   mode?: EditorMode;
+  wikiLink?: WikiLinkApi;
   onChange: (content: string) => void;
 }) {
   const storeHydrate = useReviewStore((s) => s.hydrate);
@@ -354,35 +361,37 @@ export function PlateMarkdownEditor({
   const readOnly = mode === 'viewing';
 
   return (
-    <Plate
-      editor={editor}
-      readOnly={readOnly}
-      onValueChange={({ editor, value }) => {
-        if (editor.meta.resetting) {
-          editor.meta.resetting = undefined;
-          return;
-        }
-        const nextMarkdown = serialize(value as PlateValue);
-        if (nextMarkdown === lastSerializedRef.current) return;
-        lastContentRef.current = nextMarkdown;
-        lastSerializedRef.current = nextMarkdown;
-        onChange(nextMarkdown);
-      }}
-    >
-      {readOnly ? null : <FloatingFormatToolbar />}
-      <div className="flex h-full min-h-0">
-        <div className="min-w-0 flex-1 overflow-auto">
-          <PlateContent
-            aria-label="Plate markdown editor"
-            className="min-h-full w-full px-[max(2rem,calc((100%-68ch)/2))] pt-16 pb-8 text-[15px] leading-7 text-ink outline-none [&_[data-slate-placeholder=true]]:text-faint"
-            disabled={readOnly}
-            placeholder="Write markdown…"
-            spellCheck={false}
-          />
+    <WikiLinkProvider value={wikiLink ?? {}}>
+      <Plate
+        editor={editor}
+        readOnly={readOnly}
+        onValueChange={({ editor, value }) => {
+          if (editor.meta.resetting) {
+            editor.meta.resetting = undefined;
+            return;
+          }
+          const nextMarkdown = serialize(value as PlateValue);
+          if (nextMarkdown === lastSerializedRef.current) return;
+          lastContentRef.current = nextMarkdown;
+          lastSerializedRef.current = nextMarkdown;
+          onChange(nextMarkdown);
+        }}
+      >
+        {readOnly ? null : <FloatingFormatToolbar />}
+        <div className="flex h-full min-h-0">
+          <div className="min-w-0 flex-1 overflow-auto">
+            <PlateContent
+              aria-label="Plate markdown editor"
+              className="min-h-full w-full px-[max(2rem,calc((100%-68ch)/2))] pt-16 pb-8 text-[15px] leading-7 text-ink outline-none [&_[data-slate-placeholder=true]]:text-faint"
+              disabled={readOnly}
+              placeholder="Write markdown…"
+              spellCheck={false}
+            />
+          </div>
+          <ReviewRail editor={editor} />
         </div>
-        <ReviewRail editor={editor} />
-      </div>
-    </Plate>
+      </Plate>
+    </WikiLinkProvider>
   );
 }
 

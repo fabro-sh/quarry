@@ -131,6 +131,60 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(editor).toContainText('example');
   });
 
+  test('renders a wiki-link chip and navigates to its target on click', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        { content: 'See [[Guide]] for more.\n', id: 'doc-notes', metadata: { title: 'Notes' }, path: 'notes.md', version: 'v1' },
+        { content: '# Guide\n\nThe guide body.\n', id: 'doc-guide', metadata: { title: 'Guide' }, path: 'guide.md', version: 'v-guide' },
+      ],
+      links: {
+        'notes.md': {
+          outgoing: [link({ target_text: 'Guide', target_path: 'guide.md', target_doc_id: 'doc-guide' })],
+        },
+      },
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Notes/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('See');
+
+    const chip = editor.getByTestId('wikilink');
+    await expect(chip).toHaveText('Guide');
+    await expect(chip).toHaveAttribute('data-resolved', 'true');
+
+    await chip.click();
+    await expect(editor).toContainText('The guide body.');
+  });
+
+  test('converts a typed [[..]] into a wiki-link and round-trips it', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        { content: 'Start.\n', id: 'doc-wt', metadata: { title: 'Wikitype' }, path: 'wt.md', version: 'v1' },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Wikitype/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Start.');
+
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' [[Note]] end');
+
+    // The completed [[Note]] becomes a chip, and typing continues after it.
+    await expect(editor.getByTestId('wikilink')).toHaveText('Note');
+    await expect(editor).toContainText('end');
+
+    // Autosave persists it; reloading round-trips `[[Note]]` back into a chip
+    // (which only happens if it wasn't escaped to `\[\[Note]]`).
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
+    await page.reload();
+    await page.getByRole('treeitem', { name: /Wikitype/ }).click();
+    await expect(editor.getByTestId('wikilink')).toHaveText('Note');
+  });
+
   test('opens the browser and selects a library', async ({ page }) => {
     await installMockApi(page, {
       documents: [],
@@ -640,7 +694,10 @@ test.describe('Quarry Browser smoke flows', () => {
 
     await page.getByRole('button', { name: 'daily.md' }).click();
 
-    await expect(page.getByLabel('Plate markdown editor')).toContainText('See [[Guide]].');
+    // `[[Guide]]` renders as a wiki-link chip in the editor, not literal text.
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('See');
+    await expect(editor.getByTestId('wikilink')).toHaveText('Guide');
     await expect(page).toHaveURL(/\/lib\/notes\/documents\/daily\.md$/);
   });
 

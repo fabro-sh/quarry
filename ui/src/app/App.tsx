@@ -101,7 +101,7 @@ import type {
   GitSyncResult,
 } from '../api/client';
 import { clearDraft, loadDraft, saveDraft } from '../features/editor/drafts';
-import { MarkdownEditor, type EditorMode } from '../features/editor/MarkdownEditor';
+import { MarkdownEditor, type EditorMode, type WikiLinkApi } from '../features/editor/MarkdownEditor';
 import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../features/tree/tree-model';
 import { cn } from '../lib/utils';
 
@@ -194,6 +194,7 @@ function Workspace() {
   const selectedPathRef = useRef(selectedPath);
   const activeLibraryRef = useRef(activeLibrary);
   const contentRef = useRef(content);
+  const openDocumentRef = useRef<(path: string) => void>(() => {});
   const saveStateRef = useRef(saveState);
   const loadedDocumentRef = useRef<{ library: string; path: string; etag: string } | null>(null);
   const searchQueryRef = useRef(searchQuery);
@@ -263,6 +264,10 @@ function Workspace() {
   useEffect(() => {
     contentRef.current = content;
   }, [content]);
+
+  useEffect(() => {
+    openDocumentRef.current = openDocument;
+  });
 
   useEffect(() => {
     saveStateRef.current = saveState;
@@ -462,6 +467,26 @@ function Workspace() {
     activeLibrary && selectedPath ? ['/v1/backlinks', activeLibrary, selectedPath] : null,
     () => backlinks(activeLibrary, selectedPath)
   );
+
+  // Resolve editor wiki-links against the backend's outgoing links for the open
+  // document, and open the resolved target. Memoized on `outgoing` so the editor
+  // chips don't re-render on every keystroke; `open` reads the latest navigate
+  // handler via ref. Resolution lags an edit until the next save + reindex.
+  const wikiLink = useMemo<WikiLinkApi>(() => {
+    const byTarget = new Map<string, DocumentLink>();
+    for (const link of outgoing.links) {
+      if (link.target_kind === 'wiki_link' || link.target_kind === 'embed') {
+        byTarget.set(link.target_text.toLowerCase(), link);
+      }
+    }
+    return {
+      resolve: (target) => {
+        const link = byTarget.get(target.toLowerCase());
+        return link ? { resolved: link.resolved, targetPath: link.target_path } : undefined;
+      },
+      open: (path) => openDocumentRef.current(path),
+    };
+  }, [outgoing]);
   const { data: versionList = [] } = useSWR(
     activeLibrary && selectedPath ? ['/v1/versions', activeLibrary, selectedPath] : null,
     () => versions(activeLibrary, selectedPath)
@@ -915,6 +940,7 @@ function Workspace() {
                 contentType={selectedContentType}
                 mode={editorMode}
                 path={selectedPath}
+                wikiLink={wikiLink}
                 onChange={changeContent}
               />
             </div>
@@ -1080,6 +1106,7 @@ function DocumentBody({
   contentType,
   mode,
   path,
+  wikiLink,
   onChange,
 }: {
   activeLibrary: string;
@@ -1089,10 +1116,11 @@ function DocumentBody({
   contentType: string;
   mode: EditorMode;
   path: string;
+  wikiLink: WikiLinkApi;
   onChange: (content: string) => void;
 }) {
   if (isTextContentType(contentType)) {
-    return <MarkdownEditor content={content} mode={mode} onChange={onChange} />;
+    return <MarkdownEditor content={content} mode={mode} wikiLink={wikiLink} onChange={onChange} />;
   }
 
   if (isImageContentType(contentType)) {

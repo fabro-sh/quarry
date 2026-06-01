@@ -52,6 +52,25 @@ describe('markdown codec', () => {
     expect(serialized).toContain('<sup>2</sup>');
   });
 
+  it('round-trips wiki-links without escaping the brackets', () => {
+    const cases = [
+      'A [[foo]] link.\n',
+      'See [[notes/bar|Bar]] now.\n',
+      'Jump to [[guide#Setup]].\n',
+      'An embed ![[image]] here.\n',
+    ];
+    for (const md of cases) {
+      const out = plateValueToMarkdown(markdownToPlateValue(md));
+      expect(out).toBe(md);
+      expect(out).not.toContain('\\[');
+    }
+  });
+
+  it('keeps [[..]] literal inside code', () => {
+    const md = '`[[notcode]]` stays.\n';
+    expect(plateValueToMarkdown(markdownToPlateValue(md))).toBe(md);
+  });
+
   it('leaves stray angle brackets and braces untouched', () => {
     const markdown = 'if a < b and {x} then y\n';
     expect(plateValueToMarkdown(markdownToPlateValue(markdown))).toBe(markdown);

@@ -531,25 +531,29 @@ describe('Quarry Browser workspace', () => {
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Links/ }));
 
-    expect(await screen.findAllByText('guide.md')).toHaveLength(2);
-    expect(screen.getByText('Missing')).toBeInTheDocument();
-    expect(screen.getByText('Unresolved')).toBeInTheDocument();
-    expect(screen.getByText('Duplicate')).toBeInTheDocument();
-    expect(screen.getByText('Ambiguous')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Create document for Duplicate' })).not.toBeInTheDocument();
+    // Scope link assertions to the details pane: the editor now also renders
+    // `[[Guide]]`/`[[Missing]]` as wiki-link chips with the same text.
+    await screen.findByLabelText('Plate markdown editor');
+    const details = within(screen.getByLabelText('Document details'));
+    expect(await details.findAllByText('guide.md')).toHaveLength(2);
+    expect(details.getByText('Missing')).toBeInTheDocument();
+    expect(details.getByText('Unresolved')).toBeInTheDocument();
+    expect(details.getByText('Duplicate')).toBeInTheDocument();
+    expect(details.getByText('Ambiguous')).toBeInTheDocument();
+    expect(details.queryByRole('button', { name: 'Create document for Duplicate' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Links');
-    const resolvedLinkButtons = screen.getAllByRole('button', { name: 'guide.md' });
+    const resolvedLinkButtons = details.getAllByRole('button', { name: 'guide.md' });
     await userEvent.hover(resolvedLinkButtons[0]);
     expect((await screen.findAllByLabelText('Link preview'))[0]).toHaveTextContent('Hover preview body.');
     await userEvent.unhover(resolvedLinkButtons[0]);
     await waitFor(() => expect(screen.queryAllByLabelText('Link preview')).toHaveLength(0));
     // Backlinks render in the same Links panel as outgoing links.
-    expect(screen.getByText('source.md')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Create document for Missing' }));
+    expect(details.getByText('source.md')).toBeInTheDocument();
+    await userEvent.click(details.getByRole('button', { name: 'Create document for Missing' }));
     expect(prompt).toHaveBeenCalledWith('New document path', 'Missing.md');
     await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Untitled'));
 
-    await userEvent.click(screen.getAllByRole('button', { name: 'guide.md' })[0]);
+    await userEvent.click(details.getAllByRole('button', { name: 'guide.md' })[0]);
     await waitFor(() =>
       expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Hover preview body.')
     );

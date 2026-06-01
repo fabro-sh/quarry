@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 
 import { baseMarkdownPlugins } from '../editor/markdown-codec';
 import { remarkInlineMarks } from '../editor/remark-inline-marks';
+import { applyWikiLinks } from '../editor/wiki-link';
 import { applyCriticMarkup } from './apply-critic-markup';
 import { collapseSubstitutions, expandSubstitutions } from './collapse-substitutions';
 import { serializeReviewMeta, splitEndmatter } from './endmatter';
@@ -34,7 +35,8 @@ function deserializeEditor() {
 export function markdownToReview(markdown: string): ReviewDocument {
   const { body, meta } = splitEndmatter(markdown);
   const rawValue = deserializeEditor().api.markdown.deserialize(expandSubstitutions(body));
-  return applyCriticMarkup(rawValue, meta ?? emptyReviewMeta());
+  const reviewed = applyCriticMarkup(rawValue, meta ?? emptyReviewMeta());
+  return { value: applyWikiLinks(reviewed.value), meta: reviewed.meta };
 }
 
 /** Collect the comment/suggestion ids still present as marks in the value. */
@@ -93,9 +95,13 @@ function endmatterMeta(pruned: ReviewMeta): ReviewMeta {
 
 /** Plate value + metadata → Markdown (RFM). */
 export function reviewToMarkdown(value: Descendant[], meta: ReviewMeta): string {
-  const live = liveIds(value);
+  // Convert any stray `[[...]]` text to wiki-link nodes first, so a link the user
+  // typed (but the editor hasn't turned into a chip yet) still serializes as
+  // `[[...]]` rather than being escaped to `\[\[...]]`.
+  const wikied = applyWikiLinks(value);
+  const live = liveIds(wikied);
   const pruned = pruneMeta(meta, live);
-  const body = collapseSubstitutions(serializeReviewBody(value, pruned));
+  const body = collapseSubstitutions(serializeReviewBody(wikied, pruned));
   const endmatter = serializeReviewMeta(endmatterMeta(pruned));
   return endmatter ? `${body}\n\n---\n${endmatter}` : `${body}\n`;
 }

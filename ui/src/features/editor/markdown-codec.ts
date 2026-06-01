@@ -23,6 +23,7 @@ import { BaseParagraphPlugin, createSlateEditor } from 'platejs';
 import remarkGfm from 'remark-gfm';
 
 import { remarkInlineMarks } from './remark-inline-marks';
+import { applyWikiLinks, BaseWikiLinkPlugin, wikiLinkMdRules } from './wiki-link';
 
 export type PlateValue = Array<Record<string, unknown>>;
 
@@ -49,21 +50,24 @@ export const baseMarkdownPlugins = [
   BaseSuperscriptPlugin,
   BaseListPlugin,
   BaseLinkPlugin,
+  BaseWikiLinkPlugin,
 ];
 
 export function markdownToPlateValue(markdown: string): PlateValue {
-  return editor().api.markdown.deserialize(markdown) as PlateValue;
+  return applyWikiLinks(editor().api.markdown.deserialize(markdown) as never) as PlateValue;
 }
 
 export function plateValueToMarkdown(value: PlateValue): string {
-  return editor().api.markdown.serialize({ value: value as never });
+  return editor().api.markdown.serialize({ value: applyWikiLinks(value as never) as never });
 }
 
 function editor() {
   return createSlateEditor({
     plugins: [
       ...baseMarkdownPlugins,
-      MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm, remarkInlineMarks] } }),
+      MarkdownPlugin.configure({
+        options: { remarkPlugins: [remarkGfm, remarkInlineMarks], rules: wikiLinkMdRules },
+      }),
     ],
   });
 }

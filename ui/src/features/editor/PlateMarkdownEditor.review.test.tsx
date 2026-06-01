@@ -39,6 +39,14 @@ describe('PlateMarkdownEditor link rendering', () => {
     expect(anchor).not.toBeNull();
     expect(anchor?.getAttribute('href')).toContain('platejs.org');
   });
+
+  it('renders a wiki-link as a chip showing its display text', () => {
+    render(<PlateMarkdownEditor content="See [[notes/guide|Guide]] now." onChange={vi.fn()} />);
+    const chip = screen.getByTestId('wikilink');
+    expect(chip).toHaveTextContent('Guide');
+    // No resolver in this harness, so it reads as unresolved.
+    expect(chip).toHaveAttribute('data-resolved', 'false');
+  });
 });
 
 describe('PlateMarkdownEditor review round-trip', () => {
