@@ -20,7 +20,18 @@ import { insertEmptyCodeBlock, toggleCodeBlock } from '@platejs/code-block';
 import { DndPlugin, useDraggable, useDropLine } from '@platejs/dnd';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
-import { LinkPlugin } from '@platejs/link/react';
+import { getLinkAttributes } from '@platejs/link';
+import {
+  FloatingLinkUrlInput,
+  LinkPlugin,
+  useFloatingLinkEdit,
+  useFloatingLinkEditState,
+  useFloatingLinkInsert,
+  useFloatingLinkInsertState,
+  useLinkToolbarButton,
+  useLinkToolbarButtonState,
+  type LinkFloatingToolbarState,
+} from '@platejs/link/react';
 import {
   ListPlugin,
   useIndentTodoToolBarButton,
@@ -32,7 +43,14 @@ import {
 } from '@platejs/list/react';
 import { isOrderedList, toggleList } from '@platejs/list';
 import { MarkdownPlugin } from '@platejs/markdown';
-import { flip, offset, shift, useFloatingToolbar, useFloatingToolbarState } from '@platejs/floating';
+import {
+  flip,
+  offset,
+  shift,
+  useFloatingToolbar,
+  useFloatingToolbarState,
+  type UseVirtualFloatingOptions,
+} from '@platejs/floating';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import {
   Bold,
@@ -48,7 +66,9 @@ import {
   Heading4,
   Heading5,
   Heading6,
+  ExternalLink,
   Italic,
+  Link,
   List,
   ListOrdered,
   ListTodo,
@@ -62,10 +82,20 @@ import {
   Trash2,
   Type,
   Underline,
+  Unlink,
   X,
 } from 'lucide-react';
-import { ElementApi, KEYS, NodeApi, PathApi, type Descendant, type TElement, type TListElement } from 'platejs';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  ElementApi,
+  KEYS,
+  NodeApi,
+  PathApi,
+  type Descendant,
+  type TElement,
+  type TLinkElement,
+  type TListElement,
+} from 'platejs';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import remarkGfm from 'remark-gfm';
 import {
@@ -74,8 +104,10 @@ import {
   PlateContent,
   PlateElement,
   useEditorRef,
+  useEditorSelection,
   useEventEditorValue,
   useEditorSelector,
+  useFormInputProps,
   useMarkToolbarButton,
   useMarkToolbarButtonState,
   usePlateEditor,
@@ -211,7 +243,9 @@ const plateMarkdownPlugins = [
   SubscriptPlugin,
   SuperscriptPlugin,
   ListPlugin.configure({ render: { belowNodes: BlockList } }),
-  LinkPlugin,
+  LinkPlugin.configure({
+    render: { node: LinkElement, afterEditable: () => <LinkFloatingToolbar /> },
+  }),
   DndPlugin.configure({
     render: { aboveNodes: BlockDraggable, aboveSlate: EditorDndProvider },
   }),
@@ -395,6 +429,7 @@ function FloatingFormatToolbar() {
       <MarkButton label="Inline code" nodeType={KEYS.code}>
         <Code size={15} />
       </MarkButton>
+      <LinkButton />
       <div aria-hidden="true" className="mx-0.5 h-5 w-px bg-line" />
       <ListButton label="Bullet list" nodeType={KEYS.ul}>
         <List size={15} />
@@ -475,6 +510,154 @@ function CommentButton() {
     >
       <MessageSquarePlus size={15} />
     </button>
+  );
+}
+
+// Renders an `a` node as a styled, clickable anchor. A plain click places the
+// cursor (the link text stays editable); Cmd/Ctrl+click opens the URL in a new
+// tab. The floating edit toolbar (below) also exposes Open.
+function LinkElement(props: PlateElementProps<TLinkElement>) {
+  const attributes = getLinkAttributes(props.editor, props.element);
+  return (
+    <PlateElement
+      {...props}
+      as="a"
+      className="font-medium text-accent-ink underline decoration-1 underline-offset-2"
+      attributes={{
+        ...props.attributes,
+        ...attributes,
+        onClick: (event) => {
+          if ((event.metaKey || event.ctrlKey) && attributes.href) {
+            window.open(attributes.href, '_blank', 'noopener,noreferrer');
+          }
+        },
+        // Hovering an <a> with an href otherwise steals editor focus.
+        onMouseOver: (event) => event.stopPropagation(),
+      }}
+    >
+      {props.children}
+    </PlateElement>
+  );
+}
+
+// Floating toolbar button that opens the link insert popover for the current
+// selection (also reachable via Cmd/Ctrl+K, registered by LinkPlugin).
+function LinkButton() {
+  const state = useLinkToolbarButtonState();
+  const { props } = useLinkToolbarButton(state);
+  return (
+    <button
+      aria-label="Link"
+      aria-pressed={state.pressed}
+      className={cn(
+        'inline-flex size-7 items-center justify-center rounded text-muted transition-colors hover:bg-well hover:text-body',
+        state.pressed && 'bg-well text-ink'
+      )}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => props.onClick()}
+      title="Link"
+      type="button"
+    >
+      <Link size={15} />
+    </button>
+  );
+}
+
+const linkPopover = 'z-50 rounded-md border border-line bg-raised p-1 shadow-lg';
+const linkInput =
+  'h-8 w-full bg-transparent text-sm text-body outline-none placeholder:text-faint';
+
+// Adapted from PlateJS's official LinkFloatingToolbar: a URL input when inserting
+// (Cmd/Ctrl+K or the toolbar button), and an Edit / Open / Unlink popover when the
+// cursor sits in a link. Hidden in read-only (Viewing) mode.
+function LinkFloatingToolbar() {
+  const readOnly = useReadOnly();
+  const floatingOptions: UseVirtualFloatingOptions = useMemo(
+    () => ({
+      middleware: [offset(8), flip({ fallbackPlacements: ['bottom-end', 'top-start', 'top-end'], padding: 12 })],
+      placement: 'bottom-start',
+    }),
+    []
+  );
+  const insertState = useFloatingLinkInsertState({ floatingOptions } satisfies LinkFloatingToolbarState);
+  const { hidden, props: insertProps, ref: insertRef, textInputProps } = useFloatingLinkInsert(insertState);
+  const editState = useFloatingLinkEditState({ floatingOptions } satisfies LinkFloatingToolbarState);
+  const { editButtonProps, props: editProps, ref: editRef, unlinkButtonProps } = useFloatingLinkEdit(editState);
+  const inputProps = useFormInputProps({ preventDefaultOnEnterKeydown: true });
+
+  if (readOnly || hidden) return null;
+
+  const input = (
+    <div className="flex w-[320px] flex-col" {...inputProps}>
+      <div className="flex items-center gap-1.5 px-1.5">
+        <Link className="shrink-0 text-muted" size={15} />
+        <FloatingLinkUrlInput className={linkInput} placeholder="Paste link" data-plate-focus />
+      </div>
+      <div className="my-1 h-px bg-line" />
+      <div className="flex items-center gap-1.5 px-1.5">
+        <Type className="shrink-0 text-muted" size={15} />
+        <input className={linkInput} placeholder="Text to display" data-plate-focus {...textInputProps} />
+      </div>
+    </div>
+  );
+
+  const editContent = editState.isEditing ? (
+    input
+  ) : (
+    <div className="flex items-center gap-0.5">
+      <button
+        className="inline-flex h-7 items-center rounded px-2 text-sm text-body transition-colors hover:bg-well"
+        type="button"
+        {...editButtonProps}
+      >
+        Edit
+      </button>
+      <div aria-hidden="true" className="mx-0.5 h-5 w-px bg-line" />
+      <LinkOpenButton />
+      <div aria-hidden="true" className="mx-0.5 h-5 w-px bg-line" />
+      <button
+        aria-label="Remove link"
+        className="inline-flex size-7 items-center justify-center rounded text-muted transition-colors hover:bg-well hover:text-body"
+        type="button"
+        {...unlinkButtonProps}
+      >
+        <Unlink size={15} />
+      </button>
+    </div>
+  );
+
+  return (
+    <>
+      <div className={linkPopover} ref={insertRef} {...insertProps}>
+        {input}
+      </div>
+      <div className={linkPopover} ref={editRef} {...editProps}>
+        {editContent}
+      </div>
+    </>
+  );
+}
+
+function LinkOpenButton() {
+  const editor = useEditorRef();
+  const selection = useEditorSelection();
+  const attributes = useMemo(() => {
+    const entry = editor.api.node<TLinkElement>({ match: { type: editor.getType(KEYS.link) } });
+    return entry ? getLinkAttributes(editor, entry[0]) : {};
+    // Recompute as the selection moves between links.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor, selection]);
+  return (
+    <a
+      {...attributes}
+      aria-label="Open link in a new tab"
+      className="inline-flex size-7 items-center justify-center rounded text-muted transition-colors hover:bg-well hover:text-body"
+      onMouseOver={(event) => event.stopPropagation()}
+      rel="noreferrer"
+      target="_blank"
+    >
+      <ExternalLink size={15} />
+    </a>
   );
 }
 

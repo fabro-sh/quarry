@@ -32,6 +32,15 @@ function resetReviewStore() {
 beforeEach(resetReviewStore);
 afterEach(resetReviewStore);
 
+describe('PlateMarkdownEditor link rendering', () => {
+  it('renders a markdown link as an anchor carrying its href', () => {
+    render(<PlateMarkdownEditor content="See [Plate](https://platejs.org)." onChange={vi.fn()} />);
+    const anchor = screen.getByText('Plate').closest('a');
+    expect(anchor).not.toBeNull();
+    expect(anchor?.getAttribute('href')).toContain('platejs.org');
+  });
+});
+
 describe('PlateMarkdownEditor review round-trip', () => {
   it('renders a commented range as a comment mark', () => {
     render(<PlateMarkdownEditor content={DOC} onChange={vi.fn()} />);

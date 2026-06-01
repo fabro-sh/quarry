@@ -93,6 +93,44 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(page.getByLabel('Plate markdown editor')).toContainText('edited');
   });
 
+  test('inserts and removes a hyperlink, persisting it as markdown', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        { content: 'Visit example soon.\n', id: 'doc-link', metadata: { title: 'Linky' }, path: 'link.md', version: 'v1' },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Linky/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Visit example soon');
+
+    // Select "example", open the insert popover from the floating toolbar, and
+    // enter a URL.
+    await page.getByText('example', { exact: false }).dblclick();
+    await page.getByRole('button', { name: 'Link', exact: true }).click();
+    const urlInput = page.getByPlaceholder('Paste link');
+    await urlInput.fill('https://example.com');
+    await urlInput.press('Enter');
+
+    // The word becomes a real anchor pointing at the URL.
+    const link = editor.locator('a[href*="example.com"]');
+    await expect(link).toHaveText('example');
+
+    // Autosave persists it; reloading round-trips the markdown link back into an
+    // anchor.
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
+    await page.reload();
+    await page.getByRole('treeitem', { name: /Linky/ }).click();
+    await expect(editor.locator('a[href*="example.com"]')).toHaveText('example');
+
+    // Putting the cursor in the link reveals the edit popover; Remove unlinks it.
+    await editor.locator('a[href*="example.com"]').click();
+    await page.getByRole('button', { name: 'Remove link' }).click();
+    await expect(editor.locator('a[href*="example.com"]')).toHaveCount(0);
+    await expect(editor).toContainText('example');
+  });
+
   test('opens the browser and selects a library', async ({ page }) => {
     await installMockApi(page, {
       documents: [],
