@@ -152,22 +152,72 @@ function columnAlignArray(
   return tableEntry ? tableEntry[0].align : undefined;
 }
 
-// The library's insert/delete column transforms rebuild the table node and DROP
-// our `align` array entirely. So snapshot `align` BEFORE the transform, then
-// splice it the same way the column moved and write it back. No-op when no
-// explicit alignment was set (prior align undefined).
+// The library's insert column transform rebuilds the table node and DROPS our
+// `align` array entirely. So snapshot `align` BEFORE the transform, then splice a
+// new column's slot in and write it back. No-op when no explicit alignment was
+// set (prior align undefined).
 function shiftColumnAlign(
   editor: ReturnType<typeof useEditorRef>,
   tablePath: Path,
   prior: TableAlign[] | undefined,
-  at: number,
-  mode: 'insert' | 'delete'
+  at: number
 ): void {
   if (!prior) return;
   const next = [...prior];
-  if (mode === 'insert') next.splice(at, 0, null);
-  else next.splice(at, 1);
+  next.splice(at, 0, null);
   editor.tf.setNodes<TTableElementWithAlign>({ align: next }, { at: tablePath });
+}
+
+// Delete the column at colIndex by removing each row's cell at that index
+// (selection-independent — the library's selection-based transform no-ops here
+// because the dropdown clears the editor selection). Reindex `align` to match.
+// Deleting the last remaining column drops the whole table.
+function deleteColumnAt(
+  editor: ReturnType<typeof useEditorRef>,
+  element: TTableCellElement,
+  colIndex: number
+): void {
+  const path = editor.api.findPath(element);
+  if (!path || path.length < 3) return;
+  const tablePath = path.slice(0, -2);
+  const tableEntry = editor.api.node<TTableElementWithAlign>(tablePath);
+  if (!tableEntry) return;
+  const rowCount = tableEntry[0].children.length;
+  const firstRow = editor.api.node<TTableRowElement>([...tablePath, 0]);
+  const colCount = firstRow ? firstRow[0].children.length : 0;
+  const prior = tableEntry[0].align;
+  editor.tf.withoutNormalizing(() => {
+    if (colCount <= 1) {
+      editor.tf.removeNodes({ at: tablePath });
+      return;
+    }
+    for (let r = rowCount - 1; r >= 0; r -= 1) {
+      editor.tf.removeNodes({ at: [...tablePath, r, colIndex] });
+    }
+    if (prior) {
+      const next = [...prior];
+      next.splice(colIndex, 1);
+      editor.tf.setNodes<TTableElementWithAlign>({ align: next }, { at: tablePath });
+    }
+  });
+}
+
+// Delete the row that this header cell belongs to. Deleting the last row drops
+// the whole table.
+function deleteRowAt(
+  editor: ReturnType<typeof useEditorRef>,
+  element: TTableCellElement
+): void {
+  const path = editor.api.findPath(element);
+  if (!path || path.length < 3) return;
+  const tablePath = path.slice(0, -2);
+  const tableEntry = editor.api.node<TTableElementWithAlign>(tablePath);
+  if (!tableEntry) return;
+  if (tableEntry[0].children.length <= 1) {
+    editor.tf.removeNodes({ at: tablePath });
+    return;
+  }
+  editor.tf.removeNodes({ at: path.slice(0, -1) });
 }
 
 function ColumnMenu({
@@ -182,12 +232,6 @@ function ColumnMenu({
   const { tf } = useEditorPlugin(TablePlugin);
   const readOnly = useReadOnly();
   if (readOnly) return null;
-  // Select this header cell so selection-based transforms (delete column/row)
-  // operate on this column.
-  const focusColumn = () => {
-    const path = editor.api.findPath(element);
-    if (path) editor.tf.select(path);
-  };
   return (
     <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild>
@@ -225,7 +269,7 @@ function ColumnMenu({
               const tablePath = path.slice(0, -2);
               const prior = columnAlignArray(editor, tablePath);
               tf.insert.tableColumn({ before: true, fromCell: path });
-              shiftColumnAlign(editor, tablePath, prior, colIndex, 'insert');
+              shiftColumnAlign(editor, tablePath, prior, colIndex);
             }}
           >
             <Plus className="shrink-0 text-muted" size={15} /> Insert column left
@@ -238,7 +282,7 @@ function ColumnMenu({
               const tablePath = path.slice(0, -2);
               const prior = columnAlignArray(editor, tablePath);
               tf.insert.tableColumn({ fromCell: path });
-              shiftColumnAlign(editor, tablePath, prior, colIndex + 1, 'insert');
+              shiftColumnAlign(editor, tablePath, prior, colIndex + 1);
             }}
           >
             <Plus className="shrink-0 text-muted" size={15} /> Insert column right
@@ -246,24 +290,13 @@ function ColumnMenu({
           <div className="my-1 h-px bg-line" />
           <DropdownMenu.Item
             className={cn(menuItem, 'text-danger')}
-            onSelect={() => {
-              const path = editor.api.findPath(element);
-              if (!path || path.length < 3) return;
-              const tablePath = path.slice(0, -2);
-              const prior = columnAlignArray(editor, tablePath);
-              focusColumn();
-              tf.remove.tableColumn();
-              shiftColumnAlign(editor, tablePath, prior, colIndex, 'delete');
-            }}
+            onSelect={() => deleteColumnAt(editor, element, colIndex)}
           >
             <Trash2 className="shrink-0 text-danger" size={15} /> Delete column
           </DropdownMenu.Item>
           <DropdownMenu.Item
             className={cn(menuItem, 'text-danger')}
-            onSelect={() => {
-              focusColumn();
-              tf.remove.tableRow();
-            }}
+            onSelect={() => deleteRowAt(editor, element)}
           >
             <Trash2 className="shrink-0 text-danger" size={15} /> Delete row
           </DropdownMenu.Item>

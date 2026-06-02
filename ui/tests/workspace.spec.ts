@@ -425,6 +425,44 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect.poll(() => api.lastSavedBody('t4b.md')).toMatch(/-+\s*\|\s*:-:/);
   });
 
+  test('deletes a table column', async ({ page }) => {
+    const api = await installMockApi(page, {
+      documents: [
+        { content: '# Doc\n\n| A | B | C |\n| --- | --- | --- |\n| x | y | z |\n', id: 'doc-t6', metadata: { title: 'T6' }, path: 't6.md', version: 'v1' },
+      ],
+    });
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /T6/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor.locator('th')).toHaveCount(3);
+    const bHeader = editor.locator('th', { hasText: 'B' });
+    await bHeader.hover();
+    await bHeader.getByRole('button', { name: 'Column options' }).click();
+    await page.getByRole('menuitem', { name: 'Delete column' }).click();
+    await expect(editor.locator('th')).toHaveCount(2);
+    await expect(editor.locator('th', { hasText: 'B' })).toHaveCount(0);
+    // Saved markdown reflects the deletion (poll past the empty-initial-body).
+    await expect.poll(() => api.lastSavedBody('t6.md')).toContain('C');
+    expect(api.lastSavedBody('t6.md')).not.toContain('B');
+  });
+
+  test('deletes a table row', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        { content: '# Doc\n\n| A | B |\n| --- | --- |\n| x | y |\n| p | q |\n', id: 'doc-t7', metadata: { title: 'T7' }, path: 't7.md', version: 'v1' },
+      ],
+    });
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /T7/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor.locator('tr')).toHaveCount(3);
+    const aHeader = editor.locator('th', { hasText: 'A' });
+    await aHeader.hover();
+    await aHeader.getByRole('button', { name: 'Column options' }).click();
+    await page.getByRole('menuitem', { name: 'Delete row' }).click();
+    await expect(editor.locator('tr')).toHaveCount(2);
+  });
+
   test('opens the browser and selects a library', async ({ page }) => {
     await installMockApi(page, {
       documents: [],
