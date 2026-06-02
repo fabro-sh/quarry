@@ -1,9 +1,9 @@
-import { insertTable } from '@platejs/table';
 import {
   BaseTableCellHeaderPlugin,
   BaseTableCellPlugin,
   BaseTablePlugin,
   BaseTableRowPlugin,
+  insertTable,
 } from '@platejs/table';
 import {
   defaultRules,
@@ -36,7 +36,7 @@ export type TableAlign = 'left' | 'center' | 'right' | null;
 export type TTableElementWithAlign = TTableElement & { align?: TableAlign[] };
 
 /** Validate one mdast align cell into our TableAlign (anything else → undefined). */
-export function toAlign(value: unknown): TableAlign | undefined {
+export function toAlign(value: unknown): 'left' | 'center' | 'right' | undefined {
   return value === 'left' || value === 'center' || value === 'right' ? value : undefined;
 }
 
