@@ -9,7 +9,7 @@ import {
 } from '@platejs/table/react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { AlignCenter, AlignLeft, AlignRight, ChevronDown, Plus, Trash2 } from 'lucide-react';
-import { type TTableCellElement, type TTableRowElement } from 'platejs';
+import { type Path, type TTableCellElement, type TTableRowElement } from 'platejs';
 import {
   PlateElement,
   type PlateElementProps,
@@ -84,7 +84,7 @@ export function TableCellElement({
   const align = useEditorSelector((ed) => {
     const path = ed.api.findPath(element);
     if (!path || path.length < 3) return undefined;
-    const tableEntry = ed.api.node<TTableElementWithAlign>({ at: path.slice(0, -2) });
+    const tableEntry = ed.api.node<TTableElementWithAlign>(path.slice(0, -2));
     return tableEntry ? columnAlignOf(tableEntry[0], colIndex) : undefined;
   }, [element, colIndex]);
   return (
@@ -127,19 +127,46 @@ function setColumnAlign(
   const path = editor.api.findPath(element);
   if (!path || path.length < 3) return;
   const tablePath = path.slice(0, -2);
-  const tableEntry = editor.api.node<TTableElementWithAlign>({ at: tablePath });
+  const tableEntry = editor.api.node<TTableElementWithAlign>(tablePath);
   if (!tableEntry) return;
   const tableNode = tableEntry[0];
   const current = tableNode.align ?? [];
   // First row's cell count = column count (no merged cells in v1). Query the row
   // as a typed element so `.children` is the cell array, not a Descendant union.
-  const firstRow = editor.api.node<TTableRowElement>({ at: [...tablePath, 0] });
+  const firstRow = editor.api.node<TTableRowElement>([...tablePath, 0]);
   const colCount = firstRow ? firstRow[0].children.length : colIndex + 1;
   const next: TableAlign[] = Array.from({ length: colCount }, (_unused, i) => {
     if (i === colIndex) return value;
     const existing = current[i];
     return existing === 'left' || existing === 'center' || existing === 'right' ? existing : null;
   });
+  editor.tf.setNodes<TTableElementWithAlign>({ align: next }, { at: tablePath });
+}
+
+/** Read the table node's current `align` array, or undefined if unset. */
+function columnAlignArray(
+  editor: ReturnType<typeof useEditorRef>,
+  tablePath: Path
+): TableAlign[] | undefined {
+  const tableEntry = editor.api.node<TTableElementWithAlign>(tablePath);
+  return tableEntry ? tableEntry[0].align : undefined;
+}
+
+// The library's insert/delete column transforms rebuild the table node and DROP
+// our `align` array entirely. So snapshot `align` BEFORE the transform, then
+// splice it the same way the column moved and write it back. No-op when no
+// explicit alignment was set (prior align undefined).
+function shiftColumnAlign(
+  editor: ReturnType<typeof useEditorRef>,
+  tablePath: Path,
+  prior: TableAlign[] | undefined,
+  at: number,
+  mode: 'insert' | 'delete'
+): void {
+  if (!prior) return;
+  const next = [...prior];
+  if (mode === 'insert') next.splice(at, 0, null);
+  else next.splice(at, 1);
   editor.tf.setNodes<TTableElementWithAlign>({ align: next }, { at: tablePath });
 }
 
@@ -194,7 +221,11 @@ function ColumnMenu({
             className={menuItem}
             onSelect={() => {
               const path = editor.api.findPath(element);
-              if (path) tf.insert.tableColumn({ before: true, fromCell: path });
+              if (!path || path.length < 3) return;
+              const tablePath = path.slice(0, -2);
+              const prior = columnAlignArray(editor, tablePath);
+              tf.insert.tableColumn({ before: true, fromCell: path });
+              shiftColumnAlign(editor, tablePath, prior, colIndex, 'insert');
             }}
           >
             <Plus className="shrink-0 text-muted" size={15} /> Insert column left
@@ -203,7 +234,11 @@ function ColumnMenu({
             className={menuItem}
             onSelect={() => {
               const path = editor.api.findPath(element);
-              if (path) tf.insert.tableColumn({ fromCell: path });
+              if (!path || path.length < 3) return;
+              const tablePath = path.slice(0, -2);
+              const prior = columnAlignArray(editor, tablePath);
+              tf.insert.tableColumn({ fromCell: path });
+              shiftColumnAlign(editor, tablePath, prior, colIndex + 1, 'insert');
             }}
           >
             <Plus className="shrink-0 text-muted" size={15} /> Insert column right
@@ -212,8 +247,13 @@ function ColumnMenu({
           <DropdownMenu.Item
             className={cn(menuItem, 'text-danger')}
             onSelect={() => {
+              const path = editor.api.findPath(element);
+              if (!path || path.length < 3) return;
+              const tablePath = path.slice(0, -2);
+              const prior = columnAlignArray(editor, tablePath);
               focusColumn();
               tf.remove.tableColumn();
+              shiftColumnAlign(editor, tablePath, prior, colIndex, 'delete');
             }}
           >
             <Trash2 className="shrink-0 text-danger" size={15} /> Delete column

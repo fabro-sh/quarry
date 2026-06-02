@@ -399,6 +399,30 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect.poll(() => api.lastSavedBody('t4.md')).toContain(':-:');
   });
 
+  test('column alignment follows its column when a column is inserted', async ({ page }) => {
+    const api = await installMockApi(page, {
+      documents: [
+        { content: '# Doc\n\n| A | B |\n| --- | --- |\n| x | y |\n', id: 'doc-t4b', metadata: { title: 'T4b' }, path: 't4b.md', version: 'v1' },
+      ],
+    });
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /T4b/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    // Center-align column A.
+    await editor.locator('th', { hasText: 'A' }).hover();
+    await editor.getByRole('button', { name: 'Column options' }).first().click();
+    await page.getByRole('menuitem', { name: 'Align center' }).click();
+    await expect.poll(() => api.lastSavedBody('t4b.md')).toContain(':-:');
+    // Insert a column to the LEFT of A; the centered column must move to slot 2,
+    // so a plain delimiter now precedes the centered one.
+    await editor.locator('th', { hasText: 'A' }).hover();
+    await editor.getByRole('button', { name: 'Column options' }).first().click();
+    await page.getByRole('menuitem', { name: 'Insert column left' }).click();
+    // GFM serializes the empty column's delimiter minimally (`-`), so a plain
+    // delimiter now precedes the centered one — the center moved off column 0.
+    await expect.poll(() => api.lastSavedBody('t4b.md')).toMatch(/-+\s*\|\s*:-:/);
+  });
+
   test('opens the browser and selects a library', async ({ page }) => {
     await installMockApi(page, {
       documents: [],
