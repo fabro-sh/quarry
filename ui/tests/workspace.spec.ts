@@ -225,6 +225,65 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(editor.locator('img')).toHaveAttribute('src', /assets\/[0-9a-f]+\.png/);
   });
 
+  test('renders a mermaid code block as a diagram with a Code/Preview toggle', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: '# Flow\n\n```mermaid\ngraph TD\n  A --> B\n```\n',
+          id: 'doc-mmd',
+          metadata: { title: 'Mermaiddoc' },
+          path: 'mmd.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Mermaiddoc/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Flow');
+
+    const diagram = editor.getByTestId('mermaid-diagram');
+    const toggle = editor.getByTestId('mermaid-toggle');
+
+    // Default Preview: the diagram renders as an SVG; the source is hidden.
+    await expect(diagram.locator('svg')).toBeVisible({ timeout: 20000 });
+    await expect(toggle).toContainText('Code');
+    await expect(editor.locator('pre')).toBeHidden();
+
+    // Toggle to Code: the editable source shows, the diagram is gone.
+    await toggle.click();
+    await expect(editor.locator('pre')).toBeVisible();
+    await expect(editor.locator('pre')).toContainText('graph TD');
+    await expect(diagram).toHaveCount(0);
+    await expect(toggle).toContainText('Preview');
+
+    // Toggle back to Preview: the diagram renders again.
+    await toggle.click();
+    await expect(editor.getByTestId('mermaid-diagram').locator('svg')).toBeVisible({ timeout: 20000 });
+  });
+
+  test('turns a block into a mermaid diagram from the toolbar', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        { content: '# Make\n\ngraph TD; A-->B\n', id: 'doc-mk', metadata: { title: 'Makemmd' }, path: 'makemmd.md', version: 'v1' },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Makemmd/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('graph TD');
+
+    // Select the line (valid mermaid) and convert it via Turn into → Mermaid.
+    await page.getByText('graph TD', { exact: false }).click({ clickCount: 3 });
+    await page.getByRole('button', { name: 'Turn into' }).click();
+    await page.getByRole('menuitem', { name: 'Mermaid' }).click();
+
+    // It renders as a diagram (content present → opens in Preview).
+    await expect(editor.getByTestId('mermaid-diagram').locator('svg')).toBeVisible({ timeout: 20000 });
+  });
+
   test('opens the browser and selects a library', async ({ page }) => {
     await installMockApi(page, {
       documents: [],

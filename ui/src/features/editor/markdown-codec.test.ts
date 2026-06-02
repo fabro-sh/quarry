@@ -73,6 +73,13 @@ describe('markdown codec', () => {
     }
   });
 
+  it('round-trips a mermaid code block', () => {
+    const md = '```mermaid\ngraph TD\n  A --> B\n```\n';
+    const value = markdownToPlateValue(md);
+    expect((value[0] as { lang?: string }).lang).toBe('mermaid');
+    expect(plateValueToMarkdown(value)).toBe(md);
+  });
+
   it('drops upload placeholders when serializing', () => {
     const value = [
       { type: 'p', children: [{ text: 'Keep me.' }] },

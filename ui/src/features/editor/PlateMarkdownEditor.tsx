@@ -83,6 +83,7 @@ import {
   Type,
   Underline,
   Unlink,
+  Workflow,
   X,
 } from 'lucide-react';
 import {
@@ -91,6 +92,7 @@ import {
   NodeApi,
   PathApi,
   type Descendant,
+  type TCodeBlockElement,
   type TElement,
   type TLinkElement,
   type TListElement,
@@ -125,6 +127,7 @@ import { type PlateValue } from './markdown-codec';
 import { remarkInlineMarks } from './remark-inline-marks';
 import { reviewKit } from './review-kit';
 import { ImageKit, ImageProvider, type ImageApi } from './image-element';
+import { MermaidCodeBlock } from './mermaid-block';
 import { wikiLinkMdRules } from './wiki-link';
 import { WikiLinkPlugin, WikiLinkProvider, type WikiLinkApi } from './wiki-link-element';
 import { startCommentDraft } from '../review/comment-draft';
@@ -765,6 +768,7 @@ const TURN_INTO_ITEMS = [
   { icon: Heading6, label: 'Heading 6', value: KEYS.h6 },
   { icon: Quote, label: 'Quote', value: KEYS.blockquote },
   { icon: SquareCode, label: 'Code', value: KEYS.codeBlock },
+  { icon: Workflow, label: 'Mermaid', value: 'mermaid' },
 ];
 
 function setBlockType(editor: PlateEditor, type: string) {
@@ -788,6 +792,14 @@ function applyBlockType(editor: PlateEditor, type: string) {
   } else {
     setBlockType(editor, type);
   }
+}
+
+// A Mermaid diagram is a code block tagged with `lang: 'mermaid'`; the editor
+// renders that as a diagram.
+function turnIntoMermaid(editor: PlateEditor) {
+  applyBlockType(editor, KEYS.codeBlock);
+  const entry = editor.api.above({ match: { type: editor.getType(KEYS.codeBlock) } });
+  if (entry) editor.tf.setNodes({ lang: 'mermaid' }, { at: entry[1] });
 }
 
 function TurnIntoButton() {
@@ -830,7 +842,8 @@ function TurnIntoButton() {
               )}
               key={item.value}
               onSelect={() => {
-                applyBlockType(editor, item.value);
+                if (item.value === 'mermaid') turnIntoMermaid(editor);
+                else applyBlockType(editor, item.value);
                 editor.tf.focus();
               }}
             >
@@ -844,8 +857,9 @@ function TurnIntoButton() {
   );
 }
 
-function CodeBlockElement(props: PlateElementProps) {
+function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
   const [copied, setCopied] = useState(false);
+  if (props.element.lang === 'mermaid') return <MermaidCodeBlock {...props} />;
   return (
     <PlateElement {...props} className="group">
       <pre>
@@ -1015,6 +1029,7 @@ const BLOCK_TURN_INTO: ReadonlyArray<{
   { icon: ListTodo, label: 'To-do list', apply: (editor) => turnIntoList(editor, KEYS.listTodo, false) },
   { icon: Quote, label: 'Quote', apply: (editor) => applyBlockType(editor, KEYS.blockquote) },
   { icon: SquareCode, label: 'Code', apply: (editor) => applyBlockType(editor, KEYS.codeBlock) },
+  { icon: Workflow, label: 'Mermaid diagram', apply: (editor) => turnIntoMermaid(editor) },
 ];
 
 function turnBlockInto(editor: PlateEditor, element: TElement, apply: (editor: PlateEditor) => void) {
