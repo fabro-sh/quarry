@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 
 import { baseMarkdownPlugins } from '../editor/markdown-codec';
 import { remarkInlineMarks } from '../editor/remark-inline-marks';
+import { stripPlaceholders } from '../editor/image';
 import { applyWikiLinks } from '../editor/wiki-link';
 import { applyCriticMarkup } from './apply-critic-markup';
 import { collapseSubstitutions, expandSubstitutions } from './collapse-substitutions';
@@ -97,8 +98,9 @@ function endmatterMeta(pruned: ReviewMeta): ReviewMeta {
 export function reviewToMarkdown(value: Descendant[], meta: ReviewMeta): string {
   // Convert any stray `[[...]]` text to wiki-link nodes first, so a link the user
   // typed (but the editor hasn't turned into a chip yet) still serializes as
-  // `[[...]]` rather than being escaped to `\[\[...]]`.
-  const wikied = applyWikiLinks(value);
+  // `[[...]]` rather than being escaped to `\[\[...]]`. Drop in-flight upload
+  // placeholders — they aren't part of the saved document.
+  const wikied = stripPlaceholders(applyWikiLinks(value));
   const live = liveIds(wikied);
   const pruned = pruneMeta(meta, live);
   const body = collapseSubstitutions(serializeReviewBody(wikied, pruned));

@@ -124,6 +124,7 @@ import { cn } from '../../lib/utils';
 import { type PlateValue } from './markdown-codec';
 import { remarkInlineMarks } from './remark-inline-marks';
 import { reviewKit } from './review-kit';
+import { ImageKit, ImageProvider, type ImageApi } from './image-element';
 import { wikiLinkMdRules } from './wiki-link';
 import { WikiLinkPlugin, WikiLinkProvider, type WikiLinkApi } from './wiki-link-element';
 import { startCommentDraft } from '../review/comment-draft';
@@ -249,6 +250,7 @@ const plateMarkdownPlugins = [
     render: { node: LinkElement, afterEditable: () => <LinkFloatingToolbar /> },
   }),
   WikiLinkPlugin,
+  ...ImageKit,
   DndPlugin.configure({
     render: { aboveNodes: BlockDraggable, aboveSlate: EditorDndProvider },
   }),
@@ -276,11 +278,13 @@ export function PlateMarkdownEditor({
   content,
   mode = 'editing',
   wikiLink,
+  image,
   onChange,
 }: {
   content: string;
   mode?: EditorMode;
   wikiLink?: WikiLinkApi;
+  image?: ImageApi;
   onChange: (content: string) => void;
 }) {
   const storeHydrate = useReviewStore((s) => s.hydrate);
@@ -362,6 +366,7 @@ export function PlateMarkdownEditor({
 
   return (
     <WikiLinkProvider value={wikiLink ?? {}}>
+     <ImageProvider value={image ?? {}}>
       <Plate
         editor={editor}
         readOnly={readOnly}
@@ -391,6 +396,7 @@ export function PlateMarkdownEditor({
           <ReviewRail editor={editor} />
         </div>
       </Plate>
+     </ImageProvider>
     </WikiLinkProvider>
   );
 }

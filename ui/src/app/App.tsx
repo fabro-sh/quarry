@@ -77,6 +77,7 @@ import {
   listLibraries,
   moveDocument,
   outgoingLinks,
+  putBinaryDocument,
   putDocument,
   resolveConflict,
   restoreVersion,
@@ -101,7 +102,8 @@ import type {
   GitSyncResult,
 } from '../api/client';
 import { clearDraft, loadDraft, saveDraft } from '../features/editor/drafts';
-import { MarkdownEditor, type EditorMode, type WikiLinkApi } from '../features/editor/MarkdownEditor';
+import { MarkdownEditor, type EditorMode, type ImageApi, type WikiLinkApi } from '../features/editor/MarkdownEditor';
+import { imageAssetPath, resolveImageSrc } from '../features/editor/image';
 import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../features/tree/tree-model';
 import { cn } from '../lib/utils';
 
@@ -487,6 +489,26 @@ function Workspace() {
       open: (path) => openDocumentRef.current(path),
     };
   }, [outgoing]);
+
+  // Render image urls (relative asset paths) against the serve endpoint, and
+  // store dropped/pasted images as content-addressed `assets/<hash>` documents.
+  const imageApi = useMemo<ImageApi>(
+    () => ({
+      resolveSrc: (url) => resolveImageSrc(url, activeLibrary),
+      upload: async (file) => {
+        const path = await imageAssetPath(file);
+        try {
+          await putBinaryDocument(activeLibrary, path, file, file.type || 'application/octet-stream');
+        } catch (error) {
+          // 412 means an identical asset is already stored at this path — reuse it.
+          if (!(error instanceof ApiPreconditionError)) throw error;
+        }
+        void mutate(['/v1/documents', activeLibrary]);
+        return path;
+      },
+    }),
+    [activeLibrary, mutate]
+  );
   const { data: versionList = [] } = useSWR(
     activeLibrary && selectedPath ? ['/v1/versions', activeLibrary, selectedPath] : null,
     () => versions(activeLibrary, selectedPath)
@@ -938,6 +960,7 @@ function Workspace() {
                 contentHash={selectedEntry?.content_hash}
                 content={content}
                 contentType={selectedContentType}
+                image={imageApi}
                 mode={editorMode}
                 path={selectedPath}
                 wikiLink={wikiLink}
@@ -1104,6 +1127,7 @@ function DocumentBody({
   contentHash,
   content,
   contentType,
+  image,
   mode,
   path,
   wikiLink,
@@ -1114,13 +1138,14 @@ function DocumentBody({
   contentHash?: string | null;
   content: string;
   contentType: string;
+  image: ImageApi;
   mode: EditorMode;
   path: string;
   wikiLink: WikiLinkApi;
   onChange: (content: string) => void;
 }) {
   if (isTextContentType(contentType)) {
-    return <MarkdownEditor content={content} mode={mode} wikiLink={wikiLink} onChange={onChange} />;
+    return <MarkdownEditor content={content} mode={mode} wikiLink={wikiLink} image={image} onChange={onChange} />;
   }
 
   if (isImageContentType(contentType)) {

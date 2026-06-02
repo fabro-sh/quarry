@@ -185,6 +185,46 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(editor.getByTestId('wikilink')).toHaveText('Note');
   });
 
+  test('drops an image, stores it as an asset, and references it as markdown', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        { content: 'Drop here.\n', id: 'doc-img', metadata: { title: 'Imgdoc' }, path: 'imgdoc.md', version: 'v1' },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Imgdoc/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Drop here.');
+    await editor.click();
+
+    // Drop a 1x1 PNG onto the editor (a real File in a DataTransfer, with drop
+    // coordinates so Plate can resolve the caret location).
+    const dataTransfer = await page.evaluateHandle(() => {
+      const dt = new DataTransfer();
+      const bytes = Uint8Array.from(
+        atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='),
+        (c) => c.charCodeAt(0)
+      );
+      const file = new File([bytes], 'pic.png', { type: 'image/png' });
+      dt.items.add(file);
+      return dt;
+    });
+    const box = (await editor.boundingBox())!;
+    await editor.dispatchEvent('drop', { dataTransfer, clientX: box.x + 40, clientY: box.y + 20 });
+
+    // The upload PUTs the bytes to assets/<hash>.png and the image renders from
+    // the serve endpoint.
+    const img = editor.locator('img');
+    await expect(img).toHaveAttribute('src', /\/v1\/libraries\/notes\/documents\/assets\/[0-9a-f]+\.png/);
+
+    // Autosave persists `![](assets/<hash>.png)`; reloading round-trips it.
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
+    await page.reload();
+    await page.getByRole('treeitem', { name: /Imgdoc/ }).click();
+    await expect(editor.locator('img')).toHaveAttribute('src', /assets\/[0-9a-f]+\.png/);
+  });
+
   test('opens the browser and selects a library', async ({ page }) => {
     await installMockApi(page, {
       documents: [],

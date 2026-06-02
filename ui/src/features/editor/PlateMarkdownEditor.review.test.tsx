@@ -47,6 +47,13 @@ describe('PlateMarkdownEditor link rendering', () => {
     // No resolver in this harness, so it reads as unresolved.
     expect(chip).toHaveAttribute('data-resolved', 'false');
   });
+
+  it('renders a markdown image reference as an <img>', () => {
+    render(<PlateMarkdownEditor content="![](assets/x.png)" onChange={vi.fn()} />);
+    const img = document.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute('src')).toContain('assets/x.png');
+  });
 });
 
 describe('PlateMarkdownEditor review round-trip', () => {

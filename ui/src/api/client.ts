@@ -115,6 +115,23 @@ export function createDocument(
   });
 }
 
+// Create a binary document (e.g. a dropped image) from raw bytes. Uses
+// If-None-Match:* so an identical asset already at the path stays put — callers
+// treat the resulting 412 (ApiPreconditionError) as success.
+export async function putBinaryDocument(
+  library: string,
+  path: string,
+  blob: Blob,
+  contentType: string
+): Promise<void> {
+  const response = await fetch(documentHref(library, path), {
+    method: 'PUT',
+    headers: { 'If-None-Match': '*', 'content-type': contentType },
+    body: blob,
+  });
+  await assertOk(response);
+}
+
 export async function moveDocument(library: string, fromPath: string, toPath: string) {
   return jsonRequest(`/v1/libraries/${segment(library)}/documents/${pathSegments(fromPath)}/move`, {
     method: 'POST',

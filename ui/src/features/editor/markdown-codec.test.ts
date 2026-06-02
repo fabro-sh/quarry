@@ -66,6 +66,21 @@ describe('markdown codec', () => {
     }
   });
 
+  it('round-trips image references', () => {
+    const cases = ['![](assets/abc.png)\n', 'Before.\n\n![](assets/y.jpg)\n\nAfter.\n'];
+    for (const md of cases) {
+      expect(plateValueToMarkdown(markdownToPlateValue(md))).toBe(md);
+    }
+  });
+
+  it('drops upload placeholders when serializing', () => {
+    const value = [
+      { type: 'p', children: [{ text: 'Keep me.' }] },
+      { type: 'placeholder', id: 'x', mediaType: 'img', children: [{ text: '' }] },
+    ];
+    expect(plateValueToMarkdown(value as never)).toBe('Keep me.\n');
+  });
+
   it('keeps [[..]] literal inside code', () => {
     const md = '`[[notcode]]` stays.\n';
     expect(plateValueToMarkdown(markdownToPlateValue(md))).toBe(md);

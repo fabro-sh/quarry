@@ -17,12 +17,14 @@ import {
 } from '@platejs/basic-nodes';
 import { BaseCodeBlockPlugin, BaseCodeLinePlugin, BaseCodeSyntaxPlugin } from '@platejs/code-block';
 import { BaseLinkPlugin } from '@platejs/link';
+import { BaseImagePlugin } from '@platejs/media';
 import { BaseListPlugin } from '@platejs/list';
 import { MarkdownPlugin } from '@platejs/markdown';
 import { BaseParagraphPlugin, createSlateEditor } from 'platejs';
 import remarkGfm from 'remark-gfm';
 
 import { remarkInlineMarks } from './remark-inline-marks';
+import { stripPlaceholders } from './image';
 import { applyWikiLinks, BaseWikiLinkPlugin, wikiLinkMdRules } from './wiki-link';
 
 export type PlateValue = Array<Record<string, unknown>>;
@@ -51,6 +53,7 @@ export const baseMarkdownPlugins = [
   BaseListPlugin,
   BaseLinkPlugin,
   BaseWikiLinkPlugin,
+  BaseImagePlugin,
 ];
 
 export function markdownToPlateValue(markdown: string): PlateValue {
@@ -58,7 +61,8 @@ export function markdownToPlateValue(markdown: string): PlateValue {
 }
 
 export function plateValueToMarkdown(value: PlateValue): string {
-  return editor().api.markdown.serialize({ value: applyWikiLinks(value as never) as never });
+  const cleaned = stripPlaceholders(applyWikiLinks(value as never));
+  return editor().api.markdown.serialize({ value: cleaned as never });
 }
 
 function editor() {
