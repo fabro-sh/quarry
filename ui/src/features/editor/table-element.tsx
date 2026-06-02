@@ -31,7 +31,7 @@ export const TableElement = withHOC(TableProvider, function TableElement(props: 
           <tbody className="min-w-full">{props.children}</tbody>
         </table>
         {readOnly ? null : (
-          <>
+          <div contentEditable={false}>
             <button
               aria-label="Add row"
               className="absolute inset-x-0 -bottom-3 flex h-3 items-center justify-center rounded-sm bg-well text-muted opacity-0 transition-opacity hover:bg-line hover:text-body group-hover/table:opacity-100"
@@ -50,7 +50,7 @@ export const TableElement = withHOC(TableProvider, function TableElement(props: 
             >
               <Plus size={12} />
             </button>
-          </>
+          </div>
         )}
       </div>
     </PlateElement>
