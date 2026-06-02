@@ -396,6 +396,8 @@ test.describe('Quarry Browser smoke flows', () => {
     await editor.locator('th', { hasText: 'A' }).hover();
     await editor.getByRole('button', { name: 'Column options' }).first().click();
     await page.getByRole('menuitem', { name: 'Align center' }).click();
+    // The reactive align read must restyle the cell, not just the saved markdown.
+    await expect(editor.locator('th', { hasText: 'A' })).toHaveClass(/text-center/);
     await expect.poll(() => api.lastSavedBody('t4.md')).toContain(':-:');
   });
 
