@@ -340,6 +340,50 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(editor).toContainText('a new paragraph');
   });
 
+  test('renders a GFM table with editable cells', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        { content: '# Doc\n\n| Name | Role |\n| --- | --- |\n| Ana | Lead |\n', id: 'doc-tbl', metadata: { title: 'Tbl' }, path: 'tbl.md', version: 'v1' },
+      ],
+    });
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Tbl/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor.locator('table')).toBeVisible();
+    await expect(editor.locator('th', { hasText: 'Name' })).toBeVisible();
+    await expect(editor.locator('td', { hasText: 'Lead' })).toBeVisible();
+  });
+
+  test('turns a block into a table from the toolbar', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        { content: '# Doc\n\nseed line\n', id: 'doc-t2', metadata: { title: 'T2' }, path: 't2.md', version: 'v1' },
+      ],
+    });
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /T2/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await editor.getByText('seed line').selectText();
+    await page.getByRole('button', { name: 'Turn into' }).click();
+    await page.getByRole('menuitem', { name: 'Table' }).click();
+    await expect(editor.locator('th')).toHaveCount(3);
+    await expect(editor.locator('td')).toHaveCount(6);
+  });
+
+  test('typing in a table cell autosaves', async ({ page }) => {
+    const api = await installMockApi(page, {
+      documents: [
+        { content: '# Doc\n\n| A | B |\n| --- | --- |\n| x | y |\n', id: 'doc-t3', metadata: { title: 'T3' }, path: 't3.md', version: 'v1' },
+      ],
+    });
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /T3/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await editor.locator('td', { hasText: 'x' }).click();
+    await page.keyboard.type('X1');
+    await expect.poll(() => api.saveHeaders.length).toBeGreaterThan(0);
+  });
+
   test('opens the browser and selects a library', async ({ page }) => {
     await installMockApi(page, {
       documents: [],

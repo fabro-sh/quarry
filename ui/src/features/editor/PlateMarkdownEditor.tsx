@@ -79,6 +79,7 @@ import {
   Strikethrough,
   Subscript,
   Superscript,
+  Table,
   Trash2,
   Type,
   Underline,
@@ -130,6 +131,8 @@ import { reviewKit } from './review-kit';
 import { ImageKit, ImageProvider, type ImageApi } from './image-element';
 import { mermaidMdRules, MERMAID_KEY } from './mermaid';
 import { MermaidPlugin } from './mermaid-block';
+import { tableMdRules, turnIntoTable } from './table';
+import { TableKit } from './table-element';
 import { wikiLinkMdRules } from './wiki-link';
 import { WikiLinkPlugin, WikiLinkProvider, type WikiLinkApi } from './wiki-link-element';
 import { startCommentDraft } from '../review/comment-draft';
@@ -261,6 +264,7 @@ const plateMarkdownPlugins = [
   }),
   WikiLinkPlugin,
   MermaidPlugin,
+  ...TableKit,
   ...ImageKit,
   DndPlugin.configure({
     render: { aboveNodes: BlockDraggable, aboveSlate: EditorDndProvider },
@@ -277,7 +281,7 @@ const plateMarkdownPlugins = [
   }),
   ...reviewKit,
   MarkdownPlugin.configure({
-    options: { remarkPlugins: [remarkGfm, remarkInlineMarks], rules: { ...wikiLinkMdRules, ...mermaidMdRules } },
+    options: { remarkPlugins: [remarkGfm, remarkInlineMarks], rules: { ...wikiLinkMdRules, ...mermaidMdRules, ...tableMdRules } },
   }),
 ] as const;
 
@@ -777,6 +781,7 @@ const TURN_INTO_ITEMS = [
   { icon: Quote, label: 'Quote', value: KEYS.blockquote },
   { icon: SquareCode, label: 'Code', value: KEYS.codeBlock },
   { icon: Workflow, label: 'Mermaid', value: 'mermaid' },
+  { icon: Table, label: 'Table', value: 'table' },
 ];
 
 function setBlockType(editor: PlateEditor, type: string) {
@@ -852,6 +857,7 @@ function TurnIntoButton() {
               key={item.value}
               onSelect={() => {
                 if (item.value === 'mermaid') turnIntoMermaid(editor);
+                else if (item.value === 'table') turnIntoTable(editor);
                 else applyBlockType(editor, item.value);
                 editor.tf.focus();
               }}
@@ -1038,6 +1044,7 @@ const BLOCK_TURN_INTO: ReadonlyArray<{
   { icon: Quote, label: 'Quote', apply: (editor) => applyBlockType(editor, KEYS.blockquote) },
   { icon: SquareCode, label: 'Code', apply: (editor) => applyBlockType(editor, KEYS.codeBlock) },
   { icon: Workflow, label: 'Mermaid diagram', apply: (editor) => turnIntoMermaid(editor) },
+  { icon: Table, label: 'Table', apply: (editor) => turnIntoTable(editor) },
 ];
 
 function turnBlockInto(editor: PlateEditor, element: TElement, apply: (editor: PlateEditor) => void) {
