@@ -384,6 +384,21 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect.poll(() => api.saveHeaders.length).toBeGreaterThan(0);
   });
 
+  test('setting a column alignment persists to markdown', async ({ page }) => {
+    const api = await installMockApi(page, {
+      documents: [
+        { content: '# Doc\n\n| A | B |\n| --- | --- |\n| x | y |\n', id: 'doc-t4', metadata: { title: 'T4' }, path: 't4.md', version: 'v1' },
+      ],
+    });
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /T4/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await editor.locator('th', { hasText: 'A' }).hover();
+    await editor.getByRole('button', { name: 'Column options' }).first().click();
+    await page.getByRole('menuitem', { name: 'Align center' }).click();
+    await expect.poll(() => api.lastSavedBody('t4.md')).toContain(':-:');
+  });
+
   test('opens the browser and selects a library', async ({ page }) => {
     await installMockApi(page, {
       documents: [],
@@ -1686,6 +1701,7 @@ async function installMockApi(
     resolvedConflicts: [] as string[],
     restoredVersions: [] as string[],
     saveHeaders: [] as string[],
+    savedBodies: [] as { body: string; path: string }[],
     versions: options.versions ?? {},
   };
 
@@ -1915,6 +1931,7 @@ async function installMockApi(
       const ifMatch = request.headers()['if-match'];
       if (ifNoneMatch) state.createHeaders.push(ifNoneMatch);
       if (ifMatch) state.saveHeaders.push(ifMatch);
+      state.savedBodies.push({ body: request.postData() ?? '', path: documentPath.documentPath });
 
       if (state.rejectNextSaveAsStale) {
         const documents = state.documentsByLibrary.get(documentPath.library) ?? state.documents;
@@ -1954,7 +1971,15 @@ async function installMockApi(
     await notFound(route);
   });
 
-  return state;
+  return {
+    ...state,
+    // The body of the most recent PUT to `path` (the saved markdown), or '' if
+    // that path hasn't been saved yet. `savedBodies` is mutated in place, so the
+    // spread keeps the live array reference — poll-friendly.
+    lastSavedBody(path: string): string {
+      return state.savedBodies.findLast((entry) => entry.path === path)?.body ?? '';
+    },
+  };
 }
 
 function libraryPathFromEndpoint(path: string) {

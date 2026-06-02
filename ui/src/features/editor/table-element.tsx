@@ -7,17 +7,21 @@ import {
   useTableCellElement,
   useTableElement,
 } from '@platejs/table/react';
-import { type TTableCellElement } from 'platejs';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import { AlignCenter, AlignLeft, AlignRight, ChevronDown, Plus, Trash2 } from 'lucide-react';
+import { type TTableCellElement, type TTableRowElement } from 'platejs';
 import {
   PlateElement,
   type PlateElementProps,
   useEditorPlugin,
+  useEditorRef,
+  useEditorSelector,
   useReadOnly,
   withHOC,
 } from 'platejs/react';
-import { Plus } from 'lucide-react';
 
 import { cn } from '../../lib/utils';
+import { columnAlignOf, type TableAlign, type TTableElementWithAlign } from './table';
 
 export const TableElement = withHOC(TableProvider, function TableElement(props: PlateElementProps) {
   const { editor, element } = props;
@@ -61,13 +65,28 @@ export function TableRowElement(props: PlateElementProps) {
   return <PlateElement {...props} as="tr" />;
 }
 
+const ALIGN_CLASS: Record<'left' | 'center' | 'right', string> = {
+  center: 'text-center',
+  left: 'text-left',
+  right: 'text-right',
+};
+
 export function TableCellElement({
   isHeader,
   ...props
 }: PlateElementProps<TTableCellElement> & { isHeader?: boolean }) {
   const { api } = useEditorPlugin(TablePlugin);
+  const editor = useEditorRef();
   const element = props.element;
-  const { width } = useTableCellElement();
+  const { colIndex, width } = useTableCellElement();
+  // Reactively read this column's alignment off the parent table node so cells
+  // restyle when alignment changes.
+  const align = useEditorSelector((ed) => {
+    const path = ed.api.findPath(element);
+    if (!path || path.length < 3) return undefined;
+    const tableEntry = ed.api.node<TTableElementWithAlign>({ at: path.slice(0, -2) });
+    return tableEntry ? columnAlignOf(tableEntry[0], colIndex) : undefined;
+  }, [element, colIndex]);
   return (
     <PlateElement
       {...props}
@@ -78,18 +97,140 @@ export function TableCellElement({
         rowSpan: api.table.getRowSpan(element),
       }}
       className={cn(
-        'relative border border-line align-top',
-        isHeader ? 'bg-well font-semibold text-ink' : 'text-body'
+        'group/cell relative border border-line align-top',
+        isHeader ? 'bg-well font-semibold text-ink' : 'text-body',
+        align ? ALIGN_CLASS[align] : null
       )}
       style={{ maxWidth: width || 320, minWidth: width || 96 }}
     >
       <div className="px-3 py-1.5">{props.children}</div>
+      {isHeader ? <ColumnMenu colIndex={colIndex} editor={editor} element={element} /> : null}
     </PlateElement>
   );
 }
 
 export function TableCellHeaderElement(props: PlateElementProps<TTableCellElement>) {
   return <TableCellElement {...props} isHeader />;
+}
+
+const menuItem =
+  'flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-body outline-none select-none data-highlighted:bg-well';
+
+// Set `align[colIndex]` on the table node (immutably), driving both the rendered
+// text-align and the serialized `:--:` delimiter.
+function setColumnAlign(
+  editor: ReturnType<typeof useEditorRef>,
+  element: TTableCellElement,
+  colIndex: number,
+  value: TableAlign
+): void {
+  const path = editor.api.findPath(element);
+  if (!path || path.length < 3) return;
+  const tablePath = path.slice(0, -2);
+  const tableEntry = editor.api.node<TTableElementWithAlign>({ at: tablePath });
+  if (!tableEntry) return;
+  const tableNode = tableEntry[0];
+  const current = tableNode.align ?? [];
+  // First row's cell count = column count (no merged cells in v1). Query the row
+  // as a typed element so `.children` is the cell array, not a Descendant union.
+  const firstRow = editor.api.node<TTableRowElement>({ at: [...tablePath, 0] });
+  const colCount = firstRow ? firstRow[0].children.length : colIndex + 1;
+  const next: TableAlign[] = Array.from({ length: colCount }, (_unused, i) => {
+    if (i === colIndex) return value;
+    const existing = current[i];
+    return existing === 'left' || existing === 'center' || existing === 'right' ? existing : null;
+  });
+  editor.tf.setNodes<TTableElementWithAlign>({ align: next }, { at: tablePath });
+}
+
+function ColumnMenu({
+  colIndex,
+  editor,
+  element,
+}: {
+  colIndex: number;
+  editor: ReturnType<typeof useEditorRef>;
+  element: TTableCellElement;
+}) {
+  const { tf } = useEditorPlugin(TablePlugin);
+  const readOnly = useReadOnly();
+  if (readOnly) return null;
+  // Select this header cell so selection-based transforms (delete column/row)
+  // operate on this column.
+  const focusColumn = () => {
+    const path = editor.api.findPath(element);
+    if (path) editor.tf.select(path);
+  };
+  return (
+    <DropdownMenu.Root modal={false}>
+      <DropdownMenu.Trigger asChild>
+        <button
+          aria-label="Column options"
+          className="absolute right-0.5 top-0.5 inline-flex items-center rounded p-0.5 text-muted opacity-0 transition-opacity hover:text-body group-hover/cell:opacity-100 focus-visible:opacity-100"
+          contentEditable={false}
+          onMouseDown={(event) => event.preventDefault()}
+          type="button"
+        >
+          <ChevronDown size={13} />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          className="z-50 min-w-44 rounded-md border border-line bg-raised p-1 shadow-lg"
+          sideOffset={4}
+        >
+          <DropdownMenu.Item className={menuItem} onSelect={() => setColumnAlign(editor, element, colIndex, 'left')}>
+            <AlignLeft className="shrink-0 text-muted" size={15} /> Align left
+          </DropdownMenu.Item>
+          <DropdownMenu.Item className={menuItem} onSelect={() => setColumnAlign(editor, element, colIndex, 'center')}>
+            <AlignCenter className="shrink-0 text-muted" size={15} /> Align center
+          </DropdownMenu.Item>
+          <DropdownMenu.Item className={menuItem} onSelect={() => setColumnAlign(editor, element, colIndex, 'right')}>
+            <AlignRight className="shrink-0 text-muted" size={15} /> Align right
+          </DropdownMenu.Item>
+          <div className="my-1 h-px bg-line" />
+          <DropdownMenu.Item
+            className={menuItem}
+            onSelect={() => {
+              const path = editor.api.findPath(element);
+              if (path) tf.insert.tableColumn({ before: true, fromCell: path });
+            }}
+          >
+            <Plus className="shrink-0 text-muted" size={15} /> Insert column left
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            className={menuItem}
+            onSelect={() => {
+              const path = editor.api.findPath(element);
+              if (path) tf.insert.tableColumn({ fromCell: path });
+            }}
+          >
+            <Plus className="shrink-0 text-muted" size={15} /> Insert column right
+          </DropdownMenu.Item>
+          <div className="my-1 h-px bg-line" />
+          <DropdownMenu.Item
+            className={cn(menuItem, 'text-danger')}
+            onSelect={() => {
+              focusColumn();
+              tf.remove.tableColumn();
+            }}
+          >
+            <Trash2 className="shrink-0 text-danger" size={15} /> Delete column
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            className={cn(menuItem, 'text-danger')}
+            onSelect={() => {
+              focusColumn();
+              tf.remove.tableRow();
+            }}
+          >
+            <Trash2 className="shrink-0 text-danger" size={15} /> Delete row
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
 }
 
 export const TableKit = [
