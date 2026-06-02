@@ -127,7 +127,8 @@ import { type PlateValue } from './markdown-codec';
 import { remarkInlineMarks } from './remark-inline-marks';
 import { reviewKit } from './review-kit';
 import { ImageKit, ImageProvider, type ImageApi } from './image-element';
-import { MermaidCodeBlock } from './mermaid-block';
+import { mermaidMdRules, MERMAID_KEY } from './mermaid';
+import { MermaidPlugin } from './mermaid-block';
 import { wikiLinkMdRules } from './wiki-link';
 import { WikiLinkPlugin, WikiLinkProvider, type WikiLinkApi } from './wiki-link-element';
 import { startCommentDraft } from '../review/comment-draft';
@@ -253,6 +254,7 @@ const plateMarkdownPlugins = [
     render: { node: LinkElement, afterEditable: () => <LinkFloatingToolbar /> },
   }),
   WikiLinkPlugin,
+  MermaidPlugin,
   ...ImageKit,
   DndPlugin.configure({
     render: { aboveNodes: BlockDraggable, aboveSlate: EditorDndProvider },
@@ -269,7 +271,7 @@ const plateMarkdownPlugins = [
   }),
   ...reviewKit,
   MarkdownPlugin.configure({
-    options: { remarkPlugins: [remarkGfm, remarkInlineMarks], rules: wikiLinkMdRules },
+    options: { remarkPlugins: [remarkGfm, remarkInlineMarks], rules: { ...wikiLinkMdRules, ...mermaidMdRules } },
   }),
 ] as const;
 
@@ -794,12 +796,13 @@ function applyBlockType(editor: PlateEditor, type: string) {
   }
 }
 
-// A Mermaid diagram is a code block tagged with `lang: 'mermaid'`; the editor
-// renders that as a diagram.
+// A Mermaid diagram is an atomic void block; the current block's text seeds the
+// diagram source.
 function turnIntoMermaid(editor: PlateEditor) {
-  applyBlockType(editor, KEYS.codeBlock);
-  const entry = editor.api.above({ match: { type: editor.getType(KEYS.codeBlock) } });
-  if (entry) editor.tf.setNodes({ lang: 'mermaid' }, { at: entry[1] });
+  const entry = editor.api.block({ highest: true });
+  if (!entry) return;
+  const code = NodeApi.string(entry[0]);
+  editor.tf.replaceNodes({ type: MERMAID_KEY, code, children: [{ text: '' }] }, { at: entry[1] });
 }
 
 function TurnIntoButton() {
@@ -859,7 +862,6 @@ function TurnIntoButton() {
 
 function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
   const [copied, setCopied] = useState(false);
-  if (props.element.lang === 'mermaid') return <MermaidCodeBlock {...props} />;
   return (
     <PlateElement {...props} className="group">
       <pre>

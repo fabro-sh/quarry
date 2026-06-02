@@ -52,6 +52,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await disableEventSource(page);
   });
 
+
   test('creates, edits, saves, and reloads a markdown document', async ({ page }) => {
     const api = await installMockApi(page, {
       documents: [
@@ -246,15 +247,15 @@ test.describe('Quarry Browser smoke flows', () => {
     const diagram = editor.getByTestId('mermaid-diagram');
     const toggle = editor.getByTestId('mermaid-toggle');
 
-    // Default Preview: the diagram renders as an SVG; the source is hidden.
+    // Default Preview: the diagram renders as an SVG.
     await expect(diagram.locator('svg')).toBeVisible({ timeout: 20000 });
     await expect(toggle).toContainText('Code');
-    await expect(editor.locator('pre')).toBeHidden();
 
-    // Toggle to Code: the editable source shows, the diagram is gone.
+    // Toggle to Code: the source textarea shows, the diagram is gone.
     await toggle.click();
-    await expect(editor.locator('pre')).toBeVisible();
-    await expect(editor.locator('pre')).toContainText('graph TD');
+    const source = editor.getByTestId('mermaid-source');
+    await expect(source).toBeVisible();
+    await expect(source).toHaveValue(/graph TD/);
     await expect(diagram).toHaveCount(0);
     await expect(toggle).toContainText('Preview');
 
@@ -282,6 +283,37 @@ test.describe('Quarry Browser smoke flows', () => {
 
     // It renders as a diagram (content present → opens in Preview).
     await expect(editor.getByTestId('mermaid-diagram').locator('svg')).toBeVisible({ timeout: 20000 });
+  });
+
+  test('deletes a mermaid diagram as one block on backspace from the next line', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        {
+          content: '# T\n\n```mermaid\ngraph TD\n  A --> B\n```\n\nAfter line.\n',
+          id: 'doc-bd',
+          metadata: { title: 'Bdel' },
+          path: 'bdel.md',
+          version: 'v1',
+        },
+      ],
+    });
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Bdel/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor.getByTestId('mermaid-diagram').locator('svg')).toBeVisible({ timeout: 20000 });
+
+    // Select the line after the diagram (a real range Slate maps), collapse to
+    // its start (ArrowLeft), then backspace.
+    await editor.getByText('After line').selectText();
+    await expect(editor.getByText('After line')).toBeVisible();
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('Backspace');
+
+    // The whole diagram block is removed; the source is never edited (no error),
+    // and the following line survives.
+    await expect(editor.getByTestId('mermaid-error')).toHaveCount(0);
+    await expect(editor.getByTestId('mermaid-diagram')).toHaveCount(0);
+    await expect(editor.getByText('After line')).toBeVisible();
   });
 
   test('opens the browser and selects a library', async ({ page }) => {

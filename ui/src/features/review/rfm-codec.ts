@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm';
 import { baseMarkdownPlugins } from '../editor/markdown-codec';
 import { remarkInlineMarks } from '../editor/remark-inline-marks';
 import { stripPlaceholders } from '../editor/image';
+import { applyMermaid } from '../editor/mermaid';
 import { applyWikiLinks } from '../editor/wiki-link';
 import { applyCriticMarkup } from './apply-critic-markup';
 import { collapseSubstitutions, expandSubstitutions } from './collapse-substitutions';
@@ -37,7 +38,7 @@ export function markdownToReview(markdown: string): ReviewDocument {
   const { body, meta } = splitEndmatter(markdown);
   const rawValue = deserializeEditor().api.markdown.deserialize(expandSubstitutions(body));
   const reviewed = applyCriticMarkup(rawValue, meta ?? emptyReviewMeta());
-  return { value: applyWikiLinks(reviewed.value), meta: reviewed.meta };
+  return { value: applyMermaid(applyWikiLinks(reviewed.value)), meta: reviewed.meta };
 }
 
 /** Collect the comment/suggestion ids still present as marks in the value. */

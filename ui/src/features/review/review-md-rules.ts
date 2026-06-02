@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 
 import { baseMarkdownPlugins } from '../editor/markdown-codec';
 import { remarkInlineMarks } from '../editor/remark-inline-marks';
+import { mermaidMdRules } from '../editor/mermaid';
 import { wikiLinkMdRules } from '../editor/wiki-link';
 import type { ReviewMeta } from './rfm-types';
 import { readSuggestionMark } from './suggestion-mark';
@@ -22,6 +23,7 @@ function commentId(leaf: Record<string, unknown>): string | null {
 export function reviewMdRules(meta: ReviewMeta) {
   return {
     ...wikiLinkMdRules,
+    ...mermaidMdRules,
     suggestion: {
       mark: true,
       serialize: (leaf: Record<string, unknown> & { text: string }) => {

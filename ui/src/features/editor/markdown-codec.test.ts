@@ -73,10 +73,11 @@ describe('markdown codec', () => {
     }
   });
 
-  it('round-trips a mermaid code block', () => {
+  it('round-trips a mermaid block as a ```mermaid code fence', () => {
     const md = '```mermaid\ngraph TD\n  A --> B\n```\n';
     const value = markdownToPlateValue(md);
-    expect((value[0] as { lang?: string }).lang).toBe('mermaid');
+    expect((value[0] as { type?: string }).type).toBe('mermaid');
+    expect((value[0] as { code?: string }).code).toBe('graph TD\n  A --> B');
     expect(plateValueToMarkdown(value)).toBe(md);
   });
 

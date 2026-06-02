@@ -1,13 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Code, Eye } from 'lucide-react';
-import { NodeApi, type TCodeBlockElement } from 'platejs';
-import { PlateElement, type PlateElementProps } from 'platejs/react';
+import { PlateElement, useEditorRef, type PlateElementProps } from 'platejs/react';
 
 import { cn } from '../../lib/utils';
-
-// Mermaid diagrams are plain ```mermaid fenced code blocks (so they round-trip
-// for free). This renders one with a Code/Preview toggle: Preview shows the
-// rendered SVG, Code shows the editable source.
+import { BaseMermaidPlugin, type TMermaidElement } from './mermaid';
 
 function readTheme(): 'light' | 'dark' {
   const value = document.querySelector('[data-theme]')?.getAttribute('data-theme');
@@ -61,29 +57,24 @@ function MermaidDiagram({ source }: { source: string }) {
 
   if (!code) {
     return (
-      <div className="px-3 py-6 text-center text-sm text-faint" contentEditable={false}>
+      <div className="px-3 py-6 text-center text-sm text-faint">
         Empty diagram — switch to Code to add Mermaid syntax.
       </div>
     );
   }
   if (error) {
     return (
-      <div className="rounded-sm bg-well px-3 py-2 text-sm text-danger" contentEditable={false} data-testid="mermaid-error">
+      <div className="rounded-sm bg-well px-3 py-2 text-sm text-danger" data-testid="mermaid-error">
         Diagram error: {error}
       </div>
     );
   }
   if (svg === null) {
-    return (
-      <div className="px-3 py-6 text-center text-sm text-muted" contentEditable={false}>
-        Rendering diagram…
-      </div>
-    );
+    return <div className="px-3 py-6 text-center text-sm text-muted">Rendering diagram…</div>;
   }
   return (
     <div
       className="flex justify-center py-2 [&_svg]:h-auto [&_svg]:max-w-full"
-      contentEditable={false}
       data-testid="mermaid-diagram"
       // mermaid sanitizes its output (securityLevel: 'strict').
       dangerouslySetInnerHTML={{ __html: svg }}
@@ -91,28 +82,51 @@ function MermaidDiagram({ source }: { source: string }) {
   );
 }
 
-export function MermaidCodeBlock(props: PlateElementProps<TCodeBlockElement>) {
-  const source = props.element.children.map((child) => NodeApi.string(child)).join('\n');
-  const [preview, setPreview] = useState(() => source.trim().length > 0);
+// An atomic (void) Mermaid block. Preview renders the diagram; Code shows a
+// textarea bound to the node's `code`. Being void, the block is a single unit to
+// Slate, so neighbouring edits and cursor moves can't reach the source.
+export function MermaidBlock(props: PlateElementProps<TMermaidElement>) {
+  const editor = useEditorRef();
+  const code = props.element.code ?? '';
+  const [editing, setEditing] = useState(() => code.trim().length === 0);
   return (
-    <PlateElement {...props} className="group relative">
-      <button
-        aria-label={preview ? 'Edit Mermaid source' : 'Preview Mermaid diagram'}
-        className="absolute right-1.5 top-1.5 z-10 inline-flex items-center gap-1 rounded border border-line bg-raised px-1.5 py-1 text-xs text-muted opacity-0 transition-opacity hover:text-body group-hover:opacity-100 focus-visible:opacity-100"
-        contentEditable={false}
-        data-testid="mermaid-toggle"
-        onClick={() => setPreview((value) => !value)}
-        onMouseDown={(event) => event.preventDefault()}
-        type="button"
-      >
-        {preview ? <Code size={13} /> : <Eye size={13} />}
-        {preview ? 'Code' : 'Preview'}
-      </button>
-      {/* Keep the source in the DOM for Slate; hide it in preview. */}
-      <pre className={cn(preview && 'hidden')}>
-        <code>{props.children}</code>
-      </pre>
-      {preview ? <MermaidDiagram source={source} /> : null}
+    <PlateElement {...props} className="group relative my-1">
+      {/* The void element's content is non-editable; only the textarea (a form
+          control) takes input. Plate renders props.children as the void spacer. */}
+      <div contentEditable={false}>
+        <button
+          aria-label={editing ? 'Preview Mermaid diagram' : 'Edit Mermaid source'}
+          className="absolute right-1.5 top-1.5 z-10 inline-flex items-center gap-1 rounded border border-line bg-raised px-1.5 py-1 text-xs text-muted opacity-0 transition-opacity hover:text-body group-hover:opacity-100 focus-visible:opacity-100"
+          data-testid="mermaid-toggle"
+          onClick={() => setEditing((value) => !value)}
+          type="button"
+        >
+          {editing ? <Eye size={13} /> : <Code size={13} />}
+          {editing ? 'Preview' : 'Code'}
+        </button>
+        {editing ? (
+          <textarea
+            aria-label="Mermaid source"
+            className={cn(
+              'block w-full resize-y rounded-sm border border-line bg-canvas p-3 pr-16 font-mono text-sm text-ink outline-none',
+              'focus:border-accent'
+            )}
+            data-testid="mermaid-source"
+            defaultValue={code}
+            onChange={(event) => {
+              const path = editor.api.findPath(props.element);
+              if (path) editor.tf.setNodes({ code: event.target.value }, { at: path });
+            }}
+            rows={Math.max(3, code.split('\n').length + 1)}
+            spellCheck={false}
+          />
+        ) : (
+          <MermaidDiagram source={code} />
+        )}
+      </div>
+      {props.children}
     </PlateElement>
   );
 }
+
+export const MermaidPlugin = BaseMermaidPlugin.withComponent(MermaidBlock);
