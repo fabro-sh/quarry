@@ -26,6 +26,13 @@ import remarkGfm from 'remark-gfm';
 import { remarkInlineMarks } from './remark-inline-marks';
 import { stripPlaceholders } from './image';
 import { applyMermaid, BaseMermaidPlugin, mermaidMdRules } from './mermaid';
+import {
+  BaseTableCellHeaderPlugin,
+  BaseTableCellPlugin,
+  BaseTablePlugin,
+  BaseTableRowPlugin,
+  tableMdRules,
+} from './table';
 import { applyWikiLinks, BaseWikiLinkPlugin, wikiLinkMdRules } from './wiki-link';
 
 export type PlateValue = Array<Record<string, unknown>>;
@@ -56,6 +63,10 @@ export const baseMarkdownPlugins = [
   BaseWikiLinkPlugin,
   BaseImagePlugin,
   BaseMermaidPlugin,
+  BaseTablePlugin,
+  BaseTableRowPlugin,
+  BaseTableCellPlugin,
+  BaseTableCellHeaderPlugin,
 ];
 
 export function markdownToPlateValue(markdown: string): PlateValue {
@@ -93,7 +104,7 @@ function editor() {
       MarkdownPlugin.configure({
         options: {
           remarkPlugins: [remarkGfm, remarkInlineMarks],
-          rules: { ...wikiLinkMdRules, ...mermaidMdRules },
+          rules: { ...wikiLinkMdRules, ...mermaidMdRules, ...tableMdRules },
         },
       }),
     ],

@@ -81,6 +81,36 @@ describe('markdown codec', () => {
     expect(plateValueToMarkdown(value)).toBe(md);
   });
 
+  it('round-trips a GFM table with inline marks in cells', () => {
+    const md = '| Name | Role |\n| --- | --- |\n| **Ana** | `dev` |\n';
+    const value = markdownToPlateValue(md);
+    expect((value[0] as { type?: string }).type).toBe('table');
+    const out = plateValueToMarkdown(value);
+    expect(out).toContain('| Name');
+    expect(out).toContain('**Ana**');
+    expect(out).toContain('`dev`');
+    expect(plateValueToMarkdown(markdownToPlateValue(out))).toBe(out);
+  });
+
+  it('round-trips GFM column alignment (left/center/right)', () => {
+    const md = '| L | C | R |\n| :-- | :-: | --: |\n| 1 | 2 | 3 |\n';
+    const value = markdownToPlateValue(md);
+    expect((value[0] as { align?: unknown }).align).toEqual(['left', 'center', 'right']);
+    const out = plateValueToMarkdown(value);
+    // remark-gfm emits the canonical minimal delimiter row, collapsing each
+    // column to the narrowest valid form (`:-`/`:-:`/`-:`) — semantically the
+    // same alignment markers as the `:--`/`--:` input.
+    expect(out).toContain(':-');
+    expect(out).toContain(':-:');
+    expect(out).toContain('-:');
+    // The alignment markers survive a full re-parse, which is what matters.
+    expect((markdownToPlateValue(out)[0] as { align?: unknown }).align).toEqual([
+      'left',
+      'center',
+      'right',
+    ]);
+  });
+
   it('drops upload placeholders when serializing', () => {
     const value = [
       { type: 'p', children: [{ text: 'Keep me.' }] },
