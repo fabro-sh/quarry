@@ -461,6 +461,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await aHeader.getByRole('button', { name: 'Column options' }).click();
     await page.getByRole('menuitem', { name: 'Delete row' }).click();
     await expect(editor.locator('tr')).toHaveCount(2);
+    await expect(editor.locator('th')).toHaveCount(2); // new header row promoted (x, y)
   });
 
   test('opens the browser and selects a library', async ({ page }) => {

@@ -9,7 +9,7 @@ import {
 } from '@platejs/table/react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { AlignCenter, AlignLeft, AlignRight, ChevronDown, Plus, Trash2 } from 'lucide-react';
-import { type Path, type TTableCellElement, type TTableRowElement } from 'platejs';
+import { KEYS, type Path, type TTableCellElement, type TTableRowElement } from 'platejs';
 import {
   PlateElement,
   type PlateElementProps,
@@ -211,13 +211,26 @@ function deleteRowAt(
   const path = editor.api.findPath(element);
   if (!path || path.length < 3) return;
   const tablePath = path.slice(0, -2);
+  const rowPath = path.slice(0, -1);
   const tableEntry = editor.api.node<TTableElementWithAlign>(tablePath);
   if (!tableEntry) return;
   if (tableEntry[0].children.length <= 1) {
     editor.tf.removeNodes({ at: tablePath });
     return;
   }
-  editor.tf.removeNodes({ at: path.slice(0, -1) });
+  editor.tf.withoutNormalizing(() => {
+    editor.tf.removeNodes({ at: rowPath });
+    // The menu is header-anchored, so we just deleted the header row — promote
+    // the new first row to a real header so the table stays well-formed.
+    const newFirstRow = editor.api.node<TTableRowElement>([...tablePath, 0]);
+    if (newFirstRow) {
+      const cellCount = newFirstRow[0].children.length;
+      const thType = editor.getType(KEYS.th);
+      for (let c = 0; c < cellCount; c += 1) {
+        editor.tf.setNodes<TTableCellElement>({ type: thType }, { at: [...tablePath, 0, c] });
+      }
+    }
+  });
 }
 
 function ColumnMenu({
