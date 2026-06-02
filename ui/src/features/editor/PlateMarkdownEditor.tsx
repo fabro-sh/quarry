@@ -91,6 +91,7 @@ import {
   KEYS,
   NodeApi,
   PathApi,
+  TrailingBlockPlugin,
   type Descendant,
   type TCodeBlockElement,
   type TElement,
@@ -232,6 +233,11 @@ const BlockDraggable: RenderNodeWrapper = (props) => {
 
 const plateMarkdownPlugins = [
   ParagraphPlugin,
+  // Always keep an editable paragraph at the end, so there's a line to type on
+  // below the last block — even an atomic void like a Mermaid diagram or image,
+  // which would otherwise leave the document with no place to continue writing.
+  // The trailing paragraph is stripped on serialize (stripTrailingEmptyParagraphs).
+  TrailingBlockPlugin,
   H1Plugin,
   H2Plugin,
   H3Plugin,

@@ -2,7 +2,7 @@ import { MarkdownPlugin } from '@platejs/markdown';
 import { createSlateEditor, type Descendant } from 'platejs';
 import remarkGfm from 'remark-gfm';
 
-import { baseMarkdownPlugins } from '../editor/markdown-codec';
+import { baseMarkdownPlugins, stripTrailingEmptyParagraphs } from '../editor/markdown-codec';
 import { remarkInlineMarks } from '../editor/remark-inline-marks';
 import { stripPlaceholders } from '../editor/image';
 import { applyMermaid } from '../editor/mermaid';
@@ -101,7 +101,7 @@ export function reviewToMarkdown(value: Descendant[], meta: ReviewMeta): string 
   // typed (but the editor hasn't turned into a chip yet) still serializes as
   // `[[...]]` rather than being escaped to `\[\[...]]`. Drop in-flight upload
   // placeholders — they aren't part of the saved document.
-  const wikied = stripPlaceholders(applyWikiLinks(value));
+  const wikied = stripTrailingEmptyParagraphs(stripPlaceholders(applyWikiLinks(value)));
   const live = liveIds(wikied);
   const pruned = pruneMeta(meta, live);
   const body = collapseSubstitutions(serializeReviewBody(wikied, pruned));

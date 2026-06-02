@@ -316,6 +316,30 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(editor.getByText('After line')).toBeVisible();
   });
 
+  test('can type a new block after a trailing mermaid diagram', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        { content: '# Title\n\n```mermaid\ngraph TD; A-->B\n```\n', id: 'doc-tr', metadata: { title: 'Trailmmd' }, path: 'trailmmd.md', version: 'v1' },
+      ],
+    });
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Trailmmd/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor.getByTestId('mermaid-diagram').locator('svg')).toBeVisible({ timeout: 20000 });
+
+    // The diagram is not the last block — there's a visible editable line after
+    // it to click into and type.
+    const lastIsDiagram = await editor.evaluate(
+      (el) => !!el.lastElementChild?.querySelector('[data-testid="mermaid-diagram"]')
+    );
+    expect(lastIsDiagram).toBe(false);
+
+    const box = (await editor.boundingBox())!;
+    await editor.click({ position: { x: 40, y: box.height - 12 } });
+    await page.keyboard.type('a new paragraph');
+    await expect(editor).toContainText('a new paragraph');
+  });
+
   test('opens the browser and selects a library', async ({ page }) => {
     await installMockApi(page, {
       documents: [],
