@@ -43,6 +43,7 @@ import {
 } from '@platejs/list/react';
 import { isOrderedList, toggleList } from '@platejs/list';
 import { MarkdownPlugin } from '@platejs/markdown';
+import { YjsPlugin } from '@platejs/yjs/react';
 import {
   flip,
   offset,
@@ -141,6 +142,9 @@ import { markdownToReview, reviewToMarkdown } from '../review/rfm-codec';
 import { syncSuggestionsFromValue, useReviewStore } from '../review/review-store';
 import { acceptSuggestionById, rejectSuggestionById } from '../review/accept-reject';
 import { ReviewRail } from '../review/ui/ReviewRail';
+import { RUST_WS_PROVIDER_TYPE, registerRustWsProviderType } from '../collab/rust-ws-provider';
+
+registerRustWsProviderType();
 
 // Notion-style markdown shortcuts: typing the markdown prefix at the start of a
 // block (or wrapping marks) auto-converts it. Scoped to the surface Quarry
@@ -289,13 +293,21 @@ const plateMarkdownPlugins = [
 // read-only; Editing edits directly; Suggesting tracks edits as suggestion marks.
 export type EditorMode = 'editing' | 'suggesting' | 'viewing';
 
+export interface CollabEditorConfig {
+  documentId: string;
+  sessionId: string;
+  token?: string;
+}
+
 export function PlateMarkdownEditor({
+  collab,
   content,
   mode = 'editing',
   wikiLink,
   image,
   onChange,
 }: {
+  collab?: CollabEditorConfig;
   content: string;
   mode?: EditorMode;
   wikiLink?: WikiLinkApi;
@@ -304,6 +316,8 @@ export function PlateMarkdownEditor({
 }) {
   const storeHydrate = useReviewStore((s) => s.hydrate);
   const storeGetMeta = useReviewStore((s) => s.getMeta);
+  const collabEnabled = Boolean(collab?.documentId);
+  const collabDocumentId = collab?.documentId ?? '';
 
   // The review codec serializes both the value (inline CriticMarkup) and the
   // store's metadata (YAML endmatter). `syncSuggestionsFromValue` mirrors any
@@ -323,12 +337,39 @@ export function PlateMarkdownEditor({
   }
   const lastContentRef = useRef(content);
   const lastSerializedRef = useRef(serialize(initialValueRef.current));
+  const editorPlugins = useMemo(() => {
+    if (!collabEnabled || !collab) return plateMarkdownPlugins;
+    return [
+      ...plateMarkdownPlugins,
+      YjsPlugin.configure({
+        options: {
+          cursors: {
+            data: {
+              color: collabColor(collab.sessionId),
+              name: currentAuthor(),
+            },
+          },
+          providers: [
+            {
+              options: {
+                roomName: collab.documentId,
+                token: collab.token,
+              },
+              type: RUST_WS_PROVIDER_TYPE,
+            } as never,
+          ],
+          userId: collab.sessionId,
+        },
+      }),
+    ] as const;
+  }, [collab, collabEnabled]);
   const editor = usePlateEditor(
     {
-      plugins: plateMarkdownPlugins as never,
-      value: initialValueRef.current as never,
+      plugins: editorPlugins as never,
+      skipInitialization: collabEnabled,
+      value: collabEnabled ? undefined : (initialValueRef.current as never),
     },
-    []
+    [collabDocumentId]
   );
 
   // Set the suggesting author before any suggesting can happen; withSuggestion
@@ -344,6 +385,38 @@ export function PlateMarkdownEditor({
   }, [editor, mode]);
 
   useEffect(() => {
+    if (!collabEnabled || !collab) return;
+    const { value, meta } = markdownToReview(content);
+    lastContentRef.current = content;
+    lastSerializedRef.current = reviewToMarkdown(value as never, meta);
+    storeHydrate(meta);
+
+    let disposed = false;
+    void editor
+      .getApi(YjsPlugin)
+      .yjs.init({
+        autoConnect: false,
+        autoSelect: 'end',
+        id: collab.documentId,
+        value: value as never,
+        onReady: () => {
+          if (!disposed) {
+            editor.getApi(YjsPlugin).yjs.connect(RUST_WS_PROVIDER_TYPE);
+          }
+        },
+      })
+      .catch((error: unknown) => {
+        console.warn('[collab] failed to initialize Yjs editor', error);
+      });
+
+    return () => {
+      disposed = true;
+      editor.getApi(YjsPlugin).yjs.destroy();
+    };
+  }, [collabDocumentId, collabEnabled, editor, storeHydrate]);
+
+  useEffect(() => {
+    if (collabEnabled) return;
     if (content === lastContentRef.current) return;
     const { value, meta } = markdownToReview(content);
     resetPlateEditor(editor, value as PlateValue);
@@ -360,7 +433,7 @@ export function PlateMarkdownEditor({
     // match that, or a pure load spuriously fires onChange.
     lastSerializedRef.current = reviewToMarkdown(value as never, meta);
     storeHydrate(meta);
-  }, [content, editor, storeHydrate]);
+  }, [collabEnabled, content, editor, storeHydrate]);
 
   // Replies/resolves and synced suggestions live in the store, not the editor
   // value, so an editor-value change won't fire. Save on store changes too.
@@ -1169,4 +1242,13 @@ function resetPlateEditor(editor: PlateEditor, value: PlateValue) {
   editor.history.undos = [];
   editor.history.redos = [];
   editor.operations = [];
+}
+
+function collabColor(seed: string) {
+  const colors = ['#2563eb', '#16a34a', '#dc2626', '#9333ea', '#0891b2', '#ca8a04'];
+  let hash = 0;
+  for (const char of seed) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return colors[hash % colors.length];
 }

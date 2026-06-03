@@ -106,7 +106,13 @@ import {
   type LiveCollabSession,
 } from '../features/collab/session-events';
 import { clearDraft, loadDraft, saveDraft } from '../features/editor/drafts';
-import { MarkdownEditor, type EditorMode, type ImageApi, type WikiLinkApi } from '../features/editor/MarkdownEditor';
+import {
+  MarkdownEditor,
+  type CollabEditorConfig,
+  type EditorMode,
+  type ImageApi,
+  type WikiLinkApi,
+} from '../features/editor/MarkdownEditor';
 import { imageAssetPath, resolveImageSrc } from '../features/editor/image';
 import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../features/tree/tree-model';
 import { cn } from '../lib/utils';
@@ -221,6 +227,7 @@ function Workspace() {
     documentId: string;
   } | null>(null);
   const liveCollabSessionRef = useRef<LiveCollabSession | null>(null);
+  const collabSessionIdRef = useRef(makeCollabSessionId());
   const searchQueryRef = useRef(searchQuery);
   const appliedRouteRef = useRef(location.pathname);
   const [collabExternalChange, setCollabExternalChange] = useState<CollabExternalChange | null>(null);
@@ -661,9 +668,22 @@ function Workspace() {
   const selectedEntry = documents.find((entry) => entry.path === selectedPath);
   const loadedDocumentContentType = document?.path === selectedPath ? document.contentType : undefined;
   const selectedContentType = loadedDocumentContentType ?? selectedEntry?.content_type ?? contentType;
+  const selectedDocumentId = document?.documentId ?? selectedEntry?.id ?? '';
   const layoutStorageKey = activeLibrary ? `quarry:layout:${activeLibrary}` : 'quarry:layout:workspace';
   const mergeConflict = conflicts.find((conflict) => conflict.id === mergeConflictId) ?? null;
   const saveConflictDialogRef = useDialogFocusTrap(Boolean(conflictRemote), closeSaveConflictDialog);
+
+  useEffect(() => {
+    if (selectedPath && selectedDocumentId && isTextContentType(selectedContentType)) {
+      liveCollabSessionRef.current = {
+        documentId: selectedDocumentId,
+        path: selectedPath,
+        sessionId: collabSessionIdRef.current,
+      };
+    } else {
+      liveCollabSessionRef.current = null;
+    }
+  }, [selectedContentType, selectedDocumentId, selectedPath]);
 
   async function save() {
     const savingLibrary = activeLibrary;
@@ -1043,9 +1063,11 @@ function Workspace() {
               <DocumentBody
                 activeLibrary={activeLibrary}
                 byteSize={selectedEntry?.byte_size}
+                collabSessionId={collabSessionIdRef.current}
                 contentHash={selectedEntry?.content_hash}
                 content={content}
                 contentType={selectedContentType}
+                documentId={selectedDocumentId}
                 image={imageApi}
                 mode={editorMode}
                 path={selectedPath}
@@ -1210,9 +1232,11 @@ function Workspace() {
 function DocumentBody({
   activeLibrary,
   byteSize,
+  collabSessionId,
   contentHash,
   content,
   contentType,
+  documentId,
   image,
   mode,
   path,
@@ -1221,9 +1245,11 @@ function DocumentBody({
 }: {
   activeLibrary: string;
   byteSize?: number;
+  collabSessionId: string;
   contentHash?: string | null;
   content: string;
   contentType: string;
+  documentId: string;
   image: ImageApi;
   mode: EditorMode;
   path: string;
@@ -1231,7 +1257,19 @@ function DocumentBody({
   onChange: (content: string) => void;
 }) {
   if (isTextContentType(contentType)) {
-    return <MarkdownEditor content={content} mode={mode} wikiLink={wikiLink} image={image} onChange={onChange} />;
+    const collab: CollabEditorConfig | undefined = documentId
+      ? { documentId, sessionId: collabSessionId }
+      : undefined;
+    return (
+      <MarkdownEditor
+        collab={collab}
+        content={content}
+        mode={mode}
+        wikiLink={wikiLink}
+        image={image}
+        onChange={onChange}
+      />
+    );
   }
 
   if (isImageContentType(contentType)) {
@@ -3451,6 +3489,13 @@ function safeDecodeSegment(segment: string) {
   } catch {
     return segment;
   }
+}
+
+function makeCollabSessionId() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return `browser:${crypto.randomUUID()}`;
+  }
+  return `browser:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
 }
 
 function parseBrowserEvent(event: MessageEvent): BrowserEventPayload | null {
