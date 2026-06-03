@@ -31,16 +31,21 @@ export const TableElement = withHOC(TableProvider, function TableElement(props: 
   const readOnly = useReadOnly();
   const { marginLeft, props: tableProps } = useTableElement();
   return (
-    <PlateElement {...props} className="overflow-x-auto py-2" style={{ paddingLeft: marginLeft }}>
-      <div className="group/table relative w-fit">
-        <table className="my-0 table table-fixed border-collapse text-sm" {...tableProps}>
-          <tbody className="min-w-full">{props.children}</tbody>
-        </table>
+    <PlateElement {...props} className="py-2" style={{ paddingLeft: marginLeft }}>
+      {/* The horizontal-scroll box wraps only the table; the add-row/column bars
+          live outside it as siblings, so they sit in the gutter without being
+          clipped (overflow-x:auto forces overflow-y:auto, which would clip them). */}
+      <div className="group/table relative w-fit max-w-full">
+        <div className="max-w-full overflow-x-auto">
+          <table className="my-0 table table-fixed border-collapse text-sm" {...tableProps}>
+            <tbody className="min-w-full">{props.children}</tbody>
+          </table>
+        </div>
         {readOnly ? null : (
           <div contentEditable={false}>
             <button
               aria-label="Add row"
-              className="absolute inset-x-0 -bottom-3 flex h-3 items-center justify-center rounded-sm bg-well text-muted opacity-0 transition-opacity hover:bg-line hover:text-body group-hover/table:opacity-100"
+              className="absolute inset-x-0 -bottom-4 flex h-4 items-center justify-center rounded-sm bg-well text-muted opacity-0 transition-opacity hover:bg-line hover:text-body group-hover/table:opacity-100"
               onClick={() => tf.insert.tableRow({ at: editor.api.findPath(element) })}
               onMouseDown={(event) => event.preventDefault()}
               type="button"
@@ -49,7 +54,7 @@ export const TableElement = withHOC(TableProvider, function TableElement(props: 
             </button>
             <button
               aria-label="Add column"
-              className="absolute inset-y-0 -right-3 flex w-3 items-center justify-center rounded-sm bg-well text-muted opacity-0 transition-opacity hover:bg-line hover:text-body group-hover/table:opacity-100"
+              className="absolute inset-y-0 -right-4 flex w-4 items-center justify-center rounded-sm bg-well text-muted opacity-0 transition-opacity hover:bg-line hover:text-body group-hover/table:opacity-100"
               onClick={() => tf.insert.tableColumn({ at: editor.api.findPath(element) })}
               onMouseDown={(event) => event.preventDefault()}
               type="button"
