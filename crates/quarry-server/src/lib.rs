@@ -14,10 +14,11 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use futures_util::{stream, Stream};
 use quarry_core::{
-    ConflictRecord, DocumentLink, DocumentListEntry, DocumentSource, DocumentVersion,
-    DocumentVersionContent, GcReport, GitPeer, GraphEdge, GraphNode, GraphResponse, Library,
-    LinkCollection, QuarryError, ReindexReport, SearchResponse, SearchResult, SearchSuggestion,
-    TransactionRecord, VersionDiff, WriteOutcome, WritePrecondition,
+    now_timestamp, ConflictRecord, DocumentLink, DocumentListEntry, DocumentSource,
+    DocumentVersion, DocumentVersionContent, GcReport, GitPeer, GraphEdge, GraphNode,
+    GraphResponse, Library, LinkCollection, QuarryError, ReindexReport, SearchResponse,
+    SearchResult, SearchSuggestion, TransactionRecord, VersionDiff, WriteOutcome,
+    WritePrecondition,
 };
 use quarry_git::{
     export_worktree, import_worktree, pull_peer, push_peer, sync_peer, GitExportOptions,
@@ -26,7 +27,7 @@ use quarry_git::{
 use quarry_storage::{QuarryStore, StoreEvent, StoreEventKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -39,6 +40,8 @@ pub struct AppState {
     store: QuarryStore,
     collab: collab::CollabHub,
     agent_idempotency: AgentIdempotencyCache,
+    agent_events: AgentEventJournal,
+    agent_presence: AgentPresenceRegistry,
 }
 
 #[derive(Clone, Default)]
@@ -91,7 +94,119 @@ impl AgentIdempotencyCache {
     }
 }
 
+const AGENT_EVENT_JOURNAL_CAPACITY: usize = 4096;
+
+#[derive(Clone, Default)]
+struct AgentEventJournal {
+    inner: Arc<Mutex<AgentEventJournalInner>>,
+    acks: Arc<Mutex<HashMap<String, u64>>>,
+}
+
+#[derive(Default)]
+struct AgentEventJournalInner {
+    next_id: u64,
+    events: VecDeque<LoggedStoreEvent>,
+}
+
+#[derive(Clone)]
+struct LoggedStoreEvent {
+    id: u64,
+    event: StoreEvent,
+}
+
+impl AgentEventJournal {
+    fn spawn_ingest(&self, store: QuarryStore) {
+        let journal = self.clone();
+        let mut receiver = store.subscribe_events();
+        tokio::spawn(async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(event) => journal.push(event).await,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(skipped, "agent event journal lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                }
+            }
+        });
+    }
+
+    async fn push(&self, event: StoreEvent) {
+        let mut inner = self.inner.lock().await;
+        inner.next_id = inner.next_id.saturating_add(1);
+        let id = inner.next_id;
+        inner.events.push_back(LoggedStoreEvent { id, event });
+        while inner.events.len() > AGENT_EVENT_JOURNAL_CAPACITY {
+            inner.events.pop_front();
+        }
+    }
+
+    async fn pending_since(
+        &self,
+        library_id: &str,
+        after: u64,
+        limit: usize,
+    ) -> Vec<LoggedStoreEvent> {
+        let inner = self.inner.lock().await;
+        inner
+            .events
+            .iter()
+            .filter(|event| event.id > after && event.event.library_id == library_id)
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
+    async fn ack(&self, agent_id: String, event_id: u64) {
+        let mut acks = self.acks.lock().await;
+        let ack = acks.entry(agent_id).or_insert(0);
+        *ack = (*ack).max(event_id);
+    }
+}
+
+#[derive(Clone, Default)]
+struct AgentPresenceRegistry {
+    entries: Arc<Mutex<HashMap<String, AgentPresenceEntry>>>,
+}
+
+impl AgentPresenceRegistry {
+    async fn update(
+        &self,
+        library: &str,
+        path: &str,
+        document_id: &str,
+        agent_id: String,
+        status: String,
+        by: Option<String>,
+    ) -> AgentPresenceResponse {
+        let entry = AgentPresenceEntry {
+            library: library.to_string(),
+            path: path.to_string(),
+            document_id: document_id.to_string(),
+            agent_id,
+            status,
+            by,
+            updated_at: now_timestamp(),
+        };
+        let key = format!("{}\0{}\0{}", entry.library, entry.path, entry.agent_id);
+        let mut entries = self.entries.lock().await;
+        entries.insert(key, entry.clone());
+        let presence = entries
+            .values()
+            .filter(|other| other.library == library && other.path == path)
+            .cloned()
+            .collect();
+        AgentPresenceResponse {
+            current: entry,
+            presence,
+        }
+    }
+}
+
 pub fn router(store: QuarryStore) -> Router {
+    let agent_events = AgentEventJournal::default();
+    agent_events.spawn_ingest(store.clone());
+
     let router = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/openapi.json", get(openapi_json))
@@ -108,6 +223,11 @@ pub fn router(store: QuarryStore) -> Router {
         )
         .route("/v1/libraries/{library}/reindex", post(reindex_library))
         .route("/v1/libraries/{library}/graph", get(graph))
+        .route(
+            "/v1/libraries/{library}/events/pending",
+            get(agent_events_pending),
+        )
+        .route("/v1/libraries/{library}/events/ack", post(agent_events_ack))
         .route(
             "/v1/libraries/{library}/documents/{*path}",
             get(get_document)
@@ -172,6 +292,8 @@ pub fn router(store: QuarryStore) -> Router {
         store,
         collab,
         agent_idempotency: AgentIdempotencyCache::default(),
+        agent_events,
+        agent_presence: AgentPresenceRegistry::default(),
     })
 }
 
@@ -262,6 +384,9 @@ async fn browser_asset(uri: Uri) -> Response {
         document_backlinks_openapi,
         document_outgoing_links_openapi,
         document_snapshot_openapi,
+        agent_presence_openapi,
+        agent_events_pending,
+        agent_events_ack,
         document_versions_openapi,
         document_version_openapi,
         document_version_diff_openapi,
@@ -307,6 +432,13 @@ async fn browser_asset(uri: Uri) -> Response {
         AgentEditResponse,
         AgentBlockOperation,
         AgentEditBlock,
+        AgentPresenceRequest,
+        AgentPresenceResponse,
+        AgentPresenceEntry,
+        AgentPendingEventsResponse,
+        AgentEventRecord,
+        AgentEventsAckRequest,
+        AgentEventsAckResponse,
         TransactionRecord,
         ConflictRecord,
         SearchResponse,
@@ -397,6 +529,70 @@ async fn events(
     ))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/libraries/{library}/events/pending",
+    params(("library" = String, Path), ("after" = Option<u64>, Query), ("limit" = Option<usize>, Query)),
+    responses((status = 200, body = AgentPendingEventsResponse), (status = 404, body = ErrorResponse))
+)]
+async fn agent_events_pending(
+    State(state): State<AppState>,
+    Path(library): Path<String>,
+    Query(query): Query<AgentPendingEventsQuery>,
+) -> Result<Json<AgentPendingEventsResponse>, ApiError> {
+    let library = state.store.get_library(&library).await?;
+    let after = query.after.unwrap_or(0);
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    let pending = state
+        .agent_events
+        .pending_since(&library.id, after, limit)
+        .await;
+    let next_after = pending.last().map(|event| event.id).unwrap_or(after);
+    let events = pending
+        .into_iter()
+        .map(|logged| {
+            let event_type = store_event_type(&logged.event);
+            let mut data = store_event_payload(&library.slug, &event_type, &logged.event);
+            if let Some(object) = data.as_object_mut() {
+                object.insert("event_id".to_string(), JsonValue::from(logged.id));
+            }
+            AgentEventRecord {
+                id: logged.id,
+                event: event_type,
+                data,
+            }
+        })
+        .collect();
+
+    Ok(Json(AgentPendingEventsResponse { events, next_after }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/libraries/{library}/events/ack",
+    params(("library" = String, Path)),
+    request_body = AgentEventsAckRequest,
+    responses((status = 200, body = AgentEventsAckResponse), (status = 404, body = ErrorResponse))
+)]
+async fn agent_events_ack(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(library): Path<String>,
+    Json(request): Json<AgentEventsAckRequest>,
+) -> Result<Json<AgentEventsAckResponse>, ApiError> {
+    state.store.get_library(&library).await?;
+    let agent_id = agent_id_from_headers_or_body(&headers, request.agent_id.as_deref())?;
+    state
+        .agent_events
+        .ack(agent_id.clone(), request.event_id)
+        .await;
+    Ok(Json(AgentEventsAckResponse {
+        ok: true,
+        agent_id,
+        acked_through: request.event_id,
+    }))
+}
+
 #[utoipa::path(post, path = "/v1/admin/gc", responses((status = 200, body = GcReport)))]
 async fn admin_gc(State(state): State<AppState>) -> Result<Json<GcReport>, ApiError> {
     let report = state.store.gc().await?;
@@ -474,6 +670,73 @@ struct GraphQuery {
 #[derive(Debug, Deserialize)]
 struct EventsQuery {
     library: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentPendingEventsQuery {
+    after: Option<u64>,
+    limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AgentEventRecord {
+    pub id: u64,
+    pub event: String,
+    pub data: JsonValue,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AgentPendingEventsResponse {
+    pub events: Vec<AgentEventRecord>,
+    #[serde(rename = "nextAfter")]
+    pub next_after: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, ToSchema)]
+pub struct AgentEventsAckRequest {
+    #[serde(default, rename = "agentId")]
+    pub agent_id: Option<String>,
+    #[serde(rename = "eventId")]
+    pub event_id: u64,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AgentEventsAckResponse {
+    pub ok: bool,
+    #[serde(rename = "agentId")]
+    pub agent_id: String,
+    #[serde(rename = "ackedThrough")]
+    pub acked_through: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, ToSchema)]
+pub struct AgentPresenceRequest {
+    #[serde(default, rename = "agentId")]
+    pub agent_id: Option<String>,
+    pub status: String,
+    #[serde(default)]
+    pub by: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AgentPresenceEntry {
+    pub library: String,
+    pub path: String,
+    #[serde(rename = "documentId")]
+    pub document_id: String,
+    #[serde(rename = "agentId")]
+    pub agent_id: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AgentPresenceResponse {
+    pub current: AgentPresenceEntry,
+    pub presence: Vec<AgentPresenceEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -931,6 +1194,14 @@ async fn post_document_action(
         return agent_edit_response(response);
     }
 
+    if let Some(path) = path.strip_suffix("/presence") {
+        let request: AgentPresenceRequest = serde_json::from_value(request).map_err(|error| {
+            QuarryError::InvalidPath(format!("invalid presence request: {error}"))
+        })?;
+        let response = agent_presence_document(&state, &headers, &library, path, request).await?;
+        return json_response(StatusCode::OK, &response);
+    }
+
     Err(QuarryError::NotFound(path).into())
 }
 
@@ -944,10 +1215,43 @@ async fn post_document_action(
 #[allow(dead_code)]
 async fn document_edit_openapi() {}
 
+#[utoipa::path(
+    post,
+    path = "/v1/libraries/{library}/documents/{path}/presence",
+    params(("library" = String, Path), ("path" = String, Path)),
+    request_body = AgentPresenceRequest,
+    responses((status = 200, body = AgentPresenceResponse), (status = 404, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn agent_presence_openapi() {}
+
 #[derive(Clone)]
 struct AgentEditResult {
     response: AgentEditResponse,
     version_id: Option<String>,
+}
+
+async fn agent_presence_document(
+    state: &AppState,
+    headers: &HeaderMap,
+    library: &str,
+    path: &str,
+    request: AgentPresenceRequest,
+) -> Result<AgentPresenceResponse, ApiError> {
+    let document = state.store.head_document(library, path).await?;
+    let agent_id = agent_id_from_headers_or_body(headers, request.agent_id.as_deref())?;
+    let status = normalized_agent_status(&request.status)?;
+    Ok(state
+        .agent_presence
+        .update(
+            library,
+            path,
+            &document.id,
+            agent_id,
+            status,
+            request.by.filter(|by| !by.trim().is_empty()),
+        )
+        .await)
 }
 
 async fn agent_document_snapshot(
@@ -2031,6 +2335,30 @@ fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<Str
                 .map_err(|_| QuarryError::Storage(format!("invalid {name} header")).into())
         })
         .transpose()
+}
+
+fn agent_id_from_headers_or_body(
+    headers: &HeaderMap,
+    body_agent_id: Option<&str>,
+) -> Result<String, ApiError> {
+    optional_header(headers, "x-agent-id")?
+        .or_else(|| body_agent_id.map(str::to_string))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            QuarryError::InvalidPath("agent request missing X-Agent-Id or agentId".to_string())
+                .into()
+        })
+}
+
+fn normalized_agent_status(status: &str) -> Result<String, ApiError> {
+    let status = status.trim().to_ascii_lowercase();
+    match status.as_str() {
+        "reading" | "thinking" | "acting" | "waiting" | "completed" | "error" => Ok(status),
+        _ => Err(
+            QuarryError::InvalidPath(format!("unsupported agent presence status {status}")).into(),
+        ),
+    }
 }
 
 fn export_options(request: &GitExportRequest) -> GitExportOptions {

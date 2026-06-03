@@ -229,7 +229,10 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}"]["head"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/snapshot"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/edit"].is_object());
+    assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/presence"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/metadata"].is_object());
+    assert!(openapi["paths"]["/v1/libraries/{library}/events/pending"].is_object());
+    assert!(openapi["paths"]["/v1/libraries/{library}/events/ack"].is_object());
     assert!(openapi["paths"]
         ["/v1/libraries/{library}/transactions/{tx}/documents/{path}/metadata"]
         .is_object());
@@ -494,6 +497,148 @@ async fn agent_edit_supports_insert_and_delete_block_ops() {
         body["markdown"],
         "One\n\nBefore two\n\nTwo\n\nThree\n\nAfter three\n\n"
     );
+}
+
+#[tokio::test]
+async fn agent_presence_records_status_by_document() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("presence").await.unwrap();
+    let written = store
+        .put_document(
+            &library.slug,
+            "live.md",
+            b"hello".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/presence/documents/live.md/presence")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("X-Agent-Id", "agent-a")
+                .body(Body::from(
+                    serde_json::json!({"status":"thinking","by":"ai:codex"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["current"]["agentId"], "agent-a");
+    assert_eq!(body["current"]["status"], "thinking");
+    assert_eq!(body["current"]["by"], "ai:codex");
+    assert_eq!(body["current"]["documentId"], written.document.id);
+    assert_eq!(body["presence"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn agent_events_pending_and_ack_expose_sparse_event_signals() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    store.create_library("eventfallback").await.unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/eventfallback/documents/live.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .body(Body::from("hello"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let pending = timeout(Duration::from_secs(1), async {
+        loop {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::GET)
+                        .uri("/v1/libraries/eventfallback/events/pending?after=0")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body: Value = response_json(response).await;
+            if body["events"].as_array().unwrap().iter().any(|event| {
+                event["event"] == "doc.changed"
+                    && event["data"]["path"] == "live.md"
+                    && event["data"]["version_id"].as_str().is_some()
+            }) {
+                break body;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let event_id = pending["nextAfter"].as_u64().unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/eventfallback/events/ack")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("X-Agent-Id", "agent-a")
+                .body(Body::from(
+                    serde_json::json!({"eventId": event_id}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["agentId"], "agent-a");
+    assert_eq!(body["ackedThrough"], event_id);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v1/libraries/eventfallback/events/pending?after={event_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert!(body["events"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -1093,6 +1238,7 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/backlinks"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/versions"].is_object());
     assert!(openapi["paths"]["/v1/events"].is_object());
+    assert!(openapi["paths"]["/v1/libraries/{library}/events/pending"].is_object());
 }
 
 #[tokio::test]
