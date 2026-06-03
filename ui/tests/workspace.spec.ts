@@ -464,6 +464,31 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(editor.locator('th')).toHaveCount(2); // new header row promoted (x, y)
   });
 
+  test('resizing a table column does not trigger a save', async ({ page }) => {
+    const api = await installMockApi(page, {
+      documents: [
+        { content: '# Doc\n\n| A | B |\n| --- | --- |\n| x | y |\n', id: 'doc-t5', metadata: { title: 'T5' }, path: 't5.md', version: 'v1' },
+      ],
+    });
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /T5/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    const handle = editor.getByTestId('column-resize').first();
+    await expect(handle).toBeAttached();
+    const headerA = editor.locator('th', { hasText: 'A' });
+    const widthBefore = (await headerA.boundingBox())!.width;
+    const box = (await handle.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 80, box.y + box.height / 2, { steps: 10 });
+    await page.mouse.up();
+    // The resize actually engaged (width changed)...
+    await expect.poll(async () => (await headerA.boundingBox())!.width).toBeGreaterThan(widthBefore + 10);
+    // ...yet no save fired, because colSizes is never serialized.
+    await page.waitForTimeout(800);
+    expect(api.saveHeaders.length).toBe(0);
+  });
+
   test('opens the browser and selects a library', async ({ page }) => {
     await installMockApi(page, {
       documents: [],

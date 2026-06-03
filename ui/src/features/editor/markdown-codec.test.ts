@@ -111,6 +111,13 @@ describe('markdown codec', () => {
     ]);
   });
 
+  it('drops table colSizes when serializing (resize is editor-only)', () => {
+    const md = '| A | B |\n| --- | --- |\n| x | y |\n';
+    const value = markdownToPlateValue(md);
+    const withSizes = [{ ...(value[0] as Record<string, unknown>), colSizes: [200, 200] }, ...value.slice(1)];
+    expect(plateValueToMarkdown(withSizes)).toBe(plateValueToMarkdown(value));
+  });
+
   it('drops upload placeholders when serializing', () => {
     const value = [
       { type: 'p', children: [{ text: 'Keep me.' }] },

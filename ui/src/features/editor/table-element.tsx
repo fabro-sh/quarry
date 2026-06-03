@@ -1,3 +1,4 @@
+import { ResizeHandle } from '@platejs/resizable';
 import {
   TableCellHeaderPlugin,
   TableCellPlugin,
@@ -5,6 +6,7 @@ import {
   TableProvider,
   TableRowPlugin,
   useTableCellElement,
+  useTableCellElementResizable,
   useTableElement,
 } from '@platejs/table/react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
@@ -77,8 +79,14 @@ export function TableCellElement({
 }: PlateElementProps<TTableCellElement> & { isHeader?: boolean }) {
   const { api } = useEditorPlugin(TablePlugin);
   const editor = useEditorRef();
+  const readOnly = useReadOnly();
   const element = props.element;
-  const { colIndex, width } = useTableCellElement();
+  const { colIndex, colSpan, rowIndex, width } = useTableCellElement();
+  const { bottomProps, hiddenLeft, leftProps, rightProps } = useTableCellElementResizable({
+    colIndex,
+    colSpan,
+    rowIndex,
+  });
   // Reactively read this column's alignment off the parent table node so cells
   // restyle when alignment changes.
   const align = useEditorSelector((ed) => {
@@ -105,6 +113,19 @@ export function TableCellElement({
     >
       <div className="px-3 py-1.5">{props.children}</div>
       {isHeader ? <ColumnMenu colIndex={colIndex} editor={editor} element={element} /> : null}
+      {readOnly ? null : (
+        <div className="pointer-events-none absolute inset-0 z-20 select-none" contentEditable={false}>
+          <ResizeHandle
+            {...rightProps}
+            className="pointer-events-auto absolute -right-1 top-0 h-full w-2 cursor-col-resize"
+            data-testid="column-resize"
+          />
+          <ResizeHandle {...bottomProps} className="pointer-events-auto absolute -bottom-1 left-0 h-2 w-full cursor-row-resize" />
+          {hiddenLeft ? null : (
+            <ResizeHandle {...leftProps} className="pointer-events-auto absolute -left-1 top-0 h-full w-2 cursor-col-resize" />
+          )}
+        </div>
+      )}
     </PlateElement>
   );
 }
