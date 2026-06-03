@@ -1,5 +1,6 @@
 import {
   ApiPreconditionError,
+  createCollabInvite,
   createDocument,
   getDocument,
   isTextContentType,
@@ -62,6 +63,38 @@ describe('Quarry API client', () => {
       '/v1/libraries/notes/documents/a.md',
       expect.objectContaining({
         headers: expect.objectContaining({ 'X-Quarry-Collab-Session-Id': 'browser:session-1' }),
+      })
+    );
+  });
+
+  it('mints document-scoped collab invite tokens', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          id: 'invite-1',
+          document_id: 'doc-1',
+          role: 'editor',
+          by_hint: 'Avery',
+          created_at: 'now',
+          revoked_at: null,
+        }),
+        { headers: { 'content-type': 'application/json' } }
+      )
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(
+      createCollabInvite('notes', 'folder/live.md', { byHint: 'Avery' })
+    ).resolves.toMatchObject({
+      id: 'invite-1',
+      role: 'editor',
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/v1/libraries/notes/documents/folder/live.md/share',
+      expect.objectContaining({
+        body: JSON.stringify({ byHint: 'Avery', role: 'editor' }),
+        method: 'POST',
       })
     );
   });

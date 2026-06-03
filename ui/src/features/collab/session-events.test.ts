@@ -41,6 +41,20 @@ describe('collaboration session event classification', () => {
     ).toEqual({ action: 'ignore_flush_echo' });
   });
 
+  it('ignores a same-document browser peer flush echo by collab provenance', () => {
+    expect(
+      classifyLiveDocumentEvent(
+        {
+          type: 'doc.changed',
+          path: 'notes/daily.md',
+          doc_id: 'doc-1',
+          collab_session_id: 'browser:peer',
+        },
+        session
+      )
+    ).toEqual({ action: 'ignore_flush_echo' });
+  });
+
   it('ignores the live session own flush echo by acked version metadata', () => {
     expect(
       classifyLiveDocumentEvent(

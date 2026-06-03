@@ -22,7 +22,15 @@ interface MarkdownEditorProps {
   onChange: (content: string) => void;
 }
 
-export function MarkdownEditor({ author = 'user', collab, content, mode, wikiLink, image, onChange }: MarkdownEditorProps) {
+export function MarkdownEditor({
+  author = 'user',
+  collab,
+  content,
+  mode,
+  wikiLink,
+  image,
+  onChange,
+}: MarkdownEditorProps) {
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-surface" aria-label="Editor">
       <div className="min-h-0 flex-1 overflow-auto">

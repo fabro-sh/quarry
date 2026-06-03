@@ -54,6 +54,7 @@ function matchesLiveDocument(payload: DocumentEventPayload, session: LiveCollabS
 
 function isOwnFlushEcho(payload: DocumentEventPayload, session: LiveCollabSession) {
   if (payload.collab_session_id && payload.collab_session_id === session.sessionId) return true;
+  if (payload.collab_session_id?.startsWith('browser:')) return true;
   if (payload.version_id && session.ackedFlushVersionIds?.has(payload.version_id)) return true;
   if (payload.etag && session.ackedFlushEtags?.has(payload.etag)) return true;
   return false;

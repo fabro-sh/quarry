@@ -1,5 +1,6 @@
 import type {
   ConflictRecord,
+  CollabInviteToken,
   DocumentListEntry,
   DocumentVersion,
   DocumentVersionContent,
@@ -159,6 +160,17 @@ export const resolveConflict = (library: string, conflict: string) =>
     `/v1/libraries/${segment(library)}/conflicts/${segment(conflict)}/resolve`,
     { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }
   );
+
+export const createCollabInvite = (
+  library: string,
+  path: string,
+  request: { byHint?: string; role?: 'editor' | 'viewer' } = {}
+) =>
+  jsonRequest<CollabInviteToken>(`/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/share`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ byHint: request.byHint, role: request.role ?? 'editor' }),
+  });
 
 export const searchDocuments = (library: string, query: string) =>
   jsonRequest<SearchResponse>(

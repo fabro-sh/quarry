@@ -144,6 +144,12 @@ import { syncSuggestionsFromValue, useReviewStore } from '../review/review-store
 import { acceptSuggestionById, rejectSuggestionById } from '../review/accept-reject';
 import { ReviewRail } from '../review/ui/ReviewRail';
 import { RemoteCursorOverlay } from '../collab/RemoteCursorOverlay';
+import {
+  clearCollabAwareness,
+  collectFlushAcks,
+  type CollabFlushAck,
+  updateCollabAwareness,
+} from '../collab/flusher-lease';
 import { RUST_WS_PROVIDER_TYPE, registerRustWsProviderType } from '../collab/rust-ws-provider';
 
 registerRustWsProviderType();
@@ -297,6 +303,9 @@ export type EditorMode = 'editing' | 'suggesting' | 'viewing';
 
 export interface CollabEditorConfig {
   documentId: string;
+  flushAck?: CollabFlushAck | null;
+  onFlushAck?: (ack: CollabFlushAck) => void;
+  onFlusherChange?: (isFlusher: boolean) => void;
   sessionId: string;
   token?: string;
 }
@@ -477,6 +486,7 @@ export function PlateMarkdownEditor({
           onChange(nextMarkdown);
         }}
       >
+        {collabEnabled && collab ? <CollabAwarenessBridge collab={collab} /> : null}
         {readOnly ? null : <FloatingFormatToolbar />}
         <PlateContainer className="relative flex h-full min-h-0">
           <div className="relative min-w-0 flex-1 overflow-auto">
@@ -494,6 +504,58 @@ export function PlateMarkdownEditor({
      </ImageProvider>
     </WikiLinkProvider>
   );
+}
+
+function CollabAwarenessBridge({ collab }: { collab: CollabEditorConfig }) {
+  const editor = useEditorRef();
+  const flushAckRef = useRef<CollabFlushAck | null>(collab.flushAck ?? null);
+  const callbacksRef = useRef({
+    onFlushAck: collab.onFlushAck,
+    onFlusherChange: collab.onFlusherChange,
+  });
+
+  useEffect(() => {
+    flushAckRef.current = collab.flushAck ?? null;
+    callbacksRef.current = {
+      onFlushAck: collab.onFlushAck,
+      onFlusherChange: collab.onFlusherChange,
+    };
+    const awareness = editor.getOption(YjsPlugin, 'awareness');
+    if (awareness) {
+      const isFlusher = updateCollabAwareness(awareness, collab.sessionId, flushAckRef.current);
+      callbacksRef.current.onFlusherChange?.(isFlusher);
+    }
+  }, [collab.flushAck, collab.onFlushAck, collab.onFlusherChange, collab.sessionId, editor]);
+
+  useEffect(() => {
+    const awareness = editor.getOption(YjsPlugin, 'awareness');
+    if (!awareness) return;
+    let disposed = false;
+
+    const publish = () => {
+      if (disposed) return;
+      const isFlusher = updateCollabAwareness(awareness, collab.sessionId, flushAckRef.current);
+      callbacksRef.current.onFlusherChange?.(isFlusher);
+      for (const ack of collectFlushAcks(awareness)) {
+        callbacksRef.current.onFlushAck?.(ack);
+      }
+    };
+    const awarenessEvents = awareness as typeof awareness & {
+      off: (event: 'change', handler: () => void) => void;
+      on: (event: 'change', handler: () => void) => void;
+    };
+
+    awarenessEvents.on('change', publish);
+    publish();
+    return () => {
+      disposed = true;
+      awarenessEvents.off('change', publish);
+      clearCollabAwareness(awareness);
+      callbacksRef.current.onFlusherChange?.(false);
+    };
+  }, [collab.documentId, collab.sessionId, editor]);
+
+  return null;
 }
 
 function FloatingFormatToolbar() {

@@ -49,6 +49,15 @@ export interface WriteOutcome {
   transaction: TransactionRecord;
 }
 
+export interface CollabInviteToken {
+  id: string;
+  document_id: string;
+  role: string;
+  by_hint: string | null;
+  created_at: string;
+  revoked_at: string | null;
+}
+
 export interface TransactionRecord {
   id: string;
   library_id: string;

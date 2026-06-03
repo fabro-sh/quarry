@@ -39,6 +39,7 @@ import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -57,6 +58,7 @@ import useSWR, { useSWRConfig } from 'swr';
 import {
   ApiPreconditionError,
   backlinks,
+  createCollabInvite,
   createDocument,
   createGitPeer,
   createLibrary,
@@ -105,6 +107,7 @@ import {
   classifyLiveDocumentEvent,
   type LiveCollabSession,
 } from '../features/collab/session-events';
+import type { CollabFlushAck } from '../features/collab/flusher-lease';
 import { clearDraft, loadDraft, saveDraft } from '../features/editor/drafts';
 import {
   MarkdownEditor,
@@ -179,6 +182,10 @@ function Workspace() {
   const location = useLocation();
   const navigate = useNavigate();
   const routeSelection = useMemo(() => parseWorkspaceRoute(location.pathname), [location.pathname]);
+  const routeCollabToken = useMemo(
+    () => new URLSearchParams(location.search).get('token') ?? undefined,
+    [location.search]
+  );
   const { mutate } = useSWRConfig();
   const { data: libraries = [] } = useSWR('/v1/libraries', listLibraries);
   const [activeLibrary, setActiveLibrary] = useState<string>(() => {
@@ -230,9 +237,12 @@ function Workspace() {
   } | null>(null);
   const liveCollabSessionRef = useRef<LiveCollabSession | null>(null);
   const collabSessionIdRef = useRef(makeCollabSessionId());
+  const collabFlusherRef = useRef(false);
   const searchQueryRef = useRef(searchQuery);
   const appliedRouteRef = useRef(location.pathname);
   const [collabExternalChange, setCollabExternalChange] = useState<CollabExternalChange | null>(null);
+  const [collabFlushAck, setCollabFlushAck] = useState<CollabFlushAck | null>(null);
+  const [collabFlusher, setCollabFlusher] = useState(false);
 
   useEffect(() => {
     if (!activeLibrary && libraries.length >= 1) {
@@ -310,6 +320,17 @@ function Workspace() {
   useEffect(() => {
     saveStateRef.current = saveState;
   }, [saveState]);
+
+  const changeCollabFlusher = useCallback((isFlusher: boolean) => {
+    collabFlusherRef.current = isFlusher;
+    setCollabFlusher(isFlusher);
+  }, []);
+
+  const recordCollabFlushAck = useCallback((ack: CollabFlushAck) => {
+    const session = liveCollabSessionRef.current;
+    if (!session) return;
+    liveCollabSessionRef.current = ackLiveCollabFlush(session, ack.versionId, ack.etag);
+  }, []);
 
   useEffect(() => {
     searchQueryRef.current = searchQuery;
@@ -686,8 +707,10 @@ function Workspace() {
         path: selectedPath,
         sessionId: collabSessionIdRef.current,
       };
+      setCollabFlushAck(null);
     } else {
       liveCollabSessionRef.current = null;
+      setCollabFlushAck(null);
     }
   }, [selectedContentType, selectedDocumentId, selectedPath]);
 
@@ -701,6 +724,14 @@ function Workspace() {
     if (!savingLibrary || !savingPath || !savingEtag) return;
     if (!isTextContentType(contentType)) return;
     if (saveStateRef.current === 'saving') return;
+    const savingCollabSession =
+      liveCollabSessionRef.current?.documentId === savingDocumentId
+        ? liveCollabSessionRef.current
+        : null;
+    if (savingCollabSession && (!collabFlusherRef.current || collabExternalChange)) {
+      transitionSaveState('drafted');
+      return;
+    }
 
     // Autosave can resolve after you've kept typing or switched documents. Gate
     // every post-await state write on still viewing the document we saved, so a
@@ -710,10 +741,6 @@ function Workspace() {
 
     transitionSaveState('saving');
     try {
-      const savingCollabSession =
-        liveCollabSessionRef.current?.documentId === savingDocumentId
-          ? liveCollabSessionRef.current
-          : null;
       const saved = await putDocument(savingLibrary, savingPath, savingContent, savingEtag, contentType, {
         collabSessionId: savingCollabSession?.sessionId ?? undefined,
       });
@@ -729,11 +756,17 @@ function Workspace() {
       };
       setEtag(savedEtag);
       if (savingCollabSession && liveCollabSessionRef.current?.documentId === savedDocumentId) {
+        const ack = {
+          etag: savedEtag,
+          sessionId: savingCollabSession.sessionId ?? collabSessionIdRef.current,
+          versionId: saved.outcome.version.id,
+        };
         liveCollabSessionRef.current = ackLiveCollabFlush(
           liveCollabSessionRef.current,
-          saved.outcome.version.id,
-          savedEtag
+          ack.versionId,
+          ack.etag
         );
+        setCollabFlushAck(ack);
       }
       // If edits landed while the request was in flight, the newer text still
       // needs saving: re-draft under the new ETag and drop back to `drafted` so
@@ -788,10 +821,22 @@ function Workspace() {
   useEffect(() => {
     if (editorMode === 'viewing') return;
     if (conflictRemote) return;
+    if (collabExternalChange) return;
+    if (liveCollabSessionRef.current && !collabFlusher) return;
     if (saveState !== 'drafted') return;
     const timer = window.setTimeout(() => void saveRef.current(), AUTOSAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [content, saveState, editorMode, conflictRemote]);
+  }, [collabExternalChange, collabFlusher, content, saveState, editorMode, conflictRemote]);
+
+  useEffect(() => {
+    const flushBeforePageHide = () => {
+      if (saveStateRef.current !== 'drafted') return;
+      if (!canCurrentBrowserFlush()) return;
+      void saveRef.current();
+    };
+    window.addEventListener('pagehide', flushBeforePageHide);
+    return () => window.removeEventListener('pagehide', flushBeforePageHide);
+  }, []);
 
   function changeContent(next: string) {
     contentRef.current = next;
@@ -819,7 +864,7 @@ function Workspace() {
     const path = window.prompt('New document path', defaultPath);
     if (!path) return;
     // Flush the pending draft before creating + switching (see openDocument).
-    if (saveStateRef.current === 'drafted') void save();
+    if (saveStateRef.current === 'drafted' && canCurrentBrowserFlush()) void save();
     await createDocument(activeLibrary, path, '# Untitled\n');
     await Promise.all([
       mutate(['/v1/documents', activeLibrary]),
@@ -880,6 +925,22 @@ function Workspace() {
     URL.revokeObjectURL(url);
   }
 
+  async function shareCurrentDocument() {
+    if (!activeLibrary || !selectedPath) return;
+    const token = await createCollabInvite(activeLibrary, selectedPath, {
+      byHint: author,
+      role: 'editor',
+    });
+    const url = new URL(workspaceRoute(activeLibrary, selectedPath), window.location.origin);
+    url.searchParams.set('token', token.id);
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+      await navigator.clipboard.writeText(url.toString());
+    } catch {
+      window.prompt('Share link', url.toString());
+    }
+  }
+
   async function deleteDocumentPath(path: string) {
     if (!activeLibrary) return;
     if (!window.confirm(`Delete ${path}?`)) return;
@@ -914,7 +975,7 @@ function Workspace() {
     if (!path || path === selectedPath) return;
     // Flush the pending draft before leaving; `save` is guarded on the
     // originating document, so a late response won't disturb the next one.
-    if (saveStateRef.current === 'drafted') void save();
+    if (saveStateRef.current === 'drafted' && canCurrentBrowserFlush()) void save();
     setSelectedPath(path);
   }
 
@@ -1016,6 +1077,10 @@ function Workspace() {
     setSaveState(next);
   }
 
+  function canCurrentBrowserFlush() {
+    return !liveCollabSessionRef.current || collabFlusherRef.current;
+  }
+
   return (
     <main
       className="isolate flex h-screen min-h-0 flex-col overflow-hidden bg-canvas text-ink antialiased"
@@ -1075,6 +1140,7 @@ function Workspace() {
                 onDelete={deleteCurrent}
                 onDownload={downloadCurrentMarkdown}
                 onRename={renameCurrent}
+                onShare={() => void shareCurrentDocument()}
               />
               {collabExternalChange ? (
                 <CollabExternalChangeBanner change={collabExternalChange} />
@@ -1084,6 +1150,10 @@ function Workspace() {
                 author={author}
                 byteSize={selectedEntry?.byte_size}
                 collabSessionId={collabSessionIdRef.current}
+                collabFlushAck={collabFlushAck}
+                onCollabFlushAck={recordCollabFlushAck}
+                onCollabFlusherChange={changeCollabFlusher}
+                collabToken={routeCollabToken}
                 contentHash={selectedEntry?.content_hash}
                 content={content}
                 contentType={selectedContentType}
@@ -1255,7 +1325,9 @@ function DocumentBody({
   activeLibrary,
   author,
   byteSize,
+  collabFlushAck,
   collabSessionId,
+  collabToken,
   contentHash,
   content,
   contentType,
@@ -1265,11 +1337,15 @@ function DocumentBody({
   path,
   wikiLink,
   onChange,
+  onCollabFlushAck,
+  onCollabFlusherChange,
 }: {
   activeLibrary: string;
   author: string;
   byteSize?: number;
+  collabFlushAck: CollabFlushAck | null;
   collabSessionId: string;
+  collabToken?: string;
   contentHash?: string | null;
   content: string;
   contentType: string;
@@ -1279,10 +1355,19 @@ function DocumentBody({
   path: string;
   wikiLink: WikiLinkApi;
   onChange: (content: string) => void;
+  onCollabFlushAck: (ack: CollabFlushAck) => void;
+  onCollabFlusherChange: (isFlusher: boolean) => void;
 }) {
   if (isTextContentType(contentType)) {
     const collab: CollabEditorConfig | undefined = documentId
-      ? { documentId, sessionId: collabSessionId }
+      ? {
+          documentId,
+          flushAck: collabFlushAck,
+          onFlushAck: onCollabFlushAck,
+          onFlusherChange: onCollabFlusherChange,
+          sessionId: collabSessionId,
+          token: collabToken,
+        }
       : undefined;
     return (
       <MarkdownEditor
@@ -2610,6 +2695,7 @@ function DocumentToolbar({
   onDelete,
   onDownload,
   onRename,
+  onShare,
 }: {
   isText: boolean;
   mode: EditorMode;
@@ -2619,6 +2705,7 @@ function DocumentToolbar({
   onDelete: () => void;
   onDownload: () => void;
   onRename: () => void;
+  onShare: () => void;
 }) {
   return (
     <div className="flex h-12 shrink-0 items-center gap-2 bg-surface px-3">
@@ -2647,10 +2734,16 @@ function DocumentToolbar({
             sideOffset={6}
           >
             {isText ? (
-              <DropdownMenu.Item className={menuItem} onSelect={onDownload}>
-                <Download className="shrink-0" size={15} />
-                Download as Markdown
-              </DropdownMenu.Item>
+              <>
+                <DropdownMenu.Item className={menuItem} onSelect={onShare}>
+                  <Link2 className="shrink-0" size={15} />
+                  Copy invite link
+                </DropdownMenu.Item>
+                <DropdownMenu.Item className={menuItem} onSelect={onDownload}>
+                  <Download className="shrink-0" size={15} />
+                  Download as Markdown
+                </DropdownMenu.Item>
+              </>
             ) : null}
             <DropdownMenu.Item className={menuItem} onSelect={onRename}>
               Move…
