@@ -4,6 +4,7 @@ import type { Awareness } from 'y-protocols/awareness';
 import {
   COLLAB_AWARENESS_FIELD,
   collectFlushAcks,
+  collectRecoveryErrors,
   electFlusherClientId,
   updateCollabAwareness,
 } from './flusher-lease';
@@ -44,6 +45,25 @@ describe('collab flusher lease', () => {
     expect(collectFlushAcks(awareness.value)).toEqual([
       { etag: '"v2"', sessionId: 'browser:local', versionId: 'v2' },
       { etag: '"v3"', sessionId: 'browser:peer', versionId: 'v3' },
+    ]);
+  });
+
+  it('collects server recovery persistence errors from awareness', () => {
+    const awareness = new FakeAwareness(10);
+    awareness.states.set(99, {
+      quarryServer: {
+        recoveryError: {
+          documentId: 'doc-1',
+          message: 'failed to persist collab recovery state',
+        },
+      },
+    });
+
+    expect(collectRecoveryErrors(awareness.value)).toEqual([
+      {
+        documentId: 'doc-1',
+        message: 'failed to persist collab recovery state',
+      },
     ]);
   });
 });

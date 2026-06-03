@@ -107,7 +107,7 @@ import {
   classifyLiveDocumentEvent,
   type LiveCollabSession,
 } from '../features/collab/session-events';
-import type { CollabFlushAck } from '../features/collab/flusher-lease';
+import type { CollabFlushAck, CollabRecoveryError } from '../features/collab/flusher-lease';
 import { clearDraft, loadDraft, saveDraft } from '../features/editor/drafts';
 import {
   MarkdownEditor,
@@ -243,6 +243,7 @@ function Workspace() {
   const [collabExternalChange, setCollabExternalChange] = useState<CollabExternalChange | null>(null);
   const [collabFlushAck, setCollabFlushAck] = useState<CollabFlushAck | null>(null);
   const [collabFlusher, setCollabFlusher] = useState(false);
+  const [collabRecoveryError, setCollabRecoveryError] = useState<CollabRecoveryError | null>(null);
 
   useEffect(() => {
     if (!activeLibrary && libraries.length >= 1) {
@@ -330,6 +331,10 @@ function Workspace() {
     const session = liveCollabSessionRef.current;
     if (!session) return;
     liveCollabSessionRef.current = ackLiveCollabFlush(session, ack.versionId, ack.etag);
+  }, []);
+
+  const recordCollabRecoveryError = useCallback((error: CollabRecoveryError) => {
+    setCollabRecoveryError(error);
   }, []);
 
   useEffect(() => {
@@ -708,9 +713,11 @@ function Workspace() {
         sessionId: collabSessionIdRef.current,
       };
       setCollabFlushAck(null);
+      setCollabRecoveryError(null);
     } else {
       liveCollabSessionRef.current = null;
       setCollabFlushAck(null);
+      setCollabRecoveryError(null);
     }
   }, [selectedContentType, selectedDocumentId, selectedPath]);
 
@@ -728,7 +735,10 @@ function Workspace() {
       liveCollabSessionRef.current?.documentId === savingDocumentId
         ? liveCollabSessionRef.current
         : null;
-    if (savingCollabSession && (!collabFlusherRef.current || collabExternalChange)) {
+    if (
+      savingCollabSession &&
+      (!collabFlusherRef.current || collabExternalChange || collabRecoveryError)
+    ) {
       transitionSaveState('drafted');
       return;
     }
@@ -822,11 +832,20 @@ function Workspace() {
     if (editorMode === 'viewing') return;
     if (conflictRemote) return;
     if (collabExternalChange) return;
+    if (collabRecoveryError) return;
     if (liveCollabSessionRef.current && !collabFlusher) return;
     if (saveState !== 'drafted') return;
     const timer = window.setTimeout(() => void saveRef.current(), AUTOSAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [collabExternalChange, collabFlusher, content, saveState, editorMode, conflictRemote]);
+  }, [
+    collabExternalChange,
+    collabFlusher,
+    collabRecoveryError,
+    content,
+    saveState,
+    editorMode,
+    conflictRemote,
+  ]);
 
   useEffect(() => {
     const flushBeforePageHide = () => {
@@ -1145,6 +1164,9 @@ function Workspace() {
               {collabExternalChange ? (
                 <CollabExternalChangeBanner change={collabExternalChange} />
               ) : null}
+              {collabRecoveryError ? (
+                <CollabRecoveryErrorBanner error={collabRecoveryError} />
+              ) : null}
               <DocumentBody
                 activeLibrary={activeLibrary}
                 author={author}
@@ -1153,6 +1175,7 @@ function Workspace() {
                 collabFlushAck={collabFlushAck}
                 onCollabFlushAck={recordCollabFlushAck}
                 onCollabFlusherChange={changeCollabFlusher}
+                onCollabRecoveryError={recordCollabRecoveryError}
                 collabToken={routeCollabToken}
                 contentHash={selectedEntry?.content_hash}
                 content={content}
@@ -1339,6 +1362,7 @@ function DocumentBody({
   onChange,
   onCollabFlushAck,
   onCollabFlusherChange,
+  onCollabRecoveryError,
 }: {
   activeLibrary: string;
   author: string;
@@ -1357,6 +1381,7 @@ function DocumentBody({
   onChange: (content: string) => void;
   onCollabFlushAck: (ack: CollabFlushAck) => void;
   onCollabFlusherChange: (isFlusher: boolean) => void;
+  onCollabRecoveryError: (error: CollabRecoveryError) => void;
 }) {
   if (isTextContentType(contentType)) {
     const collab: CollabEditorConfig | undefined = documentId
@@ -1365,6 +1390,7 @@ function DocumentBody({
           flushAck: collabFlushAck,
           onFlushAck: onCollabFlushAck,
           onFlusherChange: onCollabFlusherChange,
+          onRecoveryError: onCollabRecoveryError,
           sessionId: collabSessionId,
           token: collabToken,
         }
@@ -2681,6 +2707,18 @@ function CollabExternalChangeBanner({ change }: { change: CollabExternalChange }
       <span className="min-w-0 truncate">
         <span className="font-medium">{detail}</span>
         <span className="text-warn-ink/80"> · {change.path}</span>
+      </span>
+    </div>
+  );
+}
+
+function CollabRecoveryErrorBanner({ error }: { error: CollabRecoveryError }) {
+  return (
+    <div className="flex min-h-9 items-center gap-2 border-b border-warn-line bg-warn-tint px-4 text-xs text-warn-ink">
+      <AlertTriangle className="shrink-0" size={14} />
+      <span className="min-w-0 truncate">
+        <span className="font-medium">Collaboration recovery is not persisted</span>
+        <span className="text-warn-ink/80"> · {error.message}</span>
       </span>
     </div>
   );

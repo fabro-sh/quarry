@@ -147,7 +147,9 @@ import { RemoteCursorOverlay } from '../collab/RemoteCursorOverlay';
 import {
   clearCollabAwareness,
   collectFlushAcks,
+  collectRecoveryErrors,
   type CollabFlushAck,
+  type CollabRecoveryError,
   updateCollabAwareness,
 } from '../collab/flusher-lease';
 import { RUST_WS_PROVIDER_TYPE, registerRustWsProviderType } from '../collab/rust-ws-provider';
@@ -306,6 +308,7 @@ export interface CollabEditorConfig {
   flushAck?: CollabFlushAck | null;
   onFlushAck?: (ack: CollabFlushAck) => void;
   onFlusherChange?: (isFlusher: boolean) => void;
+  onRecoveryError?: (error: CollabRecoveryError) => void;
   sessionId: string;
   token?: string;
 }
@@ -512,6 +515,7 @@ function CollabAwarenessBridge({ collab }: { collab: CollabEditorConfig }) {
   const callbacksRef = useRef({
     onFlushAck: collab.onFlushAck,
     onFlusherChange: collab.onFlusherChange,
+    onRecoveryError: collab.onRecoveryError,
   });
 
   useEffect(() => {
@@ -519,13 +523,21 @@ function CollabAwarenessBridge({ collab }: { collab: CollabEditorConfig }) {
     callbacksRef.current = {
       onFlushAck: collab.onFlushAck,
       onFlusherChange: collab.onFlusherChange,
+      onRecoveryError: collab.onRecoveryError,
     };
     const awareness = editor.getOption(YjsPlugin, 'awareness');
     if (awareness) {
       const isFlusher = updateCollabAwareness(awareness, collab.sessionId, flushAckRef.current);
       callbacksRef.current.onFlusherChange?.(isFlusher);
     }
-  }, [collab.flushAck, collab.onFlushAck, collab.onFlusherChange, collab.sessionId, editor]);
+  }, [
+    collab.flushAck,
+    collab.onFlushAck,
+    collab.onFlusherChange,
+    collab.onRecoveryError,
+    collab.sessionId,
+    editor,
+  ]);
 
   useEffect(() => {
     const awareness = editor.getOption(YjsPlugin, 'awareness');
@@ -538,6 +550,9 @@ function CollabAwarenessBridge({ collab }: { collab: CollabEditorConfig }) {
       callbacksRef.current.onFlusherChange?.(isFlusher);
       for (const ack of collectFlushAcks(awareness)) {
         callbacksRef.current.onFlushAck?.(ack);
+      }
+      for (const error of collectRecoveryErrors(awareness)) {
+        callbacksRef.current.onRecoveryError?.(error);
       }
     };
     const awarenessEvents = awareness as typeof awareness & {

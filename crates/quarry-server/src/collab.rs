@@ -5,13 +5,14 @@ use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use quarry_storage::QuarryStore;
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::broadcast::{channel, Receiver, Sender};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{watch, Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use yrs::encoding::write::Write;
@@ -153,6 +154,8 @@ struct BroadcastGroup {
     sender: Sender<Vec<u8>>,
     _receiver: Receiver<Vec<u8>>,
     awareness_updater: JoinHandle<()>,
+    persistence_failed: Arc<AtomicBool>,
+    persistence_failure: watch::Sender<Option<String>>,
     recovery_persister: Option<JoinHandle<()>>,
 }
 
@@ -166,6 +169,8 @@ impl BroadcastGroup {
         persistence: Option<RecoveryPersistence>,
     ) -> Self {
         let (sender, receiver) = channel(buffer_capacity);
+        let persistence_failed = Arc::new(AtomicBool::new(false));
+        let (persistence_failure, _persistence_failure_rx) = watch::channel(None);
         let awareness_c = Arc::downgrade(&awareness);
         let (recovery_tx, recovery_persister) = persistence
             .map(|persistence| {
@@ -176,6 +181,8 @@ impl BroadcastGroup {
                         Arc::downgrade(&awareness),
                         persistence,
                         rx,
+                        persistence_failed.clone(),
+                        persistence_failure.clone(),
                     )),
                 )
             })
@@ -233,6 +240,8 @@ impl BroadcastGroup {
             sender,
             _receiver: receiver,
             awareness_updater,
+            persistence_failed,
+            persistence_failure,
             recovery_persister,
         }
     }
@@ -267,35 +276,71 @@ impl BroadcastGroup {
         let sink_task = {
             let sink = sink.clone();
             let mut receiver = self.sender.subscribe();
+            let mut failure = self.persistence_failure.subscribe();
             tokio::spawn(async move {
-                while let Ok(msg) = receiver.recv().await {
-                    let mut sink = sink.lock().await;
-                    if let Err(error) = sink.send(msg).await {
-                        return Err(Error::Other(Box::new(error)));
+                loop {
+                    select! {
+                        changed = failure.changed() => {
+                            if changed.is_err() {
+                                return Ok(());
+                            }
+                            if let Some(message) = failure.borrow().clone() {
+                                return Err(collab_persistence_error(message));
+                            }
+                        }
+                        message = receiver.recv() => {
+                            let Ok(msg) = message else {
+                                return Ok(());
+                            };
+                            let mut sink = sink.lock().await;
+                            if let Err(error) = sink.send(msg).await {
+                                return Err(Error::Other(Box::new(error)));
+                            }
+                        }
                     }
                 }
-                Ok(())
             })
         };
 
         let stream_task = {
             let awareness = self.awareness().clone();
+            let persistence_failed = self.persistence_failed.clone();
+            let mut failure = self.persistence_failure.subscribe();
             tokio::spawn(async move {
-                while let Some(result) = stream.next().await {
-                    let payload = result.map_err(|error| Error::Other(Box::new(error)))?;
-                    let replies = {
-                        let mut awareness = awareness.write().await;
-                        protocol.handle(&mut awareness, &payload)?
-                    };
+                loop {
+                    select! {
+                        changed = failure.changed() => {
+                            if changed.is_err() {
+                                return Ok(());
+                            }
+                            if let Some(message) = failure.borrow().clone() {
+                                return Err(collab_persistence_error(message));
+                            }
+                        }
+                        result = stream.next() => {
+                            let Some(result) = result else {
+                                return Ok(());
+                            };
+                            if persistence_failed.load(Ordering::SeqCst) {
+                                return Err(collab_persistence_error(
+                                    "collab recovery persistence failed".to_string(),
+                                ));
+                            }
+                            let payload = result.map_err(|error| Error::Other(Box::new(error)))?;
+                            let replies = {
+                                let mut awareness = awareness.write().await;
+                                protocol.handle(&mut awareness, &payload)?
+                            };
 
-                    for reply in replies {
-                        let mut sink = sink.lock().await;
-                        sink.send(reply.encode_v1())
-                            .await
-                            .map_err(|error| Error::Other(Box::new(error)))?;
+                            for reply in replies {
+                                let mut sink = sink.lock().await;
+                                sink.send(reply.encode_v1())
+                                    .await
+                                    .map_err(|error| Error::Other(Box::new(error)))?;
+                            }
+                        }
                     }
                 }
-                Ok(())
             })
         };
 
@@ -319,6 +364,8 @@ fn spawn_recovery_persister(
     awareness: Weak<RwLock<Awareness>>,
     persistence: RecoveryPersistence,
     mut rx: UnboundedReceiver<()>,
+    persistence_failed: Arc<AtomicBool>,
+    persistence_failure: watch::Sender<Option<String>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         while rx.recv().await.is_some() {
@@ -326,13 +373,26 @@ fn spawn_recovery_persister(
                 match timeout(persistence.debounce, rx.recv()).await {
                     Ok(Some(_)) => continue,
                     Ok(None) => {
-                        persist_recovery_snapshot(&awareness, &persistence).await;
+                        persist_recovery_snapshot(
+                            &awareness,
+                            &persistence,
+                            &persistence_failed,
+                            &persistence_failure,
+                        )
+                        .await;
                         return;
                     }
                     Err(_) => break,
                 }
             }
-            if !persist_recovery_snapshot(&awareness, &persistence).await {
+            if !persist_recovery_snapshot(
+                &awareness,
+                &persistence,
+                &persistence_failed,
+                &persistence_failure,
+            )
+            .await
+            {
                 return;
             }
         }
@@ -342,6 +402,8 @@ fn spawn_recovery_persister(
 async fn persist_recovery_snapshot(
     awareness: &Weak<RwLock<Awareness>>,
     persistence: &RecoveryPersistence,
+    persistence_failed: &AtomicBool,
+    persistence_failure: &watch::Sender<Option<String>>,
 ) -> bool {
     let Some(awareness) = awareness.upgrade() else {
         return false;
@@ -359,13 +421,45 @@ async fn persist_recovery_snapshot(
         .put_collab_recovery_state(&persistence.document_id, None, update_v1, true)
         .await
     {
+        let message = format!("failed to persist collab recovery state: {error}");
         tracing::warn!(
             %error,
             document_id = %persistence.document_id,
             "failed to persist collab recovery state"
         );
+        persistence_failed.store(true, Ordering::SeqCst);
+        signal_recovery_persistence_error(&awareness, &persistence.document_id, &message).await;
+        let _ = persistence_failure.send(Some(message));
+        return false;
     }
     true
+}
+
+async fn signal_recovery_persistence_error(
+    awareness: &RwLock<Awareness>,
+    document_id: &str,
+    message: &str,
+) {
+    let mut awareness = awareness.write().await;
+    let state = serde_json::json!({
+        "quarryServer": {
+            "recoveryError": {
+                "documentId": document_id,
+                "message": message,
+            }
+        }
+    });
+    if let Err(error) = awareness.set_local_state(state) {
+        tracing::warn!(
+            %error,
+            %document_id,
+            "failed to broadcast collab recovery persistence error"
+        );
+    }
+}
+
+fn collab_persistence_error(message: String) -> Error {
+    Error::Other(Box::new(std::io::Error::other(message)))
 }
 
 #[derive(Debug)]
@@ -575,6 +669,46 @@ mod tests {
         let restored_hub = CollabHub::new(store);
         let restored = restored_hub.room(&document_id).await;
         assert_eq!(restored.content_text().await.as_deref(), Some("hello"));
+    }
+
+    #[tokio::test]
+    async fn signals_recovery_persistence_failures_to_peers() {
+        let root = tempfile::tempdir().unwrap();
+        let store = QuarryStore::open(StoreConfig {
+            db_path: root.path().join("quarry.db"),
+            cas_path: root.path().join("cas"),
+            lock_path: None,
+        })
+        .await
+        .unwrap();
+        let awareness = Arc::new(RwLock::new(Awareness::new(Doc::new())));
+        let persistence = RecoveryPersistence {
+            store,
+            document_id: "missing-document".to_string(),
+            debounce: Duration::from_millis(1),
+        };
+        let failed = AtomicBool::new(false);
+        let (failure_tx, failure_rx) = watch::channel(None);
+
+        assert!(
+            !persist_recovery_snapshot(
+                &Arc::downgrade(&awareness),
+                &persistence,
+                &failed,
+                &failure_tx,
+            )
+            .await
+        );
+
+        assert!(failed.load(Ordering::SeqCst));
+        assert!(failure_rx
+            .borrow()
+            .as_deref()
+            .unwrap()
+            .contains("failed to persist collab recovery state"));
+        let state = awareness.read().await.local_state_raw().unwrap();
+        assert!(state.contains("quarryServer"));
+        assert!(state.contains("missing-document"));
     }
 
     async fn wait_for_recovery_state(

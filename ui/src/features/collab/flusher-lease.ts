@@ -8,6 +8,11 @@ export interface CollabFlushAck {
   versionId: string;
 }
 
+export interface CollabRecoveryError {
+  documentId?: string;
+  message: string;
+}
+
 export interface CollabAwarenessState {
   flushAck?: CollabFlushAck | null;
   flusherLease?: {
@@ -51,6 +56,20 @@ export function collectFlushAcks(awareness: Awareness): CollabFlushAck[] {
   return acks;
 }
 
+export function collectRecoveryErrors(awareness: Awareness): CollabRecoveryError[] {
+  const errors: CollabRecoveryError[] = [];
+  for (const state of awareness.getStates().values()) {
+    const error = serverStateOf(state)?.recoveryError;
+    if (typeof error?.message === 'string') {
+      errors.push({
+        documentId: typeof error.documentId === 'string' ? error.documentId : undefined,
+        message: error.message,
+      });
+    }
+  }
+  return errors;
+}
+
 export function electFlusherClientId(awareness: Awareness) {
   const candidates = Array.from(awareness.getStates().entries())
     .filter(([, state]) => Boolean(collabStateOf(state)?.sessionId))
@@ -69,4 +88,12 @@ function collabStateOf(state: Record<string, unknown> | null): CollabAwarenessSt
   const value = state?.[COLLAB_AWARENESS_FIELD];
   if (!value || typeof value !== 'object') return null;
   return value as CollabAwarenessState;
+}
+
+function serverStateOf(state: Record<string, unknown> | null): {
+  recoveryError?: { documentId?: unknown; message?: unknown };
+} | null {
+  const value = state?.quarryServer;
+  if (!value || typeof value !== 'object') return null;
+  return value as { recoveryError?: { documentId?: unknown; message?: unknown } };
 }
