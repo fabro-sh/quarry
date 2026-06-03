@@ -9,6 +9,7 @@ bundle_ui = ["dep:rust-embed"]
 
 [dependencies]
 axum.workspace = true
+blake3.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 futures-util.workspace = true

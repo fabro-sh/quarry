@@ -26,15 +26,69 @@ use quarry_git::{
 use quarry_storage::{QuarryStore, StoreEvent, StoreEventKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use utoipa::{OpenApi, ToSchema};
 
 #[derive(Clone)]
 pub struct AppState {
     store: QuarryStore,
     collab: collab::CollabHub,
+    agent_idempotency: AgentIdempotencyCache,
+}
+
+#[derive(Clone, Default)]
+struct AgentIdempotencyCache {
+    entries: Arc<Mutex<HashMap<String, CachedAgentEdit>>>,
+}
+
+#[derive(Clone)]
+struct CachedAgentEdit {
+    request_hash: String,
+    response: AgentEditResponse,
+    version_id: Option<String>,
+}
+
+impl AgentIdempotencyCache {
+    async fn get(
+        &self,
+        key: &str,
+        request_hash: &str,
+    ) -> Result<Option<CachedAgentEdit>, ApiError> {
+        let entries = self.entries.lock().await;
+        let Some(cached) = entries.get(key) else {
+            return Ok(None);
+        };
+        if cached.request_hash != request_hash {
+            return Err(QuarryError::Conflict(
+                "idempotency key already used for a different edit".to_string(),
+            )
+            .into());
+        }
+        Ok(Some(cached.clone()))
+    }
+
+    async fn insert(
+        &self,
+        key: String,
+        request_hash: String,
+        response: AgentEditResponse,
+        version_id: Option<String>,
+    ) {
+        let mut entries = self.entries.lock().await;
+        entries.insert(
+            key,
+            CachedAgentEdit {
+                request_hash,
+                response,
+                version_id,
+            },
+        );
+    }
 }
 
 pub fn router(store: QuarryStore) -> Router {
@@ -116,6 +170,7 @@ pub fn router(store: QuarryStore) -> Router {
     router.with_state(AppState {
         store,
         collab: collab::CollabHub::default(),
+        agent_idempotency: AgentIdempotencyCache::default(),
     })
 }
 
@@ -205,6 +260,7 @@ async fn browser_asset(uri: Uri) -> Response {
         get_document,
         document_backlinks_openapi,
         document_outgoing_links_openapi,
+        document_snapshot_openapi,
         document_versions_openapi,
         document_version_openapi,
         document_version_diff_openapi,
@@ -212,6 +268,7 @@ async fn browser_asset(uri: Uri) -> Response {
         head_document,
         put_document,
         post_document_action,
+        document_edit_openapi,
         patch_document_metadata,
         delete_document,
         begin_transaction,
@@ -242,6 +299,13 @@ async fn browser_asset(uri: Uri) -> Response {
         DocumentVersion,
         DocumentVersionContent,
         WriteOutcome,
+        AgentDocumentSnapshot,
+        AgentSnapshotBlock,
+        AgentBlockRef,
+        AgentEditRequest,
+        AgentEditResponse,
+        AgentBlockOperation,
+        AgentEditBlock,
         TransactionRecord,
         ConflictRecord,
         SearchResponse,
@@ -416,6 +480,81 @@ struct DocumentGetQuery {
     against: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct DocumentActionQuery {
+    #[serde(default, rename = "dryRun", alias = "dry_run")]
+    dry_run: Option<String>,
+}
+
+impl DocumentActionQuery {
+    fn dry_run(&self) -> Result<bool, ApiError> {
+        let Some(value) = self.dry_run.as_deref() else {
+            return Ok(false);
+        };
+        match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" => Ok(true),
+            "0" | "false" | "no" => Ok(false),
+            _ => Err(QuarryError::InvalidPath("invalid dryRun value".to_string()).into()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AgentBlockRef {
+    #[serde(rename = "baseToken")]
+    pub base_token: String,
+    pub ordinal: usize,
+    #[serde(rename = "contentHash")]
+    pub content_hash: String,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AgentSnapshotBlock {
+    #[serde(rename = "ref")]
+    pub block_ref: AgentBlockRef,
+    pub markdown: String,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AgentDocumentSnapshot {
+    #[serde(rename = "documentId")]
+    pub document_id: String,
+    #[serde(rename = "baseToken")]
+    pub base_token: String,
+    pub blocks: Vec<AgentSnapshotBlock>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AgentEditBlock {
+    pub markdown: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AgentBlockOperation {
+    pub op: String,
+    #[serde(default, rename = "ref")]
+    pub block_ref: Option<AgentBlockRef>,
+    #[serde(default)]
+    pub block: Option<AgentEditBlock>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AgentEditRequest {
+    #[serde(rename = "baseToken")]
+    pub base_token: String,
+    pub operations: Vec<AgentBlockOperation>,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AgentEditResponse {
+    #[serde(rename = "dryRun")]
+    pub dry_run: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<WriteOutcome>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub markdown: Option<String>,
+}
+
 #[utoipa::path(
     get,
     path = "/v1/libraries/{library}/documents",
@@ -546,6 +685,12 @@ async fn get_document(
             &state.store.outgoing_links(&library, path).await?,
         );
     }
+    if let Some(path) = path.strip_suffix("/snapshot") {
+        return json_response(
+            StatusCode::OK,
+            &agent_document_snapshot(&state.store, &library, path).await?,
+        );
+    }
     if let Some(path) = path.strip_suffix("/versions") {
         return json_response(
             StatusCode::OK,
@@ -598,6 +743,15 @@ async fn document_backlinks_openapi() {}
 )]
 #[allow(dead_code)]
 async fn document_outgoing_links_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/libraries/{library}/documents/{path}/snapshot",
+    params(("library" = String, Path), ("path" = String, Path)),
+    responses((status = 200, body = AgentDocumentSnapshot), (status = 404, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn document_snapshot_openapi() {}
 
 #[utoipa::path(
     get,
@@ -743,6 +897,8 @@ pub struct MoveRequest {
 )]
 async fn post_document_action(
     State(state): State<AppState>,
+    Query(query): Query<DocumentActionQuery>,
+    headers: HeaderMap,
     Path((library, path)): Path<(String, String)>,
     Json(request): Json<JsonValue>,
 ) -> Result<Response, ApiError> {
@@ -766,7 +922,439 @@ async fn post_document_action(
         return json_response(StatusCode::OK, &transaction);
     }
 
+    if let Some(path) = path.strip_suffix("/edit") {
+        let request: AgentEditRequest = serde_json::from_value(request)
+            .map_err(|error| QuarryError::InvalidPath(format!("invalid edit request: {error}")))?;
+        let response =
+            agent_edit_document(&state, &headers, &query, &library, path, request).await?;
+        return agent_edit_response(response);
+    }
+
     Err(QuarryError::NotFound(path).into())
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/libraries/{library}/documents/{path}/edit",
+    params(("library" = String, Path), ("path" = String, Path), ("dryRun" = Option<String>, Query)),
+    request_body = AgentEditRequest,
+    responses((status = 200, body = AgentEditResponse), (status = 412, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn document_edit_openapi() {}
+
+#[derive(Clone)]
+struct AgentEditResult {
+    response: AgentEditResponse,
+    version_id: Option<String>,
+}
+
+async fn agent_document_snapshot(
+    store: &QuarryStore,
+    library: &str,
+    path: &str,
+) -> Result<AgentDocumentSnapshot, ApiError> {
+    let document = store.get_document(library, path).await?;
+    let markdown = document_markdown(&document)?;
+    let base_token = etag(&document.version.id);
+    let blocks = snapshot_blocks(&markdown, &base_token);
+    Ok(AgentDocumentSnapshot {
+        document_id: document.id,
+        base_token,
+        blocks,
+    })
+}
+
+async fn agent_edit_document(
+    state: &AppState,
+    headers: &HeaderMap,
+    query: &DocumentActionQuery,
+    library: &str,
+    path: &str,
+    request: AgentEditRequest,
+) -> Result<AgentEditResult, ApiError> {
+    let dry_run = query.dry_run()?;
+    let request_hash = agent_edit_request_hash(&request, dry_run)?;
+    let idempotency_key = optional_header(headers, "idempotency-key")?
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let cache_key = idempotency_key
+        .as_ref()
+        .filter(|_| !dry_run)
+        .map(|key| format!("agent-edit\0{library}\0{path}\0{key}"));
+
+    if let Some(cache_key) = &cache_key {
+        if let Some(cached) = state
+            .agent_idempotency
+            .get(cache_key, &request_hash)
+            .await?
+        {
+            return Ok(AgentEditResult {
+                response: cached.response,
+                version_id: cached.version_id,
+            });
+        }
+    }
+
+    let document = state.store.get_document(library, path).await?;
+    let markdown = document_markdown(&document)?;
+    let base_token = etag(&document.version.id);
+    let next_markdown = apply_agent_edit(&markdown, &base_token, &request)?;
+
+    if dry_run {
+        return Ok(AgentEditResult {
+            response: AgentEditResponse {
+                dry_run: true,
+                outcome: None,
+                markdown: Some(next_markdown),
+            },
+            version_id: None,
+        });
+    }
+
+    let base_version_id = version_id_from_base_token(&request.base_token)?;
+    let outcome = state
+        .store
+        .put_document(
+            library,
+            path,
+            next_markdown.into_bytes(),
+            document.version.metadata.clone(),
+            &document.version.content_type,
+            DocumentSource::Rest,
+            WritePrecondition::IfMatch(base_version_id),
+        )
+        .await?;
+    let version_id = outcome.version.id.clone();
+    let response = AgentEditResponse {
+        dry_run: false,
+        outcome: Some(outcome),
+        markdown: None,
+    };
+
+    if let Some(cache_key) = cache_key {
+        state
+            .agent_idempotency
+            .insert(
+                cache_key,
+                request_hash,
+                response.clone(),
+                Some(version_id.clone()),
+            )
+            .await;
+    }
+
+    Ok(AgentEditResult {
+        response,
+        version_id: Some(version_id),
+    })
+}
+
+fn agent_edit_response(result: AgentEditResult) -> Result<Response, ApiError> {
+    if let Some(version_id) = result.version_id {
+        json_with_etag(StatusCode::OK, &result.response, &version_id)
+    } else {
+        json_response(StatusCode::OK, &result.response)
+    }
+}
+
+fn agent_edit_request_hash(request: &AgentEditRequest, dry_run: bool) -> Result<String, ApiError> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(if dry_run { b"dry-run:1" } else { b"dry-run:0" });
+    hasher.update(&serde_json::to_vec(request).map_err(QuarryError::from)?);
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn document_markdown(document: &quarry_core::Document) -> Result<String, ApiError> {
+    if !is_markdown_content_type(&document.version.content_type) {
+        return Err(QuarryError::InvalidPath(
+            "agent document APIs require markdown content".to_string(),
+        )
+        .into());
+    }
+    std::str::from_utf8(&document.content)
+        .map(str::to_string)
+        .map_err(|_| {
+            QuarryError::InvalidPath("agent document APIs require UTF-8 markdown".to_string())
+                .into()
+        })
+}
+
+fn is_markdown_content_type(content_type: &str) -> bool {
+    matches!(
+        content_type
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "text/markdown" | "text/x-markdown" | "application/markdown" | "application/x-markdown"
+    )
+}
+
+fn snapshot_blocks(markdown: &str, base_token: &str) -> Vec<AgentSnapshotBlock> {
+    split_markdown_blocks(markdown)
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, markdown)| AgentSnapshotBlock {
+            block_ref: AgentBlockRef {
+                base_token: base_token.to_string(),
+                ordinal,
+                content_hash: block_hash(&markdown),
+            },
+            markdown,
+        })
+        .collect()
+}
+
+fn apply_agent_edit(
+    markdown: &str,
+    current_base_token: &str,
+    request: &AgentEditRequest,
+) -> Result<String, ApiError> {
+    if request.operations.is_empty() {
+        return Err(QuarryError::InvalidPath(
+            "edit request must include at least one operation".to_string(),
+        )
+        .into());
+    }
+
+    let request_base_version_id = version_id_from_base_token(&request.base_token)?;
+    let current_base_version_id = version_id_from_base_token(current_base_token)?;
+    if request_base_version_id != current_base_version_id {
+        return Err(stale_base_error());
+    }
+
+    let original_blocks = split_markdown_blocks(markdown);
+    let mut blocks = original_blocks
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(ordinal, markdown)| (Some(ordinal), markdown))
+        .collect::<Vec<_>>();
+    let mut targeted_ordinals = HashSet::new();
+
+    for operation in &request.operations {
+        let block_ref = operation.block_ref.as_ref().ok_or_else(|| {
+            QuarryError::InvalidPath(format!("{} operation missing ref", operation.op))
+        })?;
+        validate_block_ref(block_ref, &request_base_version_id, &original_blocks)?;
+        if !targeted_ordinals.insert(block_ref.ordinal) {
+            return Err(QuarryError::InvalidPath(format!(
+                "multiple operations target block ordinal {}",
+                block_ref.ordinal
+            ))
+            .into());
+        }
+        let current_index = blocks
+            .iter()
+            .position(|(ordinal, _)| *ordinal == Some(block_ref.ordinal))
+            .ok_or_else(stale_base_error)?;
+
+        match operation.op.as_str() {
+            "replace_block" => {
+                let markdown = required_operation_block(operation)?;
+                validate_single_markdown_block(markdown)?;
+                blocks[current_index] = (Some(block_ref.ordinal), markdown.to_string());
+            }
+            "insert_before" => {
+                let markdown = required_operation_block(operation)?;
+                validate_single_markdown_block(markdown)?;
+                blocks.insert(current_index, (None, markdown.to_string()));
+            }
+            "insert_after" => {
+                let markdown = required_operation_block(operation)?;
+                validate_single_markdown_block(markdown)?;
+                blocks.insert(current_index + 1, (None, markdown.to_string()));
+            }
+            "delete_block" => {
+                blocks.remove(current_index);
+            }
+            other => {
+                return Err(QuarryError::InvalidPath(format!(
+                    "unsupported edit operation {other}"
+                ))
+                .into());
+            }
+        }
+    }
+
+    let next_markdown = blocks
+        .into_iter()
+        .map(|(_, markdown)| markdown)
+        .collect::<String>();
+    validate_markdown_roundtrip(&next_markdown)?;
+    Ok(next_markdown)
+}
+
+fn required_operation_block(operation: &AgentBlockOperation) -> Result<&str, ApiError> {
+    operation
+        .block
+        .as_ref()
+        .map(|block| block.markdown.as_str())
+        .ok_or_else(|| {
+            QuarryError::InvalidPath(format!("{} operation missing block", operation.op)).into()
+        })
+}
+
+fn validate_block_ref(
+    block_ref: &AgentBlockRef,
+    request_base_version_id: &str,
+    original_blocks: &[String],
+) -> Result<(), ApiError> {
+    if version_id_from_base_token(&block_ref.base_token)? != request_base_version_id {
+        return Err(stale_base_error());
+    }
+    let Some(block) = original_blocks.get(block_ref.ordinal) else {
+        return Err(stale_base_error());
+    };
+    if block_hash(block) != block_ref.content_hash {
+        return Err(stale_base_error());
+    }
+    Ok(())
+}
+
+fn validate_single_markdown_block(markdown: &str) -> Result<(), ApiError> {
+    if markdown.trim().is_empty() {
+        return Err(
+            QuarryError::InvalidPath("edit block markdown must not be empty".to_string()).into(),
+        );
+    }
+    let blocks = split_markdown_blocks(markdown);
+    if blocks.len() != 1 || blocks.concat() != markdown {
+        return Err(QuarryError::InvalidPath(
+            "edit block markdown must be one top-level block".to_string(),
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn validate_markdown_roundtrip(markdown: &str) -> Result<(), ApiError> {
+    if split_markdown_blocks(markdown).concat() != markdown {
+        return Err(QuarryError::InvalidPath(
+            "spliced markdown failed block round-trip validation".to_string(),
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn version_id_from_base_token(base_token: &str) -> Result<String, ApiError> {
+    let token = base_token
+        .trim()
+        .strip_prefix("W/")
+        .unwrap_or_else(|| base_token.trim())
+        .trim()
+        .trim_matches('"')
+        .to_string();
+    if token.is_empty() {
+        return Err(stale_base_error());
+    }
+    Ok(token)
+}
+
+fn stale_base_error() -> ApiError {
+    QuarryError::PreconditionFailed("STALE_BASE".to_string()).into()
+}
+
+fn block_hash(markdown: &str) -> String {
+    blake3::hash(markdown.as_bytes()).to_hex().to_string()
+}
+
+fn split_markdown_blocks(markdown: &str) -> Vec<String> {
+    if markdown.is_empty() {
+        return Vec::new();
+    }
+
+    let mut blocks = Vec::new();
+    let mut block_start = 0usize;
+    let mut offset = 0usize;
+    let mut pending_boundary = None;
+    let mut fence = None;
+
+    for line in markdown.split_inclusive('\n') {
+        let line_start = offset;
+        let line_end = line_start + line.len();
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        let outside_fence = fence.is_none();
+        let blank_outside_fence = outside_fence && trimmed.trim().is_empty();
+
+        if outside_fence && !blank_outside_fence {
+            if let Some(boundary) = pending_boundary.take() {
+                if block_start < boundary {
+                    blocks.push(markdown[block_start..boundary].to_string());
+                    block_start = boundary;
+                }
+            }
+        }
+
+        update_markdown_fence(trimmed, &mut fence);
+
+        if blank_outside_fence {
+            pending_boundary = Some(line_end);
+        } else if fence.is_none() {
+            pending_boundary = None;
+        }
+
+        offset = line_end;
+    }
+
+    if offset < markdown.len() {
+        let line = &markdown[offset..];
+        let outside_fence = fence.is_none();
+        if outside_fence && !line.trim().is_empty() {
+            if let Some(boundary) = pending_boundary.take() {
+                if block_start < boundary {
+                    blocks.push(markdown[block_start..boundary].to_string());
+                    block_start = boundary;
+                }
+            }
+        }
+        if outside_fence && line.trim().is_empty() {
+            pending_boundary = Some(markdown.len());
+        }
+    }
+
+    if let Some(boundary) = pending_boundary {
+        if boundary > block_start && boundary == markdown.len() {
+            blocks.push(markdown[block_start..boundary].to_string());
+            return blocks;
+        }
+    }
+    if block_start < markdown.len() {
+        blocks.push(markdown[block_start..].to_string());
+    }
+    blocks
+}
+
+fn update_markdown_fence(trimmed_line: &str, fence: &mut Option<(char, usize)>) {
+    let Some((marker, count)) = markdown_fence_marker(trimmed_line) else {
+        return;
+    };
+    match fence {
+        Some((open_marker, open_count)) if *open_marker == marker && count >= *open_count => {
+            *fence = None;
+        }
+        None => {
+            *fence = Some((marker, count));
+        }
+        _ => {}
+    }
+}
+
+fn markdown_fence_marker(line: &str) -> Option<(char, usize)> {
+    let trimmed = line.trim_start_matches(' ');
+    if line.len() - trimmed.len() > 3 {
+        return None;
+    }
+    let marker = trimmed.chars().next()?;
+    if marker != '`' && marker != '~' {
+        return None;
+    }
+    let count = trimmed.chars().take_while(|char| *char == marker).count();
+    (count >= 3).then_some((marker, count))
 }
 
 #[utoipa::path(

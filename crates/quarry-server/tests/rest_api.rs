@@ -227,12 +227,273 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
     let openapi: Value = response_json(response).await;
     assert!(openapi["paths"]["/v1/libraries"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}"]["head"].is_object());
+    assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/snapshot"].is_object());
+    assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/edit"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/metadata"].is_object());
     assert!(openapi["paths"]
         ["/v1/libraries/{library}/transactions/{tx}/documents/{path}/metadata"]
         .is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/git/peers"]["post"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/git/peers"]["get"].is_object());
+}
+
+#[tokio::test]
+async fn agent_snapshot_exposes_snapshot_scoped_block_refs() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agent").await.unwrap();
+    let written = store
+        .put_document(
+            &library.slug,
+            "notes/one.md",
+            b"# Title\n\nFirst paragraph.\n\nSecond paragraph.\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agent/documents/notes/one.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    let base_token = format!("\"{}\"", written.version.id);
+    assert_eq!(body["documentId"], written.document.id);
+    assert_eq!(body["baseToken"], base_token);
+    assert_eq!(body["blocks"].as_array().unwrap().len(), 3);
+    assert_eq!(body["blocks"][0]["markdown"], "# Title\n\n");
+    assert_eq!(body["blocks"][0]["ref"]["baseToken"], base_token);
+    assert_eq!(body["blocks"][0]["ref"]["ordinal"], 0);
+    assert_eq!(
+        body["blocks"][0]["ref"]["contentHash"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+}
+
+#[tokio::test]
+async fn agent_edit_applies_block_ops_with_dry_run_stale_base_and_idempotency() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentedit").await.unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "notes/one.md",
+            b"One\n\nTwo\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentedit/documents/notes/one.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let snapshot: Value = response_json(response).await;
+    let base_token = snapshot["baseToken"].as_str().unwrap().to_string();
+    let first_ref = snapshot["blocks"][0]["ref"].clone();
+    let edit = serde_json::json!({
+        "baseToken": base_token,
+        "operations": [{
+            "op": "replace_block",
+            "ref": first_ref,
+            "block": { "markdown": "Changed\n\n" }
+        }]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentedit/documents/notes/one.md/edit?dryRun=1",
+            edit.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["dryRun"], true);
+    assert_eq!(body["markdown"], "Changed\n\nTwo\n");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/agentedit/documents/notes/one.md/edit")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("Idempotency-Key", "replace-first")
+                .body(Body::from(edit.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let first_edit_etag = response.headers()[header::ETAG]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let body: Value = response_json(response).await;
+    assert_eq!(body["dryRun"], false);
+    assert_eq!(body["outcome"]["document"]["path"], "notes/one.md");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentedit/documents/notes/one.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+        "Changed\n\nTwo\n"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/agentedit/documents/notes/one.md/edit")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("Idempotency-Key", "replace-first")
+                .body(Body::from(edit.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::ETAG], first_edit_etag);
+
+    let response = app
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentedit/documents/notes/one.md/edit",
+            edit,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    let body: Value = response_json(response).await;
+    assert!(body["error"].as_str().unwrap().contains("STALE_BASE"));
+}
+
+#[tokio::test]
+async fn agent_edit_supports_insert_and_delete_block_ops() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentops").await.unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "notes/ops.md",
+            b"One\n\nTwo\n\nThree\n\nFour\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentops/documents/notes/ops.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let snapshot: Value = response_json(response).await;
+    let edit = serde_json::json!({
+        "baseToken": snapshot["baseToken"].as_str().unwrap(),
+        "operations": [
+            {
+                "op": "insert_before",
+                "ref": snapshot["blocks"][1]["ref"].clone(),
+                "block": { "markdown": "Before two\n\n" }
+            },
+            {
+                "op": "insert_after",
+                "ref": snapshot["blocks"][2]["ref"].clone(),
+                "block": { "markdown": "After three\n\n" }
+            },
+            {
+                "op": "delete_block",
+                "ref": snapshot["blocks"][3]["ref"].clone()
+            }
+        ]
+    });
+
+    let response = app
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentops/documents/notes/ops.md/edit?dryRun=true",
+            edit,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(
+        body["markdown"],
+        "One\n\nBefore two\n\nTwo\n\nThree\n\nAfter three\n\n"
+    );
 }
 
 #[tokio::test]
