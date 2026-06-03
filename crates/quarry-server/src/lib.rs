@@ -1,6 +1,9 @@
+mod collab;
+
 #[cfg(feature = "bundle_ui")]
 use axum::body::Body;
 use axum::body::Bytes;
+use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path, Query, State};
 #[cfg(feature = "bundle_ui")]
 use axum::http::Uri;
@@ -31,6 +34,7 @@ use utoipa::{OpenApi, ToSchema};
 #[derive(Clone)]
 pub struct AppState {
     store: QuarryStore,
+    collab: collab::CollabHub,
 }
 
 pub fn router(store: QuarryStore) -> Router {
@@ -39,6 +43,7 @@ pub fn router(store: QuarryStore) -> Router {
         .route("/v1/openapi.json", get(openapi_json))
         .route("/v1/admin/gc", post(admin_gc))
         .route("/v1/events", get(events))
+        .route("/v1/collab/{document_id}", get(collab_websocket))
         .route("/v1/libraries", get(list_libraries).post(create_library))
         .route("/v1/libraries/{library}", get(get_library))
         .route("/v1/libraries/{library}/documents", get(list_documents))
@@ -108,7 +113,10 @@ pub fn router(store: QuarryStore) -> Router {
     #[cfg(feature = "bundle_ui")]
     let router = router.fallback(get(browser_asset));
 
-    router.with_state(AppState { store })
+    router.with_state(AppState {
+        store,
+        collab: collab::CollabHub::default(),
+    })
 }
 
 pub async fn serve(store: QuarryStore, addr: SocketAddr) -> std::io::Result<()> {
@@ -266,6 +274,16 @@ async fn health() -> Json<JsonValue> {
 #[utoipa::path(get, path = "/v1/openapi.json", responses((status = 200, body = JsonValue)))]
 async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
     Json(ApiDoc::openapi())
+}
+
+async fn collab_websocket(
+    State(state): State<AppState>,
+    Path(document_id): Path<String>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| async move {
+        state.collab.serve_socket(document_id, socket).await;
+    })
 }
 
 #[utoipa::path(

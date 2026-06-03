@@ -1,10 +1,16 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Method, Request, StatusCode};
+use futures_util::{SinkExt, StreamExt};
 use quarry_core::DocumentSource;
 use quarry_server::router;
 use quarry_storage::{QuarryStore, StoreConfig};
 use serde_json::Value;
+use tokio::time::{timeout, Duration};
+use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
 use tower::ServiceExt;
+use yrs::sync::{Message as YMessage, SyncMessage};
+use yrs::updates::decoder::Decode;
+use yrs::updates::encoder::Encode;
 
 #[tokio::test]
 async fn rest_api_supports_documents_transactions_etags_and_openapi() {
@@ -227,6 +233,54 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
         .is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/git/peers"]["post"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/git/peers"]["get"].is_object());
+}
+
+#[tokio::test]
+async fn collab_websocket_accepts_yjs_updates_by_document_id() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let app = router(store);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/doc-route"))
+            .await
+            .unwrap();
+    let update = vec![
+        1, 1, 7, 0, 4, 1, 7, 99, 111, 110, 116, 101, 110, 116, 5, 104, 101, 108, 108, 111, 0,
+    ];
+    socket
+        .send(TungsteniteMessage::Binary(
+            YMessage::Sync(SyncMessage::Update(update))
+                .encode_v1()
+                .into(),
+        ))
+        .await
+        .unwrap();
+
+    let reply = timeout(Duration::from_secs(2), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let bytes = match reply {
+        TungsteniteMessage::Binary(bytes) => bytes,
+        other => panic!("expected binary yjs reply, got {other:?}"),
+    };
+    let message = YMessage::decode_v1(bytes.as_ref()).unwrap();
+    assert!(matches!(message, YMessage::Sync(SyncMessage::Update(_))));
+
+    server.abort();
 }
 
 #[tokio::test]
