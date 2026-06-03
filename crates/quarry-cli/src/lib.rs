@@ -31,6 +31,7 @@ enum Command {
     Get(DocumentPathCommand),
     Put(PutCommand),
     List(ListCommand),
+    Share(ShareCommand),
     Move(MoveCommand),
     Delete(DocumentPathCommand),
     Tx(TxCommand),
@@ -89,6 +90,18 @@ struct ListCommand {
 
     #[arg(long)]
     prefix: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct ShareCommand {
+    library: String,
+    path: String,
+
+    #[arg(long, default_value = "editor")]
+    role: String,
+
+    #[arg(long)]
+    by: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -253,6 +266,19 @@ pub async fn run() -> Result<()> {
                 .list_documents(&command.library, command.prefix.as_deref(), None)
                 .await?;
             println!("{}", serde_json::to_string_pretty(&documents)?);
+            Ok(())
+        }
+        Command::Share(command) => {
+            let store = open_at(&cli.root, None, None).await?;
+            let token = store
+                .create_collab_invite_token(
+                    &command.library,
+                    &command.path,
+                    &command.role,
+                    command.by,
+                )
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&token)?);
             Ok(())
         }
         Command::Move(command) => {
@@ -522,5 +548,18 @@ mod tests {
             panic!("expected mount command");
         };
         assert_eq!(command.serve_addr, Some("127.0.0.1:9000".parse().unwrap()));
+    }
+
+    #[test]
+    fn share_command_mints_editor_tokens_by_default() {
+        let cli =
+            Cli::try_parse_from(["quarry", "share", "notes", "live.md", "--by", "Avery"]).unwrap();
+        let Command::Share(command) = cli.command else {
+            panic!("expected share command");
+        };
+        assert_eq!(command.library, "notes");
+        assert_eq!(command.path, "live.md");
+        assert_eq!(command.role, "editor");
+        assert_eq!(command.by.as_deref(), Some("Avery"));
     }
 }
