@@ -14,9 +14,9 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use futures_util::{stream, Stream};
 use quarry_core::{
-    now_timestamp, ConflictRecord, DocumentLink, DocumentListEntry, DocumentSource,
-    DocumentVersion, DocumentVersionContent, GcReport, GitPeer, GraphEdge, GraphNode,
-    GraphResponse, Library, LinkCollection, QuarryError, ReindexReport, SearchResponse,
+    now_timestamp, CollabInviteToken, ConflictRecord, DocumentLink, DocumentListEntry,
+    DocumentSource, DocumentVersion, DocumentVersionContent, GcReport, GitPeer, GraphEdge,
+    GraphNode, GraphResponse, Library, LinkCollection, QuarryError, ReindexReport, SearchResponse,
     SearchResult, SearchSuggestion, TransactionRecord, VersionDiff, WriteOutcome,
     WritePrecondition,
 };
@@ -384,6 +384,9 @@ async fn browser_asset(uri: Uri) -> Response {
         document_backlinks_openapi,
         document_outgoing_links_openapi,
         document_snapshot_openapi,
+        document_share_openapi,
+        document_share_create_openapi,
+        document_share_revoke_openapi,
         agent_presence_openapi,
         agent_events_pending,
         agent_events_ack,
@@ -442,6 +445,8 @@ async fn browser_asset(uri: Uri) -> Response {
         AgentEventsAckResponse,
         AgentOpsRequest,
         AgentOpsResponse,
+        CollabInviteToken,
+        CreateCollabInviteRequest,
         TransactionRecord,
         ConflictRecord,
         SearchResponse,
@@ -742,6 +747,13 @@ pub struct AgentPresenceResponse {
     pub presence: Vec<AgentPresenceEntry>,
 }
 
+#[derive(Clone, Debug, Deserialize, ToSchema)]
+pub struct CreateCollabInviteRequest {
+    pub role: String,
+    #[serde(default, rename = "byHint")]
+    pub by_hint: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct DocumentGetQuery {
     against: Option<String>,
@@ -991,6 +1003,12 @@ async fn get_document(
             &agent_document_snapshot(&state.store, &library, path).await?,
         );
     }
+    if let Some(path) = path.strip_suffix("/share") {
+        return json_response(
+            StatusCode::OK,
+            &state.store.collab_invite_tokens(&library, path).await?,
+        );
+    }
     if let Some(path) = path.strip_suffix("/versions") {
         return json_response(
             StatusCode::OK,
@@ -1052,6 +1070,34 @@ async fn document_outgoing_links_openapi() {}
 )]
 #[allow(dead_code)]
 async fn document_snapshot_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/libraries/{library}/documents/{path}/share",
+    params(("library" = String, Path), ("path" = String, Path)),
+    responses((status = 200, body = [CollabInviteToken]), (status = 404, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn document_share_openapi() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/libraries/{library}/documents/{path}/share",
+    params(("library" = String, Path), ("path" = String, Path)),
+    request_body = CreateCollabInviteRequest,
+    responses((status = 201, body = CollabInviteToken), (status = 404, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn document_share_create_openapi() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/libraries/{library}/documents/{path}/share/{token}/revoke",
+    params(("library" = String, Path), ("path" = String, Path), ("token" = String, Path)),
+    responses((status = 200, body = CollabInviteToken), (status = 404, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn document_share_revoke_openapi() {}
 
 #[utoipa::path(
     get,
@@ -1239,6 +1285,21 @@ async fn post_document_action(
             .move_document(&library, from_path, to_path, DocumentSource::Rest)
             .await?;
         return json_response(StatusCode::OK, &transaction);
+    }
+
+    if let Some(path) = path.strip_suffix("/share") {
+        let request: CreateCollabInviteRequest = serde_json::from_value(request)
+            .map_err(|error| QuarryError::InvalidPath(format!("invalid share request: {error}")))?;
+        let token = state
+            .store
+            .create_collab_invite_token(&library, path, &request.role, request.by_hint)
+            .await?;
+        return json_response(StatusCode::CREATED, &token);
+    }
+
+    if let Some((_, token_id)) = collab_invite_revoke_path(&path) {
+        let token = state.store.revoke_collab_invite_token(token_id).await?;
+        return json_response(StatusCode::OK, &token);
     }
 
     if let Some(path) = path.strip_suffix("/edit") {
@@ -2934,6 +2995,15 @@ fn document_version_diff_path(path: &str) -> Option<(&str, &str)> {
 
 fn document_version_restore_path(path: &str) -> Option<(&str, &str)> {
     document_version_path(path.strip_suffix("/restore")?)
+}
+
+fn collab_invite_revoke_path(path: &str) -> Option<(&str, &str)> {
+    let path = path.strip_suffix("/revoke")?;
+    let (document_path, token_id) = path.rsplit_once("/share/")?;
+    if document_path.is_empty() || token_id.is_empty() || token_id.contains('/') {
+        return None;
+    }
+    Some((document_path, token_id))
 }
 
 fn store_event_type(event: &StoreEvent) -> String {

@@ -228,6 +228,11 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
     assert!(openapi["paths"]["/v1/libraries"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}"]["head"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/snapshot"].is_object());
+    assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/share"].is_object());
+    assert!(
+        openapi["paths"]["/v1/libraries/{library}/documents/{path}/share/{token}/revoke"]
+            .is_object()
+    );
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/edit"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/ops"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/presence"].is_object());
@@ -755,6 +760,77 @@ async fn agent_presence_records_status_by_document() {
     assert_eq!(body["current"]["by"], "ai:codex");
     assert_eq!(body["current"]["documentId"], written.document.id);
     assert_eq!(body["presence"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn collab_share_endpoints_mint_list_and_revoke_invite_tokens() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("shares").await.unwrap();
+    let written = store
+        .put_document(
+            &library.slug,
+            "live.md",
+            b"hello".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/shares/documents/live.md/share",
+            serde_json::json!({"role":"editor","byHint":"Avery"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let token: Value = response_json(response).await;
+    assert_eq!(token["document_id"], written.document.id);
+    assert_eq!(token["role"], "editor");
+    assert_eq!(token["by_hint"], "Avery");
+    let token_id = token["id"].as_str().unwrap().to_string();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/shares/documents/live.md/share")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let tokens: Value = response_json(response).await;
+    assert_eq!(tokens.as_array().unwrap().len(), 1);
+    assert_eq!(tokens[0]["id"], token_id);
+
+    let response = app
+        .oneshot(json_request(
+            Method::POST,
+            &format!("/v1/libraries/shares/documents/live.md/share/{token_id}/revoke"),
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let token: Value = response_json(response).await;
+    assert_eq!(token["id"], token_id);
+    assert!(token["revoked_at"].as_str().is_some());
 }
 
 #[tokio::test]

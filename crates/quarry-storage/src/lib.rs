@@ -1,7 +1,7 @@
 use quarry_cas::DiskCas;
 use quarry_core::{
-    normalize_path, now_timestamp, parent_dirs, ChangeType, ConflictRecord, ConflictStatus,
-    Document, DocumentLink, DocumentListEntry, DocumentSource, DocumentVersion,
+    normalize_path, now_timestamp, parent_dirs, ChangeType, CollabInviteToken, ConflictRecord,
+    ConflictStatus, Document, DocumentLink, DocumentListEntry, DocumentSource, DocumentVersion,
     DocumentVersionContent, GcReport, GitPeer, GraphEdge, GraphNode, GraphResponse, Library,
     LinkCollection, QuarryError, ReindexReport, Result, SearchResponse, SearchResult,
     SearchSuggestion, SyncStateEntry, TransactionRecord, TransactionState, VersionDiff,
@@ -804,6 +804,94 @@ impl QuarryStore {
             .await
             .map_err(map_turso_error)?;
             self.collab_recovery_state_conn(&conn, document_id).await
+        }
+        .await;
+        finish_tx(&conn, result).await
+    }
+
+    pub async fn create_collab_invite_token(
+        &self,
+        library: &str,
+        path: &str,
+        role: &str,
+        by_hint: Option<String>,
+    ) -> Result<CollabInviteToken> {
+        let role = normalize_collab_invite_role(role)?;
+        let path = normalize_path(path)?;
+        let _guard = self.write_lock.lock().await;
+        let conn = self.conn()?;
+        begin_immediate(&conn).await?;
+        let result = async {
+            let library = self.require_library_conn(&conn, library).await?;
+            let (document_id, _) = self
+                .document_identity_conn(&conn, &library.id, &path)
+                .await?
+                .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+            let token = CollabInviteToken {
+                id: Uuid::new_v4().to_string(),
+                document_id,
+                role,
+                by_hint: by_hint.filter(|value| !value.trim().is_empty()),
+                created_at: now_timestamp(),
+                revoked_at: None,
+            };
+            conn.execute(
+                "INSERT INTO collab_invite_tokens
+                 (id, document_id, role, by_hint, created_at, revoked_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+                vec![
+                    Value::Text(token.id.clone()),
+                    Value::Text(token.document_id.clone()),
+                    Value::Text(token.role.clone()),
+                    opt_value(token.by_hint.clone()),
+                    Value::Text(token.created_at.clone()),
+                ],
+            )
+            .await
+            .map_err(map_turso_error)?;
+            Ok(token)
+        }
+        .await;
+        finish_tx(&conn, result).await
+    }
+
+    pub async fn collab_invite_tokens(
+        &self,
+        library: &str,
+        path: &str,
+    ) -> Result<Vec<CollabInviteToken>> {
+        let path = normalize_path(path)?;
+        let conn = self.conn()?;
+        let library = self.require_library_conn(&conn, library).await?;
+        let (document_id, _) = self
+            .document_identity_conn(&conn, &library.id, &path)
+            .await?
+            .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+        self.collab_invite_tokens_for_document_conn(&conn, &document_id)
+            .await
+    }
+
+    pub async fn revoke_collab_invite_token(&self, token_id: &str) -> Result<CollabInviteToken> {
+        let _guard = self.write_lock.lock().await;
+        let conn = self.conn()?;
+        begin_immediate(&conn).await?;
+        let result = async {
+            let revoked_at = now_timestamp();
+            let changed = conn
+                .execute(
+                    "UPDATE collab_invite_tokens
+                     SET revoked_at = COALESCE(revoked_at, ?2)
+                     WHERE id = ?1",
+                    params![token_id.to_string(), revoked_at],
+                )
+                .await
+                .map_err(map_turso_error)?;
+            if changed == 0 {
+                return Err(QuarryError::NotFound(format!("invite token {token_id}")));
+            }
+            self.collab_invite_token_conn(&conn, token_id)
+                .await?
+                .ok_or_else(|| QuarryError::NotFound(format!("invite token {token_id}")))
         }
         .await;
         finish_tx(&conn, result).await
@@ -2712,6 +2800,48 @@ impl QuarryStore {
             .transpose()
     }
 
+    async fn collab_invite_token_conn(
+        &self,
+        conn: &Connection,
+        token_id: &str,
+    ) -> Result<Option<CollabInviteToken>> {
+        let mut rows = conn
+            .query(
+                "SELECT id, document_id, role, by_hint, created_at, revoked_at
+                 FROM collab_invite_tokens WHERE id = ?1 LIMIT 1",
+                params![token_id.to_string()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        rows.next()
+            .await
+            .map_err(map_turso_error)?
+            .map(|row| collab_invite_token_from_row(&row))
+            .transpose()
+    }
+
+    async fn collab_invite_tokens_for_document_conn(
+        &self,
+        conn: &Connection,
+        document_id: &str,
+    ) -> Result<Vec<CollabInviteToken>> {
+        let mut rows = conn
+            .query(
+                "SELECT id, document_id, role, by_hint, created_at, revoked_at
+                 FROM collab_invite_tokens
+                 WHERE document_id = ?1
+                 ORDER BY created_at, id",
+                params![document_id.to_string()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        let mut tokens = Vec::new();
+        while let Some(row) = rows.next().await.map_err(map_turso_error)? {
+            tokens.push(collab_invite_token_from_row(&row)?);
+        }
+        Ok(tokens)
+    }
+
     async fn insert_version_conn(
         &self,
         conn: &Connection,
@@ -3230,6 +3360,15 @@ CREATE TABLE IF NOT EXISTS collab_recovery_states(
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS collab_invite_tokens(
+  id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  by_hint TEXT,
+  created_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS aliases(
   library_id TEXT NOT NULL,
   doc_id TEXT NOT NULL,
@@ -3248,6 +3387,7 @@ CREATE INDEX IF NOT EXISTS idx_changes_tx ON transaction_changes(tx_id);
 CREATE INDEX IF NOT EXISTS idx_links_src ON links(library_id, src_doc_id, src_version_id);
 CREATE INDEX IF NOT EXISTS idx_links_target ON links(library_id, target_doc_id);
 CREATE INDEX IF NOT EXISTS idx_aliases_lookup ON aliases(library_id, alias);
+CREATE INDEX IF NOT EXISTS idx_collab_invite_tokens_document ON collab_invite_tokens(document_id);
 "#;
 
 fn title_for_entry(entry: &DocumentListEntry) -> String {
@@ -4291,6 +4431,17 @@ fn collab_recovery_state_from_row(row: &Row) -> Result<CollabRecoveryState> {
     })
 }
 
+fn collab_invite_token_from_row(row: &Row) -> Result<CollabInviteToken> {
+    Ok(CollabInviteToken {
+        id: text(row, 0)?,
+        document_id: text(row, 1)?,
+        role: text(row, 2)?,
+        by_hint: opt_text(row, 3)?,
+        created_at: text(row, 4)?,
+        revoked_at: opt_text(row, 5)?,
+    })
+}
+
 fn ensure_open(tx: &TransactionRecord) -> Result<()> {
     if tx.state == TransactionState::Open {
         Ok(())
@@ -4446,6 +4597,16 @@ fn is_markdown_content_type(content_type: &str) -> bool {
         content_type.split(';').next().unwrap_or("").trim(),
         "text/markdown" | "text/x-markdown" | "application/markdown" | "application/x-markdown"
     )
+}
+
+fn normalize_collab_invite_role(role: &str) -> Result<String> {
+    let role = role.trim().to_ascii_lowercase();
+    match role.as_str() {
+        "viewer" | "editor" => Ok(role),
+        _ => Err(QuarryError::InvalidPath(format!(
+            "unsupported collab invite role {role}"
+        ))),
+    }
 }
 
 fn opt_value(value: Option<String>) -> Value {

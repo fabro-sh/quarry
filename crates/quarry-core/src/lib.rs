@@ -174,6 +174,16 @@ pub struct DocumentListEntry {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct CollabInviteToken {
+    pub id: String,
+    pub document_id: String,
+    pub role: String,
+    pub by_hint: Option<String>,
+    pub created_at: String,
+    pub revoked_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct WriteOutcome {
     pub document: DocumentListEntry,
     pub version: DocumentVersion,

@@ -211,6 +211,62 @@ async fn persists_collab_recovery_state_by_document_id_across_restart() {
     assert!(matches!(error, QuarryError::NotFound(_)));
 }
 
+#[tokio::test]
+async fn manages_stateful_collab_invite_tokens_by_document_id() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("shares").await.unwrap();
+    let written = store
+        .put_document(
+            &library.slug,
+            "live.md",
+            b"markdown head".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    let token = store
+        .create_collab_invite_token(
+            &library.slug,
+            "live.md",
+            "EDITOR",
+            Some("Avery".to_string()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(token.document_id, written.document.id);
+    assert_eq!(token.role, "editor");
+    assert_eq!(token.by_hint.as_deref(), Some("Avery"));
+    assert!(token.revoked_at.is_none());
+
+    let tokens = store
+        .collab_invite_tokens(&library.slug, "live.md")
+        .await
+        .unwrap();
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(tokens[0].id, token.id);
+
+    let revoked = store.revoke_collab_invite_token(&token.id).await.unwrap();
+    assert_eq!(revoked.id, token.id);
+    assert!(revoked.revoked_at.is_some());
+
+    let error = store
+        .create_collab_invite_token(&library.slug, "live.md", "owner", None)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, QuarryError::InvalidPath(_)));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_auto_commit_writes_publish_without_lost_documents() {
     let root = tempfile::tempdir().unwrap();
