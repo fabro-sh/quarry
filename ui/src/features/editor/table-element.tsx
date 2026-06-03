@@ -114,6 +114,9 @@ export function TableCellElement({
       <div className="px-3 py-1.5">{props.children}</div>
       {isHeader ? <ColumnMenu colIndex={colIndex} editor={editor} element={element} /> : null}
       {readOnly ? null : (
+        // Cell z-band: content/resize handles z-10–z-20, column-menu trigger z-30,
+        // portalled menus z-50. The wrapper is pointer-events-none so only the thin
+        // edge handles (pointer-events-auto) capture drags; clicks pass to the cell.
         <div className="pointer-events-none absolute inset-0 z-20 select-none" contentEditable={false}>
           <ResizeHandle
             {...rightProps}
@@ -271,7 +274,8 @@ function ColumnMenu({
       <DropdownMenu.Trigger asChild>
         <button
           aria-label="Column options"
-          className="absolute right-0.5 top-0.5 inline-flex items-center rounded p-0.5 text-muted opacity-0 transition-opacity hover:text-body group-hover/cell:opacity-100 focus-visible:opacity-100"
+          // z-30 keeps this trigger above the z-20 resize overlay so it stays clickable.
+          className="absolute right-0.5 top-0.5 z-30 inline-flex items-center rounded p-0.5 text-muted opacity-0 transition-opacity hover:text-body group-hover/cell:opacity-100 focus-visible:opacity-100"
           contentEditable={false}
           onMouseDown={(event) => event.preventDefault()}
           type="button"

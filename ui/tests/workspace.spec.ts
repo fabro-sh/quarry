@@ -484,8 +484,10 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.mouse.up();
     // The resize actually engaged (width changed)...
     await expect.poll(async () => (await headerA.boundingBox())!.width).toBeGreaterThan(widthBefore + 10);
-    // ...yet no save fired, because colSizes is never serialized.
-    await page.waitForTimeout(800);
+    // ...yet no save fired, because colSizes is never serialized. Wait past a full
+    // autosave debounce window (AUTOSAVE_DEBOUNCE_MS=1500) so a regression that
+    // dirtied the doc would have flushed its PUT before we assert zero saves.
+    await page.waitForTimeout(1800);
     expect(api.saveHeaders.length).toBe(0);
   });
 
