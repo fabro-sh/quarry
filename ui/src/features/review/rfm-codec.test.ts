@@ -42,4 +42,16 @@ describe('rfm-codec round-trip', () => {
     expect(out).toContain('{>>fix this<<}');
     expect(out).not.toContain('body:');
   });
+
+  it('round-trips a GFM table with alignment through the review save path', () => {
+    const md = '| A | B |\n| :-- | --: |\n| x | y |\n';
+    const { value, meta } = markdownToReview(md);
+    expect((value[0] as { type?: string }).type).toBe('table');
+    expect((value[0] as { align?: unknown }).align).toEqual(['left', 'right']);
+    const out = reviewToMarkdown(value, meta);
+    expect(out).toContain('| x');
+    // Alignment survives the review save path (assert via re-parse, robust to GFM's
+    // minimal delimiter form).
+    expect((markdownToReview(out).value[0] as { align?: unknown }).align).toEqual(['left', 'right']);
+  });
 });

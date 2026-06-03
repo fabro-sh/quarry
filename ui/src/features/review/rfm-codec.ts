@@ -6,6 +6,7 @@ import { baseMarkdownPlugins, stripTrailingEmptyParagraphs } from '../editor/mar
 import { remarkInlineMarks } from '../editor/remark-inline-marks';
 import { stripPlaceholders } from '../editor/image';
 import { applyMermaid } from '../editor/mermaid';
+import { tableMdRules } from '../editor/table';
 import { applyWikiLinks } from '../editor/wiki-link';
 import { applyCriticMarkup } from './apply-critic-markup';
 import { collapseSubstitutions, expandSubstitutions } from './collapse-substitutions';
@@ -28,7 +29,9 @@ function deserializeEditor() {
   return createSlateEditor({
     plugins: [
       ...baseMarkdownPlugins,
-      MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm, remarkInlineMarks] } }),
+      MarkdownPlugin.configure({
+        options: { remarkPlugins: [remarkGfm, remarkInlineMarks], rules: tableMdRules },
+      }),
     ],
   });
 }
