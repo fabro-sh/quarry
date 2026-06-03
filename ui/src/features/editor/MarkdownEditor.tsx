@@ -13,6 +13,7 @@ const PlateMarkdownEditor = lazy(() =>
 );
 
 interface MarkdownEditorProps {
+  author?: string;
   collab?: CollabEditorConfig;
   content: string;
   mode: EditorMode;
@@ -21,12 +22,13 @@ interface MarkdownEditorProps {
   onChange: (content: string) => void;
 }
 
-export function MarkdownEditor({ collab, content, mode, wikiLink, image, onChange }: MarkdownEditorProps) {
+export function MarkdownEditor({ author = 'user', collab, content, mode, wikiLink, image, onChange }: MarkdownEditorProps) {
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-surface" aria-label="Editor">
       <div className="min-h-0 flex-1 overflow-auto">
         <Suspense fallback={<div className="px-8 py-7 text-sm text-muted">Loading editor…</div>}>
           <PlateMarkdownEditor
+            author={author}
             collab={collab}
             content={content}
             mode={mode}

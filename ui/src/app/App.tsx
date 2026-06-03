@@ -114,6 +114,7 @@ import {
   type WikiLinkApi,
 } from '../features/editor/MarkdownEditor';
 import { imageAssetPath, resolveImageSrc } from '../features/editor/image';
+import { loadAuthor, saveAuthor } from '../features/review/identity';
 import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../features/tree/tree-model';
 import { cn } from '../lib/utils';
 
@@ -205,6 +206,7 @@ function Workspace() {
   const [gitOpen, setGitOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lastSyncResult, setLastSyncResult] = useState('');
+  const [author, setAuthor] = useState(() => loadAuthor());
   const [theme, setTheme] = useState<ThemePreference>(() =>
     localStorage.getItem('quarry:theme') === 'light' ? 'light' : 'dark'
   );
@@ -280,6 +282,10 @@ function Workspace() {
     localStorage.setItem('quarry:theme', theme);
     window.document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  function changeAuthor(nextAuthor: string) {
+    setAuthor(saveAuthor(nextAuthor));
+  }
 
   useEffect(() => {
     setLastSyncResult('');
@@ -1075,6 +1081,7 @@ function Workspace() {
               ) : null}
               <DocumentBody
                 activeLibrary={activeLibrary}
+                author={author}
                 byteSize={selectedEntry?.byte_size}
                 collabSessionId={collabSessionIdRef.current}
                 contentHash={selectedEntry?.content_hash}
@@ -1206,10 +1213,12 @@ function Workspace() {
 
       <SettingsDialog
         activeLibrary={activeLibrary}
+        author={author}
         layoutStorageKey={layoutStorageKey}
         open={settingsOpen}
         theme={theme}
         onClose={() => setSettingsOpen(false)}
+        onAuthorChange={changeAuthor}
         onResetLayout={() => localStorage.removeItem(layoutStorageKey)}
         onThemeChange={setTheme}
       />
@@ -1244,6 +1253,7 @@ function Workspace() {
 
 function DocumentBody({
   activeLibrary,
+  author,
   byteSize,
   collabSessionId,
   contentHash,
@@ -1257,6 +1267,7 @@ function DocumentBody({
   onChange,
 }: {
   activeLibrary: string;
+  author: string;
   byteSize?: number;
   collabSessionId: string;
   contentHash?: string | null;
@@ -1275,6 +1286,7 @@ function DocumentBody({
       : undefined;
     return (
       <MarkdownEditor
+        author={author}
         collab={collab}
         content={content}
         mode={mode}
@@ -1562,22 +1574,31 @@ function CommandPalette({
 
 function SettingsDialog({
   activeLibrary,
+  author,
   layoutStorageKey,
   open,
   theme,
+  onAuthorChange,
   onClose,
   onResetLayout,
   onThemeChange,
 }: {
   activeLibrary: string;
+  author: string;
   layoutStorageKey: string;
   open: boolean;
   theme: ThemePreference;
+  onAuthorChange: (author: string) => void;
   onClose: () => void;
   onResetLayout: () => void;
   onThemeChange: (theme: ThemePreference) => void;
 }) {
   const dialogRef = useDialogFocusTrap(open, onClose);
+  const [draftAuthor, setDraftAuthor] = useState(author);
+
+  useEffect(() => {
+    if (open) setDraftAuthor(author);
+  }, [author, open]);
 
   if (!open) return null;
 
@@ -1611,6 +1632,22 @@ function SettingsDialog({
                 {activeLibrary || 'No library selected'}
               </dd>
             </dl>
+          </section>
+
+          <section>
+            <h3 className="text-xs font-semibold uppercase text-muted">Identity</h3>
+            <label className="mt-2 grid gap-1 text-sm">
+              <span className="text-muted">Author</span>
+              <input
+                className="h-9 rounded-md border border-line bg-raised px-3 text-sm text-body outline-none focus:border-accent-line focus:ring-2 focus:ring-accent-ring"
+                onBlur={() => onAuthorChange(draftAuthor)}
+                onChange={(event) => setDraftAuthor(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') onAuthorChange(draftAuthor);
+                }}
+                value={draftAuthor}
+              />
+            </label>
           </section>
 
           <section>

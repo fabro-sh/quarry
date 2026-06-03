@@ -302,6 +302,7 @@ export interface CollabEditorConfig {
 }
 
 export function PlateMarkdownEditor({
+  author = currentAuthor(),
   collab,
   content,
   mode = 'editing',
@@ -309,6 +310,7 @@ export function PlateMarkdownEditor({
   image,
   onChange,
 }: {
+  author?: string;
   collab?: CollabEditorConfig;
   content: string;
   mode?: EditorMode;
@@ -351,7 +353,7 @@ export function PlateMarkdownEditor({
           cursors: {
             data: {
               color: collabColor(collab.sessionId),
-              name: currentAuthor(),
+              name: author,
             },
           },
           providers: [
@@ -367,7 +369,7 @@ export function PlateMarkdownEditor({
         },
       }),
     ] as const;
-  }, [collab, collabEnabled]);
+  }, [author, collab, collabEnabled]);
   const editor = usePlateEditor(
     {
       plugins: editorPlugins as never,
@@ -380,8 +382,8 @@ export function PlateMarkdownEditor({
   // Set the suggesting author before any suggesting can happen; withSuggestion
   // normalizes away suggestion marks that lack a currentUserId.
   useEffect(() => {
-    editor.setOption(SuggestionPlugin, 'currentUserId', currentAuthor());
-  }, [editor]);
+    editor.setOption(SuggestionPlugin, 'currentUserId', author);
+  }, [author, editor]);
 
   // The mode selector is the single source of truth for Suggesting: only that
   // mode tracks edits as suggestion marks (via withSuggestion).
