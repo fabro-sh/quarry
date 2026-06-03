@@ -27,7 +27,7 @@ use quarry_git::{
 use quarry_storage::{QuarryStore, StoreEvent, StoreEventKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -387,6 +387,7 @@ async fn browser_asset(uri: Uri) -> Response {
         agent_presence_openapi,
         agent_events_pending,
         agent_events_ack,
+        document_ops_openapi,
         document_versions_openapi,
         document_version_openapi,
         document_version_diff_openapi,
@@ -439,6 +440,8 @@ async fn browser_asset(uri: Uri) -> Response {
         AgentEventRecord,
         AgentEventsAckRequest,
         AgentEventsAckResponse,
+        AgentOpsRequest,
+        AgentOpsResponse,
         TransactionRecord,
         ConflictRecord,
         SearchResponse,
@@ -813,6 +816,39 @@ pub struct AgentEditRequest {
 pub struct AgentEditResponse {
     #[serde(rename = "dryRun")]
     pub dry_run: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<WriteOutcome>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub markdown: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AgentOpsRequest {
+    #[serde(rename = "baseToken")]
+    pub base_token: String,
+    pub op: String,
+    #[serde(default, rename = "ref")]
+    pub block_ref: Option<AgentBlockRef>,
+    #[serde(default)]
+    pub quote: Option<String>,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub by: Option<String>,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default, alias = "suggestionType")]
+    pub kind: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AgentOpsResponse {
+    #[serde(rename = "dryRun")]
+    pub dry_run: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<WriteOutcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1194,6 +1230,14 @@ async fn post_document_action(
         return agent_edit_response(response);
     }
 
+    if let Some(path) = path.strip_suffix("/ops") {
+        let request: AgentOpsRequest = serde_json::from_value(request)
+            .map_err(|error| QuarryError::InvalidPath(format!("invalid ops request: {error}")))?;
+        let response =
+            agent_ops_document(&state, &headers, &query, &library, path, request).await?;
+        return agent_ops_response(response);
+    }
+
     if let Some(path) = path.strip_suffix("/presence") {
         let request: AgentPresenceRequest = serde_json::from_value(request).map_err(|error| {
             QuarryError::InvalidPath(format!("invalid presence request: {error}"))
@@ -1225,10 +1269,54 @@ async fn document_edit_openapi() {}
 #[allow(dead_code)]
 async fn agent_presence_openapi() {}
 
+#[utoipa::path(
+    post,
+    path = "/v1/libraries/{library}/documents/{path}/ops",
+    params(("library" = String, Path), ("path" = String, Path), ("dryRun" = Option<String>, Query)),
+    request_body = AgentOpsRequest,
+    responses((status = 200, body = AgentOpsResponse), (status = 412, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn document_ops_openapi() {}
+
 #[derive(Clone)]
 struct AgentEditResult {
     response: AgentEditResponse,
     version_id: Option<String>,
+}
+
+#[derive(Clone)]
+struct AgentOpsResult {
+    response: AgentOpsResponse,
+    version_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct ReviewMeta {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    comments: BTreeMap<String, ReviewMetaEntry>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    suggestions: BTreeMap<String, ReviewMetaEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ReviewMetaEntry {
+    #[serde(default = "unknown_review_author")]
+    by: String,
+    #[serde(default)]
+    at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    re: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resolved: Option<String>,
+}
+
+fn unknown_review_author() -> String {
+    "unknown".to_string()
 }
 
 async fn agent_presence_document(
@@ -1252,6 +1340,73 @@ async fn agent_presence_document(
             request.by.filter(|by| !by.trim().is_empty()),
         )
         .await)
+}
+
+async fn agent_ops_document(
+    state: &AppState,
+    headers: &HeaderMap,
+    query: &DocumentActionQuery,
+    library: &str,
+    path: &str,
+    request: AgentOpsRequest,
+) -> Result<AgentOpsResult, ApiError> {
+    let dry_run = query.dry_run()?;
+    let document = state.store.get_document(library, path).await?;
+    let markdown = document_markdown(&document)?;
+    let base_token = etag(&document.version.id);
+    let author = request
+        .by
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| optional_header(headers, "x-agent-id").ok().flatten())
+        .unwrap_or_else(|| "unknown".to_string());
+    let applied = apply_agent_ops(&markdown, &base_token, &request, &author)?;
+
+    if dry_run {
+        return Ok(AgentOpsResult {
+            response: AgentOpsResponse {
+                dry_run: true,
+                id: applied.id,
+                outcome: None,
+                markdown: Some(applied.markdown),
+            },
+            version_id: None,
+        });
+    }
+
+    let base_version_id = version_id_from_base_token(&request.base_token)?;
+    let outcome = state
+        .store
+        .put_document(
+            library,
+            path,
+            applied.markdown.into_bytes(),
+            document.version.metadata.clone(),
+            &document.version.content_type,
+            DocumentSource::Rest,
+            WritePrecondition::IfMatch(base_version_id),
+        )
+        .await?;
+    let version_id = outcome.version.id.clone();
+    Ok(AgentOpsResult {
+        response: AgentOpsResponse {
+            dry_run: false,
+            id: applied.id,
+            outcome: Some(outcome),
+            markdown: None,
+        },
+        version_id: Some(version_id),
+    })
+}
+
+fn agent_ops_response(result: AgentOpsResult) -> Result<Response, ApiError> {
+    if let Some(version_id) = result.version_id {
+        json_with_etag(StatusCode::OK, &result.response, &version_id)
+    } else {
+        json_response(StatusCode::OK, &result.response)
+    }
 }
 
 async fn agent_document_snapshot(
@@ -1493,6 +1648,149 @@ fn apply_agent_edit(
     Ok(next_markdown)
 }
 
+struct AppliedAgentOps {
+    markdown: String,
+    id: Option<String>,
+}
+
+fn apply_agent_ops(
+    markdown: &str,
+    current_base_token: &str,
+    request: &AgentOpsRequest,
+    author: &str,
+) -> Result<AppliedAgentOps, ApiError> {
+    let request_base_version_id = version_id_from_base_token(&request.base_token)?;
+    let current_base_version_id = version_id_from_base_token(current_base_token)?;
+    if request_base_version_id != current_base_version_id {
+        return Err(stale_base_error());
+    }
+
+    let (body, mut meta) = split_review_endmatter(markdown);
+    let (next_body, applied_id) = match request.op.as_str() {
+        "comment.add" => {
+            let id = review_id(request.id.as_deref(), "c", markdown, &request.op)?;
+            ensure_review_id_available(&body, &meta, &id)?;
+            let block_ref = request.block_ref.as_ref().ok_or_else(|| {
+                QuarryError::InvalidPath("comment.add operation missing ref".to_string())
+            })?;
+            let body_text = required_ops_text(request.body.as_deref(), "comment.add missing body")?;
+            let next = splice_block_anchor(
+                &body,
+                &request_base_version_id,
+                block_ref,
+                request.quote.as_deref(),
+                |anchor| format!("{{=={anchor}==}}{{>>{body_text}<<}}{{#{id}}}"),
+            )?;
+            meta.comments.insert(
+                id.clone(),
+                ReviewMetaEntry {
+                    by: author.to_string(),
+                    at: now_timestamp(),
+                    body: None,
+                    re: None,
+                    status: None,
+                    resolved: None,
+                },
+            );
+            (next, Some(id))
+        }
+        "suggestion.add" => {
+            let id = review_id(request.id.as_deref(), "s", markdown, &request.op)?;
+            ensure_review_id_available(&body, &meta, &id)?;
+            let block_ref = request.block_ref.as_ref().ok_or_else(|| {
+                QuarryError::InvalidPath("suggestion.add operation missing ref".to_string())
+            })?;
+            let kind = request
+                .kind
+                .as_deref()
+                .unwrap_or("substitution")
+                .trim()
+                .to_ascii_lowercase();
+            let next = match kind.as_str() {
+                "insert" => {
+                    let content =
+                        required_ops_text(request.content.as_deref(), "insert missing content")?;
+                    splice_block_insertion(
+                        &body,
+                        &request_base_version_id,
+                        block_ref,
+                        request.quote.as_deref(),
+                        &format!("{{++{content}++}}{{#{id}}}"),
+                    )?
+                }
+                "delete" | "remove" => splice_block_anchor(
+                    &body,
+                    &request_base_version_id,
+                    block_ref,
+                    request.quote.as_deref(),
+                    |anchor| format!("{{--{anchor}--}}{{#{id}}}"),
+                )?,
+                "replace" | "substitution" => {
+                    let content = required_ops_text(
+                        request.content.as_deref(),
+                        "substitution missing content",
+                    )?;
+                    splice_block_anchor(
+                        &body,
+                        &request_base_version_id,
+                        block_ref,
+                        request.quote.as_deref(),
+                        |anchor| format!("{{~~{anchor}~>{content}~~}}{{#{id}}}"),
+                    )?
+                }
+                other => {
+                    return Err(QuarryError::InvalidPath(format!(
+                        "unsupported suggestion kind {other}"
+                    ))
+                    .into());
+                }
+            };
+            meta.suggestions.insert(
+                id.clone(),
+                ReviewMetaEntry {
+                    by: author.to_string(),
+                    at: now_timestamp(),
+                    body: None,
+                    re: None,
+                    status: None,
+                    resolved: None,
+                },
+            );
+            (next, Some(id))
+        }
+        "suggestion.accept" | "accept" => {
+            let id = required_ops_text(request.id.as_deref(), "accept missing id")?;
+            let next = transform_suggestion_by_id(&body, id, true)?;
+            meta.suggestions.remove(id);
+            (next, Some(id.to_string()))
+        }
+        "suggestion.reject" | "reject" => {
+            let id = required_ops_text(request.id.as_deref(), "reject missing id")?;
+            let next = transform_suggestion_by_id(&body, id, false)?;
+            meta.suggestions.remove(id);
+            (next, Some(id.to_string()))
+        }
+        "comment.resolve" => {
+            let id = required_ops_text(request.id.as_deref(), "comment.resolve missing id")?;
+            let entry = meta.comments.get_mut(id).ok_or_else(|| {
+                QuarryError::InvalidPath(format!("review comment {id} not found"))
+            })?;
+            entry.status = Some("resolved".to_string());
+            (body, Some(id.to_string()))
+        }
+        other => {
+            return Err(
+                QuarryError::InvalidPath(format!("unsupported ops operation {other}")).into(),
+            );
+        }
+    };
+
+    Ok(AppliedAgentOps {
+        markdown: assemble_review_document(&next_body, &meta)?,
+        id: applied_id,
+    })
+}
+
 fn required_operation_block(operation: &AgentBlockOperation) -> Result<&str, ApiError> {
     operation
         .block
@@ -1501,6 +1799,240 @@ fn required_operation_block(operation: &AgentBlockOperation) -> Result<&str, Api
         .ok_or_else(|| {
             QuarryError::InvalidPath(format!("{} operation missing block", operation.op)).into()
         })
+}
+
+fn required_ops_text<'a>(value: Option<&'a str>, message: &str) -> Result<&'a str, ApiError> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| QuarryError::InvalidPath(message.to_string()).into())
+}
+
+fn review_id(
+    supplied: Option<&str>,
+    prefix: &str,
+    markdown: &str,
+    operation: &str,
+) -> Result<String, ApiError> {
+    if let Some(id) = supplied.map(str::trim).filter(|id| !id.is_empty()) {
+        validate_review_id(id)?;
+        return Ok(id.to_string());
+    }
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(markdown.as_bytes());
+    hasher.update(operation.as_bytes());
+    hasher.update(now_timestamp().as_bytes());
+    Ok(format!(
+        "{}{}",
+        prefix,
+        &hasher.finalize().to_hex().to_string()[..12]
+    ))
+}
+
+fn validate_review_id(id: &str) -> Result<(), ApiError> {
+    if id
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        Ok(())
+    } else {
+        Err(QuarryError::InvalidPath(format!("invalid review id {id}")).into())
+    }
+}
+
+fn ensure_review_id_available(body: &str, meta: &ReviewMeta, id: &str) -> Result<(), ApiError> {
+    if meta.comments.contains_key(id)
+        || meta.suggestions.contains_key(id)
+        || body.contains(&format!("{{#{id}}}"))
+    {
+        return Err(QuarryError::Conflict(format!("review id {id} already exists")).into());
+    }
+    Ok(())
+}
+
+fn splice_block_anchor<F>(
+    body: &str,
+    request_base_version_id: &str,
+    block_ref: &AgentBlockRef,
+    quote: Option<&str>,
+    replacement: F,
+) -> Result<String, ApiError>
+where
+    F: FnOnce(&str) -> String,
+{
+    let mut blocks = split_markdown_blocks(body);
+    validate_block_ref(block_ref, request_base_version_id, &blocks)?;
+    let block = blocks
+        .get_mut(block_ref.ordinal)
+        .ok_or_else(stale_base_error)?;
+    let range = anchor_range(block, quote)?;
+    let anchor = block[range.clone()].to_string();
+    block.replace_range(range, &replacement(&anchor));
+    Ok(blocks.concat())
+}
+
+fn splice_block_insertion(
+    body: &str,
+    request_base_version_id: &str,
+    block_ref: &AgentBlockRef,
+    quote: Option<&str>,
+    insertion: &str,
+) -> Result<String, ApiError> {
+    let mut blocks = split_markdown_blocks(body);
+    validate_block_ref(block_ref, request_base_version_id, &blocks)?;
+    let block = blocks
+        .get_mut(block_ref.ordinal)
+        .ok_or_else(stale_base_error)?;
+    let index = if let Some(quote) = quote {
+        unique_quote_range(block, quote)?.end
+    } else {
+        block.trim_end().len()
+    };
+    block.insert_str(index, insertion);
+    Ok(blocks.concat())
+}
+
+fn anchor_range(block: &str, quote: Option<&str>) -> Result<std::ops::Range<usize>, ApiError> {
+    if let Some(quote) = quote {
+        unique_quote_range(block, quote)
+    } else {
+        let end = block.trim_end().len();
+        if end == 0 {
+            return Err(QuarryError::InvalidPath("anchor block is empty".to_string()).into());
+        }
+        Ok(0..end)
+    }
+}
+
+fn unique_quote_range(block: &str, quote: &str) -> Result<std::ops::Range<usize>, ApiError> {
+    if quote.is_empty() {
+        return Err(QuarryError::InvalidPath("quote must not be empty".to_string()).into());
+    }
+    let matches = block.match_indices(quote).collect::<Vec<_>>();
+    match matches.as_slice() {
+        [] => Err(QuarryError::InvalidPath("ANCHOR_NOT_FOUND".to_string()).into()),
+        [(start, matched)] => Ok(*start..(*start + matched.len())),
+        _ => Err(QuarryError::InvalidPath("AMBIGUOUS_ANCHOR".to_string()).into()),
+    }
+}
+
+fn transform_suggestion_by_id(body: &str, id: &str, accept: bool) -> Result<String, ApiError> {
+    validate_review_id(id)?;
+    let suffix = format!("{{#{id}}}");
+    let matches = body.match_indices(&suffix).collect::<Vec<_>>();
+    let suffix_start = match matches.as_slice() {
+        [] => {
+            return Err(
+                QuarryError::InvalidPath(format!("review suggestion {id} not found")).into(),
+            );
+        }
+        [(start, _)] => *start,
+        _ => {
+            return Err(
+                QuarryError::InvalidPath(format!("review suggestion {id} is ambiguous")).into(),
+            );
+        }
+    };
+    let suffix_end = suffix_start + suffix.len();
+    let before = &body[..suffix_start];
+
+    let (marker_start, replacement) = if before.ends_with("++}") {
+        let marker_start = before
+            .rfind("{++")
+            .ok_or_else(|| invalid_review_marker(id))?;
+        let text = &body[marker_start + 3..suffix_start - 3];
+        (marker_start, if accept { text } else { "" }.to_string())
+    } else if before.ends_with("--}") {
+        let marker_start = before
+            .rfind("{--")
+            .ok_or_else(|| invalid_review_marker(id))?;
+        let text = &body[marker_start + 3..suffix_start - 3];
+        (marker_start, if accept { "" } else { text }.to_string())
+    } else if before.ends_with("~~}") {
+        let marker_start = before
+            .rfind("{~~")
+            .ok_or_else(|| invalid_review_marker(id))?;
+        let inner = &body[marker_start + 3..suffix_start - 3];
+        let (old, new) = inner
+            .split_once("~>")
+            .ok_or_else(|| invalid_review_marker(id))?;
+        (marker_start, if accept { new } else { old }.to_string())
+    } else {
+        return Err(invalid_review_marker(id));
+    };
+
+    let mut next = body.to_string();
+    next.replace_range(marker_start..suffix_end, &replacement);
+    Ok(next)
+}
+
+fn invalid_review_marker(id: &str) -> ApiError {
+    QuarryError::InvalidPath(format!("review marker {id} is not a suggestion")).into()
+}
+
+fn split_review_endmatter(markdown: &str) -> (String, ReviewMeta) {
+    let Some((delimiter_start, delimiter_end)) = last_endmatter_delimiter(markdown) else {
+        return (markdown.to_string(), ReviewMeta::default());
+    };
+    let yaml = &markdown[delimiter_end..];
+    let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
+        return (markdown.to_string(), ReviewMeta::default());
+    };
+    if !is_review_meta_value(&value) {
+        return (markdown.to_string(), ReviewMeta::default());
+    }
+    let meta = serde_yaml::from_value::<ReviewMeta>(value).unwrap_or_default();
+    (markdown[..delimiter_start].trim_end().to_string(), meta)
+}
+
+fn last_endmatter_delimiter(markdown: &str) -> Option<(usize, usize)> {
+    let bytes = markdown.as_bytes();
+    let mut index = 0usize;
+    let mut last = None;
+    while let Some(offset) = markdown[index..].find("\n---") {
+        let start = index + offset;
+        let mut cursor = start + 4;
+        while cursor < bytes.len() && matches!(bytes[cursor], b' ' | b'\t') {
+            cursor += 1;
+        }
+        let end =
+            if cursor + 1 < bytes.len() && bytes[cursor] == b'\r' && bytes[cursor + 1] == b'\n' {
+                Some(cursor + 2)
+            } else if cursor < bytes.len() && bytes[cursor] == b'\n' {
+                Some(cursor + 1)
+            } else {
+                None
+            };
+        if let Some(end) = end {
+            last = Some((start, end));
+        }
+        index = start + 1;
+    }
+    last
+}
+
+fn is_review_meta_value(value: &serde_yaml::Value) -> bool {
+    let serde_yaml::Value::Mapping(mapping) = value else {
+        return false;
+    };
+    mapping.contains_key(serde_yaml::Value::String("comments".to_string()))
+        || mapping.contains_key(serde_yaml::Value::String("suggestions".to_string()))
+}
+
+fn assemble_review_document(body: &str, meta: &ReviewMeta) -> Result<String, ApiError> {
+    let body = body.trim_end();
+    if meta.comments.is_empty() && meta.suggestions.is_empty() {
+        return Ok(if body.is_empty() {
+            String::new()
+        } else {
+            format!("{body}\n")
+        });
+    }
+    let mut yaml = serde_yaml::to_string(meta).map_err(QuarryError::from)?;
+    if let Some(stripped) = yaml.strip_prefix("---\n") {
+        yaml = stripped.to_string();
+    }
+    Ok(format!("{body}\n\n---\n{yaml}"))
 }
 
 fn validate_block_ref(

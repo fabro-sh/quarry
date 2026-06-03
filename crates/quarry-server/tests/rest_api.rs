@@ -229,6 +229,7 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}"]["head"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/snapshot"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/edit"].is_object());
+    assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/ops"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/presence"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/metadata"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/events/pending"].is_object());
@@ -497,6 +498,214 @@ async fn agent_edit_supports_insert_and_delete_block_ops() {
         body["markdown"],
         "One\n\nBefore two\n\nTwo\n\nThree\n\nAfter three\n\n"
     );
+}
+
+#[tokio::test]
+async fn agent_ops_add_comments_and_suggestions_with_review_endmatter() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentreview").await.unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            b"One target here.\n\nSecond paragraph.\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreview/documents/notes/review.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let snapshot: Value = response_json(response).await;
+    let base_token = snapshot["baseToken"].as_str().unwrap();
+    let first_ref = snapshot["blocks"][0]["ref"].clone();
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentreview/documents/notes/review.md/ops?dryRun=1",
+            serde_json::json!({
+                "baseToken": base_token,
+                "op": "comment.add",
+                "id": "c1",
+                "ref": first_ref.clone(),
+                "quote": "target",
+                "body": "Needs support.",
+                "by": "ai:codex"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["dryRun"], true);
+    let markdown = body["markdown"].as_str().unwrap();
+    assert!(markdown.contains("One {==target==}{>>Needs support.<<}{#c1} here."));
+    assert!(markdown.contains("comments:"));
+    assert!(markdown.contains("by: ai:codex"));
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentreview/documents/notes/review.md/ops",
+            serde_json::json!({
+                "baseToken": base_token,
+                "op": "suggestion.add",
+                "id": "s1",
+                "kind": "substitution",
+                "ref": first_ref,
+                "quote": "target",
+                "content": "focus",
+                "by": "ai:codex"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let etag = response.headers()[header::ETAG]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let body: Value = response_json(response).await;
+    assert_eq!(body["id"], "s1");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreview/documents/notes/review.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let markdown = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(markdown.contains("One {~~target~>focus~~}{#s1} here."));
+    assert!(markdown.contains("suggestions:"));
+    assert!(markdown.contains("s1:"));
+    assert!(etag.starts_with('"'));
+}
+
+#[tokio::test]
+async fn agent_ops_accept_reject_and_resolve_review_marks() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentreview2").await.unwrap();
+    let written = store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            b"Keep {++added++}{#s1} and drop {--bad--}{#s2}. See {==this==}{>>Check it<<}{#c1}.\n\n---\ncomments:\n  c1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user\nsuggestions:\n  s1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: AI\n  s2:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: AI\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+    let base_token = format!("\"{}\"", written.version.id);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentreview2/documents/notes/review.md/ops",
+            serde_json::json!({"baseToken": base_token, "op": "suggestion.accept", "id": "s1"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let base_token = response.headers()[header::ETAG]
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentreview2/documents/notes/review.md/ops",
+            serde_json::json!({"baseToken": base_token, "op": "suggestion.reject", "id": "s2"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let base_token = response.headers()[header::ETAG]
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentreview2/documents/notes/review.md/ops",
+            serde_json::json!({"baseToken": base_token, "op": "comment.resolve", "id": "c1"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreview2/documents/notes/review.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let markdown = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(markdown.contains("Keep added and drop bad."));
+    assert!(!markdown.contains("{++added++}{#s1}"));
+    assert!(!markdown.contains("{--bad--}{#s2}"));
+    assert!(!markdown.contains("suggestions:"));
+    assert!(markdown.contains("status: resolved"));
 }
 
 #[tokio::test]

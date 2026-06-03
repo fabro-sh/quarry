@@ -21,6 +21,7 @@ quarry-storage.workspace = true
 rust-embed = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 tokio.workspace = true
 tower.workspace = true
 tracing.workspace = true
