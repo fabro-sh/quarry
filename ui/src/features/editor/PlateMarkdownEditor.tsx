@@ -106,6 +106,7 @@ import remarkGfm from 'remark-gfm';
 import {
   ParagraphPlugin,
   Plate,
+  PlateContainer,
   PlateContent,
   PlateElement,
   useEditorRef,
@@ -142,6 +143,7 @@ import { markdownToReview, reviewToMarkdown } from '../review/rfm-codec';
 import { syncSuggestionsFromValue, useReviewStore } from '../review/review-store';
 import { acceptSuggestionById, rejectSuggestionById } from '../review/accept-reject';
 import { ReviewRail } from '../review/ui/ReviewRail';
+import { RemoteCursorOverlay } from '../collab/RemoteCursorOverlay';
 import { RUST_WS_PROVIDER_TYPE, registerRustWsProviderType } from '../collab/rust-ws-provider';
 
 registerRustWsProviderType();
@@ -342,6 +344,9 @@ export function PlateMarkdownEditor({
     return [
       ...plateMarkdownPlugins,
       YjsPlugin.configure({
+        render: {
+          afterEditable: RemoteCursorOverlay,
+        },
         options: {
           cursors: {
             data: {
@@ -471,8 +476,8 @@ export function PlateMarkdownEditor({
         }}
       >
         {readOnly ? null : <FloatingFormatToolbar />}
-        <div className="flex h-full min-h-0">
-          <div className="min-w-0 flex-1 overflow-auto">
+        <PlateContainer className="relative flex h-full min-h-0">
+          <div className="relative min-w-0 flex-1 overflow-auto">
             <PlateContent
               aria-label="Plate markdown editor"
               className="min-h-full w-full px-[max(2rem,calc((100%-68ch)/2))] pt-16 pb-8 text-[15px] leading-7 text-ink outline-none [&_[data-slate-placeholder=true]]:text-faint"
@@ -482,7 +487,7 @@ export function PlateMarkdownEditor({
             />
           </div>
           <ReviewRail editor={editor} />
-        </div>
+        </PlateContainer>
       </Plate>
      </ImageProvider>
     </WikiLinkProvider>
