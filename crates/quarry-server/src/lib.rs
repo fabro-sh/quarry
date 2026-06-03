@@ -1148,6 +1148,25 @@ async fn put_document(
             collab_session_id,
         )
         .await?;
+    if headers.contains_key("x-quarry-collab-session-id") {
+        if let Err(error) = state
+            .store
+            .mark_collab_recovery_state_clean(
+                &outcome.document.id,
+                Some(outcome.version.id.clone()),
+            )
+            .await
+        {
+            if !matches!(error, QuarryError::NotFound(_)) {
+                tracing::warn!(
+                    %error,
+                    document_id = %outcome.document.id,
+                    version_id = %outcome.version.id,
+                    "failed to mark collab recovery state clean after browser flush"
+                );
+            }
+        }
+    }
     json_with_etag(StatusCode::OK, &outcome, &outcome.version.id)
 }
 

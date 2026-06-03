@@ -943,6 +943,66 @@ async fn document_put_events_echo_collab_session_id() {
 }
 
 #[tokio::test]
+async fn document_put_with_collab_session_marks_recovery_state_clean() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("collab-clean").await.unwrap();
+    let written = store
+        .put_document(
+            &library.slug,
+            "live.md",
+            b"old".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    store
+        .put_collab_recovery_state(
+            &written.document.id,
+            Some(written.version.id.clone()),
+            vec![1, 2, 3],
+            true,
+        )
+        .await
+        .unwrap();
+    let app = router(store.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/collab-clean/documents/live.md")
+                .header(header::IF_MATCH, format!("\"{}\"", written.version.id))
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header("X-Quarry-Collab-Session-Id", "browser:session-1")
+                .body(Body::from("new"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    let next_version = body["version"]["id"].as_str().unwrap();
+
+    let recovery = store
+        .collab_recovery_state(&written.document.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!recovery.dirty);
+    assert_eq!(recovery.base_version_id.as_deref(), Some(next_version));
+}
+
+#[tokio::test]
 async fn rest_api_supports_browser_search_links_versions_and_events() {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {
