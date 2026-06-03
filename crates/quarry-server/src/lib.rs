@@ -13,6 +13,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use futures_util::{stream, Stream};
+use pulldown_cmark::{
+    Event as MarkdownEvent, Options as MarkdownOptions, Parser as MarkdownParser, Tag,
+};
 use quarry_core::{
     now_timestamp, CollabInviteToken, ConflictRecord, DocumentLink, DocumentListEntry,
     DocumentSource, DocumentVersion, DocumentVersionContent, GcReport, GitPeer, GraphEdge,
@@ -2180,6 +2183,13 @@ fn validate_single_markdown_block(markdown: &str) -> Result<(), ApiError> {
             QuarryError::InvalidPath("edit block markdown must not be empty".to_string()).into(),
         );
     }
+    let parsed_blocks = parsed_top_level_markdown_blocks(markdown);
+    if parsed_blocks != 1 {
+        return Err(QuarryError::InvalidPath(
+            "edit block markdown must parse as one top-level block".to_string(),
+        )
+        .into());
+    }
     let blocks = split_markdown_blocks(markdown);
     if blocks.len() != 1 || blocks.concat() != markdown {
         return Err(QuarryError::InvalidPath(
@@ -2191,6 +2201,7 @@ fn validate_single_markdown_block(markdown: &str) -> Result<(), ApiError> {
 }
 
 fn validate_markdown_roundtrip(markdown: &str) -> Result<(), ApiError> {
+    parsed_top_level_markdown_blocks(markdown);
     if split_markdown_blocks(markdown).concat() != markdown {
         return Err(QuarryError::InvalidPath(
             "spliced markdown failed block round-trip validation".to_string(),
@@ -2198,6 +2209,61 @@ fn validate_markdown_roundtrip(markdown: &str) -> Result<(), ApiError> {
         .into());
     }
     Ok(())
+}
+
+fn parsed_top_level_markdown_blocks(markdown: &str) -> usize {
+    let parser = MarkdownParser::new_ext(markdown, MarkdownOptions::all());
+    let mut stack = Vec::new();
+    let mut depth = 0usize;
+    let mut count = 0usize;
+
+    for event in parser {
+        match event {
+            MarkdownEvent::Start(tag) => {
+                let is_block = is_markdown_block_tag(&tag);
+                stack.push(is_block);
+                if is_block {
+                    if depth == 0 {
+                        count += 1;
+                    }
+                    depth += 1;
+                }
+            }
+            MarkdownEvent::End(_) => {
+                if stack.pop().unwrap_or(false) && depth > 0 {
+                    depth -= 1;
+                }
+            }
+            MarkdownEvent::Rule if depth == 0 => {
+                count += 1;
+            }
+            _ => {}
+        }
+    }
+
+    count
+}
+
+fn is_markdown_block_tag(tag: &Tag<'_>) -> bool {
+    matches!(
+        tag,
+        Tag::Paragraph
+            | Tag::Heading { .. }
+            | Tag::BlockQuote(_)
+            | Tag::CodeBlock(_)
+            | Tag::HtmlBlock
+            | Tag::List(_)
+            | Tag::Item
+            | Tag::FootnoteDefinition(_)
+            | Tag::DefinitionList
+            | Tag::DefinitionListTitle
+            | Tag::DefinitionListDefinition
+            | Tag::Table(_)
+            | Tag::TableHead
+            | Tag::TableRow
+            | Tag::TableCell
+            | Tag::MetadataBlock(_)
+    )
 }
 
 fn version_id_from_base_token(base_token: &str) -> Result<String, ApiError> {
