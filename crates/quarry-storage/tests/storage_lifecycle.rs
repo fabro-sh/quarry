@@ -1,4 +1,4 @@
-use quarry_core::{DocumentSource, WritePrecondition, INLINE_CONTENT_THRESHOLD};
+use quarry_core::{DocumentSource, QuarryError, WritePrecondition, INLINE_CONTENT_THRESHOLD};
 use quarry_storage::{QuarryStore, StoreConfig, StoreEventKind};
 use std::time::Duration;
 
@@ -132,6 +132,83 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
 
     let gc = reopened.gc().await.unwrap();
     assert_eq!(gc.removed, 0);
+}
+
+#[tokio::test]
+async fn persists_collab_recovery_state_by_document_id_across_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let db_path = root.path().join("quarry.db");
+    let cas_path = root.path().join("cas");
+
+    let store = QuarryStore::open(StoreConfig {
+        db_path: db_path.clone(),
+        cas_path: cas_path.clone(),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("collab").await.unwrap();
+    let written = store
+        .put_document(
+            &library.slug,
+            "live.md",
+            b"markdown head".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    let state = store
+        .put_collab_recovery_state(&written.document.id, None, vec![1, 2, 3, 4], true)
+        .await
+        .unwrap();
+    assert_eq!(state.document_id, written.document.id);
+    assert_eq!(state.base_version_id, Some(written.version.id.clone()));
+    assert_eq!(state.update_v1, vec![1, 2, 3, 4]);
+    assert!(state.dirty);
+
+    drop(store);
+
+    let reopened = QuarryStore::open(StoreConfig {
+        db_path,
+        cas_path,
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let state = reopened
+        .collab_recovery_state(&written.document.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.base_version_id, Some(written.version.id.clone()));
+    assert_eq!(state.update_v1, vec![1, 2, 3, 4]);
+    assert!(state.dirty);
+    assert_eq!(
+        reopened
+            .get_document(&library.slug, "live.md")
+            .await
+            .unwrap()
+            .content,
+        b"markdown head"
+    );
+
+    let clean = reopened
+        .mark_collab_recovery_state_clean(&written.document.id, None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(clean.base_version_id, Some(written.version.id));
+    assert!(!clean.dirty);
+
+    let error = reopened
+        .put_collab_recovery_state("not-a-document", None, vec![9], true)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, QuarryError::NotFound(_)));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

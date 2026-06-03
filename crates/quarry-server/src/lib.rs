@@ -167,9 +167,10 @@ pub fn router(store: QuarryStore) -> Router {
     #[cfg(feature = "bundle_ui")]
     let router = router.fallback(get(browser_asset));
 
+    let collab = collab::CollabHub::new(store.clone());
     router.with_state(AppState {
         store,
-        collab: collab::CollabHub::default(),
+        collab,
         agent_idempotency: AgentIdempotencyCache::default(),
     })
 }

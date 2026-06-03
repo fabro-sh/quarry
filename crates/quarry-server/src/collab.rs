@@ -2,34 +2,46 @@ use axum::body::Bytes;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use quarry_storage::QuarryStore;
 use std::collections::HashMap;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::task::{Context, Poll};
+use std::time::Duration;
 use tokio::select;
 use tokio::sync::broadcast::{channel, Receiver, Sender};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
 use yrs::encoding::write::Write;
 use yrs::sync::protocol::{MSG_SYNC, MSG_SYNC_UPDATE};
 use yrs::sync::{Awareness, DefaultProtocol, Error, Message, Protocol};
+use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 #[cfg(test)]
 use yrs::GetString;
-#[cfg(test)]
-use yrs::ReadTxn;
-use yrs::{Doc, Transact, WriteTxn};
+use yrs::{Doc, ReadTxn, StateVector, Transact, Update, WriteTxn};
 
 pub(crate) const SHARED_ROOT: &str = "content";
+const RECOVERY_PERSIST_DEBOUNCE: Duration = Duration::from_millis(50);
 
 type AwarenessRef = Arc<RwLock<Awareness>>;
 
 #[derive(Clone, Default)]
 pub(crate) struct CollabHub {
     rooms: Arc<RwLock<HashMap<String, Arc<CollabRoom>>>>,
+    store: Option<QuarryStore>,
 }
 
 impl CollabHub {
+    pub(crate) fn new(store: QuarryStore) -> Self {
+        Self {
+            rooms: Arc::default(),
+            store: Some(store),
+        }
+    }
+
     pub(crate) async fn serve_socket(&self, document_id: String, socket: WebSocket) {
         let room = self.room(&document_id).await;
         room.serve_socket(socket).await;
@@ -45,7 +57,7 @@ impl CollabHub {
             return room;
         }
 
-        let room = Arc::new(CollabRoom::new().await);
+        let room = Arc::new(CollabRoom::new(document_id, self.store.clone()).await);
         rooms.insert(document_id.to_string(), room.clone());
         room
     }
@@ -61,17 +73,34 @@ pub(crate) struct CollabRoom {
 }
 
 impl CollabRoom {
-    async fn new() -> Self {
+    async fn new(document_id: &str, store: Option<QuarryStore>) -> Self {
         let doc = Doc::new();
         {
             let mut txn = doc.transact_mut();
             // Yjs root Y.Text and Y.XmlText share wire updates; yrs exposes root creation as TextRef.
             txn.get_or_insert_text(SHARED_ROOT);
+            if let Some(recovery) = load_recovery_update(store.as_ref(), document_id).await {
+                match Update::decode_v1(&recovery.update_v1) {
+                    Ok(update) => {
+                        if let Err(error) = txn.apply_update(update) {
+                            tracing::warn!(%error, %document_id, "failed to apply collab recovery state");
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, %document_id, "failed to decode collab recovery state");
+                    }
+                }
+            }
         }
         let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
+        let persistence = store.map(|store| RecoveryPersistence {
+            store,
+            document_id: document_id.to_string(),
+            debounce: RECOVERY_PERSIST_DEBOUNCE,
+        });
 
         Self {
-            broadcast: BroadcastGroup::new(awareness, 32).await,
+            broadcast: BroadcastGroup::new(awareness, 32, persistence).await,
         }
     }
 
@@ -95,6 +124,28 @@ impl CollabRoom {
     }
 }
 
+async fn load_recovery_update(
+    store: Option<&QuarryStore>,
+    document_id: &str,
+) -> Option<quarry_storage::CollabRecoveryState> {
+    let store = store?;
+    match store.collab_recovery_state(document_id).await {
+        Ok(Some(state)) if state.dirty && !state.update_v1.is_empty() => Some(state),
+        Ok(_) => None,
+        Err(error) => {
+            tracing::warn!(%error, %document_id, "failed to load collab recovery state");
+            None
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RecoveryPersistence {
+    store: QuarryStore,
+    document_id: String,
+    debounce: Duration,
+}
+
 struct BroadcastGroup {
     _awareness_sub: yrs::Subscription,
     _doc_sub: yrs::Subscription,
@@ -102,15 +153,33 @@ struct BroadcastGroup {
     sender: Sender<Vec<u8>>,
     _receiver: Receiver<Vec<u8>>,
     awareness_updater: JoinHandle<()>,
+    recovery_persister: Option<JoinHandle<()>>,
 }
 
 unsafe impl Send for BroadcastGroup {}
 unsafe impl Sync for BroadcastGroup {}
 
 impl BroadcastGroup {
-    async fn new(awareness: AwarenessRef, buffer_capacity: usize) -> Self {
+    async fn new(
+        awareness: AwarenessRef,
+        buffer_capacity: usize,
+        persistence: Option<RecoveryPersistence>,
+    ) -> Self {
         let (sender, receiver) = channel(buffer_capacity);
         let awareness_c = Arc::downgrade(&awareness);
+        let (recovery_tx, recovery_persister) = persistence
+            .map(|persistence| {
+                let (tx, rx) = unbounded_channel();
+                (
+                    Some(tx),
+                    Some(spawn_recovery_persister(
+                        Arc::downgrade(&awareness),
+                        persistence,
+                        rx,
+                    )),
+                )
+            })
+            .unwrap_or((None, None));
 
         let mut lock = awareness.write().await;
         let sink = sender.clone();
@@ -122,6 +191,9 @@ impl BroadcastGroup {
                     encoder.write_var(MSG_SYNC_UPDATE);
                     encoder.write_buf(&update.update);
                     let _ = sink.send(encoder.to_vec());
+                    if let Some(recovery_tx) = &recovery_tx {
+                        let _ = recovery_tx.send(());
+                    }
                 })
                 .unwrap()
         };
@@ -161,6 +233,7 @@ impl BroadcastGroup {
             sender,
             _receiver: receiver,
             awareness_updater,
+            recovery_persister,
         }
     }
 
@@ -236,7 +309,63 @@ impl BroadcastGroup {
 impl Drop for BroadcastGroup {
     fn drop(&mut self) {
         self.awareness_updater.abort();
+        if let Some(task) = &self.recovery_persister {
+            task.abort();
+        }
     }
+}
+
+fn spawn_recovery_persister(
+    awareness: Weak<RwLock<Awareness>>,
+    persistence: RecoveryPersistence,
+    mut rx: UnboundedReceiver<()>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while rx.recv().await.is_some() {
+            loop {
+                match timeout(persistence.debounce, rx.recv()).await {
+                    Ok(Some(_)) => continue,
+                    Ok(None) => {
+                        persist_recovery_snapshot(&awareness, &persistence).await;
+                        return;
+                    }
+                    Err(_) => break,
+                }
+            }
+            if !persist_recovery_snapshot(&awareness, &persistence).await {
+                return;
+            }
+        }
+    })
+}
+
+async fn persist_recovery_snapshot(
+    awareness: &Weak<RwLock<Awareness>>,
+    persistence: &RecoveryPersistence,
+) -> bool {
+    let Some(awareness) = awareness.upgrade() else {
+        return false;
+    };
+    let update_v1 = {
+        let awareness = awareness.read().await;
+        let update = awareness
+            .doc()
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        update
+    };
+    if let Err(error) = persistence
+        .store
+        .put_collab_recovery_state(&persistence.document_id, None, update_v1, true)
+        .await
+    {
+        tracing::warn!(
+            %error,
+            document_id = %persistence.document_id,
+            "failed to persist collab recovery state"
+        );
+    }
+    true
 }
 
 #[derive(Debug)]
@@ -341,8 +470,11 @@ impl Stream for AxumStream {
 mod tests {
     use super::*;
     use futures_util::{ready, SinkExt, StreamExt};
+    use quarry_core::{DocumentSource, WritePrecondition};
+    use quarry_storage::{QuarryStore, StoreConfig};
     use std::task::{Context, Poll};
     use tokio::sync::mpsc;
+    use tokio::time::{sleep, Duration};
     use yrs::sync::{Message, SyncMessage};
     use yrs::updates::decoder::Decode;
     use yrs::updates::encoder::Encode;
@@ -385,6 +517,82 @@ mod tests {
 
         drop(client_sink);
         subscription.completed().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn persists_and_loads_recovery_state_by_document_id() {
+        let root = tempfile::tempdir().unwrap();
+        let store = QuarryStore::open(StoreConfig {
+            db_path: root.path().join("quarry.db"),
+            cas_path: root.path().join("cas"),
+            lock_path: None,
+        })
+        .await
+        .unwrap();
+        let library = store.create_library("collab").await.unwrap();
+        let written = store
+            .put_document(
+                &library.slug,
+                "live.md",
+                b"markdown".to_vec(),
+                serde_json::json!({"content_type":"text/markdown"}),
+                "text/markdown",
+                DocumentSource::Rest,
+                WritePrecondition::None,
+            )
+            .await
+            .unwrap();
+        let document_id = written.document.id.clone();
+
+        let hub = CollabHub::new(store.clone());
+        let room = hub.room(&document_id).await;
+        let (server_sink, mut client_stream) = test_channel(8);
+        let (mut client_sink, server_stream) = test_channel(8);
+        let subscription = room
+            .broadcast
+            .subscribe(Arc::new(Mutex::new(server_sink)), server_stream);
+
+        let update = vec![
+            1, 1, 7, 0, 4, 1, 7, 99, 111, 110, 116, 101, 110, 116, 5, 104, 101, 108, 108, 111, 0,
+        ];
+        client_sink
+            .send(Message::Sync(SyncMessage::Update(update)).encode_v1())
+            .await
+            .unwrap();
+        let _ = client_stream.next().await.unwrap().unwrap();
+
+        let state = wait_for_recovery_state(&store, &document_id).await;
+        assert_eq!(state.document_id, document_id);
+        assert_eq!(state.base_version_id, Some(written.version.id));
+        assert!(state.dirty);
+        assert!(!state.update_v1.is_empty());
+
+        drop(client_sink);
+        subscription.completed().await.unwrap();
+        drop(room);
+        drop(hub);
+
+        let restored_hub = CollabHub::new(store);
+        let restored = restored_hub.room(&document_id).await;
+        assert_eq!(restored.content_text().await.as_deref(), Some("hello"));
+    }
+
+    async fn wait_for_recovery_state(
+        store: &QuarryStore,
+        document_id: &str,
+    ) -> quarry_storage::CollabRecoveryState {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(state) = store.collab_recovery_state(document_id).await.unwrap() {
+                    if state.dirty {
+                        return state;
+                    }
+                }
+                sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap()
     }
 
     fn test_channel(
