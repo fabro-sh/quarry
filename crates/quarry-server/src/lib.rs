@@ -384,6 +384,7 @@ async fn browser_asset(uri: Uri) -> Response {
         document_backlinks_openapi,
         document_outgoing_links_openapi,
         document_snapshot_openapi,
+        document_events_stream_openapi,
         document_share_openapi,
         document_share_create_openapi,
         document_share_revoke_openapi,
@@ -501,18 +502,32 @@ async fn events(
     State(state): State<AppState>,
     Query(query): Query<EventsQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    let library = state.store.get_library(&query.library).await?;
-    let receiver = state.store.subscribe_events();
+    events_for_library(&state.store, &query.library, None).await
+}
+
+async fn events_for_library(
+    store: &QuarryStore,
+    library: &str,
+    document_path: Option<String>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    let library = store.get_library(library).await?;
+    let receiver = store.subscribe_events();
     let stream = stream::unfold(
-        (receiver, library.id, library.slug),
-        |(mut receiver, library_id, library_slug)| async move {
+        (receiver, library.id, library.slug, document_path),
+        |(mut receiver, library_id, library_slug, document_path)| async move {
             loop {
                 match receiver.recv().await {
-                    Ok(event) if event.library_id == library_id => {
+                    Ok(event)
+                        if event.library_id == library_id
+                            && event_matches_document_filter(&event, document_path.as_deref()) =>
+                    {
                         let event_type = store_event_type(&event);
                         let payload = store_event_payload(&library_slug, &event_type, &event);
                         let event = Event::default().event(event_type).data(payload.to_string());
-                        return Some((Ok(event), (receiver, library_id, library_slug)));
+                        return Some((
+                            Ok(event),
+                            (receiver, library_id, library_slug, document_path),
+                        ));
                     }
                     Ok(_) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
@@ -523,7 +538,10 @@ async fn events(
                             "skipped": skipped
                         });
                         let event = Event::default().event(event_type).data(payload.to_string());
-                        return Some((Ok(event), (receiver, library_id, library_slug)));
+                        return Some((
+                            Ok(event),
+                            (receiver, library_id, library_slug, document_path),
+                        ));
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
                 }
@@ -535,6 +553,13 @@ async fn events(
             .interval(Duration::from_secs(15))
             .text("keepalive"),
     ))
+}
+
+fn event_matches_document_filter(event: &StoreEvent, document_path: Option<&str>) -> bool {
+    let Some(document_path) = document_path else {
+        return true;
+    };
+    event.path.as_deref() == Some(document_path) || event.new_path.as_deref() == Some(document_path)
 }
 
 #[utoipa::path(
@@ -1003,6 +1028,14 @@ async fn get_document(
             &agent_document_snapshot(&state.store, &library, path).await?,
         );
     }
+    if let Some(path) = path.strip_suffix("/events/stream") {
+        state.store.head_document(&library, path).await?;
+        return Ok(
+            events_for_library(&state.store, &library, Some(path.to_string()))
+                .await?
+                .into_response(),
+        );
+    }
     if let Some(path) = path.strip_suffix("/share") {
         return json_response(
             StatusCode::OK,
@@ -1070,6 +1103,15 @@ async fn document_outgoing_links_openapi() {}
 )]
 #[allow(dead_code)]
 async fn document_snapshot_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/libraries/{library}/documents/{path}/events/stream",
+    params(("library" = String, Path), ("path" = String, Path)),
+    responses((status = 200, description = "Document-scoped server-sent event stream"), (status = 404, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn document_events_stream_openapi() {}
 
 #[utoipa::path(
     get,

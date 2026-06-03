@@ -1569,6 +1569,23 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
         .starts_with("text/event-stream"));
 
     let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/browser/documents/intro.md/events/stream")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers()[header::CONTENT_TYPE]
+        .to_str()
+        .unwrap()
+        .starts_with("text/event-stream"));
+
+    let response = app
         .oneshot(
             Request::builder()
                 .method(Method::GET)
@@ -1583,6 +1600,7 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/backlinks"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/versions"].is_object());
     assert!(openapi["paths"]["/v1/events"].is_object());
+    assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/events/stream"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/events/pending"].is_object());
 }
 
