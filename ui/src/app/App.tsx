@@ -243,6 +243,7 @@ function Workspace() {
   const [collabExternalChange, setCollabExternalChange] = useState<CollabExternalChange | null>(null);
   const [collabFlushAck, setCollabFlushAck] = useState<CollabFlushAck | null>(null);
   const [collabFlusher, setCollabFlusher] = useState(false);
+  const [collabRebaseKey, setCollabRebaseKey] = useState(0);
   const [collabRecoveryError, setCollabRecoveryError] = useState<CollabRecoveryError | null>(null);
 
   useEffect(() => {
@@ -713,10 +714,12 @@ function Workspace() {
         sessionId: collabSessionIdRef.current,
       };
       setCollabFlushAck(null);
+      setCollabRebaseKey(0);
       setCollabRecoveryError(null);
     } else {
       liveCollabSessionRef.current = null;
       setCollabFlushAck(null);
+      setCollabRebaseKey(0);
       setCollabRecoveryError(null);
     }
   }, [selectedContentType, selectedDocumentId, selectedPath]);
@@ -1091,6 +1094,33 @@ function Workspace() {
     setConflictDetails(null);
   }
 
+  function useRemoteConflictVersion() {
+    if (!conflictRemote || !conflictDetails || !activeLibrary || !selectedPath) return;
+    contentRef.current = conflictRemote;
+    loadedDocumentRef.current = {
+      library: activeLibrary,
+      path: selectedPath,
+      etag: conflictDetails.remoteEtag,
+      documentId: loadedDocumentRef.current?.documentId ?? selectedDocumentId,
+    };
+    clearDraft(activeLibrary, selectedPath, conflictDetails.baseEtag);
+    setContent(conflictRemote);
+    setEtag(conflictDetails.remoteEtag);
+    setConflictRemote(null);
+    setConflictDetails(null);
+    setCollabExternalChange(null);
+    setCollabRebaseKey((key) => key + 1);
+    transitionSaveState('clean');
+  }
+
+  async function reviewCollabExternalChange() {
+    if (!activeLibrary || !selectedPath || !etag) return;
+    const remote = await getDocument(activeLibrary, selectedPath);
+    setConflictDetails({ baseEtag: etag, path: selectedPath, remoteEtag: remote.etag });
+    setConflictRemote(remote.content);
+    setEtag(remote.etag);
+  }
+
   function transitionSaveState(next: SaveState) {
     saveStateRef.current = next;
     setSaveState(next);
@@ -1162,7 +1192,11 @@ function Workspace() {
                 onShare={() => void shareCurrentDocument()}
               />
               {collabExternalChange ? (
-                <CollabExternalChangeBanner change={collabExternalChange} />
+                <CollabExternalChangeBanner
+                  change={collabExternalChange}
+                  onDiscard={() => setSelectedPath('')}
+                  onReview={() => void reviewCollabExternalChange()}
+                />
               ) : null}
               {collabRecoveryError ? (
                 <CollabRecoveryErrorBanner error={collabRecoveryError} />
@@ -1177,6 +1211,7 @@ function Workspace() {
                 onCollabFlusherChange={changeCollabFlusher}
                 onCollabRecoveryError={recordCollabRecoveryError}
                 collabToken={routeCollabToken}
+                collabRebaseKey={collabRebaseKey}
                 contentHash={selectedEntry?.content_hash}
                 content={content}
                 contentType={selectedContentType}
@@ -1271,7 +1306,7 @@ function Workspace() {
               </pre>
             </div>
             <div className="col-span-2 flex justify-end gap-2">
-              <button className={secondaryButton} onClick={() => setContent(conflictRemote)}>
+              <button className={secondaryButton} onClick={useRemoteConflictVersion}>
                 Use remote
               </button>
               <button
@@ -1351,6 +1386,7 @@ function DocumentBody({
   collabFlushAck,
   collabSessionId,
   collabToken,
+  collabRebaseKey,
   contentHash,
   content,
   contentType,
@@ -1370,6 +1406,7 @@ function DocumentBody({
   collabFlushAck: CollabFlushAck | null;
   collabSessionId: string;
   collabToken?: string;
+  collabRebaseKey: number;
   contentHash?: string | null;
   content: string;
   contentType: string;
@@ -1391,6 +1428,7 @@ function DocumentBody({
           onFlushAck: onCollabFlushAck,
           onFlusherChange: onCollabFlusherChange,
           onRecoveryError: onCollabRecoveryError,
+          rebaseKey: collabRebaseKey,
           sessionId: collabSessionId,
           token: collabToken,
         }
@@ -2696,7 +2734,15 @@ function DocumentModeSelect({
   );
 }
 
-function CollabExternalChangeBanner({ change }: { change: CollabExternalChange }) {
+function CollabExternalChangeBanner({
+  change,
+  onDiscard,
+  onReview,
+}: {
+  change: CollabExternalChange;
+  onDiscard: () => void;
+  onReview: () => void;
+}) {
   const detail =
     change.kind === 'deleted'
       ? 'Deleted externally'
@@ -2704,10 +2750,18 @@ function CollabExternalChangeBanner({ change }: { change: CollabExternalChange }
   return (
     <div className="flex min-h-9 items-center gap-2 border-b border-warn-line bg-warn-tint px-4 text-xs text-warn-ink">
       <AlertTriangle className="shrink-0" size={14} />
-      <span className="min-w-0 truncate">
+      <span className="min-w-0 flex-1 truncate">
         <span className="font-medium">{detail}</span>
         <span className="text-warn-ink/80"> · {change.path}</span>
       </span>
+      {change.kind === 'changed' ? (
+        <button className={secondaryButton} onClick={onReview} type="button">
+          Review
+        </button>
+      ) : null}
+      <button className={secondaryButton} onClick={onDiscard} type="button">
+        Discard
+      </button>
     </div>
   );
 }

@@ -309,6 +309,7 @@ export interface CollabEditorConfig {
   onFlushAck?: (ack: CollabFlushAck) => void;
   onFlusherChange?: (isFlusher: boolean) => void;
   onRecoveryError?: (error: CollabRecoveryError) => void;
+  rebaseKey?: number;
   sessionId: string;
   token?: string;
 }
@@ -334,6 +335,7 @@ export function PlateMarkdownEditor({
   const storeGetMeta = useReviewStore((s) => s.getMeta);
   const collabEnabled = Boolean(collab?.documentId);
   const collabDocumentId = collab?.documentId ?? '';
+  const collabRebaseKey = collab?.rebaseKey ?? 0;
 
   // The review codec serializes both the value (inline CriticMarkup) and the
   // store's metadata (YAML endmatter). `syncSuggestionsFromValue` mirrors any
@@ -432,7 +434,7 @@ export function PlateMarkdownEditor({
       disposed = true;
       editor.getApi(YjsPlugin).yjs.destroy();
     };
-  }, [collabDocumentId, collabEnabled, editor, storeHydrate]);
+  }, [collabDocumentId, collabEnabled, collabRebaseKey, editor, storeHydrate]);
 
   useEffect(() => {
     if (collabEnabled) return;
