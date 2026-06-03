@@ -559,6 +559,7 @@ async fn get_document(
         document.content,
         &document.version.content_type,
         &document.version.id,
+        &document.id,
     )
 }
 
@@ -632,6 +633,10 @@ async fn head_document(
     response.headers_mut().insert(
         header::ETAG,
         HeaderValue::from_str(&etag(&document.head_version_id)).unwrap(),
+    );
+    response.headers_mut().insert(
+        "x-quarry-document-id",
+        HeaderValue::from_str(&document.id).unwrap(),
     );
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -1531,6 +1536,7 @@ fn bytes_response(
     content: Vec<u8>,
     content_type: &str,
     version_id: &str,
+    document_id: &str,
 ) -> Result<Response, ApiError> {
     let mut response = Response::new(axum::body::Body::from(content));
     *response.status_mut() = status;
@@ -1542,6 +1548,10 @@ fn bytes_response(
     response.headers_mut().insert(
         header::ETAG,
         HeaderValue::from_str(&etag(version_id)).unwrap(),
+    );
+    response.headers_mut().insert(
+        "x-quarry-document-id",
+        HeaderValue::from_str(document_id).unwrap(),
     );
     Ok(response)
 }

@@ -101,6 +101,10 @@ import type {
   GitPeer,
   GitSyncResult,
 } from '../api/client';
+import {
+  classifyLiveDocumentEvent,
+  type LiveCollabSession,
+} from '../features/collab/session-events';
 import { clearDraft, loadDraft, saveDraft } from '../features/editor/drafts';
 import { MarkdownEditor, type EditorMode, type ImageApi, type WikiLinkApi } from '../features/editor/MarkdownEditor';
 import { imageAssetPath, resolveImageSrc } from '../features/editor/image';
@@ -127,6 +131,12 @@ interface BrowserEventPayload {
   path?: string | null;
   from?: string | null;
   to?: string | null;
+  doc_id?: string | null;
+  version_id?: string | null;
+  etag?: string | null;
+  collab_session_id?: string | null;
+  source?: string | null;
+  tx_id?: string | null;
   peer_id?: string | null;
   applied?: number | null;
   conflicts?: number | null;
@@ -136,6 +146,12 @@ interface SaveConflictDetails {
   baseEtag: string;
   path: string;
   remoteEtag: string;
+}
+
+interface CollabExternalChange {
+  kind: 'changed' | 'deleted';
+  path: string;
+  etag?: string | null;
 }
 
 interface TreeMenuState {
@@ -198,9 +214,16 @@ function Workspace() {
   const contentRef = useRef(content);
   const openDocumentRef = useRef<(path: string) => void>(() => {});
   const saveStateRef = useRef(saveState);
-  const loadedDocumentRef = useRef<{ library: string; path: string; etag: string } | null>(null);
+  const loadedDocumentRef = useRef<{
+    library: string;
+    path: string;
+    etag: string;
+    documentId: string;
+  } | null>(null);
+  const liveCollabSessionRef = useRef<LiveCollabSession | null>(null);
   const searchQueryRef = useRef(searchQuery);
   const appliedRouteRef = useRef(location.pathname);
+  const [collabExternalChange, setCollabExternalChange] = useState<CollabExternalChange | null>(null);
 
   useEffect(() => {
     if (!activeLibrary && libraries.length >= 1) {
@@ -382,6 +405,41 @@ function Workspace() {
       }
 
       const currentPath = selectedPathRef.current;
+      const liveDecision = classifyLiveDocumentEvent(payload, liveCollabSessionRef.current);
+      if (liveDecision.action === 'ignore_flush_echo') {
+        return;
+      }
+      if (liveDecision.action === 'external_change') {
+        if (currentPath) {
+          setCollabExternalChange({ kind: 'changed', path: currentPath, etag: payload.etag });
+          void mutate(['/v1/versions', activeLibrary, currentPath]);
+          void mutate(['/v1/outgoing', activeLibrary, currentPath]);
+          void mutate(['/v1/backlinks', activeLibrary, currentPath]);
+        }
+        return;
+      }
+      if (liveDecision.action === 'external_delete') {
+        if (currentPath) {
+          setCollabExternalChange({ kind: 'deleted', path: currentPath, etag: payload.etag });
+          void mutate(['/v1/versions', activeLibrary, currentPath]);
+          void mutate(['/v1/outgoing', activeLibrary, currentPath]);
+          void mutate(['/v1/backlinks', activeLibrary, currentPath]);
+        }
+        return;
+      }
+      if (liveDecision.action === 'retarget_move') {
+        if (liveCollabSessionRef.current) {
+          liveCollabSessionRef.current = {
+            ...liveCollabSessionRef.current,
+            path: liveDecision.path,
+          };
+        }
+        setSelectedPath(liveDecision.path);
+        setCollabExternalChange(null);
+        invalidateCurrentBacklinks();
+        return;
+      }
+
       if (payload.type === 'doc.deleted' && payload.path === currentPath) {
         setSelectedPath('');
         return;
@@ -547,7 +605,12 @@ function Workspace() {
       loadedDocument?.library === activeLibrary && loadedDocument.path === selectedPath;
     if (sameDocument && hasUnsavedEditorState(saveStateRef.current)) {
       if (loadedDocument.etag !== document.etag) {
-        loadedDocumentRef.current = { library: activeLibrary, path: selectedPath, etag: document.etag };
+        loadedDocumentRef.current = {
+          library: activeLibrary,
+          path: selectedPath,
+          etag: document.etag,
+          documentId: document.documentId,
+        };
         setEtag(document.etag);
         setContentType(document.contentType);
         setConflictDetails({
@@ -564,13 +627,19 @@ function Workspace() {
     const preserveSavedState =
       sameDocument && loadedDocument?.etag === document.etag && saveStateRef.current === 'saved';
     const draft = loadDraft(activeLibrary, selectedPath, document.etag);
-    loadedDocumentRef.current = { library: activeLibrary, path: selectedPath, etag: document.etag };
+    loadedDocumentRef.current = {
+      library: activeLibrary,
+      path: selectedPath,
+      etag: document.etag,
+      documentId: document.documentId,
+    };
     setContent(draft?.content ?? document.content);
     setEtag(document.etag);
     setContentType(document.contentType);
     transitionSaveState(draft ? 'drafted' : preserveSavedState ? 'saved' : 'clean');
     setConflictRemote(null);
     setConflictDetails(null);
+    setCollabExternalChange(null);
     setSelectedVersionId(null);
     setCompareVersionId(null);
     setCurrentDiffOpen(false);
@@ -601,6 +670,8 @@ function Workspace() {
     const savingPath = selectedPath;
     const savingEtag = etag;
     const savingContent = content;
+    const savingDocumentId =
+      loadedDocumentRef.current?.documentId ?? document?.documentId ?? selectedEntry?.id ?? '';
     if (!savingLibrary || !savingPath || !savingEtag) return;
     if (!isTextContentType(contentType)) return;
     if (saveStateRef.current === 'saving') return;
@@ -615,9 +686,15 @@ function Workspace() {
     try {
       const saved = await putDocument(savingLibrary, savingPath, savingContent, savingEtag, contentType);
       const savedEtag = saved.etag || `"${saved.outcome.version.id}"`;
+      const savedDocumentId = saved.outcome.document.id || savingDocumentId;
       clearDraft(savingLibrary, savingPath, savingEtag);
       if (!onSameDocument()) return;
-      loadedDocumentRef.current = { library: savingLibrary, path: savingPath, etag: savedEtag };
+      loadedDocumentRef.current = {
+        library: savingLibrary,
+        path: savingPath,
+        etag: savedEtag,
+        documentId: savedDocumentId,
+      };
       setEtag(savedEtag);
       // If edits landed while the request was in flight, the newer text still
       // needs saving: re-draft under the new ETag and drop back to `drafted` so
@@ -631,7 +708,13 @@ function Workspace() {
       await Promise.all([
         mutate(
           ['/v1/document', savingLibrary, savingPath],
-          { content: savingContent, contentType, etag: savedEtag, path: savingPath },
+          {
+            content: savingContent,
+            contentType,
+            documentId: savedDocumentId,
+            etag: savedEtag,
+            path: savingPath,
+          },
           { revalidate: false }
         ),
         mutate(['/v1/documents', savingLibrary]),
@@ -954,6 +1037,9 @@ function Workspace() {
                 onDownload={downloadCurrentMarkdown}
                 onRename={renameCurrent}
               />
+              {collabExternalChange ? (
+                <CollabExternalChangeBanner change={collabExternalChange} />
+              ) : null}
               <DocumentBody
                 activeLibrary={activeLibrary}
                 byteSize={selectedEntry?.byte_size}
@@ -2408,6 +2494,22 @@ function DocumentModeSelect({
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
+  );
+}
+
+function CollabExternalChangeBanner({ change }: { change: CollabExternalChange }) {
+  const detail =
+    change.kind === 'deleted'
+      ? 'Deleted externally'
+      : `External version available${change.etag ? ` · ${change.etag}` : ''}`;
+  return (
+    <div className="flex min-h-9 items-center gap-2 border-b border-warn-line bg-warn-tint px-4 text-xs text-warn-ink">
+      <AlertTriangle className="shrink-0" size={14} />
+      <span className="min-w-0 truncate">
+        <span className="font-medium">{detail}</span>
+        <span className="text-warn-ink/80"> · {change.path}</span>
+      </span>
+    </div>
   );
 }
 

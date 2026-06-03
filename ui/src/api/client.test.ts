@@ -14,11 +14,14 @@ describe('Quarry API client', () => {
   it('captures ETags from document reads', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => new Response('body', { headers: { ETag: '"v1"' } }))
+      vi.fn(async () =>
+        new Response('body', { headers: { ETag: '"v1"', 'x-quarry-document-id': 'doc-1' } })
+      )
     );
 
     await expect(getDocument('notes', 'a.md')).resolves.toMatchObject({
       content: 'body',
+      documentId: 'doc-1',
       etag: '"v1"',
       path: 'a.md',
     });

@@ -12,6 +12,7 @@ import type {
 } from './generated/types';
 
 export interface LoadedDocument {
+  documentId: string;
   path: string;
   content: string;
   contentType: string;
@@ -83,6 +84,7 @@ export async function getDocument(library: string, path: string): Promise<Loaded
   await assertOk(response);
   const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
   return {
+    documentId: response.headers.get('x-quarry-document-id') ?? '',
     path,
     content: isTextContentType(contentType) ? await response.text() : '',
     contentType,

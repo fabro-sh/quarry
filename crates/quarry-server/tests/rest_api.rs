@@ -46,6 +46,9 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
         .to_str()
         .unwrap()
         .to_string();
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let document_id = body["document"]["id"].as_str().unwrap().to_string();
 
     let response = app
         .clone()
@@ -75,6 +78,10 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[header::ETAG], etag);
     assert_eq!(
+        response.headers()["x-quarry-document-id"],
+        document_id.as_str()
+    );
+    assert_eq!(
         to_bytes(response.into_body(), usize::MAX).await.unwrap(),
         "one"
     );
@@ -92,6 +99,10 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[header::ETAG], etag);
+    assert_eq!(
+        response.headers()["x-quarry-document-id"],
+        document_id.as_str()
+    );
     assert_eq!(
         to_bytes(response.into_body(), usize::MAX).await.unwrap(),
         ""
