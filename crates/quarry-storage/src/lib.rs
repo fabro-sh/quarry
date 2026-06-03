@@ -66,6 +66,7 @@ pub struct StoreEvent {
     pub peer_id: Option<String>,
     pub applied: Option<usize>,
     pub conflicts: Option<usize>,
+    pub collab_session_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -288,6 +289,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
+            collab_session_id: None,
         });
         Ok(metadata)
     }
@@ -354,6 +356,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
+            collab_session_id: None,
         });
         Ok(metadata)
     }
@@ -469,6 +472,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
+            collab_session_id: None,
         });
         Ok(())
     }
@@ -510,6 +514,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
+            collab_session_id: None,
         });
         Ok(())
     }
@@ -602,6 +607,30 @@ impl QuarryStore {
         source: DocumentSource,
         precondition: WritePrecondition,
     ) -> Result<WriteOutcome> {
+        self.put_document_with_collab_session(
+            library,
+            path,
+            content,
+            metadata,
+            content_type,
+            source,
+            precondition,
+            None,
+        )
+        .await
+    }
+
+    pub async fn put_document_with_collab_session(
+        &self,
+        library: &str,
+        path: &str,
+        content: Vec<u8>,
+        metadata: JsonValue,
+        content_type: &str,
+        source: DocumentSource,
+        precondition: WritePrecondition,
+        collab_session_id: Option<String>,
+    ) -> Result<WriteOutcome> {
         let path = normalize_path(path)?;
         let source_for_event = source.clone();
         let _operation_guard = self.normal_write_gate().await;
@@ -663,6 +692,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
+            collab_session_id,
         });
         self.emit_event(links_indexed_event(
             outcome.transaction.library_id.clone(),
@@ -930,6 +960,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
+            collab_session_id: None,
         });
         Ok(report)
     }
@@ -956,6 +987,7 @@ impl QuarryStore {
             peer_id: Some(peer_id.to_string()),
             applied: Some(applied),
             conflicts: Some(conflicts),
+            collab_session_id: None,
         });
         Ok(())
     }
@@ -1339,6 +1371,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
+            collab_session_id: None,
         });
         self.emit_event(links_indexed_event(tx.library_id.clone(), path));
         Ok(tx)
@@ -1474,6 +1507,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
+            collab_session_id: None,
         });
         self.emit_event(links_indexed_event(tx.library_id.clone(), to_path));
         Ok(tx)
@@ -1571,6 +1605,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
+            collab_session_id: None,
         });
         self.emit_event(links_indexed_event(tx.library_id.clone(), to_path));
         Ok(tx)
@@ -1884,6 +1919,7 @@ impl QuarryStore {
                             peer_id: None,
                             applied: None,
                             conflicts: None,
+            collab_session_id: None,
                         });
                         events.push(links_indexed_event(tx.library_id.clone(), change.path.clone()));
                     }
@@ -1911,6 +1947,7 @@ impl QuarryStore {
                             peer_id: None,
                             applied: None,
                             conflicts: None,
+            collab_session_id: None,
                         });
                         events.push(links_indexed_event(tx.library_id.clone(), change.path.clone()));
                     }
@@ -1971,6 +2008,7 @@ impl QuarryStore {
                                 peer_id: None,
                                 applied: None,
                                 conflicts: None,
+            collab_session_id: None,
                             });
                             events.push(links_indexed_event(tx.library_id.clone(), new_path));
                             continue;
@@ -1996,6 +2034,7 @@ impl QuarryStore {
                             peer_id: None,
                             applied: None,
                             conflicts: None,
+            collab_session_id: None,
                         });
                         events.push(links_indexed_event(tx.library_id.clone(), new_path));
                     }
@@ -2253,6 +2292,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
+            collab_session_id: None,
         });
         Ok(conflict)
     }
@@ -2290,6 +2330,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
+            collab_session_id: None,
         });
         Ok(conflict)
     }
@@ -4036,6 +4077,7 @@ fn links_indexed_event(library_id: String, path: String) -> StoreEvent {
         peer_id: None,
         applied: None,
         conflicts: None,
+        collab_session_id: None,
     }
 }
 

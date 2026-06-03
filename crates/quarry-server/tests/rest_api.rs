@@ -3,7 +3,7 @@ use axum::http::{header, Method, Request, StatusCode};
 use futures_util::{SinkExt, StreamExt};
 use quarry_core::DocumentSource;
 use quarry_server::router;
-use quarry_storage::{QuarryStore, StoreConfig};
+use quarry_storage::{QuarryStore, StoreConfig, StoreEventKind};
 use serde_json::Value;
 use tokio::time::{timeout, Duration};
 use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
@@ -281,6 +281,50 @@ async fn collab_websocket_accepts_yjs_updates_by_document_id() {
     assert!(matches!(message, YMessage::Sync(SyncMessage::Update(_))));
 
     server.abort();
+}
+
+#[tokio::test]
+async fn document_put_events_echo_collab_session_id() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    store.create_library("collab-events").await.unwrap();
+    let mut events = store.subscribe_events();
+    let app = router(store);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/collab-events/documents/live.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header("X-Quarry-Collab-Session-Id", "browser:session-1")
+                .body(Body::from("live"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let event = timeout(Duration::from_secs(2), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if event.kind == StoreEventKind::DocumentPut {
+                break event;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        event.collab_session_id.as_deref(),
+        Some("browser:session-1")
+    );
 }
 
 #[tokio::test]

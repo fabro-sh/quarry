@@ -97,12 +97,15 @@ export function putDocument(
   path: string,
   content: string,
   etag: string,
-  contentType = 'text/markdown'
+  contentType = 'text/markdown',
+  options: { collabSessionId?: string } = {}
 ) {
-  return writeDocument(library, path, content, {
+  const headers: Record<string, string> = {
     'If-Match': etag,
     'content-type': contentType,
-  });
+  };
+  if (options.collabSessionId) headers['X-Quarry-Collab-Session-Id'] = options.collabSessionId;
+  return writeDocument(library, path, content, headers);
 }
 
 export function createDocument(

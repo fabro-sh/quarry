@@ -704,7 +704,13 @@ function Workspace() {
 
     transitionSaveState('saving');
     try {
-      const saved = await putDocument(savingLibrary, savingPath, savingContent, savingEtag, contentType);
+      const savingCollabSession =
+        liveCollabSessionRef.current?.documentId === savingDocumentId
+          ? liveCollabSessionRef.current
+          : null;
+      const saved = await putDocument(savingLibrary, savingPath, savingContent, savingEtag, contentType, {
+        collabSessionId: savingCollabSession?.sessionId ?? undefined,
+      });
       const savedEtag = saved.etag || `"${saved.outcome.version.id}"`;
       const savedDocumentId = saved.outcome.document.id || savingDocumentId;
       clearDraft(savingLibrary, savingPath, savingEtag);
@@ -716,6 +722,13 @@ function Workspace() {
         documentId: savedDocumentId,
       };
       setEtag(savedEtag);
+      if (savingCollabSession && liveCollabSessionRef.current?.documentId === savedDocumentId) {
+        liveCollabSessionRef.current = ackLiveCollabFlush(
+          liveCollabSessionRef.current,
+          saved.outcome.version.id,
+          savedEtag
+        );
+      }
       // If edits landed while the request was in flight, the newer text still
       // needs saving: re-draft under the new ETag and drop back to `drafted` so
       // autosave fires again. Otherwise we're caught up.
@@ -3496,6 +3509,14 @@ function makeCollabSessionId() {
     return `browser:${crypto.randomUUID()}`;
   }
   return `browser:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
+}
+
+function ackLiveCollabFlush(session: LiveCollabSession, versionId: string, etag: string): LiveCollabSession {
+  return {
+    ...session,
+    ackedFlushEtags: new Set([...(session.ackedFlushEtags ?? []), etag]),
+    ackedFlushVersionIds: new Set([...(session.ackedFlushVersionIds ?? []), versionId]),
+  };
 }
 
 function parseBrowserEvent(event: MessageEvent): BrowserEventPayload | null {

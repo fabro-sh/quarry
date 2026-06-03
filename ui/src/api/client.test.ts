@@ -46,6 +46,26 @@ describe('Quarry API client', () => {
     );
   });
 
+  it('stamps live collaboration saves with the collab session id', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ version: { id: 'v2' } }), {
+        headers: { ETag: '"v2"', 'content-type': 'application/json' },
+      })
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await putDocument('notes', 'a.md', 'next', '"v1"', 'text/markdown', {
+      collabSessionId: 'browser:session-1',
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/v1/libraries/notes/documents/a.md',
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'X-Quarry-Collab-Session-Id': 'browser:session-1' }),
+      })
+    );
+  });
+
   it('uses If-None-Match for creates', async () => {
     const fetch = vi.fn(async () =>
       new Response(JSON.stringify({ version: { id: 'v1' } }), {

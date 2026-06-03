@@ -680,9 +680,10 @@ async fn put_document(
     let content_type = content_type(&headers);
     let metadata = metadata_from_headers(&headers, &content_type)?;
     let precondition = precondition_from_headers(&headers)?;
+    let collab_session_id = optional_header(&headers, "x-quarry-collab-session-id")?;
     let outcome = state
         .store
-        .put_document(
+        .put_document_with_collab_session(
             &library,
             &path,
             body.to_vec(),
@@ -690,6 +691,7 @@ async fn put_document(
             &content_type,
             DocumentSource::Rest,
             precondition,
+            collab_session_id,
         )
         .await?;
     json_with_etag(StatusCode::OK, &outcome, &outcome.version.id)
@@ -1285,6 +1287,7 @@ mod tests {
             peer_id: None,
             applied: None,
             conflicts: None,
+            collab_session_id: Some("browser:session-1".to_string()),
         };
 
         let event_type = store_event_type(&event);
@@ -1297,6 +1300,7 @@ mod tests {
         assert_eq!(payload["doc_id"], "doc-1");
         assert_eq!(payload["version_id"], "version-1");
         assert_eq!(payload["etag"], "\"version-1\"");
+        assert_eq!(payload["collab_session_id"], "browser:session-1");
     }
 
     #[test]
@@ -1314,6 +1318,7 @@ mod tests {
             peer_id: None,
             applied: None,
             conflicts: None,
+            collab_session_id: None,
         };
 
         let event_type = store_event_type(&event);
@@ -1341,6 +1346,7 @@ mod tests {
             peer_id: None,
             applied: None,
             conflicts: None,
+            collab_session_id: None,
         };
 
         let event_type = store_event_type(&event);
@@ -1366,6 +1372,7 @@ mod tests {
             peer_id: None,
             applied: None,
             conflicts: None,
+            collab_session_id: None,
         };
 
         let event_type = store_event_type(&event);
@@ -1392,6 +1399,7 @@ mod tests {
             peer_id: Some("peer-1".to_string()),
             applied: Some(2),
             conflicts: Some(1),
+            collab_session_id: None,
         };
 
         let event_type = store_event_type(&event);
@@ -1422,6 +1430,18 @@ fn precondition_from_headers(headers: &HeaderMap) -> Result<WritePrecondition, A
         return Ok(WritePrecondition::IfMatch(value));
     }
     Ok(WritePrecondition::None)
+}
+
+fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<String>, ApiError> {
+    headers
+        .get(name)
+        .map(|value| {
+            value
+                .to_str()
+                .map(str::to_string)
+                .map_err(|_| QuarryError::Storage(format!("invalid {name} header")).into())
+        })
+        .transpose()
 }
 
 fn export_options(request: &GitExportRequest) -> GitExportOptions {
@@ -1519,6 +1539,12 @@ fn store_event_payload(library: &str, event_type: &str, event: &StoreEvent) -> J
         }
         if let Some(conflicts) = event.conflicts {
             object.insert("conflicts".to_string(), JsonValue::from(conflicts));
+        }
+        if let Some(collab_session_id) = &event.collab_session_id {
+            object.insert(
+                "collab_session_id".to_string(),
+                JsonValue::String(collab_session_id.clone()),
+            );
         }
     }
     payload
