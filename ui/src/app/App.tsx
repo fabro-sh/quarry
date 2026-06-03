@@ -1121,6 +1121,29 @@ function Workspace() {
     setEtag(remote.etag);
   }
 
+  async function resurrectDeletedCollabDocument() {
+    if (!activeLibrary || !selectedPath || !isTextContentType(contentType)) return;
+    const resurrected = await createDocument(activeLibrary, selectedPath, content, contentType);
+    const nextEtag = resurrected.etag || `"${resurrected.outcome.version.id}"`;
+    loadedDocumentRef.current = {
+      library: activeLibrary,
+      path: selectedPath,
+      etag: nextEtag,
+      documentId: resurrected.outcome.document.id,
+    };
+    setEtag(nextEtag);
+    setCollabExternalChange(null);
+    setCollabRebaseKey((key) => key + 1);
+    transitionSaveState('saved');
+    await Promise.all([
+      mutate(['/v1/document', activeLibrary, selectedPath]),
+      mutate(['/v1/documents', activeLibrary]),
+      mutate(['/v1/versions', activeLibrary, selectedPath]),
+      mutate(['/v1/outgoing', activeLibrary, selectedPath]),
+      mutate(['/v1/backlinks', activeLibrary, selectedPath]),
+    ]);
+  }
+
   function transitionSaveState(next: SaveState) {
     saveStateRef.current = next;
     setSaveState(next);
@@ -1196,6 +1219,7 @@ function Workspace() {
                   change={collabExternalChange}
                   onDiscard={() => setSelectedPath('')}
                   onReview={() => void reviewCollabExternalChange()}
+                  onResurrect={() => void resurrectDeletedCollabDocument()}
                 />
               ) : null}
               {collabRecoveryError ? (
@@ -2738,10 +2762,12 @@ function CollabExternalChangeBanner({
   change,
   onDiscard,
   onReview,
+  onResurrect,
 }: {
   change: CollabExternalChange;
   onDiscard: () => void;
   onReview: () => void;
+  onResurrect: () => void;
 }) {
   const detail =
     change.kind === 'deleted'
@@ -2757,6 +2783,11 @@ function CollabExternalChangeBanner({
       {change.kind === 'changed' ? (
         <button className={secondaryButton} onClick={onReview} type="button">
           Review
+        </button>
+      ) : null}
+      {change.kind === 'deleted' ? (
+        <button className={secondaryButton} onClick={onResurrect} type="button">
+          Resurrect
         </button>
       ) : null}
       <button className={secondaryButton} onClick={onDiscard} type="button">
