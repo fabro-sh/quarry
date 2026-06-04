@@ -66,6 +66,141 @@ describe('Quarry Browser workspace', () => {
     expect(screen.getByRole('button', { name: 'Document mode' })).toHaveTextContent('Editing');
   });
 
+  it('opens Add agent instructions and copies the agent prompt', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/v1/libraries') {
+        return json([{ id: 'lib-agent', slug: 'agent-lib', created_at: 'now', settings: {} }]);
+      }
+      if (url === '/v1/libraries/agent-lib/documents') {
+        return json([
+          {
+            id: 'doc-agent',
+            path: 'folder/live.md',
+            head_version_id: 'v-agent',
+            content_type: 'text/markdown',
+            byte_size: 12,
+            metadata: { title: 'Live' },
+            updated_at: 'now',
+          },
+        ]);
+      }
+      if (url === '/v1/libraries/agent-lib/documents/folder/live.md') {
+        return new Response('# Live', { headers: { ETag: '"v-agent"', 'content-type': 'text/markdown' } });
+      }
+      if (url === '/v1/libraries/agent-lib/documents/folder/live.md/share' && init?.method === 'POST') {
+        expect(JSON.parse(String(init.body))).toMatchObject({ byHint: 'user', role: 'editor' });
+        return json({
+          id: 'invite-agent',
+          document_id: 'doc-agent',
+          role: 'editor',
+          by_hint: 'user',
+          created_at: 'now',
+          revoked_at: null,
+        });
+      }
+      if (url === '/v1/libraries/agent-lib/documents/folder/live.md/presence') {
+        return json({ presence: [] });
+      }
+      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) {
+        return json({ path: 'folder/live.md', links: [] });
+      }
+      if (url.startsWith('/v1/libraries/agent-lib/graph')) {
+        return json({ nodes: [], edges: [], truncated: false });
+      }
+      if (url.endsWith('/versions')) return json([]);
+      if (url === '/v1/libraries/agent-lib/conflicts') return json([]);
+      if (url === '/v1/libraries/agent-lib/git/peers') return json([]);
+      if (url.startsWith('/v1/libraries/agent-lib/search')) return json({ results: [], cursor: null });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    await userEvent.click(await screen.findByRole('treeitem', { name: /Live/ }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Add agent' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Add agent' });
+    await within(dialog).findByText(/Quarry is a local-first collaborative Markdown editor/);
+    await within(dialog).findByText(/trusted-localhost/);
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Copy instructions' }));
+    const copied = writeText.mock.lastCall?.[0] as string;
+    expect(copied).toContain('http://127.0.0.1/lib/agent-lib/documents/folder/live.md?token=invite-agent');
+    expect(copied).toContain('POST http://127.0.0.1/v1/libraries/agent-lib/documents/folder/live.md/presence');
+    expect(copied).toContain('Connected in Quarry and ready.');
+    expect(await within(dialog).findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Copy invite link' }));
+    expect(writeText.mock.lastCall?.[0]).toBe(
+      'http://127.0.0.1/lib/agent-lib/documents/folder/live.md?token=invite-agent'
+    );
+    expect(await within(dialog).findByRole('button', { name: 'Copied link' })).toBeInTheDocument();
+  });
+
+  it('renders agent presence in the document toolbar', async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/v1/libraries') {
+        return json([{ id: 'lib-presence-ui', slug: 'presence-ui', created_at: 'now', settings: {} }]);
+      }
+      if (url === '/v1/libraries/presence-ui/documents') {
+        return json([
+          {
+            id: 'doc-presence-ui',
+            path: 'live.md',
+            head_version_id: 'v-presence',
+            content_type: 'text/markdown',
+            byte_size: 8,
+            metadata: { title: 'Live' },
+            updated_at: 'now',
+          },
+        ]);
+      }
+      if (url === '/v1/libraries/presence-ui/documents/live.md') {
+        return new Response('# Live', { headers: { ETag: '"v-presence"', 'content-type': 'text/markdown' } });
+      }
+      if (url === '/v1/libraries/presence-ui/documents/live.md/presence') {
+        return json({
+          presence: [
+            {
+              library: 'presence-ui',
+              path: 'live.md',
+              documentId: 'doc-presence-ui',
+              agentId: 'ai:codex:abc',
+              status: 'waiting',
+              by: 'Codex',
+              updatedAt: '2026-06-04T12:00:00Z',
+            },
+          ],
+        });
+      }
+      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) {
+        return json({ path: 'live.md', links: [] });
+      }
+      if (url.startsWith('/v1/libraries/presence-ui/graph')) {
+        return json({ nodes: [], edges: [], truncated: false });
+      }
+      if (url.endsWith('/versions')) return json([]);
+      if (url === '/v1/libraries/presence-ui/conflicts') return json([]);
+      if (url === '/v1/libraries/presence-ui/git/peers') return json([]);
+      if (url.startsWith('/v1/libraries/presence-ui/search')) return json({ results: [], cursor: null });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    await userEvent.click(await screen.findByRole('treeitem', { name: /Live/ }));
+    expect(await screen.findByLabelText('Agent presence')).toHaveTextContent('Codex · waiting');
+  });
+
   it('persists the selected right pane tab per library', async () => {
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

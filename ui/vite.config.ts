@@ -11,6 +11,15 @@ export default defineConfig({
         target: 'http://127.0.0.1:7831',
         ws: true,
       },
+      '/quarry.SKILL.md': {
+        target: 'http://127.0.0.1:7831',
+      },
+      '/agent-docs': {
+        target: 'http://127.0.0.1:7831',
+      },
+      '/.well-known/agent.json': {
+        target: 'http://127.0.0.1:7831',
+      },
     },
   },
   test: {

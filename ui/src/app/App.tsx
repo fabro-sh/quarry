@@ -3,10 +3,12 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { Command } from 'cmdk';
 import {
   AlertTriangle,
+  Bot,
   Braces,
   Check,
   CheckCircle2,
   ChevronDown,
+  Copy,
   Download,
   Eye,
   FileArchive,
@@ -57,6 +59,7 @@ import useSWR, { useSWRConfig } from 'swr';
 
 import {
   ApiPreconditionError,
+  type AgentPresenceEntry,
   backlinks,
   createCollabInvite,
   createDocument,
@@ -73,6 +76,7 @@ import {
   gitPush,
   gitSync,
   isTextContentType,
+  listAgentPresence,
   listConflicts,
   listDocuments,
   listGitPeers,
@@ -120,6 +124,7 @@ import { imageAssetPath, resolveImageSrc } from '../features/editor/image';
 import { loadAuthor, saveAuthor } from '../features/review/identity';
 import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../features/tree/tree-model';
 import { cn } from '../lib/utils';
+import { buildAddAgentPrompt, buildTokenizedDocumentUrl } from './agent-invite';
 
 type SaveState = 'clean' | 'dirty' | 'drafted' | 'saving' | 'saved' | 'stale' | 'failed';
 type EventState = 'idle' | 'connecting' | 'open' | 'polling' | 'error';
@@ -170,6 +175,14 @@ interface TreeMenuState {
   y: number;
 }
 
+interface AddAgentModalState {
+  open: boolean;
+  loading: boolean;
+  instructions: string;
+  inviteLink: string;
+  error: string;
+}
+
 export function App() {
   return (
     <BrowserRouter>
@@ -212,6 +225,13 @@ function Workspace() {
   const [paletteQuery, setPaletteQuery] = useState('');
   const [gitOpen, setGitOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [addAgentModal, setAddAgentModal] = useState<AddAgentModalState>({
+    open: false,
+    loading: false,
+    instructions: '',
+    inviteLink: '',
+    error: '',
+  });
   const [lastSyncResult, setLastSyncResult] = useState('');
   const [author, setAuthor] = useState(() => loadAuthor());
   const [theme, setTheme] = useState<ThemePreference>(() =>
@@ -730,6 +750,13 @@ function Workspace() {
   const layoutStorageKey = activeLibrary ? `quarry:layout:${activeLibrary}` : 'quarry:layout:workspace';
   const mergeConflict = conflicts.find((conflict) => conflict.id === mergeConflictId) ?? null;
   const saveConflictDialogRef = useDialogFocusTrap(Boolean(conflictRemote), closeSaveConflictDialog);
+  const { data: agentPresence = { presence: [] } } = useSWR(
+    activeLibrary && selectedPath && isTextContentType(selectedContentType)
+      ? ['/v1/agent-presence', activeLibrary, selectedPath]
+      : null,
+    () => listAgentPresence(activeLibrary, selectedPath),
+    { refreshInterval: 3_000 }
+  );
 
   useEffect(() => {
     if (selectedPath && collabDocumentId && isTextContentType(selectedContentType)) {
@@ -1022,6 +1049,55 @@ function Workspace() {
     }
   }
 
+  async function openAddAgentModal() {
+    if (!activeLibrary || !selectedPath) return;
+    const library = activeLibrary;
+    const path = selectedPath;
+    setAddAgentModal({
+      open: true,
+      loading: true,
+      instructions: '',
+      inviteLink: '',
+      error: '',
+    });
+    try {
+      const token = await createCollabInvite(library, path, {
+        byHint: author,
+        role: 'editor',
+      });
+      const tokenizedDocUrl = buildTokenizedDocumentUrl({
+        origin: window.location.origin,
+        library,
+        path,
+        token: token.id,
+      });
+      setAddAgentModal({
+        open: true,
+        loading: false,
+        instructions: buildAddAgentPrompt({
+          origin: window.location.origin,
+          library,
+          path,
+          tokenizedDocUrl,
+        }),
+        inviteLink: tokenizedDocUrl,
+        error: '',
+      });
+    } catch (error) {
+      setAddAgentModal({
+        open: true,
+        loading: false,
+        instructions: '',
+        inviteLink: '',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  function closeAddAgentModal() {
+    setAddAgentModal((state) => ({ ...state, open: false }));
+  }
+
   async function deleteDocumentPath(path: string) {
     if (!activeLibrary) return;
     if (!window.confirm(`Delete ${path}?`)) return;
@@ -1290,11 +1366,13 @@ function Workspace() {
           {selectedPath ? (
             <div className="flex h-full min-h-0 flex-col">
               <DocumentToolbar
+                agentPresence={agentPresence.presence}
                 isText={isTextContentType(selectedContentType)}
                 mode={editorMode}
                 onModeChange={setEditorMode}
                 path={selectedPath}
                 saveState={saveState}
+                onAddAgent={() => void openAddAgentModal()}
                 onDelete={deleteCurrent}
                 onDownload={downloadCurrentMarkdown}
                 onRename={renameCurrent}
@@ -1451,6 +1529,15 @@ function Workspace() {
         onSearch={setSearchQuery}
         onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
         theme={theme}
+      />
+
+      <AddAgentDialog
+        error={addAgentModal.error}
+        instructions={addAgentModal.instructions}
+        inviteLink={addAgentModal.inviteLink}
+        loading={addAgentModal.loading}
+        open={addAgentModal.open}
+        onClose={closeAddAgentModal}
       />
 
       <SettingsDialog
@@ -1833,6 +1920,105 @@ function CommandPalette({
       </div>
     </div>
   );
+}
+
+function AddAgentDialog({
+  error,
+  instructions,
+  inviteLink,
+  loading,
+  open,
+  onClose,
+}: {
+  error: string;
+  instructions: string;
+  inviteLink: string;
+  loading: boolean;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const dialogRef = useDialogFocusTrap(open, onClose);
+  const [copied, setCopied] = useState<'instructions' | 'link' | null>(null);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(null), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
+  if (!open) return null;
+
+  return (
+    <Dialog open>
+      <div className="fixed inset-0 z-40 bg-black/20" onMouseDown={onClose} />
+      <div
+        aria-label="Add agent"
+        aria-modal="true"
+        className="fixed left-1/2 top-1/2 z-50 flex max-h-[86vh] w-[min(460px,92vw)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-md border border-line-strong bg-surface shadow-xl"
+        onMouseDown={(event) => event.stopPropagation()}
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-4">
+          <Bot size={16} className="text-accent" />
+          <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">Add agent</h2>
+          <button className={secondaryButton} onClick={onClose} type="button">
+            Close
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
+          <p className="text-sm leading-6 text-body">
+            Copy these instructions and paste them into your AI agent. It will join this document
+            and work alongside you in real time, editing directly or leaving comments and
+            suggestions for you to review.
+          </p>
+          {error ? (
+            <p className="rounded-md border border-warn-line bg-warn-tint px-3 py-2 text-sm text-warn-ink">
+              {error}
+            </p>
+          ) : null}
+          <div className="space-y-2">
+            <pre className="max-h-43 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-line bg-raised p-3 font-mono text-xs leading-5 text-muted">
+              {loading ? 'Preparing instructions...' : instructions}
+            </pre>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button
+                className={`${primaryButton} justify-center`}
+                disabled={!instructions || loading}
+                onClick={() =>
+                  void copyText(instructions, 'Agent instructions').then(() => setCopied('instructions'))
+                }
+                type="button"
+              >
+                {copied === 'instructions' ? <Check size={14} /> : <Copy size={14} />}
+                {copied === 'instructions' ? 'Copied' : 'Copy instructions'}
+              </button>
+              <button
+                className={`${secondaryButton} justify-center`}
+                disabled={!inviteLink || loading}
+                onClick={() => void copyText(inviteLink, 'Invite link').then(() => setCopied('link'))}
+                type="button"
+              >
+                {copied === 'link' ? <Check size={14} /> : <Copy size={14} />}
+                {copied === 'link' ? 'Copied link' : 'Copy invite link'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+async function copyText(text: string, promptLabel: string) {
+  if (!text) return;
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+    await navigator.clipboard.writeText(text);
+  } catch {
+    window.prompt(promptLabel, text);
+  }
 }
 
 function SettingsDialog({
@@ -2798,6 +2984,31 @@ function SaveStatusIndicator({ saveState }: { saveState: SaveState }) {
   );
 }
 
+function AgentPresencePill({ presence }: { presence: AgentPresenceEntry[] }) {
+  if (!presence.length) return null;
+  const label =
+    presence.length === 1
+      ? `${agentPresenceName(presence[0])} · ${presence[0].status}`
+      : `${presence.length} agents`;
+  return (
+    <span
+      aria-label="Agent presence"
+      className="inline-flex h-7 max-w-44 shrink-0 items-center gap-1.5 truncate rounded-md border border-accent-line bg-accent-tint px-2.5 text-xs font-medium text-accent-ink"
+      title={presence.map((entry) => `${agentPresenceName(entry)} · ${entry.status}`).join('\n')}
+    >
+      <Bot size={13} className="shrink-0" />
+      <span className="min-w-0 truncate">{label}</span>
+    </span>
+  );
+}
+
+function agentPresenceName(entry: AgentPresenceEntry) {
+  const by = entry.by?.trim();
+  if (by) return by;
+  const parts = entry.agentId.split(':').filter(Boolean);
+  return parts.at(-1) ?? entry.agentId;
+}
+
 // Viewing/Editing/Suggesting selector in the document header (à la Google Docs).
 // The mode is plain React state; the editor reacts to it, so this control needs
 // no editor context.
@@ -2900,21 +3111,25 @@ function CollabRecoveryErrorBanner({ error }: { error: CollabRecoveryError }) {
 }
 
 function DocumentToolbar({
+  agentPresence,
   isText,
   mode,
   onModeChange,
   path,
   saveState,
+  onAddAgent,
   onDelete,
   onDownload,
   onRename,
   onShare,
 }: {
+  agentPresence: AgentPresenceEntry[];
   isText: boolean;
   mode: EditorMode;
   onModeChange: (mode: EditorMode) => void;
   path: string;
   saveState: SaveState;
+  onAddAgent: () => void;
   onDelete: () => void;
   onDownload: () => void;
   onRename: () => void;
@@ -2933,6 +3148,18 @@ function DocumentToolbar({
         ))}
       </h1>
       {isText ? <SaveStatusIndicator saveState={saveState} /> : null}
+      {isText ? <AgentPresencePill presence={agentPresence} /> : null}
+      {isText ? (
+        <button
+          aria-label="Add agent"
+          className={cn(secondaryButton, 'px-2 sm:px-3')}
+          onClick={onAddAgent}
+          type="button"
+        >
+          <Bot size={15} />
+          <span className="hidden sm:inline">Add agent</span>
+        </button>
+      ) : null}
       {isText ? <DocumentModeSelect mode={mode} onModeChange={onModeChange} /> : null}
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>

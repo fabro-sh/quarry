@@ -204,6 +204,16 @@ impl AgentPresenceRegistry {
             presence,
         }
     }
+
+    async fn list(&self, library: &str, path: &str) -> AgentPresenceListResponse {
+        let entries = self.entries.lock().await;
+        let presence = entries
+            .values()
+            .filter(|entry| entry.library == library && entry.path == path)
+            .cloned()
+            .collect();
+        AgentPresenceListResponse { presence }
+    }
 }
 
 pub fn router(store: QuarryStore) -> Router {
@@ -211,6 +221,9 @@ pub fn router(store: QuarryStore) -> Router {
     agent_events.spawn_ingest(store.clone());
 
     let router = Router::new()
+        .route("/quarry.SKILL.md", get(quarry_skill))
+        .route("/agent-docs", get(agent_docs))
+        .route("/.well-known/agent.json", get(agent_discovery))
         .route("/v1/health", get(health))
         .route("/v1/openapi.json", get(openapi_json))
         .route("/v1/admin/gc", post(admin_gc))
@@ -391,6 +404,7 @@ async fn browser_asset(uri: Uri) -> Response {
         document_share_openapi,
         document_share_create_openapi,
         document_share_revoke_openapi,
+        agent_presence_list_openapi,
         agent_presence_openapi,
         agent_events_pending,
         agent_events_ack,
@@ -442,6 +456,7 @@ async fn browser_asset(uri: Uri) -> Response {
         AgentEditBlock,
         AgentPresenceRequest,
         AgentPresenceResponse,
+        AgentPresenceListResponse,
         AgentPresenceEntry,
         AgentPendingEventsResponse,
         AgentEventRecord,
@@ -474,6 +489,243 @@ async fn browser_asset(uri: Uri) -> Response {
     ))
 )]
 struct ApiDoc;
+
+const QUARRY_SKILL_MD: &str = include_str!("../resources/quarry.SKILL.md");
+const AGENT_DOCS_MD: &str = include_str!("../resources/agent-docs.md");
+
+#[derive(Debug, Serialize)]
+struct AgentDiscovery {
+    name: &'static str,
+    api_base: String,
+    docs_url: String,
+    skill_url: String,
+    openapi_url: String,
+    capabilities: Vec<&'static str>,
+    auth_note: &'static str,
+    auth: AgentDiscoveryAuth,
+    presence_statuses: Vec<&'static str>,
+    edit_operations: Vec<&'static str>,
+    ops_operations: Vec<&'static str>,
+    limitations: Vec<&'static str>,
+    route_hints: AgentDiscoveryRouteHints,
+    endpoints: BTreeMap<&'static str, AgentDiscoveryEndpoint>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentDiscoveryAuth {
+    mode: &'static str,
+    token_role: &'static str,
+    required_headers: Vec<&'static str>,
+    note: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentDiscoveryRouteHints {
+    presence: String,
+    snapshot: String,
+    events_stream: String,
+    events_pending: String,
+    edit: String,
+    ops: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentDiscoveryEndpoint {
+    method: &'static str,
+    path: &'static str,
+    url: String,
+}
+
+async fn quarry_skill() -> Response {
+    static_text_response("text/markdown; charset=utf-8", QUARRY_SKILL_MD)
+}
+
+async fn agent_docs() -> Response {
+    static_text_response("text/markdown; charset=utf-8", AGENT_DOCS_MD)
+}
+
+async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
+    let origin = request_origin(&headers);
+    let api_base = format!("{origin}/v1");
+    let document_path = "/v1/libraries/{library}/documents/{path}";
+    let mut endpoints = BTreeMap::new();
+    endpoints.insert(
+        "presence",
+        discovery_endpoint(
+            "POST",
+            "/v1/libraries/{library}/documents/{path}/presence",
+            &api_base,
+        ),
+    );
+    endpoints.insert(
+        "presence_list",
+        discovery_endpoint(
+            "GET",
+            "/v1/libraries/{library}/documents/{path}/presence",
+            &api_base,
+        ),
+    );
+    endpoints.insert(
+        "snapshot",
+        discovery_endpoint(
+            "GET",
+            "/v1/libraries/{library}/documents/{path}/snapshot",
+            &api_base,
+        ),
+    );
+    endpoints.insert(
+        "document",
+        discovery_endpoint("GET", document_path, &api_base),
+    );
+    endpoints.insert(
+        "events_stream",
+        discovery_endpoint(
+            "GET",
+            "/v1/libraries/{library}/documents/{path}/events/stream",
+            &api_base,
+        ),
+    );
+    endpoints.insert(
+        "events_pending",
+        discovery_endpoint(
+            "GET",
+            "/v1/libraries/{library}/events/pending?after={last-seen-id}",
+            &api_base,
+        ),
+    );
+    endpoints.insert(
+        "events_ack",
+        discovery_endpoint("POST", "/v1/libraries/{library}/events/ack", &api_base),
+    );
+    endpoints.insert(
+        "edit",
+        discovery_endpoint(
+            "POST",
+            "/v1/libraries/{library}/documents/{path}/edit",
+            &api_base,
+        ),
+    );
+    endpoints.insert(
+        "ops",
+        discovery_endpoint(
+            "POST",
+            "/v1/libraries/{library}/documents/{path}/ops",
+            &api_base,
+        ),
+    );
+    endpoints.insert(
+        "openapi",
+        discovery_endpoint("GET", "/v1/openapi.json", &api_base),
+    );
+    endpoints.insert(
+        "docs",
+        AgentDiscoveryEndpoint {
+            method: "GET",
+            path: "/agent-docs",
+            url: format!("{origin}/agent-docs"),
+        },
+    );
+    endpoints.insert(
+        "skill",
+        AgentDiscoveryEndpoint {
+            method: "GET",
+            path: "/quarry.SKILL.md",
+            url: format!("{origin}/quarry.SKILL.md"),
+        },
+    );
+    json_response(
+        StatusCode::OK,
+        &AgentDiscovery {
+            name: "quarry",
+            api_base: api_base.clone(),
+            docs_url: format!("{origin}/agent-docs"),
+            skill_url: format!("{origin}/quarry.SKILL.md"),
+            openapi_url: format!("{api_base}/openapi.json"),
+            capabilities: vec![
+                "presence",
+                "snapshot",
+                "events",
+                "block_edit",
+                "comments",
+                "suggestions",
+            ],
+            auth_note:
+                "Quarry REST agent APIs are trusted-localhost for now; URL tokens identify browser/collab joins and are not enforced as REST bearer auth.",
+            auth: AgentDiscoveryAuth {
+                mode: "trusted_localhost",
+                token_role: "locator_only",
+                required_headers: vec!["Content-Type", "X-Agent-Id"],
+                note: "Invite URL tokens identify shared document joins; REST agent endpoints trust localhost for now.",
+            },
+            presence_statuses: vec![
+                "reading",
+                "thinking",
+                "acting",
+                "waiting",
+                "completed",
+                "error",
+            ],
+            edit_operations: vec![
+                "replace_block",
+                "insert_before",
+                "insert_after",
+                "delete_block",
+            ],
+            ops_operations: vec![
+                "comment.add",
+                "suggestion.add",
+                "suggestion.accept",
+                "suggestion.reject",
+                "comment.resolve",
+            ],
+            limitations: vec![
+                "REST agent endpoints trust localhost and do not currently enforce bearer-token auth.",
+                "Invite URL tokens identify browser/collab joins and are not REST bearer tokens.",
+                "Direct block edits operate on whole Markdown blocks.",
+                "Quarry does not currently support rewrite.apply or comment.reply.",
+            ],
+            route_hints: AgentDiscoveryRouteHints {
+                presence: format!("{api_base}/libraries/{{library}}/documents/{{path}}/presence"),
+                snapshot: format!("{api_base}/libraries/{{library}}/documents/{{path}}/snapshot"),
+                events_stream: format!(
+                    "{api_base}/libraries/{{library}}/documents/{{path}}/events/stream"
+                ),
+                events_pending: format!("{api_base}/libraries/{{library}}/events/pending?after={{last-seen-id}}"),
+                edit: format!("{api_base}/libraries/{{library}}/documents/{{path}}/edit"),
+                ops: format!("{api_base}/libraries/{{library}}/documents/{{path}}/ops"),
+            },
+            endpoints,
+        },
+    )
+}
+
+fn discovery_endpoint(
+    method: &'static str,
+    path: &'static str,
+    api_base: &str,
+) -> AgentDiscoveryEndpoint {
+    AgentDiscoveryEndpoint {
+        method,
+        path,
+        url: format!("{}{}", api_base.trim_end_matches("/v1"), path),
+    }
+}
+
+fn request_origin(headers: &HeaderMap) -> String {
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("http");
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("127.0.0.1:7831");
+    format!("{scheme}://{host}")
+}
 
 #[utoipa::path(get, path = "/v1/health", responses((status = 200, body = JsonValue)))]
 async fn health() -> Json<JsonValue> {
@@ -775,6 +1027,11 @@ pub struct AgentPresenceResponse {
     pub presence: Vec<AgentPresenceEntry>,
 }
 
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AgentPresenceListResponse {
+    pub presence: Vec<AgentPresenceEntry>,
+}
+
 #[derive(Clone, Debug, Deserialize, ToSchema)]
 pub struct CreateCollabInviteRequest {
     pub role: String,
@@ -1029,6 +1286,13 @@ async fn get_document(
         return json_response(
             StatusCode::OK,
             &agent_document_snapshot(&state.store, &library, path).await?,
+        );
+    }
+    if let Some(path) = path.strip_suffix("/presence") {
+        state.store.head_document(&library, path).await?;
+        return json_response(
+            StatusCode::OK,
+            &state.agent_presence.list(&library, path).await,
         );
     }
     if let Some(path) = path.strip_suffix("/events/stream") {
@@ -1383,6 +1647,15 @@ async fn post_document_action(
 )]
 #[allow(dead_code)]
 async fn document_edit_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/libraries/{library}/documents/{path}/presence",
+    params(("library" = String, Path), ("path" = String, Path)),
+    responses((status = 200, body = AgentPresenceListResponse), (status = 404, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn agent_presence_list_openapi() {}
 
 #[utoipa::path(
     post,
@@ -3274,4 +3547,12 @@ fn json_response<T: Serialize>(status: StatusCode, value: &T) -> Result<Response
         HeaderValue::from_static("application/json"),
     );
     Ok(response)
+}
+
+fn static_text_response(content_type: &'static str, body: &'static str) -> Response {
+    let mut response = Response::new(axum::body::Body::from(body));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    response
 }

@@ -4,6 +4,7 @@ import {
   createDocument,
   getDocument,
   isTextContentType,
+  listAgentPresence,
   putDocument,
 } from './client';
 
@@ -97,6 +98,34 @@ describe('Quarry API client', () => {
         method: 'POST',
       })
     );
+  });
+
+  it('lists agent presence for a document', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          presence: [
+            {
+              library: 'notes',
+              path: 'folder/live.md',
+              documentId: 'doc-1',
+              agentId: 'ai:codex:abc',
+              status: 'waiting',
+              by: 'Codex',
+              updatedAt: 'now',
+            },
+          ],
+        }),
+        { headers: { 'content-type': 'application/json' } }
+      )
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(listAgentPresence('notes', 'folder/live.md')).resolves.toMatchObject({
+      presence: [{ agentId: 'ai:codex:abc', status: 'waiting' }],
+    });
+
+    expect(fetch).toHaveBeenCalledWith('/v1/libraries/notes/documents/folder/live.md/presence', undefined);
   });
 
   it('uses If-None-Match for creates', async () => {

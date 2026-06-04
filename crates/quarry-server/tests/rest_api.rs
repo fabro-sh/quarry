@@ -736,9 +736,35 @@ async fn agent_presence_records_status_by_document() {
         )
         .await
         .unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "other.md",
+            b"other".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let other_library = store.create_library("presence-other").await.unwrap();
+    store
+        .put_document(
+            &other_library.slug,
+            "live.md",
+            b"other library".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
     let app = router(store);
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method(Method::POST)
@@ -760,6 +786,140 @@ async fn agent_presence_records_status_by_document() {
     assert_eq!(body["current"]["by"], "ai:codex");
     assert_eq!(body["current"]["documentId"], written.document.id);
     assert_eq!(body["presence"].as_array().unwrap().len(), 1);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/presence/documents/other.md/presence")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("X-Agent-Id", "agent-b")
+                .body(Body::from(
+                    serde_json::json!({"status":"reading","by":"ai:claude"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/presence-other/documents/live.md/presence")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("X-Agent-Id", "agent-c")
+                .body(Body::from(
+                    serde_json::json!({"status":"waiting","by":"ai:codex"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/presence/documents/live.md/presence")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    let presence = body["presence"].as_array().unwrap();
+    assert_eq!(presence.len(), 1);
+    assert_eq!(presence[0]["agentId"], "agent-a");
+    assert_eq!(presence[0]["path"], "live.md");
+}
+
+#[tokio::test]
+async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/quarry.SKILL.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/agent-docs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/.well-known/agent.json")
+                .header(header::HOST, "127.0.0.1:7831")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["api_base"], "http://127.0.0.1:7831/v1");
+    assert_eq!(body["docs_url"], "http://127.0.0.1:7831/agent-docs");
+    assert_eq!(body["skill_url"], "http://127.0.0.1:7831/quarry.SKILL.md");
+    assert_eq!(body["openapi_url"], "http://127.0.0.1:7831/v1/openapi.json");
+    assert!(body["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|capability| capability == "presence"));
+    assert!(body["auth_note"]
+        .as_str()
+        .unwrap()
+        .contains("trusted-localhost"));
+    assert_eq!(body["auth"]["mode"], "trusted_localhost");
+    assert!(body["presence_statuses"].as_array().unwrap().len() >= 6);
+    assert!(body["edit_operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|operation| operation == "replace_block"));
+    assert!(body["ops_operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|operation| operation == "comment.add"));
+    assert_eq!(
+        body["endpoints"]["snapshot"]["url"],
+        "http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/snapshot"
+    );
 }
 
 #[tokio::test]

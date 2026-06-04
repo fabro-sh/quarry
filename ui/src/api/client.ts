@@ -50,6 +50,20 @@ export interface GitExportResult {
   commit_id: string | null;
 }
 
+export interface AgentPresenceEntry {
+  library: string;
+  path: string;
+  documentId: string;
+  agentId: string;
+  status: string;
+  by?: string;
+  updatedAt: string;
+}
+
+export interface AgentPresenceListResponse {
+  presence: AgentPresenceEntry[];
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -171,6 +185,11 @@ export const createCollabInvite = (
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ byHint: request.byHint, role: request.role ?? 'editor' }),
   });
+
+export const listAgentPresence = (library: string, path: string) =>
+  jsonRequest<AgentPresenceListResponse>(
+    `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/presence`
+  );
 
 export const searchDocuments = (library: string, query: string) =>
   jsonRequest<SearchResponse>(
