@@ -1,14 +1,19 @@
 import { render, screen } from '@testing-library/react';
 import { SuggestionPlugin } from '@platejs/suggestion/react';
+import { slateToDeterministicYjsState } from '@platejs/yjs';
+import { YjsPlugin } from '@platejs/yjs/react';
+import { slateNodesToInsertDelta, yTextToSlateElement } from '@slate-yjs/core';
 import { ParagraphPlugin, createPlateEditor } from 'platejs/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PlateMarkdownEditor } from './PlateMarkdownEditor';
+import { collabYjsInitOptions, PlateMarkdownEditor } from './PlateMarkdownEditor';
 import { reviewKit } from './review-kit';
 import { useReviewStore } from '../review/review-store';
 import { currentAuthor } from '../review/identity';
 import { reviewToMarkdown } from '../review/rfm-codec';
 import { emptyReviewMeta } from '../review/rfm-types';
 import { syncSuggestionsFromValue } from '../review/review-store';
+import type { Value } from 'platejs';
+import * as Y from 'yjs';
 
 const DOC = 'See {==here==}{>>fix this<<}{#c1}.\n\n---\ncomments:\n  c1:\n    at: "2026-01-01T00:00:00.000Z"\n    by: user\n';
 const DOC_B = 'A different document with no review marks.\n';
@@ -93,6 +98,69 @@ describe('PlateMarkdownEditor review round-trip', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 });
+
+describe('PlateMarkdownEditor collaboration lifecycle', () => {
+  it('syncs the provider before applying the initial markdown seed', () => {
+    const options = collabYjsInitOptions('doc-collab', [{ type: 'p', children: [{ text: 'Guide' }] }]);
+
+    expect(options.autoConnect).toBe(true);
+    expect(options.onReady).toBeUndefined();
+  });
+
+  it('documents why seed-before-sync duplicates existing Yjs room content', async () => {
+    const baseNodes: Value = [{ type: 'p', children: [{ text: 'hello' }] }];
+    const currentNodes: Value = [
+      { type: 'p', children: [{ text: 'hello' }] },
+      { type: 'p', children: [{ text: 'peer' }] },
+    ];
+    const serverDoc = new Y.Doc();
+    Y.applyUpdate(serverDoc, await slateToDeterministicYjsState('doc-collab', baseNodes));
+    serverDoc.get('content', Y.XmlText).applyDelta(
+      slateNodesToInsertDelta([{ type: 'p', children: [{ text: 'peer' }] }] as Value)
+    );
+    const roomUpdate = Y.encodeStateAsUpdate(serverDoc);
+
+    const seedFirstClient = new Y.Doc();
+    Y.applyUpdate(seedFirstClient, await slateToDeterministicYjsState('doc-collab', currentNodes));
+    Y.applyUpdate(seedFirstClient, roomUpdate);
+    expect(yjsChildren(seedFirstClient)).toHaveLength(4);
+
+    const syncFirstClient = new Y.Doc();
+    Y.applyUpdate(syncFirstClient, roomUpdate);
+    const sharedRoot = syncFirstClient.get('content', Y.XmlText);
+    if (sharedRoot.length === 0) {
+      Y.applyUpdate(syncFirstClient, await slateToDeterministicYjsState('doc-collab', currentNodes));
+    }
+    expect(yjsChildren(syncFirstClient)).toHaveLength(2);
+  });
+
+  it('does not rebuild the Yjs plugin when equivalent collab props are recreated', () => {
+    vi.useFakeTimers();
+    const configure = vi.spyOn(YjsPlugin, 'configure');
+    const collab = {
+      documentId: 'doc-collab',
+      flushAck: null,
+      rebaseKey: 0,
+      sessionId: 'browser:test',
+      token: 'token-1',
+    };
+
+    const { rerender, unmount } = render(
+      <PlateMarkdownEditor content="# Guide" collab={{ ...collab }} onChange={vi.fn()} />
+    );
+    const initialConfigureCalls = configure.mock.calls.length;
+
+    rerender(<PlateMarkdownEditor content="# Guide" collab={{ ...collab }} onChange={vi.fn()} />);
+
+    expect(configure).toHaveBeenCalledTimes(initialConfigureCalls);
+    unmount();
+    vi.useRealTimers();
+  });
+});
+
+function yjsChildren(doc: Y.Doc) {
+  return yTextToSlateElement(doc.get('content', Y.XmlText)).children;
+}
 
 // The floating toolbar only renders on selection and `usePluginOption` needs the
 // live Plate context, both of which are unreliable in jsdom. So the toggle's

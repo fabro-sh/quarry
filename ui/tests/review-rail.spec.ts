@@ -53,11 +53,9 @@ test.describe('Review rail', () => {
     await page.getByTestId('reply-input').fill('Looks good now');
     await page.getByTestId('reply-submit').click();
 
-    // Autosave persists the change a beat after the edit — there is no Save button.
-    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
-
     // The reply serializes as a sibling comment entry pointing back at c1 via
     // `re:`, carrying the reply body — the store's reply round-trip.
+    await expect.poll(() => saves.lastBody('rail.md')).toContain('re: c1');
     const saved = saves.lastBody('rail.md');
     expect(saved).toContain('re: c1');
     expect(saved).toContain('Looks good now');
@@ -79,11 +77,7 @@ test.describe('Review rail', () => {
     await expect(resolve).toBeVisible();
     await resolve.click();
 
-    // Autosave persists the change a beat after the edit — there is no Save button.
-    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
-
-    const saved = saves.lastBody('rail.md');
-    expect(saved).toContain('status: resolved');
+    await expect.poll(() => saves.lastBody('rail.md')).toContain('status: resolved');
   });
 
   test('delete removes the in-text mark and drops the comment from saved Markdown', async ({ page }) => {
@@ -151,9 +145,7 @@ test.describe('Review rail', () => {
     await expect(page.getByTestId('comment-card')).toBeVisible();
     await expect(page.getByTestId('comment-card')).toContainText('Please clarify');
 
-    // Autosave persists the change a beat after the edit — there is no Save button.
-    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
-
+    await expect.poll(() => saves.lastBody('draft.md')).toContain('{==');
     const saved = saves.lastBody('draft.md');
     expect(saved).toContain('{==');
     expect(saved).toMatch(/\{#[^}]+\}/);

@@ -7,7 +7,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/v1': 'http://127.0.0.1:7831',
+      '/v1': {
+        target: 'http://127.0.0.1:7831',
+        ws: true,
+      },
     },
   },
   test: {

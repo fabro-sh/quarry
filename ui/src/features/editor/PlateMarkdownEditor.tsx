@@ -314,6 +314,23 @@ export interface CollabEditorConfig {
   token?: string;
 }
 
+interface CollabYjsInitOptions {
+  autoConnect: true;
+  autoSelect: 'end';
+  id: string;
+  onReady?: undefined;
+  value: PlateValue;
+}
+
+export function collabYjsInitOptions(documentId: string, value: PlateValue): CollabYjsInitOptions {
+  return {
+    autoConnect: true,
+    autoSelect: 'end',
+    id: documentId,
+    value,
+  };
+}
+
 export function PlateMarkdownEditor({
   author = currentAuthor(),
   collab,
@@ -336,6 +353,8 @@ export function PlateMarkdownEditor({
   const collabEnabled = Boolean(collab?.documentId);
   const collabDocumentId = collab?.documentId ?? '';
   const collabRebaseKey = collab?.rebaseKey ?? 0;
+  const collabSessionId = collab?.sessionId ?? '';
+  const collabToken = collab?.token;
 
   // The review codec serializes both the value (inline CriticMarkup) and the
   // store's metadata (YAML endmatter). `syncSuggestionsFromValue` mirrors any
@@ -355,6 +374,7 @@ export function PlateMarkdownEditor({
   }
   const lastContentRef = useRef(content);
   const lastSerializedRef = useRef(serialize(initialValueRef.current));
+  const [, setCollabInitTick] = useState(0);
   const editorPlugins = useMemo(() => {
     if (!collabEnabled || !collab) return plateMarkdownPlugins;
     return [
@@ -373,17 +393,17 @@ export function PlateMarkdownEditor({
           providers: [
             {
               options: {
-                roomName: collab.documentId,
-                token: collab.token,
+                roomName: collabDocumentId,
+                token: collabToken,
               },
               type: RUST_WS_PROVIDER_TYPE,
             } as never,
           ],
-          userId: collab.sessionId,
+          userId: collabSessionId,
         },
       }),
     ] as const;
-  }, [author, collab, collabEnabled]);
+  }, [author, collabDocumentId, collabEnabled, collabSessionId, collabToken]);
   const editor = usePlateEditor(
     {
       plugins: editorPlugins as never,
@@ -413,26 +433,25 @@ export function PlateMarkdownEditor({
     storeHydrate(meta);
 
     let disposed = false;
-    void editor
-      .getApi(YjsPlugin)
-      .yjs.init({
-        autoConnect: false,
-        autoSelect: 'end',
-        id: collab.documentId,
-        value: value as never,
-        onReady: () => {
-          if (!disposed) {
-            editor.getApi(YjsPlugin).yjs.connect(RUST_WS_PROVIDER_TYPE);
-          }
-        },
-      })
-      .catch((error: unknown) => {
-        console.warn('[collab] failed to initialize Yjs editor', error);
-      });
+    let initStarted = false;
+    const yjs = editor.getApi(YjsPlugin).yjs;
+    const initTimer = window.setTimeout(() => {
+      if (disposed) return;
+      initStarted = true;
+      void yjs
+        .init(collabYjsInitOptions(collab.documentId, value as PlateValue))
+        .then(() => {
+          if (!disposed) setCollabInitTick((tick) => tick + 1);
+        })
+        .catch((error: unknown) => {
+          if (!disposed) console.warn('[collab] failed to initialize Yjs editor', error);
+        });
+    }, 0);
 
     return () => {
       disposed = true;
-      editor.getApi(YjsPlugin).yjs.destroy();
+      window.clearTimeout(initTimer);
+      if (initStarted) yjs.destroy();
     };
   }, [collabDocumentId, collabEnabled, collabRebaseKey, editor, storeHydrate]);
 

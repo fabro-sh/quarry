@@ -741,6 +741,38 @@ test.describe('Quarry Browser smoke flows', () => {
     expect(api.saveHeaders).toEqual(['"v1"']);
   });
 
+  test('treats a stale save as saved when the remote already has the same content', async ({ page }) => {
+    const api = await installMockApi(page, {
+      documents: [
+        {
+          content: '# Base\n',
+          id: 'doc-daily',
+          metadata: { title: 'Daily' },
+          path: 'daily.md',
+          version: 'v1',
+        },
+      ],
+      rejectNextSaveAsStale: {
+        content: (requestBody) => requestBody,
+        version: 'v2',
+      },
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Daily/ }).click();
+    await expect(page.getByLabel('Plate markdown editor')).toContainText('Base');
+
+    const editor = page.getByLabel('Plate markdown editor');
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' edit');
+
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
+    await expect(page.getByRole('dialog', { name: 'Save conflict' })).toHaveCount(0);
+    expect(api.saveHeaders).toEqual(['"v1"']);
+    expect(api.savedBodies).toHaveLength(1);
+  });
+
   test('searches and opens a server result from the keyboard', async ({ page }) => {
     await installMockApi(page, {
       documents: [
@@ -1763,7 +1795,7 @@ async function installMockApi(
     documentsByLibrary?: Record<string, MockDocument[]>;
     libraries?: MockLibrary[];
     links?: Record<string, { backlinks?: MockLink[]; outgoing?: MockLink[] }>;
-    rejectNextSaveAsStale?: Pick<MockDocument, 'content' | 'version'>;
+    rejectNextSaveAsStale?: { content: string | ((requestBody: string) => string); version: string };
     versions?: Record<string, MockVersion[]>;
   }
 ) {
@@ -2023,13 +2055,18 @@ async function installMockApi(
       const ifMatch = request.headers()['if-match'];
       if (ifNoneMatch) state.createHeaders.push(ifNoneMatch);
       if (ifMatch) state.saveHeaders.push(ifMatch);
-      state.savedBodies.push({ body: request.postData() ?? '', path: documentPath.documentPath });
+      const requestBody = request.postData() ?? '';
+      state.savedBodies.push({ body: requestBody, path: documentPath.documentPath });
 
       if (state.rejectNextSaveAsStale) {
         const documents = state.documentsByLibrary.get(documentPath.library) ?? state.documents;
         const current = documents.get(documentPath.documentPath);
+        const staleContent =
+          typeof state.rejectNextSaveAsStale.content === 'function'
+            ? state.rejectNextSaveAsStale.content(requestBody)
+            : state.rejectNextSaveAsStale.content;
         documents.set(documentPath.documentPath, {
-          content: state.rejectNextSaveAsStale.content,
+          content: staleContent,
           id: current?.id ?? `doc-${documentPath.documentPath}`,
           metadata: current?.metadata,
           path: documentPath.documentPath,

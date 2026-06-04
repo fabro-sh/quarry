@@ -645,6 +645,20 @@ function Workspace() {
       loadedDocument?.library === activeLibrary && loadedDocument.path === selectedPath;
     if (sameDocument && hasUnsavedEditorState(saveStateRef.current)) {
       if (loadedDocument.etag !== document.etag) {
+        if (contentRef.current === document.content) {
+          acceptRemoteDocumentVersion(
+            activeLibrary,
+            selectedPath,
+            {
+              content: document.content,
+              contentType: document.contentType,
+              documentId: document.documentId,
+              etag: document.etag,
+            },
+            loadedDocument.etag
+          );
+          return;
+        }
         loadedDocumentRef.current = {
           library: activeLibrary,
           path: selectedPath,
@@ -699,17 +713,28 @@ function Workspace() {
 
   const activeLibraryRecord = libraries.find((library) => library.slug === activeLibrary);
   const selectedEntry = documents.find((entry) => entry.path === selectedPath);
-  const loadedDocumentContentType = document?.path === selectedPath ? document.contentType : undefined;
+  const loadedDocumentForSelection = document?.path === selectedPath ? document : undefined;
+  const loadedDocumentContentType = loadedDocumentForSelection?.contentType;
   const selectedContentType = loadedDocumentContentType ?? selectedEntry?.content_type ?? contentType;
-  const selectedDocumentId = document?.documentId ?? selectedEntry?.id ?? '';
+  const selectedDocumentBodyReady = Boolean(
+    loadedDocumentForSelection &&
+      loadedDocumentRef.current?.library === activeLibrary &&
+      loadedDocumentRef.current.path === selectedPath &&
+      loadedDocumentRef.current.etag === loadedDocumentForSelection.etag &&
+      etag === loadedDocumentForSelection.etag
+  );
+  const collabDocumentId =
+    selectedDocumentBodyReady && loadedDocumentForSelection
+      ? loadedDocumentForSelection.documentId
+      : '';
   const layoutStorageKey = activeLibrary ? `quarry:layout:${activeLibrary}` : 'quarry:layout:workspace';
   const mergeConflict = conflicts.find((conflict) => conflict.id === mergeConflictId) ?? null;
   const saveConflictDialogRef = useDialogFocusTrap(Boolean(conflictRemote), closeSaveConflictDialog);
 
   useEffect(() => {
-    if (selectedPath && selectedDocumentId && isTextContentType(selectedContentType)) {
+    if (selectedPath && collabDocumentId && isTextContentType(selectedContentType)) {
       liveCollabSessionRef.current = {
-        documentId: selectedDocumentId,
+        documentId: collabDocumentId,
         path: selectedPath,
         sessionId: collabSessionIdRef.current,
       };
@@ -722,7 +747,7 @@ function Workspace() {
       setCollabRebaseKey(0);
       setCollabRecoveryError(null);
     }
-  }, [selectedContentType, selectedDocumentId, selectedPath]);
+  }, [collabDocumentId, selectedContentType, selectedPath]);
 
   async function save() {
     const savingLibrary = activeLibrary;
@@ -814,6 +839,40 @@ function Workspace() {
         transitionSaveState('stale');
         const remote = await getDocument(savingLibrary, savingPath);
         if (!onSameDocument()) return;
+        const latestEditorContent = contentRef.current;
+        const remoteMatchesLatestEditor = remote.content === latestEditorContent;
+        const remoteMatchesSavingRequest = remote.content === savingContent;
+        if (remoteMatchesLatestEditor || remoteMatchesSavingRequest) {
+          acceptRemoteDocumentVersion(
+            savingLibrary,
+            savingPath,
+            {
+              content: remote.content,
+              contentType: remote.contentType,
+              documentId: remote.documentId || savingDocumentId,
+              etag: remote.etag,
+            },
+            savingEtag
+          );
+          if (!remoteMatchesLatestEditor) {
+            contentRef.current = latestEditorContent;
+            setContent(latestEditorContent);
+            saveDraft(savingLibrary, savingPath, remote.etag, latestEditorContent);
+            transitionSaveState('drafted');
+          }
+          await mutate(
+            ['/v1/document', savingLibrary, savingPath],
+            {
+              content: remote.content,
+              contentType: remote.contentType,
+              documentId: remote.documentId || savingDocumentId,
+              etag: remote.etag,
+              path: savingPath,
+            },
+            { revalidate: false }
+          );
+          return;
+        }
         setConflictDetails({ baseEtag: savingEtag, path: savingPath, remoteEtag: remote.etag });
         setConflictRemote(remote.content);
         setEtag(remote.etag);
@@ -1094,6 +1153,29 @@ function Workspace() {
     setConflictDetails(null);
   }
 
+  function acceptRemoteDocumentVersion(
+    library: string,
+    path: string,
+    remote: { content: string; contentType: string; documentId: string; etag: string },
+    previousEtag: string
+  ) {
+    contentRef.current = remote.content;
+    loadedDocumentRef.current = {
+      library,
+      path,
+      etag: remote.etag,
+      documentId: remote.documentId,
+    };
+    clearDraft(library, path, previousEtag);
+    setContent(remote.content);
+    setEtag(remote.etag);
+    setContentType(remote.contentType);
+    setConflictRemote(null);
+    setConflictDetails(null);
+    setCollabExternalChange(null);
+    transitionSaveState('saved');
+  }
+
   function useRemoteConflictVersion() {
     if (!conflictRemote || !conflictDetails || !activeLibrary || !selectedPath) return;
     contentRef.current = conflictRemote;
@@ -1101,7 +1183,11 @@ function Workspace() {
       library: activeLibrary,
       path: selectedPath,
       etag: conflictDetails.remoteEtag,
-      documentId: loadedDocumentRef.current?.documentId ?? selectedDocumentId,
+      documentId:
+        loadedDocumentRef.current?.documentId ??
+        loadedDocumentForSelection?.documentId ??
+        selectedEntry?.id ??
+        '',
     };
     clearDraft(activeLibrary, selectedPath, conflictDetails.baseEtag);
     setContent(conflictRemote);
@@ -1225,27 +1311,31 @@ function Workspace() {
               {collabRecoveryError ? (
                 <CollabRecoveryErrorBanner error={collabRecoveryError} />
               ) : null}
-              <DocumentBody
-                activeLibrary={activeLibrary}
-                author={author}
-                byteSize={selectedEntry?.byte_size}
-                collabSessionId={collabSessionIdRef.current}
-                collabFlushAck={collabFlushAck}
-                onCollabFlushAck={recordCollabFlushAck}
-                onCollabFlusherChange={changeCollabFlusher}
-                onCollabRecoveryError={recordCollabRecoveryError}
-                collabToken={routeCollabToken}
-                collabRebaseKey={collabRebaseKey}
-                contentHash={selectedEntry?.content_hash}
-                content={content}
-                contentType={selectedContentType}
-                documentId={selectedDocumentId}
-                image={imageApi}
-                mode={editorMode}
-                path={selectedPath}
-                wikiLink={wikiLink}
-                onChange={changeContent}
-              />
+              {selectedDocumentBodyReady ? (
+                <DocumentBody
+                  activeLibrary={activeLibrary}
+                  author={author}
+                  byteSize={selectedEntry?.byte_size}
+                  collabSessionId={collabSessionIdRef.current}
+                  collabFlushAck={collabFlushAck}
+                  onCollabFlushAck={recordCollabFlushAck}
+                  onCollabFlusherChange={changeCollabFlusher}
+                  onCollabRecoveryError={recordCollabRecoveryError}
+                  collabToken={routeCollabToken}
+                  collabRebaseKey={collabRebaseKey}
+                  contentHash={selectedEntry?.content_hash}
+                  content={content}
+                  contentType={selectedContentType}
+                  documentId={collabDocumentId}
+                  image={imageApi}
+                  mode={editorMode}
+                  path={selectedPath}
+                  wikiLink={wikiLink}
+                  onChange={changeContent}
+                />
+              ) : (
+                <LoadingDocument />
+              )}
             </div>
           ) : (
             <EmptyDocument />
@@ -3416,6 +3506,14 @@ function EmptyDocument() {
         </p>
       </div>
     </div>
+  );
+}
+
+function LoadingDocument() {
+  return (
+    <section className="flex min-h-0 flex-1 flex-col bg-surface" aria-label="Document loading">
+      <div className="px-8 py-7 text-sm text-muted">Loading document...</div>
+    </section>
   );
 }
 

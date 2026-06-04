@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
 
+import { draftKey } from '../features/editor/drafts';
 import { App } from './App';
 
 describe('Quarry Browser workspace', () => {
@@ -184,6 +185,61 @@ describe('Quarry Browser workspace', () => {
 
     await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Next'));
     expect(window.location.pathname).toBe('/lib/routed-lib/documents/next.md');
+  });
+
+  it('does not mount a routed editor before the document body loads', async () => {
+    window.history.pushState({}, '', '/lib/race-lib/documents/deep.md');
+    let resolveDocument: () => void = () => {};
+    const documentReady = new Promise<void>((resolve) => {
+      resolveDocument = resolve;
+    });
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/v1/libraries') {
+        return json([{ id: 'lib-race', slug: 'race-lib', created_at: 'now', settings: {} }]);
+      }
+      if (url === '/v1/libraries/race-lib/documents') {
+        return json([
+          {
+            id: 'doc-deep',
+            path: 'deep.md',
+            head_version_id: 'v-deep',
+            content_type: 'text/markdown',
+            byte_size: 12,
+            metadata: { title: 'Deep' },
+            updated_at: 'now',
+          },
+        ]);
+      }
+      if (url === '/v1/libraries/race-lib/documents/deep.md') {
+        await documentReady;
+        return new Response('# Deep body', {
+          headers: { ETag: '"v-deep"', 'content-type': 'text/markdown' },
+        });
+      }
+      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) {
+        return json({ path: 'deep.md', links: [] });
+      }
+      if (url.startsWith('/v1/libraries/race-lib/graph')) {
+        return json({ nodes: [], edges: [], truncated: false });
+      }
+      if (url.endsWith('/versions')) return json([]);
+      if (url === '/v1/libraries/race-lib/conflicts') return json([]);
+      if (url === '/v1/libraries/race-lib/git/peers') return json([]);
+      if (url.startsWith('/v1/libraries/race-lib/search')) return json({ results: [], cursor: null });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    await screen.findByRole('treeitem', { name: /Deep/ });
+    await act(async () => {
+      resolveDocument();
+      await documentReady;
+    });
+
+    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Deep body'));
   });
 
   it('offers tree context menu actions for folders and documents', async () => {
@@ -848,6 +904,78 @@ describe('Quarry Browser workspace', () => {
     });
 
     await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Git synced'));
+  });
+
+  it('accepts a newer remote version when the local draft already has the same content', async () => {
+    let content = '# Base\n';
+    let etag = '"v1"';
+    let documentGets = 0;
+    localStorage.setItem(
+      draftKey('collab-lib', 'daily.md', '"v1"'),
+      JSON.stringify({
+        library: 'collab-lib',
+        path: 'daily.md',
+        etag: '"v1"',
+        content: '# Peer edit\n',
+        savedAt: '2026-06-03T12:00:00Z',
+      })
+    );
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/v1/libraries') {
+        return json([{ id: 'lib-collab', slug: 'collab-lib', created_at: 'now', settings: {} }]);
+      }
+      if (url === '/v1/libraries/collab-lib/documents') {
+        return json([
+          {
+            id: 'doc-collab',
+            path: 'daily.md',
+            head_version_id: etag === '"v1"' ? 'v1' : 'v2',
+            content_type: 'text/markdown',
+            byte_size: content.length,
+            metadata: { title: 'Daily' },
+            updated_at: 'now',
+          },
+        ]);
+      }
+      if (url === '/v1/libraries/collab-lib/documents/daily.md') {
+        documentGets += 1;
+        return new Response(content, {
+          headers: { ETag: etag, 'content-type': 'text/markdown' },
+        });
+      }
+      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) {
+        return json({ path: 'daily.md', links: [] });
+      }
+      if (url.startsWith('/v1/libraries/collab-lib/graph')) {
+        return json({ nodes: [], edges: [], truncated: false });
+      }
+      if (url.endsWith('/versions')) return json([]);
+      if (url === '/v1/libraries/collab-lib/conflicts') return json([]);
+      if (url.startsWith('/v1/libraries/collab-lib/search')) return json({ results: [], cursor: null });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    vi.stubGlobal('EventSource', MockEventSource);
+    MockEventSource.instances = [];
+
+    renderApp();
+
+    await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
+    expect(await screen.findByLabelText('Plate markdown editor')).toHaveTextContent('Peer edit');
+
+    content = '# Peer edit\n';
+    etag = '"v2"';
+    act(() => {
+      MockEventSource.instances[0].emit('stream.lagged', {
+        type: 'stream.lagged',
+        library: 'collab-lib',
+      });
+    });
+
+    await waitFor(() => expect(documentGets).toBeGreaterThan(1));
+    expect(screen.queryByRole('dialog', { name: 'Save conflict' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Save status')).toHaveTextContent('Saved');
   });
 
   it('falls back to polling when the event stream errors', async () => {
