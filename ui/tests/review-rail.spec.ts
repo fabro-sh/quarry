@@ -21,6 +21,9 @@ interface MockDocument {
 const COMMENTED_DOC =
   'See {==here==}{>>fix this<<}{#c1}.\n\n---\ncomments:\n  c1:\n    at: "2026-01-01T00:00:00.000Z"\n    by: user\n';
 
+const SUGGESTED_DOC =
+  'Use {~~rough~>specific~~}{#s1} wording.\n\n---\nsuggestions:\n  s1:\n    at: "2026-01-01T00:00:00.000Z"\n    by: user\n';
+
 test.describe('Review rail', () => {
   test.beforeEach(async ({ page }) => {
     await disableEventSource(page);
@@ -39,6 +42,25 @@ test.describe('Review rail', () => {
     const card = page.getByTestId('comment-card');
     await expect(card).toBeVisible();
     await expect(card).toContainText('fix this');
+  });
+
+  test('shows loaded suggestions before editor interaction', async ({ page }) => {
+    await installMockApi(page, [
+      { content: SUGGESTED_DOC, id: 'doc-suggested', metadata: { title: 'Suggested' }, path: 'suggested.md', version: 'v1' },
+    ]);
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Suggested/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('rough');
+    await expect(editor).toContainText('specific');
+    await expect(editor.locator('[data-suggestion-id="s1"]')).toHaveCount(2);
+
+    const card = page.getByTestId('suggestion-card');
+    await expect(card).toBeVisible();
+    await expect(card).toContainText('Replace:');
+    await expect(card).toContainText('rough');
+    await expect(card).toContainText('specific');
   });
 
   test('reply persists the new comment with a `re:` parent and body', async ({ page }) => {

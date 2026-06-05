@@ -116,6 +116,7 @@ import {
   useEventEditorValue,
   useEditorSelector,
   useFormInputProps,
+  useIncrementVersion,
   useMarkToolbarButton,
   useMarkToolbarButtonState,
   usePlateEditor,
@@ -403,6 +404,7 @@ export function PlateMarkdownEditor({
   const hasLocalEditsSinceCleanRef = useRef(false);
   const remoteChangeSinceCleanRef = useRef(false);
   const [collabInitTick, setCollabInitTick] = useState(0);
+  const [externalValueRevision, setExternalValueRevision] = useState(0);
   const editorPlugins = useMemo(() => {
     if (!collabEnabled || !collab) return plateMarkdownPlugins;
     return [
@@ -475,7 +477,10 @@ export function PlateMarkdownEditor({
       void yjs
         .init(collabYjsInitOptions(collab.documentId, value as PlateValue))
         .then(() => {
-          if (!disposed) setCollabInitTick((tick) => tick + 1);
+          if (!disposed) {
+            setCollabInitTick((tick) => tick + 1);
+            setExternalValueRevision((revision) => revision + 1);
+          }
         })
         .catch((error: unknown) => {
           if (!disposed) console.warn('[collab] failed to initialize Yjs editor', error);
@@ -683,6 +688,7 @@ export function PlateMarkdownEditor({
           onChange(nextMarkdown);
         }}
       >
+        <PlateValueRevisionBridge revision={externalValueRevision} />
         {collabEnabled && collab ? <CollabAwarenessBridge collab={collab} /> : null}
         {readOnly ? null : <FloatingFormatToolbar />}
         <PlateContainer className="relative flex h-full min-h-0">
@@ -727,6 +733,19 @@ function injectionEnvelopeMapValue(map: Y.Map<unknown>): Record<string, unknown>
   const review = map.get('review');
   if (version_id === undefined && etag === undefined && review === undefined) return null;
   return { etag, review, version_id };
+}
+
+function PlateValueRevisionBridge({ revision }: { revision: number }) {
+  const bumpEditor = useIncrementVersion('versionEditor');
+  const bumpValue = useIncrementVersion('versionValue');
+
+  useEffect(() => {
+    if (revision === 0) return;
+    bumpEditor();
+    bumpValue();
+  }, [revision, bumpEditor, bumpValue]);
+
+  return null;
 }
 
 function CollabAwarenessBridge({ collab }: { collab: CollabEditorConfig }) {
