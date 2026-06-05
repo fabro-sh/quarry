@@ -52,6 +52,6 @@ Encode document paths one segment at a time. For example, `notes/Project Plan.md
 - Use comments and suggestions for review feedback; use direct block edits only when the user asks you to change the document.
 - If an edit returns `STALE_BASE`, refresh the snapshot and retry against the new `baseToken`.
 - Include a human-readable `by` value for presence, comments, and suggestions.
-- Do not assume Proof-only operations exist in Quarry. Quarry does not currently support `rewrite.apply`, `comment.reply`, or REST bearer-token enforcement.
+- Do not assume Proof-only operations exist in Quarry. Quarry does not currently support `rewrite.apply` or REST bearer-token enforcement.
 
 For deeper setup details, fetch `/agent-docs`, `/.well-known/agent.json`, and `/v1/openapi.json` from the Quarry origin.

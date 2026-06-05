@@ -23,6 +23,8 @@ export interface ReviewMeta {
 export interface ReviewMetaPatch {
   comments?: Record<string, ReviewMetaEntry>;
   suggestions?: Record<string, ReviewMetaEntry>;
+  removeComments?: string[];
+  removeSuggestions?: string[];
 }
 
 export function emptyReviewMeta(): ReviewMeta {

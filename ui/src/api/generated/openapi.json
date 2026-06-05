@@ -777,6 +777,16 @@
               }
             }
           },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "412": {
             "description": "",
             "content": {
@@ -2388,6 +2398,13 @@
           "dryRun": {
             "type": "boolean"
           },
+          "injection": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Whether the edit was injected into a live collab room, or why it fell\nback to a plain write: `injected` | `no_live_room` | `not_codec_eligible`\n| `gate_rejected`. Absent for dry runs."
+          },
           "markdown": {
             "type": [
               "string",
@@ -2471,6 +2488,8 @@
         "type": "string",
         "enum": [
           "comment.add",
+          "comment.reply",
+          "comment.delete",
           "suggestion.add",
           "suggestion.accept",
           "suggestion.reject",
@@ -2526,6 +2545,12 @@
           "op": {
             "$ref": "#/components/schemas/AgentOpsOperation"
           },
+          "parentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "quote": {
             "type": [
               "string",
@@ -2558,6 +2583,13 @@
               "string",
               "null"
             ]
+          },
+          "injection": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Whether the ops mutation reached a live collab room, or why it used the\nnon-live write path: `injected` | `metadata_only_injected` |\n`no_live_room` | `gate_rejected` | `not_codec_eligible`. Absent for dry\nruns."
           },
           "markdown": {
             "type": [

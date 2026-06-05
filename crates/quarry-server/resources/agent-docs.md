@@ -117,7 +117,7 @@ curl -sS "$ORIGIN/v1/libraries/$LIBRARY/events/pending?after=0"
 
 The poll response contains `events` and `nextAfter`. Store `nextAfter` and pass it as `after` on the next poll.
 
-`doc.changed` events are sparse wake signals. They include revision metadata such as `version_id`/`etag` and may include `collab_session_id`. When a live `comment.add` is injected into an open browser editor, `collab_session_id` starts with `agent-injected:` and the event also includes a `review.comments` patch carrying the injected comment metadata and body.
+`doc.changed` events are sparse wake signals. They include revision metadata such as `version_id`/`etag` and may include `collab_session_id`. When live `/ops` mutations are injected into an open browser editor, `collab_session_id` starts with `agent-injected:`. The event may include a review metadata patch such as `review.comments`, `review.suggestions`, `review.removeComments`, or `review.removeSuggestions`.
 
 Ack processed events when useful:
 
@@ -170,7 +170,7 @@ Each inserted or replacement block must be a single Markdown block. If a respons
 
 ## Comments And Suggestions
 
-Use `/ops` for review feedback. It supports `comment.add`, `suggestion.add`, `suggestion.accept`, `suggestion.reject`, and `comment.resolve`.
+Use `/ops` for review feedback. It supports `comment.add`, `comment.reply`, `comment.delete`, `suggestion.add`, `suggestion.accept`, `suggestion.reject`, and `comment.resolve`.
 
 Add a comment:
 
@@ -215,7 +215,21 @@ curl -sS -X POST "$DOC/ops?dryRun=1" \
 
 Suggestion kinds are `insert`, `delete`, `remove`, `replace`, and `substitution`. `replace` and `substitution` require `content`. `insert` requires `content`. `delete` and `remove` use the quoted text or block anchor.
 
-Resolve or decide review items:
+Reply to, delete, resolve, or decide review items:
+
+```sh
+curl -sS -X POST "$DOC/ops" \
+  -H "Content-Type: application/json" \
+  -H "X-Agent-Id: $AGENT_ID" \
+  -d '{"baseToken":"W/\"version_123\"","op":"comment.reply","parentId":"c_123","body":"Thanks, I will adjust this.","by":"Codex"}'
+
+curl -sS -X POST "$DOC/ops" \
+  -H "Content-Type: application/json" \
+  -H "X-Agent-Id: $AGENT_ID" \
+  -d '{"baseToken":"W/\"version_123\"","op":"comment.delete","id":"c_123"}'
+```
+
+`comment.reply` requires `parentId` for a root comment and `body`; `id` is optional. `comment.delete` accepts a root comment id or reply id. Deleting a root removes its inline comment mark and direct replies. Deleting a reply removes only that reply metadata.
 
 ```sh
 curl -sS -X POST "$DOC/ops" \
@@ -240,7 +254,7 @@ curl -sS -X POST "$DOC/ops" \
 
 - REST agent endpoints currently trust localhost and do not enforce bearer-token auth.
 - Invite URL tokens are document locators for browser/collab joins, not REST auth tokens.
-- Quarry does not currently support Proof operations such as `rewrite.apply` or `comment.reply`.
+- Quarry does not currently support Proof operations such as `rewrite.apply`.
 - Direct block edits operate on whole Markdown blocks, not arbitrary character ranges.
 - Inserted or replacement content for `/edit` must be one Markdown block.
 

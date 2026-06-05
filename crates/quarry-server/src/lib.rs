@@ -43,7 +43,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use utoipa::{OpenApi, ToSchema};
 
-use crate::collab::{InjectionBatch, InjectionOp};
+use crate::collab::{InjectionBatch, InjectionOp, LiveMutation};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -685,6 +685,8 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
             ],
             ops_operations: vec![
                 "comment.add",
+                "comment.reply",
+                "comment.delete",
                 "suggestion.add",
                 "suggestion.accept",
                 "suggestion.reject",
@@ -694,7 +696,7 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
                 "REST agent endpoints trust localhost and do not currently enforce bearer-token auth.",
                 "Invite URL tokens identify browser/collab joins and are not REST bearer tokens.",
                 "Direct block edits operate on whole Markdown blocks.",
-                "Quarry does not currently support rewrite.apply or comment.reply.",
+                "Quarry does not currently support rewrite.apply.",
             ],
             route_hints: AgentDiscoveryRouteHints {
                 presence: format!("{api_base}/libraries/{{library}}/documents/{{path}}/presence"),
@@ -1178,6 +1180,10 @@ pub struct AgentEditResponse {
 pub enum AgentOpsOperation {
     #[serde(rename = "comment.add")]
     CommentAdd,
+    #[serde(rename = "comment.reply")]
+    CommentReply,
+    #[serde(rename = "comment.delete")]
+    CommentDelete,
     #[serde(rename = "suggestion.add")]
     SuggestionAdd,
     #[serde(rename = "suggestion.accept")]
@@ -1214,6 +1220,8 @@ pub struct AgentOpsRequest {
     pub quote: Option<String>,
     #[serde(default)]
     pub body: Option<String>,
+    #[serde(default, rename = "parentId")]
+    pub parent_id: Option<String>,
     #[serde(default)]
     pub content: Option<String>,
     #[serde(default)]
@@ -1235,6 +1243,12 @@ pub struct AgentOpsResponse {
     pub outcome: Option<WriteOutcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub markdown: Option<String>,
+    /// Whether the ops mutation reached a live collab room, or why it used the
+    /// non-live write path: `injected` | `metadata_only_injected` |
+    /// `no_live_room` | `gate_rejected` | `not_codec_eligible`. Absent for dry
+    /// runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub injection: Option<String>,
 }
 
 #[utoipa::path(
@@ -1757,7 +1771,7 @@ async fn agent_presence_openapi() {}
     path = "/v1/libraries/{library}/documents/{path}/ops",
     params(("library" = String, Path), ("path" = String, Path), ("dryRun" = Option<DryRunValue>, Query)),
     request_body = AgentOpsRequest,
-    responses((status = 200, body = AgentOpsResponse), (status = 412, body = ErrorResponse))
+    responses((status = 200, body = AgentOpsResponse), (status = 409, body = ErrorResponse), (status = 412, body = ErrorResponse))
 )]
 #[allow(dead_code)]
 async fn document_ops_openapi() {}
@@ -1846,82 +1860,85 @@ async fn agent_ops_document(
                 id: applied.id,
                 outcome: None,
                 markdown: Some(applied.markdown),
+                injection: None,
             },
             version_id: None,
         });
     }
 
     let base_version_id = version_id_from_base_token(&request.base_token)?;
-    let review_snapshot = if request.op == "comment.add" {
-        review_meta_patch_from_markdown(&applied.markdown)
-    } else {
-        None
-    };
-    let mut injected_session_id = None;
-    let injection_guard = if request.op == "comment.add" {
-        let plan = request
-            .block_ref
-            .as_ref()
-            .map(|block_ref| {
-                comment_add_injection_plan(&markdown, &applied.markdown, block_ref.ordinal)
-            })
-            .unwrap_or_else(|| Err(Unsupported::new("comment.add operation missing ref")));
-        match plan {
-            Ok(plan) => match state.collab.live_room(&document.id).await {
-                Some(room) => {
-                    let guard = room
-                        .begin_injection(
-                            plan.batch,
-                            &plan.original_blocks,
-                            base_version_id.clone(),
-                            review_snapshot.clone(),
-                        )
-                        .await;
-                    if guard.is_some() {
-                        let request_hash = agent_ops_request_hash(&request, false)?;
-                        injected_session_id = Some(format!("agent-injected:{request_hash}"));
-                    }
-                    guard
-                }
-                None => {
+    let request_hash = agent_ops_request_hash(&request, false)?;
+    let live_room = state.collab.live_room(&document.id).await;
+    let (injection_guard, injection_status, injected_session_id) = if let Some(room) = live_room {
+        let plan =
+            match agent_ops_live_mutation_plan(&markdown, &applied.markdown, &request, &applied) {
+                Ok(plan) => plan,
+                Err(error) => {
                     tracing::debug!(
                         document_id = %document.id,
                         path,
-                        "agent ops comment.add skipped live injection because no live collab room exists"
+                        reason = %error,
+                        "agent ops live mutation rejected because operation is not codec eligible"
                     );
-                    None
+                    return Err(live_gate_rejected_error());
                 }
-            },
-            Err(error) => {
+            };
+        let status = if plan.batch.is_some() {
+            "injected"
+        } else {
+            "metadata_only_injected"
+        };
+        let mutation = match (plan.batch, plan.review) {
+            (Some(batch), review) => LiveMutation::content(batch, review),
+            (None, Some(review)) => LiveMutation::metadata(review),
+            (None, None) => {
                 tracing::debug!(
                     document_id = %document.id,
                     path,
-                    reason = %error,
-                    "agent ops comment.add skipped live injection because operation is not codec eligible"
+                    "agent ops live mutation rejected because it was empty"
                 );
-                None
+                return Err(live_gate_rejected_error());
             }
-        }
+        };
+        let Some(guard) = room
+            .begin_live_mutation(mutation, &plan.original_blocks, base_version_id.clone())
+            .await
+        else {
+            tracing::debug!(
+                document_id = %document.id,
+                path,
+                "agent ops live mutation gate rejected live room"
+            );
+            return Err(live_gate_rejected_error());
+        };
+        (
+            Some(guard),
+            status.to_string(),
+            Some(format!("agent-injected:{request_hash}")),
+        )
     } else {
-        None
+        tracing::debug!(
+            document_id = %document.id,
+            path,
+            "agent ops skipped live injection because no live collab room exists"
+        );
+        (None, "no_live_room".to_string(), None)
     };
 
-    let outcome = if request.op == "comment.add" {
+    let outcome = if let Some(guard) = injection_guard {
         let outcome = state
             .store
             .commit_document_with_collab_session(
                 library,
                 path,
-                applied.markdown.into_bytes(),
+                applied.markdown.clone().into_bytes(),
                 document.version.metadata.clone(),
                 &document.version.content_type,
                 DocumentSource::Rest,
                 WritePrecondition::IfMatch(base_version_id.clone()),
             )
             .await?;
-        if let Some(guard) = injection_guard {
-            let _commit_outcome = guard.commit(outcome.version.id.clone()).await;
-        }
+        let _commit_outcome = guard.commit(outcome.version.id.clone()).await;
         state
             .store
             .emit_document_put_events(&outcome, injected_session_id);
@@ -1947,6 +1964,7 @@ async fn agent_ops_document(
             id: applied.id,
             outcome: Some(outcome),
             markdown: None,
+            injection: Some(injection_status),
         },
         version_id: Some(version_id),
     })
@@ -2033,11 +2051,10 @@ async fn agent_edit_document(
     let (injection_guard, injection_status) = match agent_edit_injection_batch(&plan) {
         Ok(batch) => match state.collab.live_room(&document.id).await {
             Some(room) => match room
-                .begin_injection(
-                    batch,
+                .begin_live_mutation(
+                    LiveMutation::content(batch, review_snapshot.clone()),
                     &plan.original_blocks,
                     base_version_id.clone(),
-                    review_snapshot.clone(),
                 )
                 .await
             {
@@ -2372,16 +2389,95 @@ fn built_nodes_for_block(
     build_nodes(&nodes)
 }
 
-struct AgentOpsInjectionPlan {
+struct AgentOpsLiveMutationPlan {
+    batch: Option<InjectionBatch>,
+    original_blocks: Vec<String>,
+    review: Option<JsonValue>,
+}
+
+fn agent_ops_live_mutation_plan(
+    original_markdown: &str,
+    edited_markdown: &str,
+    request: &AgentOpsRequest,
+    applied: &AppliedAgentOps,
+) -> Result<AgentOpsLiveMutationPlan, Unsupported> {
+    let id = applied
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| Unsupported::new("agent ops mutation missing applied review id"))?;
+    let review = agent_ops_review_meta_patch(edited_markdown, request, applied)?;
+    match request.op.as_str() {
+        "comment.add" | "suggestion.add" => {
+            let ordinal = request
+                .block_ref
+                .as_ref()
+                .ok_or_else(|| Unsupported::new(format!("{} operation missing ref", request.op)))?
+                .ordinal;
+            let plan = block_replace_injection_plan(original_markdown, edited_markdown, ordinal)?;
+            Ok(AgentOpsLiveMutationPlan {
+                batch: Some(plan.batch),
+                original_blocks: plan.original_blocks,
+                review,
+            })
+        }
+        "suggestion.accept" | "accept" | "suggestion.reject" | "reject" => {
+            let (body, _) = split_review_endmatter(original_markdown);
+            let ordinal = review_marker_block_ordinal(&body, id)?;
+            let plan = block_replace_injection_plan(original_markdown, edited_markdown, ordinal)?;
+            Ok(AgentOpsLiveMutationPlan {
+                batch: Some(plan.batch),
+                original_blocks: plan.original_blocks,
+                review,
+            })
+        }
+        "comment.reply" => Ok(AgentOpsLiveMutationPlan {
+            batch: None,
+            original_blocks: split_markdown_blocks(original_markdown),
+            review,
+        }),
+        "comment.delete" => {
+            let (original_body, _) = split_review_endmatter(original_markdown);
+            let (edited_body, _) = split_review_endmatter(edited_markdown);
+            if original_body == edited_body {
+                Ok(AgentOpsLiveMutationPlan {
+                    batch: None,
+                    original_blocks: split_markdown_blocks(original_markdown),
+                    review,
+                })
+            } else {
+                let ordinal = review_marker_block_ordinal(&original_body, id)?;
+                let plan =
+                    block_replace_injection_plan(original_markdown, edited_markdown, ordinal)?;
+                Ok(AgentOpsLiveMutationPlan {
+                    batch: Some(plan.batch),
+                    original_blocks: plan.original_blocks,
+                    review,
+                })
+            }
+        }
+        "comment.resolve" => Ok(AgentOpsLiveMutationPlan {
+            batch: None,
+            original_blocks: split_markdown_blocks(original_markdown),
+            review,
+        }),
+        other => Err(Unsupported::new(format!(
+            "unsupported ops operation {other}"
+        ))),
+    }
+}
+
+struct AgentOpsBlockReplacementPlan {
     batch: InjectionBatch,
     original_blocks: Vec<String>,
 }
 
-fn comment_add_injection_plan(
+fn block_replace_injection_plan(
     original_markdown: &str,
     edited_markdown: &str,
     ordinal: usize,
-) -> Result<AgentOpsInjectionPlan, Unsupported> {
+) -> Result<AgentOpsBlockReplacementPlan, Unsupported> {
     let original_blocks = split_markdown_blocks(original_markdown);
     let original_nodes = review_blocks_to_slate(&original_blocks)
         .map_err(|error| error.context("original blocks"))?;
@@ -2410,10 +2506,15 @@ fn comment_add_injection_plan(
 
     let (edited_body, edited_meta) = split_review_endmatter(edited_markdown);
     let edited_blocks = split_markdown_blocks(&edited_body);
-    let edited_block = edited_blocks
-        .get(ordinal)
-        .ok_or_else(|| Unsupported::new(format!("missing edited block ordinal {ordinal}")))?;
-    let new_nodes = built_nodes_for_block(edited_block, &edited_meta)?;
+    let new_nodes = if let Some(edited_block) = edited_blocks.get(ordinal) {
+        built_nodes_for_block(edited_block, &edited_meta)?
+    } else if edited_body.trim().is_empty() {
+        Vec::new()
+    } else {
+        return Err(Unsupported::new(format!(
+            "missing edited block ordinal {ordinal}"
+        )));
+    };
     let batch = InjectionBatch::new(vec![InjectionOp::ReplaceSpan {
         start,
         old_node_count,
@@ -2421,15 +2522,106 @@ fn comment_add_injection_plan(
     }])
     .ok_or_else(|| Unsupported::new("empty injection batch"))?;
 
-    Ok(AgentOpsInjectionPlan {
+    Ok(AgentOpsBlockReplacementPlan {
         batch,
         original_blocks,
     })
 }
 
+fn agent_ops_review_meta_patch(
+    edited_markdown: &str,
+    request: &AgentOpsRequest,
+    applied: &AppliedAgentOps,
+) -> Result<Option<JsonValue>, Unsupported> {
+    let id = applied
+        .id
+        .as_deref()
+        .ok_or_else(|| Unsupported::new("agent ops mutation missing applied review id"))?;
+    match request.op.as_str() {
+        "comment.add" | "comment.reply" => {
+            let (_, meta) = review_meta_with_inline_comment_bodies(edited_markdown);
+            let entry = meta
+                .comments
+                .get(id)
+                .ok_or_else(|| Unsupported::new(format!("missing comment metadata {id}")))?;
+            review_patch_entry("comments", id, entry).map(Some)
+        }
+        "suggestion.add" => {
+            let (_, meta) = split_review_endmatter(edited_markdown);
+            let entry = meta
+                .suggestions
+                .get(id)
+                .ok_or_else(|| Unsupported::new(format!("missing suggestion metadata {id}")))?;
+            review_patch_entry("suggestions", id, entry).map(Some)
+        }
+        "suggestion.accept" | "accept" | "suggestion.reject" | "reject" => {
+            Ok(Some(serde_json::json!({ "removeSuggestions": [id] })))
+        }
+        "comment.resolve" => {
+            let (_, meta) = review_meta_with_inline_comment_bodies(edited_markdown);
+            let entry = meta
+                .comments
+                .get(id)
+                .ok_or_else(|| Unsupported::new(format!("missing comment metadata {id}")))?;
+            review_patch_entry("comments", id, entry).map(Some)
+        }
+        "comment.delete" => {
+            if applied.removed_comment_ids.is_empty() {
+                return Err(Unsupported::new(
+                    "comment.delete missing removed comment ids",
+                ));
+            }
+            Ok(Some(serde_json::json!({
+                "removeComments": applied.removed_comment_ids.clone()
+            })))
+        }
+        other => Err(Unsupported::new(format!(
+            "unsupported ops operation {other}"
+        ))),
+    }
+}
+
+fn review_meta_with_inline_comment_bodies(markdown: &str) -> (String, ReviewMeta) {
+    let (body, mut meta) = split_review_endmatter(markdown);
+    hydrate_inline_comment_bodies(&body, &mut meta);
+    (body, meta)
+}
+
+fn review_patch_entry(
+    section: &str,
+    id: &str,
+    entry: &ReviewMetaEntry,
+) -> Result<JsonValue, Unsupported> {
+    let mut entries = serde_json::Map::new();
+    entries.insert(
+        id.to_string(),
+        serde_json::to_value(entry).map_err(|error| {
+            Unsupported::new(format!("review metadata serialization failed: {error}"))
+        })?,
+    );
+    let mut patch = serde_json::Map::new();
+    patch.insert(section.to_string(), JsonValue::Object(entries));
+    Ok(JsonValue::Object(patch))
+}
+
+fn review_marker_block_ordinal(body: &str, id: &str) -> Result<usize, Unsupported> {
+    let marker = format!("{{#{id}}}");
+    let matches = split_markdown_blocks(body)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(ordinal, block)| block.contains(&marker).then_some(ordinal))
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [ordinal] => Ok(*ordinal),
+        [] => Err(Unsupported::new(format!("review marker {id} not found"))),
+        _ => Err(Unsupported::new(format!("review marker {id} is ambiguous"))),
+    }
+}
+
 struct AppliedAgentOps {
     markdown: String,
     id: Option<String>,
+    removed_comment_ids: Vec<String>,
 }
 
 fn apply_agent_ops(
@@ -2445,7 +2637,7 @@ fn apply_agent_ops(
     }
 
     let (body, mut meta) = split_review_endmatter(markdown);
-    let (next_body, applied_id) = match request.op.as_str() {
+    let (next_body, applied_id, removed_comment_ids) = match request.op.as_str() {
         "comment.add" => {
             let id = review_id(request.id.as_deref(), "c", markdown, &request.op)?;
             ensure_review_id_available(&body, &meta, &id)?;
@@ -2472,7 +2664,64 @@ fn apply_agent_ops(
                     resolved: None,
                 },
             );
-            (next, Some(id))
+            (next, Some(id), Vec::new())
+        }
+        "comment.reply" => {
+            let parent_id = required_ops_text(
+                request.parent_id.as_deref(),
+                "comment.reply missing parentId",
+            )?;
+            validate_review_id(parent_id)?;
+            {
+                let parent = meta.comments.get(parent_id).ok_or_else(|| {
+                    QuarryError::InvalidPath(format!("review comment {parent_id} not found"))
+                })?;
+                if parent.re.is_some() {
+                    return Err(QuarryError::InvalidPath(format!(
+                        "review comment {parent_id} is a reply"
+                    ))
+                    .into());
+                }
+            }
+            let id = review_id(request.id.as_deref(), "r", markdown, &request.op)?;
+            ensure_review_id_available(&body, &meta, &id)?;
+            let body_text =
+                required_ops_text(request.body.as_deref(), "comment.reply missing body")?;
+            meta.comments.insert(
+                id.clone(),
+                ReviewMetaEntry {
+                    by: author.to_string(),
+                    at: now_timestamp(),
+                    body: Some(body_text.to_string()),
+                    re: Some(parent_id.to_string()),
+                    status: None,
+                    resolved: None,
+                },
+            );
+            (body, Some(id), Vec::new())
+        }
+        "comment.delete" => {
+            let id = required_ops_text(request.id.as_deref(), "comment.delete missing id")?;
+            validate_review_id(id)?;
+            let is_reply = meta
+                .comments
+                .get(id)
+                .ok_or_else(|| QuarryError::InvalidPath(format!("review comment {id} not found")))?
+                .re
+                .is_some();
+            let (next, removed_ids) = if is_reply {
+                (body, vec![id.to_string()])
+            } else {
+                let mut removed_ids = vec![id.to_string()];
+                removed_ids.extend(meta.comments.iter().filter_map(|(reply_id, entry)| {
+                    (entry.re.as_deref() == Some(id)).then_some(reply_id.clone())
+                }));
+                (transform_comment_by_id(&body, id)?, removed_ids)
+            };
+            for removed_id in &removed_ids {
+                meta.comments.remove(removed_id);
+            }
+            (next, Some(id.to_string()), removed_ids)
         }
         "suggestion.add" => {
             let id = review_id(request.id.as_deref(), "s", markdown, &request.op)?;
@@ -2536,19 +2785,19 @@ fn apply_agent_ops(
                     resolved: None,
                 },
             );
-            (next, Some(id))
+            (next, Some(id), Vec::new())
         }
         "suggestion.accept" | "accept" => {
             let id = required_ops_text(request.id.as_deref(), "accept missing id")?;
             let next = transform_suggestion_by_id(&body, id, true)?;
             meta.suggestions.remove(id);
-            (next, Some(id.to_string()))
+            (next, Some(id.to_string()), Vec::new())
         }
         "suggestion.reject" | "reject" => {
             let id = required_ops_text(request.id.as_deref(), "reject missing id")?;
             let next = transform_suggestion_by_id(&body, id, false)?;
             meta.suggestions.remove(id);
-            (next, Some(id.to_string()))
+            (next, Some(id.to_string()), Vec::new())
         }
         "comment.resolve" => {
             let id = required_ops_text(request.id.as_deref(), "comment.resolve missing id")?;
@@ -2556,7 +2805,7 @@ fn apply_agent_ops(
                 QuarryError::InvalidPath(format!("review comment {id} not found"))
             })?;
             entry.status = Some("resolved".to_string());
-            (body, Some(id.to_string()))
+            (body, Some(id.to_string()), Vec::new())
         }
         other => {
             return Err(
@@ -2568,6 +2817,7 @@ fn apply_agent_ops(
     Ok(AppliedAgentOps {
         markdown: assemble_review_document(&next_body, &meta)?,
         id: applied_id,
+        removed_comment_ids,
     })
 }
 
@@ -2779,6 +3029,36 @@ fn transform_suggestion_by_id(body: &str, id: &str, accept: bool) -> Result<Stri
     Ok(next)
 }
 
+fn transform_comment_by_id(body: &str, id: &str) -> Result<String, ApiError> {
+    validate_review_id(id)?;
+    let matches = inline_comment_body()
+        .captures_iter(body)
+        .filter_map(|captures| {
+            let marker_id = captures.get(3)?;
+            if marker_id.as_str() != id {
+                return None;
+            }
+            let full = captures.get(0)?;
+            let anchor = captures.get(1)?;
+            Some((full.start(), full.end(), anchor.as_str().to_string()))
+        })
+        .collect::<Vec<_>>();
+    let (start, end, anchor) = match matches.as_slice() {
+        [] => {
+            return Err(QuarryError::InvalidPath(format!("review comment {id} not found")).into());
+        }
+        [(start, end, anchor)] => (*start, *end, anchor.clone()),
+        _ => {
+            return Err(
+                QuarryError::InvalidPath(format!("review comment {id} is ambiguous")).into(),
+            );
+        }
+    };
+    let mut next = body.to_string();
+    next.replace_range(start..end, &anchor);
+    Ok(next)
+}
+
 fn invalid_review_marker(id: &str) -> ApiError {
     QuarryError::InvalidPath(format!("review marker {id} is not a suggestion")).into()
 }
@@ -2924,6 +3204,13 @@ fn version_id_from_base_token(base_token: &str) -> Result<String, ApiError> {
 
 fn stale_base_error() -> ApiError {
     QuarryError::PreconditionFailed("STALE_BASE".to_string()).into()
+}
+
+fn live_gate_rejected_error() -> ApiError {
+    ApiError {
+        status: StatusCode::CONFLICT,
+        message: "LIVE_GATE_REJECTED".to_string(),
+    }
 }
 
 fn block_hash(markdown: &str) -> String {

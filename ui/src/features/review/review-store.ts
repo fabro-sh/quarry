@@ -19,10 +19,17 @@ export function addComment(meta: ReviewMeta, id: string, fields: { by: string; a
 
 export function mergeReviewMetaPatch(meta: ReviewMeta, patch?: ReviewMetaPatch | null): ReviewMeta {
   if (!patch) return meta;
-  return {
+  const next = {
     comments: { ...meta.comments, ...(patch.comments ?? {}) },
     suggestions: { ...meta.suggestions, ...(patch.suggestions ?? {}) },
   };
+  for (const id of patch.removeComments ?? []) {
+    delete next.comments[id];
+  }
+  for (const id of patch.removeSuggestions ?? []) {
+    delete next.suggestions[id];
+  }
+  return next;
 }
 
 export function addReply(meta: ReviewMeta, id: string, fields: { parentId: string; body: string; by: string; at: string }): ReviewMeta {

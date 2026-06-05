@@ -163,12 +163,11 @@ impl CollabRoom {
             .collect()
     }
 
-    pub(crate) async fn begin_injection(
+    pub(crate) async fn begin_live_mutation(
         &self,
-        batch: InjectionBatch,
+        mutation: LiveMutation,
         original_blocks: &[String],
         _base_version_id: String,
-        review: Option<JsonValue>,
     ) -> Option<InjectionGuard> {
         // Reproduce the live room's nodes from the original blocks, including
         // CriticMarkup comment/suggestion marks; the trailing endmatter block
@@ -217,24 +216,54 @@ impl CollabRoom {
             }
             stripped.len() as u32
         };
-        if !batch.is_valid_for(live_content_len) {
+        if let Some(batch) = &mutation.batch {
+            if !batch.is_valid_for(live_content_len) {
+                tracing::debug!(
+                    document_id = %self.document_id,
+                    live_content_len,
+                    "agent injection batch rejected for live content length"
+                );
+                return None;
+            }
+        }
+        if mutation.batch.is_none() && mutation.review.is_none() {
             tracing::debug!(
                 document_id = %self.document_id,
-                live_content_len,
-                "agent injection batch rejected for live content length"
+                "agent injection rejected empty live mutation"
             );
             return None;
         }
 
         Some(InjectionGuard {
             awareness,
-            batch,
             document_id: self.document_id.clone(),
+            mutation,
             persistence_failed: self.broadcast.persistence_failed.clone(),
             persistence_failure: self.broadcast.persistence_failure.clone(),
-            review,
             store: self.store.clone(),
         })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct LiveMutation {
+    pub(crate) batch: Option<InjectionBatch>,
+    pub(crate) review: Option<JsonValue>,
+}
+
+impl LiveMutation {
+    pub(crate) fn content(batch: InjectionBatch, review: Option<JsonValue>) -> Self {
+        Self {
+            batch: Some(batch),
+            review,
+        }
+    }
+
+    pub(crate) fn metadata(review: JsonValue) -> Self {
+        Self {
+            batch: None,
+            review: Some(review),
+        }
     }
 }
 
@@ -294,11 +323,10 @@ pub(crate) enum CommitOutcome {
 
 pub(crate) struct InjectionGuard {
     awareness: OwnedRwLockWriteGuard<Awareness>,
-    batch: InjectionBatch,
     document_id: String,
+    mutation: LiveMutation,
     persistence_failed: Arc<AtomicBool>,
     persistence_failure: watch::Sender<Option<String>>,
-    review: Option<JsonValue>,
     store: Option<QuarryStore>,
 }
 
@@ -307,11 +335,13 @@ impl InjectionGuard {
         {
             let mut txn = self.awareness.doc().transact_mut_with(INJECTION_ORIGIN);
             let root = root_xml_text_mut(&mut txn).expect("collab root must exist");
-            apply_injection_ops(&mut txn, &root, &self.batch.ops);
+            if let Some(batch) = &self.mutation.batch {
+                apply_injection_ops(&mut txn, &root, &batch.ops);
+            }
             let envelope = txn.get_or_insert_map(INJECTION_ROOT);
             envelope.insert(&mut txn, "version_id", new_version_id.clone());
             envelope.insert(&mut txn, "etag", format!("\"{new_version_id}\""));
-            if let Some(review) = &self.review {
+            if let Some(review) = &self.mutation.review {
                 if let Ok(review_json) = serde_json::to_string(review) {
                     envelope.insert(&mut txn, "review", review_json);
                 } else {
@@ -954,7 +984,11 @@ mod tests {
         let original_blocks = vec!["Hello\n".to_string()];
 
         let guard = room
-            .begin_injection(batch, &original_blocks, "v1".to_string(), None)
+            .begin_live_mutation(
+                LiveMutation::content(batch, None),
+                &original_blocks,
+                "v1".to_string(),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -992,7 +1026,11 @@ mod tests {
         let original_blocks = vec!["Hello\n\n".to_string(), "World\n".to_string()];
 
         let guard = room
-            .begin_injection(batch, &original_blocks, "v1".to_string(), None)
+            .begin_live_mutation(
+                LiveMutation::content(batch, None),
+                &original_blocks,
+                "v1".to_string(),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -1021,7 +1059,11 @@ mod tests {
         let original_blocks = vec!["First\n\n".to_string(), "Second\n".to_string()];
 
         assert!(room
-            .begin_injection(batch, &original_blocks, "v1".to_string(), None)
+            .begin_live_mutation(
+                LiveMutation::content(batch, None),
+                &original_blocks,
+                "v1".to_string(),
+            )
             .await
             .is_none());
     }
@@ -1049,19 +1091,21 @@ mod tests {
         let original_blocks = vec![body.to_string(), endmatter.to_string()];
 
         let guard = room
-            .begin_injection(
-                batch,
+            .begin_live_mutation(
+                LiveMutation::content(
+                    batch,
+                    Some(serde_json::json!({
+                        "comments": {
+                            "c1": {
+                                "by": "ai:codex",
+                                "at": "2026-06-05T02:41:00.480Z",
+                                "body": "note"
+                            }
+                        }
+                    })),
+                ),
                 &original_blocks,
                 "v1".to_string(),
-                Some(serde_json::json!({
-                    "comments": {
-                        "c1": {
-                            "by": "ai:codex",
-                            "at": "2026-06-05T02:41:00.480Z",
-                            "body": "note"
-                        }
-                    }
-                })),
             )
             .await
             .expect("review-comment live room should pass the injection gate");
@@ -1105,7 +1149,11 @@ mod tests {
         let original_blocks = vec!["Hello\n".to_string()];
 
         let guard = room
-            .begin_injection(batch, &original_blocks, "v1".to_string(), None)
+            .begin_live_mutation(
+                LiveMutation::content(batch, None),
+                &original_blocks,
+                "v1".to_string(),
+            )
             .await
             .unwrap();
         assert_eq!(

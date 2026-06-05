@@ -84,6 +84,41 @@ describe('review-store reducers', () => {
       '{==target==}{>>Needs support.<<}{#c1}'
     );
   });
+
+  it('mergeReviewMetaPatch applies upserts and removals', () => {
+    const meta = mergeReviewMetaPatch(
+      {
+        comments: {
+          c1: { by: 'user', at },
+          r1: { by: 'user', at, body: 'reply', re: 'c1' },
+          c2: { by: 'user', at },
+        },
+        suggestions: {
+          s1: { by: 'AI', at },
+          s2: { by: 'AI', at },
+        },
+      },
+      {
+        comments: {
+          c3: { by: 'ai:codex', at, body: 'new comment' },
+        },
+        suggestions: {
+          s3: { by: 'ai:codex', at },
+        },
+        removeComments: ['c1', 'r1'],
+        removeSuggestions: ['s1'],
+      }
+    );
+
+    expect(meta.comments).toEqual({
+      c2: { by: 'user', at },
+      c3: { by: 'ai:codex', at, body: 'new comment' },
+    });
+    expect(meta.suggestions).toEqual({
+      s2: { by: 'AI', at },
+      s3: { by: 'ai:codex', at },
+    });
+  });
 });
 
 describe('review-store active/hover', () => {

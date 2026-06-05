@@ -160,6 +160,21 @@ describe('parseInjectionEnvelope', () => {
     ).toEqual({ etag: '"v3"', review, versionId: 'v3' });
   });
 
+  it('preserves deletion-aware review metadata patches', () => {
+    const review = {
+      removeComments: ['c1'],
+      removeSuggestions: ['s1'],
+    };
+
+    expect(
+      parseInjectionEnvelope({
+        etag: '"v4"',
+        review: JSON.stringify(review),
+        version_id: 'v4',
+      })
+    ).toEqual({ etag: '"v4"', review, versionId: 'v4' });
+  });
+
   it('accepts an envelope without review metadata', () => {
     expect(parseInjectionEnvelope({ etag: '"v3"', version_id: 'v3' })).toEqual({
       etag: '"v3"',
