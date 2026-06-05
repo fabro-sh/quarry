@@ -25,10 +25,14 @@ pub fn block_markdown_to_slate(markdown: &str) -> Result<Vec<Node>, Unsupported>
 /// into review marks afterwards (see `crate::review`); the editor/collab path
 /// keeps using `block_markdown_to_slate`, which still rejects them.
 pub fn block_markdown_to_slate_raw(markdown: &str) -> Result<Vec<Node>, Unsupported> {
-    // The browser parses with remark (no smartypants), so smart punctuation must
-    // stay off: it rewrites `--` → en-dash, which both diverges from the live
-    // Slate tree and corrupts the `{--del--}` CriticMarkup marker.
-    let options = Options::all() & !Options::ENABLE_SMART_PUNCTUATION;
+    // Match the browser's remark parser, which enables neither smart punctuation
+    // nor heading-id attributes:
+    //   - smart punctuation rewrites `--` → en-dash, corrupting `{--del--}`;
+    //   - heading attributes consume a trailing `{#id}` on a heading as the
+    //     heading's id, stripping the CriticMarkup `{#id}` so a commented heading
+    //     parses as a marker without an id (and review conversion then bails).
+    let options =
+        Options::all() & !Options::ENABLE_SMART_PUNCTUATION & !Options::ENABLE_HEADING_ATTRIBUTES;
     let events = Parser::new_ext(markdown, options)
         .map(|event| event.into_static())
         .collect::<Vec<_>>();

@@ -1,0 +1,46 @@
+{
+  "name": "review-heading-comment",
+  "supported": true,
+  "codec": "review",
+  "markdown": "# {==Local Light==}{>>note<<}{#c1}\n\nBody line.\n\n---\ncomments:\n  c1:\n    by: Claude\n    at: 2026-06-05T12:15:45.171Z\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "comment": true,
+          "comment_c1": true,
+          "text": "Local Light"
+        }
+      ],
+      "type": "h1"
+    },
+    {
+      "children": [
+        {
+          "text": "Body line."
+        }
+      ],
+      "type": "p"
+    }
+  ],
+  "observableState": [
+    {
+      "type": "h1",
+      "children": [
+        {
+          "comment": true,
+          "comment_c1": true,
+          "text": "Local Light"
+        }
+      ]
+    },
+    {
+      "type": "p",
+      "children": [
+        {
+          "text": "Body line."
+        }
+      ]
+    }
+  ]
+}

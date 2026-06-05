@@ -69,6 +69,13 @@ const CASES: FixtureCase[] = [
     markdown: 'See {==here==}{#c1}.\n',
   },
   {
+    name: 'review-heading-comment',
+    supported: true,
+    codec: 'review',
+    markdown:
+      '# {==Local Light==}{>>note<<}{#c1}\n\nBody line.\n\n---\ncomments:\n  c1:\n    by: Claude\n    at: 2026-06-05T12:15:45.171Z\n',
+  },
+  {
     name: 'review-comment',
     supported: true,
     codec: 'review',
