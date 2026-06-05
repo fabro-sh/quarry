@@ -1,5 +1,6 @@
 import { Dialog } from '@radix-ui/react-dialog';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import * as Tooltip from '@radix-ui/react-tooltip';
 import { Command } from 'cmdk';
 import {
   AlertTriangle,
@@ -3088,29 +3089,110 @@ function SaveStatusIndicator({ saveState }: { saveState: SaveState }) {
   );
 }
 
-function AgentPresencePill({ presence }: { presence: AgentPresenceEntry[] }) {
-  if (!presence.length) return null;
-  const label =
-    presence.length === 1
-      ? `${agentPresenceName(presence[0])} · ${presence[0].status}`
-      : `${presence.length} agents`;
-  return (
-    <span
-      aria-label="Agent presence"
-      className="inline-flex h-7 max-w-44 shrink-0 items-center gap-1.5 truncate rounded-md border border-accent-line bg-accent-tint px-2.5 text-xs font-medium text-accent-ink"
-      title={presence.map((entry) => `${agentPresenceName(entry)} · ${entry.status}`).join('\n')}
-    >
-      <Bot size={13} className="shrink-0" />
-      <span className="min-w-0 truncate">{label}</span>
-    </span>
-  );
-}
+// Brand colors for known agent providers, used to tint each presence avatar.
+// The logo SVG in /agent-icons/<kind>.svg carries the same color, so an unknown
+// kind (no entry here) falls back to a neutral Bot avatar rather than a 404.
+const AGENT_BRANDS: Record<string, string> = {
+  claude: '#D97757',
+  codex: '#000000',
+  copilot: '#000000',
+  cursor: '#000000',
+  gemini: '#8E75B2',
+  grok: '#0A0A0A',
+  mistral: '#FA520F',
+  ollama: '#000000',
+  perplexity: '#1FB8CD',
+};
+
+const PRESENCE_AVATAR_CAP = 3;
+const presenceAvatar =
+  'flex size-7 shrink-0 items-center justify-center rounded-full ring-2 ring-surface';
 
 function agentPresenceName(entry: AgentPresenceEntry) {
   const by = entry.by?.trim();
   if (by) return by;
   const parts = entry.agentId.split(':').filter(Boolean);
   return parts.at(-1) ?? entry.agentId;
+}
+
+// Provider segment of the agent id, e.g. ai:codex:abc -> codex.
+function agentPresenceKind(entry: AgentPresenceEntry) {
+  const parts = entry.agentId.split(':').filter(Boolean);
+  return (parts[0] === 'ai' ? parts[1] : parts[0]) ?? '';
+}
+
+function presenceLabel(entry: AgentPresenceEntry) {
+  return `${agentPresenceName(entry)} · ${entry.status}`;
+}
+
+function AgentAvatar({ entry }: { entry: AgentPresenceEntry }) {
+  const kind = agentPresenceKind(entry);
+  const brand = AGENT_BRANDS[kind];
+  const label = presenceLabel(entry);
+  return (
+    <Tooltip.Root>
+      <Tooltip.Trigger
+        aria-label={label}
+        className={cn(presenceAvatar, !brand && 'bg-well text-muted')}
+        style={brand ? { backgroundColor: `${brand}22` } : undefined}
+        type="button"
+      >
+        {brand ? (
+          <img alt="" className="size-full p-1" src={`/agent-icons/${kind}.svg`} />
+        ) : (
+          <Bot size={14} />
+        )}
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content
+          className="z-50 rounded-md border border-line bg-raised px-2 py-1 text-xs text-body shadow-lg"
+          sideOffset={6}
+        >
+          {label}
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  );
+}
+
+function AgentOverflowAvatar({ entries }: { entries: AgentPresenceEntry[] }) {
+  return (
+    <Tooltip.Root>
+      <Tooltip.Trigger
+        aria-label={entries.map(presenceLabel).join(', ')}
+        className={cn(presenceAvatar, 'bg-well text-xs font-medium text-muted')}
+        type="button"
+      >
+        +{entries.length}
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content
+          className="z-50 flex flex-col gap-0.5 rounded-md border border-line bg-raised px-2 py-1 text-xs text-body shadow-lg"
+          sideOffset={6}
+        >
+          {entries.map((entry) => (
+            <span key={entry.agentId}>{presenceLabel(entry)}</span>
+          ))}
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  );
+}
+
+function AgentPresencePill({ presence }: { presence: AgentPresenceEntry[] }) {
+  if (!presence.length) return null;
+  const shown = presence.slice(0, PRESENCE_AVATAR_CAP);
+  const overflow = presence.slice(PRESENCE_AVATAR_CAP);
+  return (
+    <Tooltip.Provider delayDuration={200}>
+      <div aria-label="Agent presence" className="flex shrink-0 -space-x-2">
+        {shown.map((entry) => (
+          <AgentAvatar entry={entry} key={entry.agentId} />
+        ))}
+        {overflow.length ? <AgentOverflowAvatar entries={overflow} /> : null}
+      </div>
+    </Tooltip.Provider>
+  );
 }
 
 // Viewing/Editing/Suggesting selector in the document header (à la Google Docs).

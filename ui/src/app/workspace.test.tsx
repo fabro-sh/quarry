@@ -192,7 +192,7 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Live/ }));
-    expect(await screen.findByLabelText('Agent presence')).toHaveTextContent('Codex · waiting');
+    expect(await screen.findByLabelText('Codex · waiting')).toBeInTheDocument();
   });
 
   it('persists the selected right pane tab per library', async () => {
