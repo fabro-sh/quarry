@@ -698,7 +698,7 @@ export function PlateMarkdownEditor({
           >
             <PlateContent
               aria-label="Plate markdown editor"
-              className="min-h-full w-full px-[max(2rem,calc((100%-68ch)/2))] pt-16 pb-8 text-[15px] leading-7 text-ink outline-none [&_[data-slate-placeholder=true]]:text-faint"
+              className="min-h-full w-full pt-16 pb-8 pl-[max(2rem,calc((100%-68ch)/2))] pr-[max(1rem,calc((100%-68ch)/2))] text-[15px] leading-7 text-ink outline-none [&_[data-slate-placeholder=true]]:text-faint"
               disabled={readOnly}
               placeholder="Write markdown…"
               spellCheck={false}

@@ -28,7 +28,7 @@ export function ReviewRail({ editor }: { editor: PlateEditor }) {
   return (
     <aside
       aria-label="Review"
-      className="flex h-full w-80 shrink-0 flex-col gap-2 overflow-auto border-l border-line bg-surface p-3"
+      className="mr-6 flex h-full w-80 shrink-0 flex-col gap-2 overflow-auto bg-surface p-3"
       data-testid="review-rail"
     >
       {hasDraft ? <DraftCommentComposer editor={editor} anchorText={draftText} /> : null}
