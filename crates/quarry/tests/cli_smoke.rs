@@ -1,4 +1,6 @@
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 #[test]
 fn cli_conflict_resolve_rejects_conflicts_from_another_library() {
@@ -258,6 +260,58 @@ fn cli_can_create_and_list_git_peers() {
     assert_eq!(peers[0]["id"], peer["id"]);
 }
 
+#[cfg(unix)]
+#[test]
+fn serve_sigterm_exits_and_removes_lock_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let lock_path = root.join("quarry.lock");
+    let addr = unused_loopback_addr();
+    let mut child = quarry_command()
+        .args([
+            "--root",
+            root.to_str().unwrap(),
+            "serve",
+            "--addr",
+            &addr.to_string(),
+        ])
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    wait_for_path(&lock_path, Duration::from_secs(5));
+    wait_for_tcp(addr, Duration::from_secs(5));
+    let status = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let exit_status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            panic!("quarry serve did not exit after SIGTERM");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        pipe.read_to_string(&mut stderr).unwrap();
+    }
+    assert!(
+        exit_status.success(),
+        "quarry serve should exit gracefully, got {exit_status:?}, stderr: {stderr}"
+    );
+    assert!(
+        !lock_path.exists(),
+        "quarry.lock should be removed on SIGTERM"
+    );
+}
+
 fn run_quarry<const N: usize>(args: [&str; N]) {
     let output = quarry_command().args(args).output().unwrap();
     assert!(
@@ -269,4 +323,31 @@ fn run_quarry<const N: usize>(args: [&str; N]) {
 
 fn quarry_command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_quarry"))
+}
+
+fn unused_loopback_addr() -> std::net::SocketAddr {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.local_addr().unwrap()
+}
+
+fn wait_for_path(path: &std::path::Path, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if path.exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("timed out waiting for {}", path.display());
+}
+
+fn wait_for_tcp(addr: std::net::SocketAddr, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(50)).is_ok() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("timed out waiting for {addr}");
 }

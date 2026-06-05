@@ -3,6 +3,7 @@ use quarry_core::{
 };
 use quarry_storage::QuarryStore;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::future::Future;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -659,17 +660,72 @@ pub async fn mount_library(
     mountpoint: &Path,
     read_only: bool,
 ) -> Result<()> {
+    mount_library_with_shutdown(
+        store,
+        library,
+        mountpoint,
+        read_only,
+        mount_shutdown_signal(),
+    )
+    .await
+}
+
+pub async fn mount_library_with_shutdown<F>(
+    store: QuarryStore,
+    library: &str,
+    mountpoint: &Path,
+    read_only: bool,
+    shutdown: F,
+) -> Result<()>
+where
+    F: Future<Output = ()>,
+{
     #[cfg(target_os = "linux")]
     {
-        linux_mount::mount_library(store, library, mountpoint, read_only).await
+        linux_mount::mount_library_with_shutdown(store, library, mountpoint, read_only, shutdown)
+            .await
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (store, library, mountpoint, read_only);
+        let _ = (store, library, mountpoint, read_only, shutdown);
         Err(QuarryError::Unsupported(
             "Quarry phase-one FUSE mounts are Linux-only".to_string(),
         ))
     }
+}
+
+async fn mount_shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            tracing::warn!(%error, "failed to listen for Ctrl-C");
+        }
+    };
+
+    #[cfg(unix)]
+    {
+        let sigterm = async {
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(mut signal) => {
+                    signal.recv().await;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "failed to listen for SIGTERM");
+                    std::future::pending::<()>().await;
+                }
+            }
+        };
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = sigterm => {},
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        ctrl_c.await;
+    }
+
+    tracing::info!("shutdown signal received");
 }
 
 fn watch_store_events(
@@ -753,18 +809,23 @@ mod linux_mount {
     use quarry_core::{QuarryError, Result};
     use quarry_storage::QuarryStore;
     use std::ffi::{OsStr, OsString};
+    use std::future::Future;
     use std::num::NonZeroU32;
     use std::path::Path;
     use std::time::{Duration, SystemTime};
 
     const TTL: Duration = Duration::from_secs(0);
 
-    pub async fn mount_library(
+    pub async fn mount_library_with_shutdown<F>(
         store: QuarryStore,
         library: &str,
         mountpoint: &Path,
         read_only: bool,
-    ) -> Result<()> {
+        shutdown: F,
+    ) -> Result<()>
+    where
+        F: Future<Output = ()>,
+    {
         tokio::fs::create_dir_all(mountpoint).await?;
         let projection = FuseProjection::open(store, library, read_only).await?;
         let mut options = MountOptions::default();
@@ -794,7 +855,7 @@ mod linux_mount {
             read_only,
             "FUSE mount established"
         );
-        tokio::signal::ctrl_c().await?;
+        shutdown.await;
         handle.unmount().await?;
         tracing::info!(
             library,

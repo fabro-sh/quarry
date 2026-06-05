@@ -1,11 +1,11 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use quarry_core::{DocumentSource, WritePrecondition};
-use quarry_fuse::mount_library;
+use quarry_fuse::mount_library_with_shutdown;
 use quarry_git::{
     export_worktree, import_worktree, pull_peer, push_peer, sync_peer, GitExportOptions,
 };
-use quarry_server::serve;
+use quarry_server::{serve, serve_with_shutdown, shutdown_signal};
 use quarry_storage::{QuarryStore, StoreConfig};
 use serde_json::json;
 use std::fs;
@@ -210,22 +210,39 @@ pub async fn run() -> Result<()> {
         Command::Mount(command) => {
             let store = open_at(&cli.root, None, None).await?;
             if let Some(addr) = command.serve_addr {
+                let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+                tokio::spawn(async move {
+                    shutdown_signal().await;
+                    let _ = shutdown_tx.send(true);
+                });
                 let mount_store = store.clone();
-                tokio::select! {
-                    result = mount_library(
-                        mount_store,
-                        &command.library,
-                        &command.mountpoint,
-                        command.read_only,
-                    ) => result?,
-                    result = serve(store, addr) => result?,
-                }
+                let mount_shutdown = wait_for_shutdown(shutdown_rx.clone());
+                let server_shutdown = wait_for_shutdown(shutdown_rx);
+                tokio::try_join!(
+                    async {
+                        mount_library_with_shutdown(
+                            mount_store,
+                            &command.library,
+                            &command.mountpoint,
+                            command.read_only,
+                            mount_shutdown,
+                        )
+                        .await
+                        .map_err(anyhow::Error::from)
+                    },
+                    async {
+                        serve_with_shutdown(store, addr, server_shutdown)
+                            .await
+                            .map_err(anyhow::Error::from)
+                    },
+                )?;
             } else {
-                mount_library(
+                mount_library_with_shutdown(
                     store,
                     &command.library,
                     &command.mountpoint,
                     command.read_only,
+                    shutdown_signal(),
                 )
                 .await?;
             }
@@ -330,6 +347,14 @@ fn init_tracing() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();
+}
+
+async fn wait_for_shutdown(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
+    while !*shutdown_rx.borrow_and_update() {
+        if shutdown_rx.changed().await.is_err() {
+            break;
+        }
+    }
 }
 
 async fn run_tx(root: &Path, command: TxCommand) -> Result<()> {

@@ -1,3 +1,4 @@
+use fs2::FileExt;
 use quarry_cas::DiskCas;
 use quarry_core::{
     normalize_path, now_timestamp, parent_dirs, ChangeType, CollabInviteToken, ConflictRecord,
@@ -11,7 +12,9 @@ use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::future::Future;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::process;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex, OwnedMutexGuard};
@@ -94,7 +97,7 @@ tokio::task_local! {
 
 struct LockGuard {
     path: Option<PathBuf>,
-    _file: Option<File>,
+    file: Option<File>,
 }
 
 struct StagedChange {
@@ -109,6 +112,9 @@ impl Drop for LockGuard {
     fn drop(&mut self) {
         if let Some(path) = &self.path {
             let _ = fs::remove_file(path);
+        }
+        if let Some(file) = &self.file {
+            let _ = file.unlock();
         }
     }
 }
@@ -3894,22 +3900,26 @@ fn acquire_lock(config: &StoreConfig) -> Result<LockGuard> {
         fs::create_dir_all(parent)?;
     }
     let file = OpenOptions::new()
-        .create_new(true)
+        .create(true)
+        .read(true)
         .write(true)
         .open(&path)
-        .map_err(|err| {
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                QuarryError::Busy(format!(
-                    "another Quarry daemon appears to own {}",
-                    config.db_path.display()
-                ))
-            } else {
-                QuarryError::Io(err)
-            }
-        })?;
+        .map_err(QuarryError::Io)?;
+    file.try_lock_exclusive().map_err(|err| {
+        if err.kind() == ErrorKind::WouldBlock {
+            QuarryError::Busy(format!(
+                "another Quarry daemon appears to own {}",
+                config.db_path.display()
+            ))
+        } else {
+            QuarryError::Io(err)
+        }
+    })?;
+    file.set_len(0)?;
+    writeln!(&file, "{}", process::id())?;
     Ok(LockGuard {
         path: Some(path),
-        _file: Some(file),
+        file: Some(file),
     })
 }
 

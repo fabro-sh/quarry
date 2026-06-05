@@ -1121,6 +1121,41 @@ async fn second_store_owner_is_rejected_by_lock_file() {
 }
 
 #[tokio::test]
+async fn stale_empty_lock_file_does_not_block_store_open_and_is_removed_on_drop() {
+    let root = tempfile::tempdir().unwrap();
+    let lock_path = root.path().join("quarry.lock");
+    std::fs::write(&lock_path, "").unwrap();
+    let config = StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    };
+
+    let store = QuarryStore::open(config).await.unwrap();
+    assert!(lock_path.exists());
+
+    drop(store);
+    assert!(!lock_path.exists());
+}
+
+#[tokio::test]
+async fn dropped_store_removes_lock_file() {
+    let root = tempfile::tempdir().unwrap();
+    let lock_path = root.path().join("quarry.lock");
+    let config = StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    };
+
+    let store = QuarryStore::open(config).await.unwrap();
+    assert!(lock_path.exists());
+
+    drop(store);
+    assert!(!lock_path.exists());
+}
+
+#[tokio::test]
 async fn paths_are_normalized_reserved_paths_rejected_and_keys_case_sensitive() {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {

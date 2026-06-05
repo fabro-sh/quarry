@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
+use std::future::{Future, IntoFuture};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -321,10 +322,76 @@ pub fn router(store: QuarryStore) -> Router {
 }
 
 pub async fn serve(store: QuarryStore, addr: SocketAddr) -> std::io::Result<()> {
+    serve_with_shutdown(store, addr, shutdown_signal()).await
+}
+
+pub async fn serve_with_shutdown<F>(
+    store: QuarryStore,
+    addr: SocketAddr,
+    shutdown: F,
+) -> std::io::Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
     warn_if_non_loopback(addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "quarry REST server listening");
-    axum::serve(listener, router(store)).await
+    let (shutdown_started_tx, shutdown_started_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = axum::serve(listener, router(store))
+        .with_graceful_shutdown(async move {
+            shutdown.await;
+            let _ = shutdown_started_tx.send(());
+        })
+        .into_future();
+    tokio::pin!(server);
+    tokio::pin!(shutdown_started_rx);
+
+    tokio::select! {
+        result = &mut server => result,
+        _ = &mut shutdown_started_rx => {
+            match tokio::time::timeout(Duration::from_secs(10), &mut server).await {
+                Ok(result) => result,
+                Err(_) => {
+                    tracing::warn!("quarry REST server did not finish graceful shutdown within 10 seconds");
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
+pub async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            tracing::warn!(%error, "failed to listen for Ctrl-C");
+        }
+    };
+
+    #[cfg(unix)]
+    {
+        let sigterm = async {
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(mut signal) => {
+                    signal.recv().await;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "failed to listen for SIGTERM");
+                    std::future::pending::<()>().await;
+                }
+            }
+        };
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = sigterm => {},
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        ctrl_c.await;
+    }
+
+    tracing::info!("shutdown signal received");
 }
 
 fn warn_if_non_loopback(addr: SocketAddr) {

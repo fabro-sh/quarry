@@ -13,6 +13,23 @@ async fn test_store() -> QuarryStore {
     .unwrap()
 }
 
+#[cfg(not(target_os = "linux"))]
+#[tokio::test]
+async fn mount_library_with_shutdown_reports_unsupported_on_non_linux() {
+    let store = test_store().await;
+    let error = quarry_fuse::mount_library_with_shutdown(
+        store,
+        "notes",
+        std::path::Path::new("/tmp/quarry-mount"),
+        true,
+        async {},
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(error, quarry_core::QuarryError::Unsupported(_)));
+}
+
 #[tokio::test]
 async fn projection_lists_virtual_directories_and_reads_committed_documents() {
     let store = test_store().await;

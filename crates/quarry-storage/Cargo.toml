@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 chrono.workspace = true
+fs2.workspace = true
 quarry-cas.workspace = true
 quarry-core.workspace = true
 serde.workspace = true
