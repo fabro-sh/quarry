@@ -307,6 +307,14 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
     );
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/edit"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/ops"].is_object());
+    assert!(
+        openapi["components"]["schemas"]["AgentEditResponse"]["properties"]["nextBaseToken"]
+            .is_object()
+    );
+    assert!(
+        openapi["components"]["schemas"]["AgentOpsResponse"]["properties"]["nextBaseToken"]
+            .is_object()
+    );
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/presence"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/metadata"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/events/pending"].is_object());
@@ -434,6 +442,7 @@ async fn agent_edit_applies_block_ops_with_dry_run_stale_base_and_idempotency() 
     let body: Value = response_json(response).await;
     assert_eq!(body["dryRun"], true);
     assert_eq!(body["markdown"], "Changed\n\nTwo\n");
+    assert!(body.get("nextBaseToken").is_none());
 
     let response = app
         .clone()
@@ -455,6 +464,10 @@ async fn agent_edit_applies_block_ops_with_dry_run_stale_base_and_idempotency() 
         .to_string();
     let body: Value = response_json(response).await;
     assert_eq!(body["dryRun"], false);
+    assert_eq!(
+        body["nextBaseToken"].as_str().unwrap(),
+        first_edit_etag.as_str()
+    );
     assert_eq!(body["outcome"]["document"]["path"], "notes/one.md");
     // No browser is connected in this headless test, so the edit reports that it
     // could not be injected into a live room (vs falling back silently).
@@ -492,6 +505,11 @@ async fn agent_edit_applies_block_ops_with_dry_run_stale_base_and_idempotency() 
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[header::ETAG], first_edit_etag);
+    let body: Value = response_json(response).await;
+    assert_eq!(
+        body["nextBaseToken"].as_str().unwrap(),
+        first_edit_etag.as_str()
+    );
 
     let response = app
         .oneshot(json_request(
@@ -3293,6 +3311,12 @@ async fn agent_ops_comment_add_without_live_room_uses_external_write() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    let ops_etag = response.headers()[header::ETAG]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let body: Value = response_json(response).await;
+    assert_eq!(body["nextBaseToken"].as_str().unwrap(), ops_etag.as_str());
 
     let event = next_document_put_event(&mut events).await;
     assert_eq!(event.collab_session_id, None);

@@ -1284,6 +1284,8 @@ pub struct AgentEditRequest {
 pub struct AgentEditResponse {
     #[serde(rename = "dryRun")]
     pub dry_run: bool,
+    #[serde(rename = "nextBaseToken", skip_serializing_if = "Option::is_none")]
+    pub next_base_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<WriteOutcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1371,6 +1373,8 @@ pub struct AgentOpsRequest {
 pub struct AgentOpsResponse {
     #[serde(rename = "dryRun")]
     pub dry_run: bool,
+    #[serde(rename = "nextBaseToken", skip_serializing_if = "Option::is_none")]
+    pub next_base_token: Option<String>,
     pub results: Vec<AgentOpsResultItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<WriteOutcome>,
@@ -2024,6 +2028,7 @@ async fn agent_ops_document(
         return Ok(AgentOpsResult {
             response: AgentOpsResponse {
                 dry_run: true,
+                next_base_token: None,
                 results: applied.results,
                 outcome: None,
                 markdown: Some(applied.markdown),
@@ -2125,6 +2130,7 @@ async fn agent_ops_document(
     let version_id = outcome.version.id.clone();
     let response = AgentOpsResponse {
         dry_run: false,
+        next_base_token: Some(etag(&version_id)),
         results: applied.results,
         outcome: Some(outcome),
         markdown: None,
@@ -2213,6 +2219,7 @@ async fn agent_edit_document(
         return Ok(AgentEditResult {
             response: AgentEditResponse {
                 dry_run: true,
+                next_base_token: None,
                 outcome: None,
                 markdown: Some(plan.markdown),
                 injection: None,
@@ -2295,6 +2302,7 @@ async fn agent_edit_document(
     let version_id = outcome.version.id.clone();
     let response = AgentEditResponse {
         dry_run: false,
+        next_base_token: Some(etag(&version_id)),
         outcome: Some(outcome),
         markdown: None,
         injection: Some(injection_status.to_string()),

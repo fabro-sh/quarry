@@ -2424,6 +2424,12 @@
               "null"
             ]
           },
+          "nextBaseToken": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "outcome": {
             "oneOf": [
               {
@@ -2616,6 +2622,12 @@
             "description": "Whether the ops mutation reached a live collab room, or why it used the\nnon-live write path: `injected` | `metadata_only_injected` |\n`no_live_room` | `gate_rejected` | `not_codec_eligible`. Absent for dry\nruns."
           },
           "markdown": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nextBaseToken": {
             "type": [
               "string",
               "null"
