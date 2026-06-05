@@ -2,6 +2,13 @@ export function initials(by: string): string {
   return by.trim().charAt(0).toUpperCase() || '?';
 }
 
+// The short author label shown beside an avatar: just the first word of a name,
+// so "Claude Sonnet" reads as "Claude" and "Bryan Helmkamp" as "Bryan". Callers
+// keep the full value available on hover via a title attribute.
+export function firstWord(by: string): string {
+  return by.trim().split(/\s+/)[0] || by;
+}
+
 const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
 
 export function formatRelativeTime(iso: string): string {

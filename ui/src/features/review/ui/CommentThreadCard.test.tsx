@@ -55,6 +55,28 @@ describe('CommentThreadCard', () => {
     expect(screen.getByText('Working on it.')).toBeInTheDocument();
   });
 
+  it('shows the agent brand logo for a comment authored by an agent', () => {
+    const meta = addComment(emptyReviewMeta(), 'c1', { by: 'Claude Sonnet', at, body: 'Consider rewording.' });
+    useReviewStore.getState().hydrate(meta);
+    const thread = buildThreads(useReviewStore.getState().getMeta())[0];
+
+    const { container } = render(<CommentThreadCard thread={thread} editor={makeEditor()} />);
+
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('/agent-icons/claude.svg');
+  });
+
+  it('shows only the first word of the author and the full name on hover', () => {
+    const meta = addComment(emptyReviewMeta(), 'c1', { by: 'Claude Sonnet', at, body: 'Consider rewording.' });
+    useReviewStore.getState().hydrate(meta);
+    const thread = buildThreads(useReviewStore.getState().getMeta())[0];
+
+    render(<CommentThreadCard thread={thread} editor={makeEditor()} />);
+
+    expect(screen.getByText('Claude')).toBeInTheDocument();
+    expect(screen.queryByText('Claude Sonnet')).not.toBeInTheDocument();
+    expect(screen.getByTitle('Claude Sonnet')).toBeInTheDocument();
+  });
+
   it('adds a reply through the composer', async () => {
     render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
 

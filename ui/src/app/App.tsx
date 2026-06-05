@@ -125,6 +125,8 @@ import {
   type ImageApi,
   type WikiLinkApi,
 } from '../features/editor/MarkdownEditor';
+import { AgentAvatar } from '../features/agents/AgentAvatar';
+import { agentKind } from '../features/agents/agents';
 import { imageAssetPath, resolveImageSrc } from '../features/editor/image';
 import { loadAuthor, saveAuthor } from '../features/review/identity';
 import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../features/tree/tree-model';
@@ -321,6 +323,10 @@ function Workspace() {
     localStorage.setItem('quarry:theme', theme);
     window.document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  useEffect(() => {
+    window.document.title = selectedPath ? `${documentBasename(selectedPath)} · Quarry` : 'Quarry';
+  }, [selectedPath]);
 
   function changeAuthor(nextAuthor: string) {
     setAuthor(saveAuthor(nextAuthor));
@@ -3129,21 +3135,6 @@ function SaveStatusIndicator({ saveState }: { saveState: SaveState }) {
   );
 }
 
-// Brand colors for known agent providers, used to tint each presence avatar.
-// The logo SVG in /agent-icons/<kind>.svg carries the same color, so an unknown
-// kind (no entry here) falls back to a neutral Bot avatar rather than a 404.
-const AGENT_BRANDS: Record<string, string> = {
-  claude: '#D97757',
-  codex: '#000000',
-  copilot: '#000000',
-  cursor: '#000000',
-  gemini: '#8E75B2',
-  grok: '#0A0A0A',
-  mistral: '#FA520F',
-  ollama: '#000000',
-  perplexity: '#1FB8CD',
-};
-
 const PRESENCE_AVATAR_CAP = 3;
 const presenceAvatar =
   'flex size-7 shrink-0 items-center justify-center rounded-full ring-2 ring-surface';
@@ -3155,33 +3146,20 @@ function agentPresenceName(entry: AgentPresenceEntry) {
   return parts.at(-1) ?? entry.agentId;
 }
 
-// Provider segment of the agent id, e.g. ai:codex:abc -> codex.
-function agentPresenceKind(entry: AgentPresenceEntry) {
-  const parts = entry.agentId.split(':').filter(Boolean);
-  return (parts[0] === 'ai' ? parts[1] : parts[0]) ?? '';
-}
-
 function presenceLabel(entry: AgentPresenceEntry) {
   return `${agentPresenceName(entry)} · ${entry.status}`;
 }
 
-function AgentAvatar({ entry }: { entry: AgentPresenceEntry }) {
-  const kind = agentPresenceKind(entry);
-  const brand = AGENT_BRANDS[kind];
+function AgentPresenceAvatar({ entry }: { entry: AgentPresenceEntry }) {
   const label = presenceLabel(entry);
   return (
     <Tooltip.Root>
-      <Tooltip.Trigger
-        aria-label={label}
-        className={cn(presenceAvatar, !brand && 'bg-well text-muted')}
-        style={brand ? { backgroundColor: `${brand}22` } : undefined}
-        type="button"
-      >
-        {brand ? (
-          <img alt="" className="size-full p-1" src={`/agent-icons/${kind}.svg`} />
-        ) : (
-          <Bot size={14} />
-        )}
+      <Tooltip.Trigger aria-label={label} className="flex rounded-full" type="button">
+        <AgentAvatar
+          className="bg-well text-muted ring-2 ring-surface"
+          fallback={<Bot size={14} />}
+          kind={agentKind(entry.agentId)}
+        />
       </Tooltip.Trigger>
       <Tooltip.Portal>
         <Tooltip.Content
@@ -3227,7 +3205,7 @@ function AgentPresencePill({ presence }: { presence: AgentPresenceEntry[] }) {
     <Tooltip.Provider delayDuration={200}>
       <div aria-label="Agent presence" className="flex shrink-0 -space-x-2">
         {shown.map((entry) => (
-          <AgentAvatar entry={entry} key={entry.agentId} />
+          <AgentPresenceAvatar entry={entry} key={entry.agentId} />
         ))}
         {overflow.length ? <AgentOverflowAvatar entries={overflow} /> : null}
       </div>

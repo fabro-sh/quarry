@@ -3,7 +3,9 @@ import { useEffect, useRef } from 'react';
 import type { TResolvedSuggestion } from '@platejs/suggestion';
 
 import { cn } from '../../../lib/utils';
-import { formatRelativeTime, initials } from '../format';
+import { AgentAvatar } from '../../agents/AgentAvatar';
+import { agentKind } from '../../agents/agents';
+import { firstWord, formatRelativeTime, initials } from '../format';
 import { useReviewStore } from '../review-store';
 
 interface SuggestionCardProps {
@@ -95,11 +97,13 @@ export function SuggestionCard({ suggestion, onAccept, onReject }: SuggestionCar
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2.5">
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-surface text-xs font-medium text-muted ring-1 ring-inset ring-line">
-            {initials(suggestion.userId)}
-          </span>
+          <AgentAvatar
+            className="bg-surface text-xs font-medium text-muted ring-1 ring-inset ring-line"
+            fallback={initials(suggestion.userId)}
+            kind={agentKind(suggestion.userId)}
+          />
           <div className="flex min-w-0 flex-col">
-            <span className="truncate text-sm font-medium leading-tight text-ink">{suggestion.userId}</span>
+            <span className="truncate text-sm font-medium leading-tight text-ink" title={suggestion.userId}>{firstWord(suggestion.userId)}</span>
             <span className="text-[11px] leading-tight text-faint">{formatRelativeTime(suggestion.createdAt.toISOString())}</span>
           </div>
         </div>

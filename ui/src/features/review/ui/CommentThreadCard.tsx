@@ -5,8 +5,10 @@ import type { PlateEditor } from 'platejs/react';
 import { useEffect, useRef, useState } from 'react';
 
 import { cn } from '../../../lib/utils';
+import { AgentAvatar } from '../../agents/AgentAvatar';
+import { agentKind } from '../../agents/agents';
 import { currentAuthor } from '../identity';
-import { formatRelativeTime, initials } from '../format';
+import { firstWord, formatRelativeTime, initials } from '../format';
 import { removeCommentMark } from '../remove-comment';
 import type { ReviewMeta, ReviewMetaEntry } from '../rfm-types';
 import { addReply, deleteComment, editComment, resolveComment, useReviewStore, type ReviewThread } from '../review-store';
@@ -21,9 +23,11 @@ function applyMeta(reducer: (meta: ReviewMeta) => ReviewMeta) {
 
 function Avatar({ by }: { by: string }) {
   return (
-    <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-surface text-xs font-medium text-muted ring-1 ring-inset ring-line">
-      {initials(by)}
-    </span>
+    <AgentAvatar
+      className="bg-surface text-xs font-medium text-muted ring-1 ring-inset ring-line"
+      fallback={initials(by)}
+      kind={agentKind(by)}
+    />
   );
 }
 
@@ -32,7 +36,7 @@ function CommentHeader({ entry, badge }: { entry: ReviewMetaEntry; badge?: boole
     <div className="flex items-center gap-2.5">
       <Avatar by={entry.by} />
       <div className="flex min-w-0 flex-col">
-        <span className="truncate text-sm font-medium leading-tight text-ink">{entry.by}</span>
+        <span className="truncate text-sm font-medium leading-tight text-ink" title={entry.by}>{firstWord(entry.by)}</span>
         <span className="text-[11px] leading-tight text-faint">{formatRelativeTime(entry.at)}</span>
       </div>
       {badge ? <span className="ml-1 text-[11px] font-medium text-muted">Resolved</span> : null}
