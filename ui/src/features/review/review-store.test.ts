@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { addComment, addReply, resolveComment, deleteComment, buildThreads, syncSuggestionsFromValue, useReviewStore } from './review-store';
+import {
+  addComment,
+  addReply,
+  buildThreads,
+  deleteComment,
+  mergeReviewMetaPatch,
+  resolveComment,
+  syncSuggestionsFromValue,
+  useReviewStore,
+} from './review-store';
+import { reviewToMarkdown } from './rfm-codec';
 import { emptyReviewMeta } from './rfm-types';
 
 const at = '2026-01-01T00:00:00.000Z';
@@ -55,6 +65,24 @@ describe('review-store reducers', () => {
     const value = [{ type: 'p', children: [{ text: 'x', suggestion: true, suggestion_s1: { id: 's1', type: 'insert', userId: 'someone-else', createdAt: 0 } }] }];
     const meta = syncSuggestionsFromValue({ comments: {}, suggestions: { s1: { by: 'AI', at } } }, value);
     expect(meta.suggestions.s1).toEqual({ by: 'AI', at });
+  });
+
+  it('mergeReviewMetaPatch preserves an injected root comment body for markdown serialization', () => {
+    const value = [
+      {
+        type: 'p',
+        children: [{ text: 'target', comment: true, comment_c1: true }],
+      },
+    ];
+    const meta = mergeReviewMetaPatch(emptyReviewMeta(), {
+      comments: {
+        c1: { by: 'ai:codex', at, body: 'Needs support.' },
+      },
+    });
+
+    expect(reviewToMarkdown(value, meta)).toContain(
+      '{==target==}{>>Needs support.<<}{#c1}'
+    );
   });
 });
 

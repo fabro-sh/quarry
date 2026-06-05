@@ -20,6 +20,11 @@ export interface ReviewMeta {
   suggestions: Record<string, ReviewMetaEntry>;
 }
 
+export interface ReviewMetaPatch {
+  comments?: Record<string, ReviewMetaEntry>;
+  suggestions?: Record<string, ReviewMetaEntry>;
+}
+
 export function emptyReviewMeta(): ReviewMeta {
   return { comments: {}, suggestions: {} };
 }

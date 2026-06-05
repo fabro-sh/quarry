@@ -1,9 +1,12 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Method, Request, StatusCode};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{SinkExt, Stream, StreamExt};
+use quarry_collab_codec::{
+    build_nodes, encode_update_v1_from_built, review_markdown_to_slate, xmltext_to_slate, Node,
+};
 use quarry_core::DocumentSource;
 use quarry_server::router;
-use quarry_storage::{QuarryStore, StoreConfig, StoreEventKind};
+use quarry_storage::{QuarryStore, StoreConfig, StoreEvent, StoreEventKind};
 use serde_json::Value;
 use tokio::time::{timeout, Duration};
 use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
@@ -11,6 +14,9 @@ use tower::ServiceExt;
 use yrs::sync::{Message as YMessage, SyncMessage};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
+use yrs::{Doc, OffsetKind, Options, ReadTxn, Transact, Update, XmlTextRef};
+
+const COLLAB_ROOT: &str = "content";
 
 fn assert_schema_enum_contains(openapi: &Value, schema: &Value, expected: &[&str]) {
     let resolved = if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
@@ -764,6 +770,284 @@ async fn agent_ops_accept_reject_and_resolve_review_marks() {
     assert!(!markdown.contains("{--bad--}{#s2}"));
     assert!(!markdown.contains("suggestions:"));
     assert!(markdown.contains("status: resolved"));
+}
+
+#[tokio::test]
+async fn agent_ops_comment_add_injects_into_live_collab_room() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentlivecomment").await.unwrap();
+    let written = store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            b"One target here.\n\nSecond paragraph.\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let mut events = store.subscribe_events();
+    let app = router(store.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_app = app.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, server_app).await.unwrap();
+    });
+
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/{}", written.document.id))
+            .await
+            .unwrap();
+    let (client_doc, update) = yjs_doc_with_markdown("One target here.\n\nSecond paragraph.\n");
+    socket
+        .send(TungsteniteMessage::Binary(
+            YMessage::Sync(SyncMessage::Update(update))
+                .encode_v1()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    wait_for_yjs_sync_update(&mut socket, &client_doc).await;
+
+    let snapshot = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentlivecomment/documents/notes/review.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(snapshot.status(), StatusCode::OK);
+    let snapshot: Value = response_json(snapshot).await;
+    let base_token = snapshot["baseToken"].as_str().unwrap();
+    let first_ref = snapshot["blocks"][0]["ref"].clone();
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentlivecomment/documents/notes/review.md/ops",
+            serde_json::json!({
+                "baseToken": base_token,
+                "op": "comment.add",
+                "id": "c1",
+                "ref": first_ref,
+                "quote": "target",
+                "body": "Needs support.",
+                "by": "ai:codex"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["id"], "c1");
+
+    let event = next_document_put_event(&mut events).await;
+    assert!(event
+        .collab_session_id
+        .as_deref()
+        .is_some_and(|id| id.starts_with("agent-injected:")));
+    assert_eq!(
+        event.review.as_ref().unwrap()["comments"]["c1"]["body"],
+        "Needs support."
+    );
+    assert_eq!(
+        event.review.as_ref().unwrap()["comments"]["c1"]["by"],
+        "ai:codex"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentlivecomment/documents/notes/review.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let markdown = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(markdown.contains("One {==target==}{>>Needs support.<<}{#c1} here."));
+    assert!(markdown.contains("comments:"));
+
+    wait_for_yjs_comment_mark(&mut socket, &client_doc, "c1").await;
+    assert!(yjs_has_comment_mark(&client_doc, "c1"));
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn agent_ops_comment_add_without_live_room_uses_external_write() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentcommentfallback").await.unwrap();
+    let written = store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            b"One target here.\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let mut events = store.subscribe_events();
+    let app = router(store);
+    let base_token = format!("\"{}\"", written.version.id);
+    let snapshot = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentcommentfallback/documents/notes/review.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let snapshot: Value = response_json(snapshot).await;
+
+    let response = app
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentcommentfallback/documents/notes/review.md/ops",
+            serde_json::json!({
+                "baseToken": base_token,
+                "op": "comment.add",
+                "id": "c1",
+                "ref": snapshot["blocks"][0]["ref"].clone(),
+                "quote": "target",
+                "body": "Needs support.",
+                "by": "ai:codex"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let event = next_document_put_event(&mut events).await;
+    assert_eq!(event.collab_session_id, None);
+    assert_eq!(
+        event.review.as_ref().unwrap()["comments"]["c1"]["body"],
+        "Needs support."
+    );
+}
+
+#[tokio::test]
+async fn agent_ops_comment_add_dirty_live_room_falls_back_without_mutating_yjs() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentdirtycomment").await.unwrap();
+    let written = store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            b"One target here.\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let mut events = store.subscribe_events();
+    let app = router(store);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_app = app.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, server_app).await.unwrap();
+    });
+
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/{}", written.document.id))
+            .await
+            .unwrap();
+    let (client_doc, update) = yjs_doc_with_markdown("Dirty target here.\n");
+    socket
+        .send(TungsteniteMessage::Binary(
+            YMessage::Sync(SyncMessage::Update(update))
+                .encode_v1()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    wait_for_yjs_sync_update(&mut socket, &client_doc).await;
+
+    let snapshot = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentdirtycomment/documents/notes/review.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let snapshot: Value = response_json(snapshot).await;
+    let base_token = snapshot["baseToken"].as_str().unwrap();
+
+    let response = app
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentdirtycomment/documents/notes/review.md/ops",
+            serde_json::json!({
+                "baseToken": base_token,
+                "op": "comment.add",
+                "id": "c1",
+                "ref": snapshot["blocks"][0]["ref"].clone(),
+                "quote": "target",
+                "body": "Needs support.",
+                "by": "ai:codex"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let event = next_document_put_event(&mut events).await;
+    assert_eq!(event.collab_session_id, None);
+    assert_eq!(yjs_plain_text(&client_doc), "Dirty target here.");
+    assert!(!yjs_has_comment_mark(&client_doc, "c1"));
+
+    server.abort();
 }
 
 #[tokio::test]
@@ -2527,4 +2811,126 @@ fn json_request(method: Method, uri: &str, body: Value) -> Request<Body> {
 async fn response_json(response: axum::response::Response) -> Value {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&body).unwrap()
+}
+
+async fn next_document_put_event(
+    events: &mut tokio::sync::broadcast::Receiver<StoreEvent>,
+) -> StoreEvent {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if event.kind == StoreEventKind::DocumentPut {
+                break event;
+            }
+        }
+    })
+    .await
+    .unwrap()
+}
+
+fn yjs_doc_with_markdown(markdown: &str) -> (Doc, Vec<u8>) {
+    let nodes = review_markdown_to_slate(markdown).unwrap();
+    let built = build_nodes(&nodes).unwrap();
+    let update = encode_update_v1_from_built(&built, COLLAB_ROOT);
+    let doc = Doc::with_options(Options {
+        offset_kind: OffsetKind::Utf16,
+        ..Default::default()
+    });
+    {
+        let mut txn = doc.transact_mut();
+        txn.apply_update(Update::decode_v1(&update).unwrap())
+            .unwrap();
+    }
+    (doc, update)
+}
+
+async fn wait_for_yjs_comment_mark<S>(socket: &mut S, doc: &Doc, id: &str)
+where
+    S: Stream<Item = Result<TungsteniteMessage, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let message = socket.next().await.unwrap().unwrap();
+            let TungsteniteMessage::Binary(bytes) = message else {
+                continue;
+            };
+            apply_yjs_message(doc, bytes.as_ref());
+            if yjs_has_comment_mark(doc, id) {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+}
+
+async fn wait_for_yjs_sync_update<S>(socket: &mut S, doc: &Doc)
+where
+    S: Stream<Item = Result<TungsteniteMessage, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let message = socket.next().await.unwrap().unwrap();
+            let TungsteniteMessage::Binary(bytes) = message else {
+                continue;
+            };
+            if apply_yjs_message(doc, bytes.as_ref()) {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+}
+
+fn apply_yjs_message(doc: &Doc, bytes: &[u8]) -> bool {
+    let Ok(YMessage::Sync(SyncMessage::Update(update))) = YMessage::decode_v1(bytes) else {
+        return false;
+    };
+    let mut txn = doc.transact_mut();
+    txn.apply_update(Update::decode_v1(&update).unwrap())
+        .unwrap();
+    true
+}
+
+fn yjs_slate_children(doc: &Doc) -> Vec<Node> {
+    let txn = doc.transact();
+    let text = txn.get_text(COLLAB_ROOT).unwrap();
+    let root: &XmlTextRef = text.as_ref();
+    let Node::Element { children, .. } = xmltext_to_slate(&txn, root).unwrap() else {
+        panic!("collab root should decode as a Slate fragment");
+    };
+    children
+}
+
+fn yjs_has_comment_mark(doc: &Doc, id: &str) -> bool {
+    let key = format!("comment_{id}");
+    fn visit(node: &Node, key: &str) -> bool {
+        match node {
+            Node::Text { marks, .. } => {
+                marks.get("comment").and_then(Value::as_bool) == Some(true)
+                    && marks.get(key).and_then(Value::as_bool) == Some(true)
+            }
+            Node::Element { children, .. } => children.iter().any(|child| visit(child, key)),
+        }
+    }
+    yjs_slate_children(doc).iter().any(|node| visit(node, &key))
+}
+
+fn yjs_plain_text(doc: &Doc) -> String {
+    fn collect(node: &Node, out: &mut String) {
+        match node {
+            Node::Text { text, .. } => out.push_str(text),
+            Node::Element { children, .. } => {
+                for child in children {
+                    collect(child, out);
+                }
+            }
+        }
+    }
+    let mut out = String::new();
+    for node in yjs_slate_children(doc) {
+        collect(&node, &mut out);
+    }
+    out
 }

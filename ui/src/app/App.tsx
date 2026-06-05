@@ -116,6 +116,7 @@ import {
 import { collabDebug } from '../features/collab/collab-debug';
 import type { CollabFlushAck, CollabRecoveryError } from '../features/collab/flusher-lease';
 import { clearDraft, loadDraft, saveDraft } from '../features/editor/drafts';
+import type { ReviewMetaPatch } from '../features/review/rfm-types';
 import {
   MarkdownEditor,
   type CollabEditorConfig,
@@ -159,6 +160,7 @@ interface BrowserEventPayload {
   peer_id?: string | null;
   applied?: number | null;
   conflicts?: number | null;
+  review?: ReviewMetaPatch | null;
 }
 
 interface SaveConflictDetails {
@@ -573,6 +575,7 @@ function Workspace() {
       if (liveDecision.action === 'adopt_injected') {
         setCollabInjectedVersion({
           etag: liveDecision.etag,
+          review: liveDecision.review,
           versionId: liveDecision.versionId,
         });
         if (currentPath) {

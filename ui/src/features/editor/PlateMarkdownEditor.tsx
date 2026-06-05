@@ -141,7 +141,12 @@ import { WikiLinkPlugin, WikiLinkProvider, type WikiLinkApi } from './wiki-link-
 import { startCommentDraft } from '../review/comment-draft';
 import { currentAuthor } from '../review/identity';
 import { markdownToReview, reviewToMarkdown } from '../review/rfm-codec';
-import { syncSuggestionsFromValue, useReviewStore } from '../review/review-store';
+import {
+  mergeReviewMetaPatch,
+  syncSuggestionsFromValue,
+  useReviewStore,
+} from '../review/review-store';
+import type { ReviewMeta, ReviewMetaPatch } from '../review/rfm-types';
 import { acceptSuggestionById, rejectSuggestionById } from '../review/accept-reject';
 import { ReviewRail } from '../review/ui/ReviewRail';
 import { RemoteCursorOverlay } from '../collab/RemoteCursorOverlay';
@@ -323,6 +328,7 @@ export interface CollabEditorConfig {
 
 export interface CollabInjectedVersion {
   etag: string;
+  review?: ReviewMetaPatch | null;
   versionId: string;
 }
 
@@ -372,10 +378,14 @@ export function PlateMarkdownEditor({
   // store's metadata (YAML endmatter). `syncSuggestionsFromValue` mirrors any
   // suggestion marks Plate created (via withSuggestion) into the metadata so
   // they survive the round-trip. Shared by every save path.
+  const serializeWithMeta = useCallback(
+    (value: PlateValue, meta: ReviewMeta): string =>
+      reviewToMarkdown(value as never, syncSuggestionsFromValue(meta, value as never)),
+    []
+  );
   const serialize = useCallback(
-    (value: PlateValue): string =>
-      reviewToMarkdown(value as never, syncSuggestionsFromValue(storeGetMeta(), value as never)),
-    [storeGetMeta]
+    (value: PlateValue): string => serializeWithMeta(value, storeGetMeta()),
+    [serializeWithMeta, storeGetMeta]
   );
 
   const initialValueRef = useRef<PlateValue | null>(null);
@@ -498,9 +508,11 @@ export function PlateMarkdownEditor({
   }, [collabEnabled, content, editor, storeHydrate]);
 
   const adoptInjectedVersion = useCallback(
-    (nextMarkdown: string) => {
+    (value: PlateValue) => {
       const injectedVersion = pendingInjectedVersionRef.current;
       if (!collab || !injectedVersion) return false;
+      const patchedMeta = mergeReviewMetaPatch(storeGetMeta(), injectedVersion.review);
+      const nextMarkdown = serializeWithMeta(value, patchedMeta);
       collabDebug('inject.adoptVersion', {
         versionId: injectedVersion.versionId,
         hadLocalEdits: hasLocalEditsSinceCleanRef.current,
@@ -522,7 +534,7 @@ export function PlateMarkdownEditor({
       });
       return true;
     },
-    [collab, storeHydrate]
+    [collab, serializeWithMeta, storeGetMeta, storeHydrate]
   );
 
   useEffect(() => {
@@ -536,8 +548,8 @@ export function PlateMarkdownEditor({
     // update as a local change, so `remoteChangeSinceClean` is never set and the
     // editor's onValueChange path can't trigger adoption. By the time this runs
     // the injected content is already in the doc, so serializing it is correct.
-    adoptInjectedVersion(serialize(editor.children as PlateValue));
-  }, [adoptInjectedVersion, collab?.injectedVersion, editor, serialize]);
+    adoptInjectedVersion(editor.children as PlateValue);
+  }, [adoptInjectedVersion, collab?.injectedVersion, editor]);
 
   useEffect(() => {
     if (!collab?.flushAck) return;
@@ -588,7 +600,7 @@ export function PlateMarkdownEditor({
             });
           }
           if (!isLocalChange && pendingInjectedVersionRef.current) {
-            adoptInjectedVersion(nextMarkdown);
+            adoptInjectedVersion(value as PlateValue);
             return;
           }
           if (nextMarkdown === lastSerializedRef.current) return;

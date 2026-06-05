@@ -114,6 +114,33 @@ describe('collaboration session event classification', () => {
     ).toEqual({ action: 'adopt_injected', versionId: 'v3', etag: '"v3"' });
   });
 
+  it('carries a server-injected review patch to editor adoption', () => {
+    const review = {
+      comments: {
+        c1: {
+          by: 'ai:codex',
+          at: '2026-06-05T02:41:00.480Z',
+          body: 'Needs support.',
+        },
+      },
+    };
+
+    expect(
+      classifyLiveDocumentEvent(
+        {
+          type: 'doc.changed',
+          path: 'notes/daily.md',
+          doc_id: 'doc-1',
+          version_id: 'v3',
+          etag: '"v3"',
+          collab_session_id: 'agent-injected:abc',
+          review,
+        },
+        session
+      )
+    ).toEqual({ action: 'adopt_injected', versionId: 'v3', etag: '"v3"', review });
+  });
+
   it('keeps an externally deleted live document selected for discard or resurrection', () => {
     expect(
       classifyLiveDocumentEvent(

@@ -117,6 +117,8 @@ curl -sS "$ORIGIN/v1/libraries/$LIBRARY/events/pending?after=0"
 
 The poll response contains `events` and `nextAfter`. Store `nextAfter` and pass it as `after` on the next poll.
 
+`doc.changed` events are sparse wake signals. They include revision metadata such as `version_id`/`etag` and may include `collab_session_id`. When a live `comment.add` is injected into an open browser editor, `collab_session_id` starts with `agent-injected:` and the event also includes a `review.comments` patch carrying the injected comment metadata and body.
+
 Ack processed events when useful:
 
 ```sh

@@ -76,6 +76,7 @@ pub struct StoreEvent {
     pub applied: Option<usize>,
     pub conflicts: Option<usize>,
     pub collab_session_id: Option<String>,
+    pub review: Option<JsonValue>,
 }
 
 #[derive(Clone)]
@@ -299,6 +300,7 @@ impl QuarryStore {
             applied: None,
             conflicts: None,
             collab_session_id: None,
+            review: None,
         });
         Ok(metadata)
     }
@@ -366,6 +368,7 @@ impl QuarryStore {
             applied: None,
             conflicts: None,
             collab_session_id: None,
+            review: None,
         });
         Ok(metadata)
     }
@@ -482,6 +485,7 @@ impl QuarryStore {
             applied: None,
             conflicts: None,
             collab_session_id: None,
+            review: None,
         });
         Ok(())
     }
@@ -524,6 +528,7 @@ impl QuarryStore {
             applied: None,
             conflicts: None,
             collab_session_id: None,
+            review: None,
         });
         Ok(())
     }
@@ -719,6 +724,15 @@ impl QuarryStore {
         outcome: &WriteOutcome,
         collab_session_id: Option<String>,
     ) {
+        self.emit_document_put_events_with_review(outcome, collab_session_id, None);
+    }
+
+    pub fn emit_document_put_events_with_review(
+        &self,
+        outcome: &WriteOutcome,
+        collab_session_id: Option<String>,
+        review: Option<JsonValue>,
+    ) {
         self.emit_event(StoreEvent {
             kind: StoreEventKind::DocumentPut,
             library_id: outcome.transaction.library_id.clone(),
@@ -733,6 +747,7 @@ impl QuarryStore {
             applied: None,
             conflicts: None,
             collab_session_id,
+            review,
         });
         self.emit_event(links_indexed_event(
             outcome.transaction.library_id.clone(),
@@ -1180,6 +1195,7 @@ impl QuarryStore {
             applied: None,
             conflicts: None,
             collab_session_id: None,
+            review: None,
         });
         Ok(report)
     }
@@ -1207,6 +1223,7 @@ impl QuarryStore {
             applied: Some(applied),
             conflicts: Some(conflicts),
             collab_session_id: None,
+            review: None,
         });
         Ok(())
     }
@@ -1591,6 +1608,7 @@ impl QuarryStore {
             applied: None,
             conflicts: None,
             collab_session_id: None,
+            review: None,
         });
         self.emit_event(links_indexed_event(tx.library_id.clone(), path));
         Ok(tx)
@@ -1727,6 +1745,7 @@ impl QuarryStore {
             applied: None,
             conflicts: None,
             collab_session_id: None,
+            review: None,
         });
         self.emit_event(links_indexed_event(tx.library_id.clone(), to_path));
         Ok(tx)
@@ -1825,6 +1844,7 @@ impl QuarryStore {
             applied: None,
             conflicts: None,
             collab_session_id: None,
+            review: None,
         });
         self.emit_event(links_indexed_event(tx.library_id.clone(), to_path));
         Ok(tx)
@@ -2138,7 +2158,8 @@ impl QuarryStore {
                             peer_id: None,
                             applied: None,
                             conflicts: None,
-            collab_session_id: None,
+                            collab_session_id: None,
+                            review: None,
                         });
                         events.push(links_indexed_event(tx.library_id.clone(), change.path.clone()));
                     }
@@ -2166,7 +2187,8 @@ impl QuarryStore {
                             peer_id: None,
                             applied: None,
                             conflicts: None,
-            collab_session_id: None,
+                            collab_session_id: None,
+                            review: None,
                         });
                         events.push(links_indexed_event(tx.library_id.clone(), change.path.clone()));
                     }
@@ -2227,7 +2249,8 @@ impl QuarryStore {
                                 peer_id: None,
                                 applied: None,
                                 conflicts: None,
-            collab_session_id: None,
+                                collab_session_id: None,
+                                review: None,
                             });
                             events.push(links_indexed_event(tx.library_id.clone(), new_path));
                             continue;
@@ -2253,7 +2276,8 @@ impl QuarryStore {
                             peer_id: None,
                             applied: None,
                             conflicts: None,
-            collab_session_id: None,
+                            collab_session_id: None,
+                            review: None,
                         });
                         events.push(links_indexed_event(tx.library_id.clone(), new_path));
                     }
@@ -2512,6 +2536,7 @@ impl QuarryStore {
             applied: None,
             conflicts: None,
             collab_session_id: None,
+            review: None,
         });
         Ok(conflict)
     }
@@ -2550,6 +2575,7 @@ impl QuarryStore {
             applied: None,
             conflicts: None,
             collab_session_id: None,
+            review: None,
         });
         Ok(conflict)
     }
@@ -4398,6 +4424,7 @@ fn links_indexed_event(library_id: String, path: String) -> StoreEvent {
         applied: None,
         conflicts: None,
         collab_session_id: None,
+        review: None,
     }
 }
 

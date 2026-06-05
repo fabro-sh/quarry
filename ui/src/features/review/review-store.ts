@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 import type { Descendant } from 'platejs';
-import { cloneMeta, emptyReviewMeta, type ReviewMeta, type ReviewMetaEntry } from './rfm-types';
+import {
+  cloneMeta,
+  emptyReviewMeta,
+  type ReviewMeta,
+  type ReviewMetaEntry,
+  type ReviewMetaPatch,
+} from './rfm-types';
 import { readSuggestionMark } from './suggestion-mark';
 
 export function addComment(meta: ReviewMeta, id: string, fields: { by: string; at: string; body?: string }): ReviewMeta {
@@ -9,6 +15,14 @@ export function addComment(meta: ReviewMeta, id: string, fields: { by: string; a
   if (fields.body) entry.body = fields.body;
   next.comments[id] = entry;
   return next;
+}
+
+export function mergeReviewMetaPatch(meta: ReviewMeta, patch?: ReviewMetaPatch | null): ReviewMeta {
+  if (!patch) return meta;
+  return {
+    comments: { ...meta.comments, ...(patch.comments ?? {}) },
+    suggestions: { ...meta.suggestions, ...(patch.suggestions ?? {}) },
+  };
 }
 
 export function addReply(meta: ReviewMeta, id: string, fields: { parentId: string; body: string; by: string; at: string }): ReviewMeta {

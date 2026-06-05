@@ -1,3 +1,5 @@
+import type { ReviewMetaPatch } from '../review/rfm-types';
+
 export interface DocumentEventPayload {
   type: string;
   path?: string | null;
@@ -7,6 +9,7 @@ export interface DocumentEventPayload {
   version_id?: string | null;
   etag?: string | null;
   collab_session_id?: string | null;
+  review?: ReviewMetaPatch | null;
 }
 
 export interface LiveCollabSession {
@@ -20,7 +23,7 @@ export interface LiveCollabSession {
 export type LiveDocumentEventDecision =
   | { action: 'pass' }
   | { action: 'ignore_flush_echo' }
-  | { action: 'adopt_injected'; etag: string; versionId: string }
+  | { action: 'adopt_injected'; etag: string; versionId: string; review?: ReviewMetaPatch | null }
   | { action: 'external_change' }
   | { action: 'external_delete' }
   | { action: 'retarget_move'; path: string };
@@ -37,7 +40,12 @@ export function classifyLiveDocumentEvent(
       payload.version_id &&
       payload.etag
     ) {
-      return { action: 'adopt_injected', etag: payload.etag, versionId: payload.version_id };
+      const decision: LiveDocumentEventDecision = {
+        action: 'adopt_injected',
+        etag: payload.etag,
+        versionId: payload.version_id,
+      };
+      return payload.review ? { ...decision, review: payload.review } : decision;
     }
     return isOwnFlushEcho(payload, session)
       ? { action: 'ignore_flush_echo' }

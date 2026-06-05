@@ -1851,18 +1851,86 @@ async fn agent_ops_document(
     }
 
     let base_version_id = version_id_from_base_token(&request.base_token)?;
-    let outcome = state
-        .store
-        .put_document(
-            library,
-            path,
-            applied.markdown.into_bytes(),
-            document.version.metadata.clone(),
-            &document.version.content_type,
-            DocumentSource::Rest,
-            WritePrecondition::IfMatch(base_version_id),
-        )
-        .await?;
+    let mut injected_session_id = None;
+    let injection_guard = if request.op == "comment.add" {
+        let plan = request
+            .block_ref
+            .as_ref()
+            .map(|block_ref| {
+                comment_add_injection_plan(&markdown, &applied.markdown, block_ref.ordinal)
+            })
+            .unwrap_or_else(|| Err(Unsupported::new("comment.add operation missing ref")));
+        match plan {
+            Ok(plan) => match state.collab.live_room(&document.id).await {
+                Some(room) => {
+                    let guard = room
+                        .begin_injection(plan.batch, &plan.original_blocks, base_version_id.clone())
+                        .await;
+                    if guard.is_some() {
+                        let request_hash = agent_ops_request_hash(&request, false)?;
+                        injected_session_id = Some(format!("agent-injected:{request_hash}"));
+                    }
+                    guard
+                }
+                None => {
+                    tracing::debug!(
+                        document_id = %document.id,
+                        path,
+                        "agent ops comment.add skipped live injection because no live collab room exists"
+                    );
+                    None
+                }
+            },
+            Err(error) => {
+                tracing::debug!(
+                    document_id = %document.id,
+                    path,
+                    reason = %error,
+                    "agent ops comment.add skipped live injection because operation is not codec eligible"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let outcome = if request.op == "comment.add" {
+        let outcome = state
+            .store
+            .commit_document_with_collab_session(
+                library,
+                path,
+                applied.markdown.into_bytes(),
+                document.version.metadata.clone(),
+                &document.version.content_type,
+                DocumentSource::Rest,
+                WritePrecondition::IfMatch(base_version_id.clone()),
+            )
+            .await?;
+        if let Some(guard) = injection_guard {
+            let _commit_outcome = guard.commit(outcome.version.id.clone()).await;
+        }
+        state.store.emit_document_put_events_with_review(
+            &outcome,
+            injected_session_id,
+            applied.review.clone(),
+        );
+        outcome
+    } else {
+        state
+            .store
+            .put_document(
+                library,
+                path,
+                applied.markdown.into_bytes(),
+                document.version.metadata.clone(),
+                &document.version.content_type,
+                DocumentSource::Rest,
+                WritePrecondition::IfMatch(base_version_id),
+            )
+            .await?
+    };
     let version_id = outcome.version.id.clone();
     Ok(AgentOpsResult {
         response: AgentOpsResponse {
@@ -2048,6 +2116,13 @@ fn agent_edit_response(result: AgentEditResult) -> Result<Response, ApiError> {
 }
 
 fn agent_edit_request_hash(request: &AgentEditRequest, dry_run: bool) -> Result<String, ApiError> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(if dry_run { b"dry-run:1" } else { b"dry-run:0" });
+    hasher.update(&serde_json::to_vec(request).map_err(QuarryError::from)?);
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn agent_ops_request_hash(request: &AgentOpsRequest, dry_run: bool) -> Result<String, ApiError> {
     let mut hasher = blake3::Hasher::new();
     hasher.update(if dry_run { b"dry-run:1" } else { b"dry-run:0" });
     hasher.update(&serde_json::to_vec(request).map_err(QuarryError::from)?);
@@ -2282,9 +2357,65 @@ fn built_nodes_for_block(
     build_nodes(&nodes)
 }
 
+struct AgentOpsInjectionPlan {
+    batch: InjectionBatch,
+    original_blocks: Vec<String>,
+}
+
+fn comment_add_injection_plan(
+    original_markdown: &str,
+    edited_markdown: &str,
+    ordinal: usize,
+) -> Result<AgentOpsInjectionPlan, Unsupported> {
+    let original_blocks = split_markdown_blocks(original_markdown);
+    let original_nodes = review_blocks_to_slate(&original_blocks)
+        .map_err(|error| error.context("original blocks"))?;
+
+    let mut prefix = Vec::with_capacity(original_nodes.len());
+    let mut total = 0u32;
+    for nodes in &original_nodes {
+        prefix.push(total);
+        let node_count = u32::try_from(nodes.len())
+            .map_err(|_| Unsupported::new("original node count exceeds u32"))?;
+        total = total
+            .checked_add(node_count)
+            .ok_or_else(|| Unsupported::new("original node count overflow"))?;
+    }
+
+    let start = *prefix
+        .get(ordinal)
+        .ok_or_else(|| Unsupported::new(format!("missing original block ordinal {ordinal}")))?;
+    let old_node_count = original_nodes
+        .get(ordinal)
+        .ok_or_else(|| Unsupported::new(format!("missing original block ordinal {ordinal}")))
+        .and_then(|nodes| {
+            u32::try_from(nodes.len())
+                .map_err(|_| Unsupported::new("original node count exceeds u32"))
+        })?;
+
+    let (edited_body, edited_meta) = split_review_endmatter(edited_markdown);
+    let edited_blocks = split_markdown_blocks(&edited_body);
+    let edited_block = edited_blocks
+        .get(ordinal)
+        .ok_or_else(|| Unsupported::new(format!("missing edited block ordinal {ordinal}")))?;
+    let new_nodes = built_nodes_for_block(edited_block, &edited_meta)?;
+    let batch = InjectionBatch::new(vec![InjectionOp::ReplaceSpan {
+        start,
+        old_node_count,
+        new_nodes,
+    }])
+    .ok_or_else(|| Unsupported::new("empty injection batch"))?;
+
+    Ok(AgentOpsInjectionPlan {
+        batch,
+        original_blocks,
+    })
+}
+
 struct AppliedAgentOps {
     markdown: String,
     id: Option<String>,
+    review: Option<JsonValue>,
 }
 
 fn apply_agent_ops(
@@ -2300,6 +2431,7 @@ fn apply_agent_ops(
     }
 
     let (body, mut meta) = split_review_endmatter(markdown);
+    let mut review_patch = None;
     let (next_body, applied_id) = match request.op.as_str() {
         "comment.add" => {
             let id = review_id(request.id.as_deref(), "c", markdown, &request.op)?;
@@ -2308,6 +2440,7 @@ fn apply_agent_ops(
                 QuarryError::InvalidPath("comment.add operation missing ref".to_string())
             })?;
             let body_text = required_ops_text(request.body.as_deref(), "comment.add missing body")?;
+            let at = now_timestamp();
             let next = splice_block_anchor(
                 &body,
                 &request_base_version_id,
@@ -2319,13 +2452,14 @@ fn apply_agent_ops(
                 id.clone(),
                 ReviewMetaEntry {
                     by: author.to_string(),
-                    at: now_timestamp(),
+                    at: at.clone(),
                     body: None,
                     re: None,
                     status: None,
                     resolved: None,
                 },
             );
+            review_patch = Some(comment_review_patch(&id, author, &at, body_text));
             (next, Some(id))
         }
         "suggestion.add" => {
@@ -2422,7 +2556,21 @@ fn apply_agent_ops(
     Ok(AppliedAgentOps {
         markdown: assemble_review_document(&next_body, &meta)?,
         id: applied_id,
+        review: review_patch,
     })
+}
+
+fn comment_review_patch(id: &str, author: &str, at: &str, body: &str) -> JsonValue {
+    let mut comments = serde_json::Map::new();
+    comments.insert(
+        id.to_string(),
+        serde_json::json!({
+            "by": author,
+            "at": at,
+            "body": body,
+        }),
+    );
+    serde_json::json!({ "comments": JsonValue::Object(comments) })
 }
 
 fn required_operation_block(operation: &AgentBlockOperation) -> Result<&str, ApiError> {
@@ -3415,6 +3563,7 @@ mod tests {
             applied: None,
             conflicts: None,
             collab_session_id: Some("browser:session-1".to_string()),
+            review: None,
         };
 
         let event_type = store_event_type(&event);
@@ -3428,6 +3577,45 @@ mod tests {
         assert_eq!(payload["version_id"], "version-1");
         assert_eq!(payload["etag"], "\"version-1\"");
         assert_eq!(payload["collab_session_id"], "browser:session-1");
+    }
+
+    #[test]
+    fn document_put_store_events_map_review_patch_to_sse_payloads() {
+        let event = StoreEvent {
+            kind: StoreEventKind::DocumentPut,
+            library_id: "library-id".to_string(),
+            path: Some("notes/daily.md".to_string()),
+            new_path: None,
+            source: Some(DocumentSource::Rest),
+            tx_id: Some("tx-1".to_string()),
+            doc_id: Some("doc-1".to_string()),
+            version_id: Some("version-1".to_string()),
+            conflict_id: None,
+            peer_id: None,
+            applied: None,
+            conflicts: None,
+            collab_session_id: Some("agent-injected:abc".to_string()),
+            review: Some(serde_json::json!({
+                "comments": {
+                    "c1": {
+                        "by": "ai:codex",
+                        "at": "2026-06-05T02:41:00.480Z",
+                        "body": "Needs support."
+                    }
+                }
+            })),
+        };
+
+        let event_type = store_event_type(&event);
+        let payload = store_event_payload("notes", &event_type, &event);
+
+        assert_eq!(payload["type"], "doc.changed");
+        assert_eq!(payload["collab_session_id"], "agent-injected:abc");
+        assert_eq!(payload["review"]["comments"]["c1"]["by"], "ai:codex");
+        assert_eq!(
+            payload["review"]["comments"]["c1"]["body"],
+            "Needs support."
+        );
     }
 
     #[test]
@@ -3446,6 +3634,7 @@ mod tests {
             applied: None,
             conflicts: None,
             collab_session_id: None,
+            review: None,
         };
 
         let event_type = store_event_type(&event);
@@ -3474,6 +3663,7 @@ mod tests {
             applied: None,
             conflicts: None,
             collab_session_id: None,
+            review: None,
         };
 
         let event_type = store_event_type(&event);
@@ -3500,6 +3690,7 @@ mod tests {
             applied: None,
             conflicts: None,
             collab_session_id: None,
+            review: None,
         };
 
         let event_type = store_event_type(&event);
@@ -3527,6 +3718,7 @@ mod tests {
             applied: Some(2),
             conflicts: Some(1),
             collab_session_id: None,
+            review: None,
         };
 
         let event_type = store_event_type(&event);
@@ -3705,6 +3897,9 @@ fn store_event_payload(library: &str, event_type: &str, event: &StoreEvent) -> J
                 "collab_session_id".to_string(),
                 JsonValue::String(collab_session_id.clone()),
             );
+        }
+        if let Some(review) = &event.review {
+            object.insert("review".to_string(), review.clone());
         }
     }
     payload
