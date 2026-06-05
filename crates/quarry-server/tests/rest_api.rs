@@ -69,6 +69,21 @@ fn assert_path_parameter_enum_contains(
     assert_schema_enum_contains(openapi, &parameter["schema"], expected);
 }
 
+fn ops_request(base_token: impl serde::Serialize, operation: Value) -> Value {
+    serde_json::json!({
+        "baseToken": base_token,
+        "operations": [operation]
+    })
+}
+
+fn ops_request_by(base_token: impl serde::Serialize, by: &str, operation: Value) -> Value {
+    serde_json::json!({
+        "baseToken": base_token,
+        "by": by,
+        "operations": [operation]
+    })
+}
+
 #[tokio::test]
 async fn rest_api_supports_documents_transactions_etags_and_openapi() {
     let root = tempfile::tempdir().unwrap();
@@ -346,7 +361,7 @@ async fn agent_snapshot_exposes_snapshot_scoped_block_refs() {
     assert_eq!(body["baseToken"], base_token);
     assert_eq!(body["blocks"].as_array().unwrap().len(), 3);
     assert_eq!(body["blocks"][0]["markdown"], "# Title\n\n");
-    assert_eq!(body["blocks"][0]["ref"]["baseToken"], base_token);
+    assert!(body["blocks"][0]["ref"].get("baseToken").is_none());
     assert_eq!(body["blocks"][0]["ref"]["ordinal"], 0);
     assert_eq!(
         body["blocks"][0]["ref"]["contentHash"]
@@ -1405,15 +1420,17 @@ async fn agent_ops_add_comments_and_suggestions_with_review_endmatter() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentreview/documents/notes/review.md/ops?dryRun=1",
-            serde_json::json!({
-                "baseToken": base_token,
-                "op": "comment.add",
-                "id": "c1",
-                "ref": first_ref.clone(),
-                "quote": "target",
-                "body": "Needs support.",
-                "by": "ai:codex"
-            }),
+            ops_request_by(
+                base_token,
+                "ai:codex",
+                serde_json::json!({
+                    "op": "comment.add",
+                    "id": "c1",
+                    "ref": first_ref.clone(),
+                    "quote": "target",
+                    "body": "Needs support."
+                }),
+            ),
         ))
         .await
         .unwrap();
@@ -1430,16 +1447,18 @@ async fn agent_ops_add_comments_and_suggestions_with_review_endmatter() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentreview/documents/notes/review.md/ops",
-            serde_json::json!({
-                "baseToken": base_token,
-                "op": "suggestion.add",
-                "id": "s1",
-                "kind": "substitution",
-                "ref": first_ref,
-                "quote": "target",
-                "content": "focus",
-                "by": "ai:codex"
-            }),
+            ops_request_by(
+                base_token,
+                "ai:codex",
+                serde_json::json!({
+                    "op": "suggestion.add",
+                    "id": "s1",
+                    "kind": "substitution",
+                    "ref": first_ref,
+                    "quote": "target",
+                    "content": "focus"
+                }),
+            ),
         ))
         .await
         .unwrap();
@@ -1449,7 +1468,7 @@ async fn agent_ops_add_comments_and_suggestions_with_review_endmatter() {
         .unwrap()
         .to_string();
     let body: Value = response_json(response).await;
-    assert_eq!(body["id"], "s1");
+    assert_eq!(body["results"][0]["id"], "s1");
 
     let response = app
         .oneshot(
@@ -1473,6 +1492,727 @@ async fn agent_ops_add_comments_and_suggestions_with_review_endmatter() {
     assert!(markdown.contains("suggestions:"));
     assert!(markdown.contains("s1:"));
     assert!(etag.starts_with('"'));
+}
+
+#[tokio::test]
+async fn agent_ops_batch_applies_multiple_review_ops_atomically() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentbatchreview").await.unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            b"One target here.\n\nSecond paragraph.\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentbatchreview/documents/notes/review.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let snapshot: Value = response_json(response).await;
+    let base_token = snapshot["baseToken"].as_str().unwrap();
+    let first_ref = snapshot["blocks"][0]["ref"].clone();
+    let second_ref = snapshot["blocks"][1]["ref"].clone();
+    let batch = serde_json::json!({
+        "baseToken": base_token,
+        "by": "ai:codex",
+        "operations": [
+            {
+                "op": "comment.add",
+                "id": "c1",
+                "ref": first_ref,
+                "quote": "target",
+                "body": "Needs support."
+            },
+            {
+                "op": "suggestion.add",
+                "id": "s1",
+                "kind": "replace",
+                "ref": second_ref,
+                "quote": "Second",
+                "content": "Better"
+            }
+        ]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentbatchreview/documents/notes/review.md/ops?dryRun=1",
+            batch.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["dryRun"], true);
+    assert_eq!(
+        body["results"][0],
+        serde_json::json!({"op": "comment.add", "id": "c1"})
+    );
+    assert_eq!(
+        body["results"][1],
+        serde_json::json!({"op": "suggestion.add", "id": "s1"})
+    );
+    assert!(body.get("id").is_none());
+    let markdown = body["markdown"].as_str().unwrap();
+    assert!(markdown.contains("One {==target==}{>>Needs support.<<}{#c1} here."));
+    assert!(markdown.contains("{~~Second~>Better~~}{#s1} paragraph."));
+    assert!(markdown.contains("comments:"));
+    assert!(markdown.contains("suggestions:"));
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentbatchreview/documents/notes/review.md/ops",
+            batch,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let etag = response.headers()[header::ETAG]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let body: Value = response_json(response).await;
+    assert_eq!(body["dryRun"], false);
+    assert_eq!(body["results"].as_array().unwrap().len(), 2);
+    assert!(body.get("id").is_none());
+    assert!(etag.starts_with('"'));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentbatchreview/documents/notes/review.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let markdown = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(markdown.contains("One {==target==}{>>Needs support.<<}{#c1} here."));
+    assert!(markdown.contains("{~~Second~>Better~~}{#s1} paragraph."));
+}
+
+#[tokio::test]
+async fn agent_ops_batch_validation_failure_is_atomic_and_not_idempotency_cached() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentbatchatomic").await.unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            b"One target here.\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let snapshot = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentbatchatomic/documents/notes/review.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(snapshot.status(), StatusCode::OK);
+    let snapshot: Value = response_json(snapshot).await;
+    let base_token = snapshot["baseToken"].as_str().unwrap();
+    let first_ref = snapshot["blocks"][0]["ref"].clone();
+    let invalid_batch = serde_json::json!({
+        "baseToken": base_token,
+        "by": "ai:codex",
+        "operations": [
+            {
+                "op": "comment.add",
+                "id": "c1",
+                "ref": first_ref.clone(),
+                "quote": "target",
+                "body": "Needs support."
+            },
+            {
+                "op": "suggestion.add",
+                "id": "s1",
+                "kind": "replace",
+                "ref": first_ref.clone(),
+                "quote": "missing",
+                "content": "focus"
+            }
+        ]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/agentbatchatomic/documents/notes/review.md/ops")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("Idempotency-Key", "atomic-key")
+                .body(Body::from(invalid_batch.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentbatchatomic/documents/notes/review.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+        "One target here.\n"
+    );
+
+    let valid_batch = serde_json::json!({
+        "baseToken": base_token,
+        "by": "ai:codex",
+        "operations": [{
+            "op": "comment.add",
+            "id": "c1",
+            "ref": first_ref,
+            "quote": "target",
+            "body": "Needs support."
+        }]
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/agentbatchatomic/documents/notes/review.md/ops")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("Idempotency-Key", "atomic-key")
+                .body(Body::from(valid_batch.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["results"][0]["id"], "c1");
+}
+
+#[tokio::test]
+async fn agent_ops_batch_same_block_overlap_rules() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentbatchoverlap").await.unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            b"alpha beta gamma\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let snapshot = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentbatchoverlap/documents/notes/review.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let snapshot: Value = response_json(snapshot).await;
+    let base_token = snapshot["baseToken"].as_str().unwrap();
+    let block_ref = snapshot["blocks"][0]["ref"].clone();
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentbatchoverlap/documents/notes/review.md/ops?dryRun=1",
+            serde_json::json!({
+                "baseToken": base_token,
+                "operations": [
+                    {
+                        "op": "comment.add",
+                        "id": "c1",
+                        "ref": block_ref.clone(),
+                        "quote": "alpha",
+                        "body": "Clarify."
+                    },
+                    {
+                        "op": "suggestion.add",
+                        "id": "s1",
+                        "kind": "replace",
+                        "ref": block_ref.clone(),
+                        "quote": "gamma",
+                        "content": "delta"
+                    }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    let markdown = body["markdown"].as_str().unwrap();
+    assert!(markdown.contains("{==alpha==}{>>Clarify.<<}{#c1} beta {~~gamma~>delta~~}{#s1}"));
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentbatchoverlap/documents/notes/review.md/ops?dryRun=1",
+            serde_json::json!({
+                "baseToken": base_token,
+                "operations": [
+                    {
+                        "op": "suggestion.add",
+                        "id": "s2",
+                        "kind": "insert",
+                        "ref": block_ref.clone(),
+                        "quote": "beta",
+                        "content": "X"
+                    },
+                    {
+                        "op": "suggestion.add",
+                        "id": "s3",
+                        "kind": "insert",
+                        "ref": block_ref.clone(),
+                        "quote": "beta",
+                        "content": "Y"
+                    }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert!(body["markdown"]
+        .as_str()
+        .unwrap()
+        .contains("beta{++X++}{#s2}{++Y++}{#s3}"));
+
+    let response = app
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentbatchoverlap/documents/notes/review.md/ops?dryRun=1",
+            serde_json::json!({
+                "baseToken": base_token,
+                "operations": [
+                    {
+                        "op": "comment.add",
+                        "id": "c2",
+                        "ref": block_ref.clone(),
+                        "quote": "beta",
+                        "body": "Clarify."
+                    },
+                    {
+                        "op": "suggestion.add",
+                        "id": "s4",
+                        "kind": "replace",
+                        "ref": block_ref,
+                        "quote": "beta",
+                        "content": "theta"
+                    }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn agent_ops_idempotency_replays_same_batch_and_conflicts_on_changed_body() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentbatchidempotency").await.unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            b"One target here.\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let snapshot = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentbatchidempotency/documents/notes/review.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let snapshot: Value = response_json(snapshot).await;
+    let base_token = snapshot["baseToken"].as_str().unwrap();
+    let block_ref = snapshot["blocks"][0]["ref"].clone();
+    let batch = serde_json::json!({
+        "baseToken": base_token,
+        "operations": [{
+            "op": "comment.add",
+            "id": "c1",
+            "ref": block_ref,
+            "quote": "target",
+            "body": "Needs support."
+        }]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/agentbatchidempotency/documents/notes/review.md/ops")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("Idempotency-Key", "ops-key")
+                .body(Body::from(batch.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let etag = response.headers()[header::ETAG]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let body: Value = response_json(response).await;
+    assert_eq!(body["results"][0]["id"], "c1");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/agentbatchidempotency/documents/notes/review.md/ops")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("Idempotency-Key", "ops-key")
+                .body(Body::from(batch.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::ETAG].to_str().unwrap(), etag);
+
+    let mut changed_batch = batch;
+    changed_batch["operations"][0]["body"] = serde_json::json!("Different body.");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/agentbatchidempotency/documents/notes/review.md/ops")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("Idempotency-Key", "ops-key")
+                .body(Body::from(changed_batch.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn agent_ops_batch_injects_multiple_changed_blocks_into_live_room() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentbatchlive").await.unwrap();
+    let written = store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            b"One target here.\n\nSecond paragraph.\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let mut events = store.subscribe_events();
+    let app = router(store.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_app = app.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, server_app).await.unwrap();
+    });
+
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/{}", written.document.id))
+            .await
+            .unwrap();
+    let client_doc = empty_yjs_doc();
+    sync_yjs_doc_from_socket(&mut socket, &client_doc).await;
+
+    let snapshot = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentbatchlive/documents/notes/review.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let snapshot: Value = response_json(snapshot).await;
+    let base_token = snapshot["baseToken"].as_str().unwrap();
+    let first_ref = snapshot["blocks"][0]["ref"].clone();
+    let second_ref = snapshot["blocks"][1]["ref"].clone();
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentbatchlive/documents/notes/review.md/ops",
+            serde_json::json!({
+                "baseToken": base_token,
+                "by": "ai:codex",
+                "operations": [
+                    {
+                        "op": "comment.add",
+                        "id": "c1",
+                        "ref": first_ref,
+                        "quote": "target",
+                        "body": "Needs support."
+                    },
+                    {
+                        "op": "suggestion.add",
+                        "id": "s1",
+                        "kind": "replace",
+                        "ref": second_ref,
+                        "quote": "Second",
+                        "content": "Better"
+                    }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["injection"], "injected");
+    assert_eq!(body["results"].as_array().unwrap().len(), 2);
+
+    let event = next_document_put_event(&mut events).await;
+    assert!(event
+        .collab_session_id
+        .as_deref()
+        .is_some_and(|session| session.starts_with("agent-injected:")));
+    let recovery = store
+        .collab_recovery_state(&written.document.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let envelope = injection_envelope_from_update(&recovery.update_v1);
+    let review: Value = serde_json::from_str(envelope["review"].as_str().unwrap()).unwrap();
+    assert_eq!(review["comments"]["c1"]["body"], "Needs support.");
+    assert_eq!(review["suggestions"]["s1"]["by"], "ai:codex");
+
+    wait_for_yjs_comment_mark(&mut socket, &client_doc, "c1").await;
+    wait_for_yjs_suggestion_mark(&mut socket, &client_doc, "s1").await;
+    assert!(yjs_has_comment_mark(&client_doc, "c1"));
+    assert!(yjs_has_suggestion_mark(&client_doc, "s1"));
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn agent_ops_batch_merges_metadata_live_patch_for_mixed_review_ops() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentbatchmetalive").await.unwrap();
+    let markdown = "Keep {++added++}{#s1} and drop {--bad--}{#s2}. See {==this==}{>>Check it<<}{#c1}.\n\n---\ncomments:\n  c1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user\n  r1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    body: Existing reply.\n    by: user\n    re: c1\nsuggestions:\n  s1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: AI\n  s2:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: AI\n";
+    let written = store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            markdown.as_bytes().to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let mut events = store.subscribe_events();
+    let app = router(store.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_app = app.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, server_app).await.unwrap();
+    });
+
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/{}", written.document.id))
+            .await
+            .unwrap();
+    let client_doc = empty_yjs_doc();
+    sync_yjs_doc_from_socket(&mut socket, &client_doc).await;
+    assert!(yjs_has_suggestion_mark(&client_doc, "s1"));
+    assert!(yjs_has_suggestion_mark(&client_doc, "s2"));
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentbatchmetalive/documents/notes/review.md/ops",
+            serde_json::json!({
+                "baseToken": format!("\"{}\"", written.version.id),
+                "by": "ai:codex",
+                "operations": [
+                    {
+                        "op": "comment.reply",
+                        "id": "r2",
+                        "parentId": "c1",
+                        "body": "Following up."
+                    },
+                    {
+                        "op": "comment.resolve",
+                        "id": "c1"
+                    },
+                    {
+                        "op": "comment.delete",
+                        "id": "r1"
+                    },
+                    {
+                        "op": "suggestion.accept",
+                        "id": "s1"
+                    },
+                    {
+                        "op": "suggestion.reject",
+                        "id": "s2"
+                    }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["injection"], "injected");
+    assert_eq!(body["results"].as_array().unwrap().len(), 5);
+
+    let event = next_document_put_event(&mut events).await;
+    assert!(event
+        .collab_session_id
+        .as_deref()
+        .is_some_and(|session| session.starts_with("agent-injected:")));
+    let recovery = store
+        .collab_recovery_state(&written.document.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let envelope = injection_envelope_from_update(&recovery.update_v1);
+    let review: Value = serde_json::from_str(envelope["review"].as_str().unwrap()).unwrap();
+    assert_eq!(review["comments"]["r2"]["body"], "Following up.");
+    assert_eq!(review["comments"]["r2"]["re"], "c1");
+    assert_eq!(review["comments"]["c1"]["status"], "resolved");
+    assert_eq!(review["removeComments"], serde_json::json!(["r1"]));
+    assert_eq!(review["removeSuggestions"], serde_json::json!(["s1", "s2"]));
+
+    wait_for_yjs_sync_update(&mut socket, &client_doc).await;
+    assert_eq!(
+        yjs_plain_text(&client_doc),
+        "Keep added and drop bad. See this."
+    );
+    assert!(!yjs_has_suggestion_mark(&client_doc, "s1"));
+    assert!(!yjs_has_suggestion_mark(&client_doc, "s2"));
+
+    server.abort();
 }
 
 #[tokio::test]
@@ -1506,7 +2246,10 @@ async fn agent_ops_accept_reject_and_resolve_review_marks() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentreview2/documents/notes/review.md/ops",
-            serde_json::json!({"baseToken": base_token, "op": "suggestion.accept", "id": "s1"}),
+            ops_request(
+                &base_token,
+                serde_json::json!({"op": "suggestion.accept", "id": "s1"}),
+            ),
         ))
         .await
         .unwrap();
@@ -1521,7 +2264,10 @@ async fn agent_ops_accept_reject_and_resolve_review_marks() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentreview2/documents/notes/review.md/ops",
-            serde_json::json!({"baseToken": base_token, "op": "suggestion.reject", "id": "s2"}),
+            ops_request(
+                &base_token,
+                serde_json::json!({"op": "suggestion.reject", "id": "s2"}),
+            ),
         ))
         .await
         .unwrap();
@@ -1536,7 +2282,10 @@ async fn agent_ops_accept_reject_and_resolve_review_marks() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentreview2/documents/notes/review.md/ops",
-            serde_json::json!({"baseToken": base_token, "op": "comment.resolve", "id": "c1"}),
+            ops_request(
+                &base_token,
+                serde_json::json!({"op": "comment.resolve", "id": "c1"}),
+            ),
         ))
         .await
         .unwrap();
@@ -1598,21 +2347,23 @@ async fn agent_ops_reply_and_delete_comments_without_live_room() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentreviewdelete/documents/notes/review.md/ops?dryRun=1",
-            serde_json::json!({
-                "baseToken": base_token,
-                "op": "comment.reply",
-                "id": "r1",
-                "parentId": "c1",
-                "body": "Following up.",
-                "by": "ai:codex"
-            }),
+            ops_request_by(
+                &base_token,
+                "ai:codex",
+                serde_json::json!({
+                    "op": "comment.reply",
+                    "id": "r1",
+                    "parentId": "c1",
+                    "body": "Following up."
+                }),
+            ),
         ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body["dryRun"], true);
-    assert_eq!(body["id"], "r1");
+    assert_eq!(body["results"][0]["id"], "r1");
     let dry_run_markdown = body["markdown"].as_str().unwrap();
     assert!(dry_run_markdown.contains("r1:"));
     assert!(dry_run_markdown.contains("body: Following up."));
@@ -1624,14 +2375,16 @@ async fn agent_ops_reply_and_delete_comments_without_live_room() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentreviewdelete/documents/notes/review.md/ops",
-            serde_json::json!({
-                "baseToken": base_token,
-                "op": "comment.reply",
-                "id": "r1",
-                "parentId": "c1",
-                "body": "Following up.",
-                "by": "ai:codex"
-            }),
+            ops_request_by(
+                &base_token,
+                "ai:codex",
+                serde_json::json!({
+                    "op": "comment.reply",
+                    "id": "r1",
+                    "parentId": "c1",
+                    "body": "Following up."
+                }),
+            ),
         ))
         .await
         .unwrap();
@@ -1646,11 +2399,13 @@ async fn agent_ops_reply_and_delete_comments_without_live_room() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentreviewdelete/documents/notes/review.md/ops",
-            serde_json::json!({
-                "baseToken": base_token,
-                "op": "comment.delete",
-                "id": "r1"
-            }),
+            ops_request(
+                &base_token,
+                serde_json::json!({
+                    "op": "comment.delete",
+                    "id": "r1"
+                }),
+            ),
         ))
         .await
         .unwrap();
@@ -1665,14 +2420,16 @@ async fn agent_ops_reply_and_delete_comments_without_live_room() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentreviewdelete/documents/notes/review.md/ops",
-            serde_json::json!({
-                "baseToken": base_token,
-                "op": "comment.reply",
-                "id": "r2",
-                "parentId": "c1",
-                "body": "Second reply.",
-                "by": "ai:codex"
-            }),
+            ops_request_by(
+                &base_token,
+                "ai:codex",
+                serde_json::json!({
+                    "op": "comment.reply",
+                    "id": "r2",
+                    "parentId": "c1",
+                    "body": "Second reply."
+                }),
+            ),
         ))
         .await
         .unwrap();
@@ -1687,17 +2444,19 @@ async fn agent_ops_reply_and_delete_comments_without_live_room() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentreviewdelete/documents/notes/review.md/ops",
-            serde_json::json!({
-                "baseToken": base_token,
-                "op": "comment.delete",
-                "id": "c1"
-            }),
+            ops_request(
+                &base_token,
+                serde_json::json!({
+                    "op": "comment.delete",
+                    "id": "c1"
+                }),
+            ),
         ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert_eq!(body["id"], "c1");
+    assert_eq!(body["results"][0]["id"], "c1");
 
     let response = app
         .oneshot(
@@ -1748,39 +2507,49 @@ async fn agent_ops_comment_reply_validates_parent_and_body() {
     let base_token = format!("\"{}\"", written.version.id);
 
     for request in [
-        serde_json::json!({
-            "baseToken": base_token,
-            "op": "comment.reply",
-            "id": "r2",
-            "body": "Missing parent."
-        }),
-        serde_json::json!({
-            "baseToken": base_token,
-            "op": "comment.reply",
-            "id": "r2",
-            "parentId": "missing",
-            "body": "Missing parent."
-        }),
-        serde_json::json!({
-            "baseToken": base_token,
-            "op": "comment.reply",
-            "id": "r2",
-            "parentId": "r1",
-            "body": "Reply to a reply."
-        }),
-        serde_json::json!({
-            "baseToken": base_token,
-            "op": "comment.reply",
-            "id": "r1",
-            "parentId": "c1",
-            "body": "Duplicate id."
-        }),
-        serde_json::json!({
-            "baseToken": base_token,
-            "op": "comment.reply",
-            "id": "r2",
-            "parentId": "c1"
-        }),
+        ops_request(
+            &base_token,
+            serde_json::json!({
+                "op": "comment.reply",
+                "id": "r2",
+                "body": "Missing parent."
+            }),
+        ),
+        ops_request(
+            &base_token,
+            serde_json::json!({
+                "op": "comment.reply",
+                "id": "r2",
+                "parentId": "missing",
+                "body": "Missing parent."
+            }),
+        ),
+        ops_request(
+            &base_token,
+            serde_json::json!({
+                "op": "comment.reply",
+                "id": "r2",
+                "parentId": "r1",
+                "body": "Reply to a reply."
+            }),
+        ),
+        ops_request(
+            &base_token,
+            serde_json::json!({
+                "op": "comment.reply",
+                "id": "r1",
+                "parentId": "c1",
+                "body": "Duplicate id."
+            }),
+        ),
+        ops_request(
+            &base_token,
+            serde_json::json!({
+                "op": "comment.reply",
+                "id": "r2",
+                "parentId": "c1"
+            }),
+        ),
     ] {
         let response = app
             .clone()
@@ -1859,21 +2628,23 @@ async fn agent_ops_comment_add_injects_into_live_collab_room() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentlivecomment/documents/notes/review.md/ops",
-            serde_json::json!({
-                "baseToken": base_token,
-                "op": "comment.add",
-                "id": "c1",
-                "ref": first_ref,
-                "quote": "target",
-                "body": "Needs support.",
-                "by": "ai:codex"
-            }),
+            ops_request_by(
+                base_token,
+                "ai:codex",
+                serde_json::json!({
+                    "op": "comment.add",
+                    "id": "c1",
+                    "ref": first_ref,
+                    "quote": "target",
+                    "body": "Needs support."
+                }),
+            ),
         ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert_eq!(body["id"], "c1");
+    assert_eq!(body["results"][0]["id"], "c1");
 
     let event = next_document_put_event(&mut events).await;
     assert!(event
@@ -1995,22 +2766,24 @@ async fn agent_ops_suggestion_add_kinds_inject_into_live_collab_room() {
             .oneshot(json_request(
                 Method::POST,
                 &format!("/v1/libraries/agentlivesuggestion/documents/{path}/ops"),
-                serde_json::json!({
-                    "baseToken": base_token,
-                    "op": "suggestion.add",
-                    "id": id,
-                    "kind": kind,
-                    "ref": first_ref,
-                    "quote": "target",
-                    "content": "focus",
-                    "by": "ai:codex"
-                }),
+                ops_request_by(
+                    base_token,
+                    "ai:codex",
+                    serde_json::json!({
+                        "op": "suggestion.add",
+                        "id": id,
+                        "kind": kind,
+                        "ref": first_ref,
+                        "quote": "target",
+                        "content": "focus"
+                    }),
+                ),
             ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body: Value = response_json(response).await;
-        assert_eq!(body["id"], id);
+        assert_eq!(body["results"][0]["id"], id);
         assert_eq!(body["injection"], "injected");
 
         let event = next_document_put_event(&mut events).await;
@@ -2082,11 +2855,10 @@ async fn agent_ops_accept_reject_inject_and_remove_suggestion_metadata() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentliveaccept/documents/notes/review.md/ops",
-            serde_json::json!({
-                "baseToken": format!("\"{}\"", written.version.id),
-                "op": "suggestion.accept",
-                "id": "s1"
-            }),
+            ops_request(
+                format!("\"{}\"", written.version.id),
+                serde_json::json!({"op": "suggestion.accept", "id": "s1"}),
+            ),
         ))
         .await
         .unwrap();
@@ -2119,11 +2891,10 @@ async fn agent_ops_accept_reject_inject_and_remove_suggestion_metadata() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentliveaccept/documents/notes/review.md/ops",
-            serde_json::json!({
-                "baseToken": base_token,
-                "op": "suggestion.reject",
-                "id": "s2"
-            }),
+            ops_request(
+                &base_token,
+                serde_json::json!({"op": "suggestion.reject", "id": "s2"}),
+            ),
         ))
         .await
         .unwrap();
@@ -2216,11 +2987,10 @@ async fn agent_ops_comment_resolve_injects_metadata_only_live_patch() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentliveresolve/documents/notes/review.md/ops",
-            serde_json::json!({
-                "baseToken": format!("\"{}\"", written.version.id),
-                "op": "comment.resolve",
-                "id": "c1"
-            }),
+            ops_request(
+                format!("\"{}\"", written.version.id),
+                serde_json::json!({"op": "comment.resolve", "id": "c1"}),
+            ),
         ))
         .await
         .unwrap();
@@ -2293,14 +3063,16 @@ async fn agent_ops_comment_reply_and_reply_delete_inject_metadata_only_live_patc
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentlivereply/documents/notes/review.md/ops",
-            serde_json::json!({
-                "baseToken": format!("\"{}\"", written.version.id),
-                "op": "comment.reply",
-                "id": "r1",
-                "parentId": "c1",
-                "body": "Following up.",
-                "by": "ai:codex"
-            }),
+            ops_request_by(
+                format!("\"{}\"", written.version.id),
+                "ai:codex",
+                serde_json::json!({
+                    "op": "comment.reply",
+                    "id": "r1",
+                    "parentId": "c1",
+                    "body": "Following up."
+                }),
+            ),
         ))
         .await
         .unwrap();
@@ -2310,7 +3082,7 @@ async fn agent_ops_comment_reply_and_reply_delete_inject_metadata_only_live_patc
         .unwrap()
         .to_string();
     let body: Value = response_json(response).await;
-    assert_eq!(body["id"], "r1");
+    assert_eq!(body["results"][0]["id"], "r1");
     assert_eq!(body["injection"], "metadata_only_injected");
 
     let event = next_document_put_event(&mut events).await;
@@ -2335,17 +3107,19 @@ async fn agent_ops_comment_reply_and_reply_delete_inject_metadata_only_live_patc
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentlivereply/documents/notes/review.md/ops",
-            serde_json::json!({
-                "baseToken": base_token,
-                "op": "comment.delete",
-                "id": "r1"
-            }),
+            ops_request(
+                &base_token,
+                serde_json::json!({
+                    "op": "comment.delete",
+                    "id": "r1"
+                }),
+            ),
         ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert_eq!(body["id"], "r1");
+    assert_eq!(body["results"][0]["id"], "r1");
     assert_eq!(body["injection"], "metadata_only_injected");
     let event = next_document_put_event(&mut events).await;
     assert!(event
@@ -2412,17 +3186,16 @@ async fn agent_ops_comment_delete_root_injects_content_and_removes_replies() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentlivedelete/documents/notes/review.md/ops",
-            serde_json::json!({
-                "baseToken": format!("\"{}\"", written.version.id),
-                "op": "comment.delete",
-                "id": "c1"
-            }),
+            ops_request(
+                format!("\"{}\"", written.version.id),
+                serde_json::json!({"op": "comment.delete", "id": "c1"}),
+            ),
         ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert_eq!(body["id"], "c1");
+    assert_eq!(body["results"][0]["id"], "c1");
     assert_eq!(body["injection"], "injected");
 
     let event = next_document_put_event(&mut events).await;
@@ -2505,15 +3278,17 @@ async fn agent_ops_comment_add_without_live_room_uses_external_write() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentcommentfallback/documents/notes/review.md/ops",
-            serde_json::json!({
-                "baseToken": base_token,
-                "op": "comment.add",
-                "id": "c1",
-                "ref": snapshot["blocks"][0]["ref"].clone(),
-                "quote": "target",
-                "body": "Needs support.",
-                "by": "ai:codex"
-            }),
+            ops_request_by(
+                &base_token,
+                "ai:codex",
+                serde_json::json!({
+                    "op": "comment.add",
+                    "id": "c1",
+                    "ref": snapshot["blocks"][0]["ref"].clone(),
+                    "quote": "target",
+                    "body": "Needs support."
+                }),
+            ),
         ))
         .await
         .unwrap();
@@ -2608,15 +3383,17 @@ async fn agent_ops_comment_add_dirty_live_room_rejects_without_persisting() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentdirtycomment/documents/notes/review.md/ops",
-            serde_json::json!({
-                "baseToken": base_token,
-                "op": "comment.add",
-                "id": "c1",
-                "ref": snapshot["blocks"][0]["ref"].clone(),
-                "quote": "target",
-                "body": "Needs support.",
-                "by": "ai:codex"
-            }),
+            ops_request_by(
+                base_token,
+                "ai:codex",
+                serde_json::json!({
+                    "op": "comment.add",
+                    "id": "c1",
+                    "ref": snapshot["blocks"][0]["ref"].clone(),
+                    "quote": "target",
+                    "body": "Needs support."
+                }),
+            ),
         ))
         .await
         .unwrap();
@@ -2698,11 +3475,10 @@ async fn agent_ops_comment_delete_dirty_live_room_rejects_without_persisting() {
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentdirtydelete/documents/notes/review.md/ops",
-            serde_json::json!({
-                "baseToken": format!("\"{}\"", written.version.id),
-                "op": "comment.delete",
-                "id": "c1"
-            }),
+            ops_request(
+                format!("\"{}\"", written.version.id),
+                serde_json::json!({"op": "comment.delete", "id": "c1"}),
+            ),
         ))
         .await
         .unwrap();
@@ -3839,9 +4615,17 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
         openapi["components"]["schemas"]["AgentBlockOperation"]["properties"]["markdown"]
             .is_object()
     );
+    assert!(
+        openapi["components"]["schemas"]["AgentBlockRef"]["properties"]
+            .get("baseToken")
+            .is_none()
+    );
+    assert!(
+        openapi["components"]["schemas"]["AgentOpsRequest"]["properties"]["operations"].is_object()
+    );
     assert_schema_enum_contains(
         &openapi,
-        &openapi["components"]["schemas"]["AgentOpsRequest"]["properties"]["op"],
+        &openapi["components"]["schemas"]["AgentOpsOperationRequest"]["properties"]["op"],
         &[
             "comment.add",
             "comment.reply",
@@ -3856,11 +4640,15 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
     );
     assert_schema_enum_contains(
         &openapi,
-        &openapi["components"]["schemas"]["AgentOpsRequest"]["properties"]["kind"],
+        &openapi["components"]["schemas"]["AgentOpsOperationRequest"]["properties"]["kind"],
         &["insert", "delete", "remove", "replace", "substitution"],
     );
     assert!(
-        openapi["components"]["schemas"]["AgentOpsRequest"]["properties"]["parentId"].is_object()
+        openapi["components"]["schemas"]["AgentOpsOperationRequest"]["properties"]["parentId"]
+            .is_object()
+    );
+    assert!(
+        openapi["components"]["schemas"]["AgentOpsResponse"]["properties"]["results"].is_object()
     );
     assert_schema_enum_contains(
         &openapi,
@@ -4628,6 +5416,9 @@ async fn wait_for_yjs_comment_mark<S>(socket: &mut S, doc: &Doc, id: &str)
 where
     S: Stream<Item = Result<TungsteniteMessage, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
+    if yjs_has_comment_mark(doc, id) {
+        return;
+    }
     timeout(Duration::from_secs(2), async {
         loop {
             let message = socket.next().await.unwrap().unwrap();
@@ -4648,6 +5439,9 @@ async fn wait_for_yjs_suggestion_mark<S>(socket: &mut S, doc: &Doc, id: &str)
 where
     S: Stream<Item = Result<TungsteniteMessage, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
+    if yjs_has_suggestion_mark(doc, id) {
+        return;
+    }
     timeout(Duration::from_secs(2), async {
         loop {
             let message = socket.next().await.unwrap().unwrap();

@@ -104,7 +104,6 @@ Important response fields:
   "blocks": [
     {
       "ref": {
-        "baseToken": "W/\"version_123\"",
         "ordinal": 0,
         "contentHash": "abc123"
       },
@@ -151,7 +150,6 @@ curl -sS -X POST "$DOC/edit?dryRun=1" \
       {
         "op": "replace_block",
         "ref": {
-          "baseToken": "W/\"version_123\"",
           "ordinal": 0,
           "contentHash": "abc123"
         },
@@ -183,7 +181,6 @@ curl -sS -X POST "$DOC/edit?dryRun=1" \
       {
         "op": "insert_after",
         "ref": {
-          "baseToken": "W/\"version_123\"",
           "ordinal": 0,
           "contentHash": "abc123"
         },
@@ -223,12 +220,11 @@ Supported `/ops` operations: `comment.add`, `comment.reply`,
 `comment.delete`, `comment.resolve`, `suggestion.add`,
 `suggestion.accept`, `suggestion.reject`.
 
-`/ops` takes one operation per request, and each write advances the document
-version — so the `baseToken` you just used is now stale. To leave several
-comments or suggestions, submit them one at a time and refresh `baseToken`
-between writes. The staleness check is per-document, so even annotations on
-different blocks need a fresh token; only a block's `contentHash` is reusable
-while that block stays untouched (see "Leaving Several Annotations" below).
+`/ops` takes a batch of one or more operations. All operations share one
+top-level `baseToken` and `by` author, resolve refs against the original
+snapshot, and commit atomically. Put several comments or suggestions in one
+`operations` array instead of refreshing the token between annotations. Use an
+`Idempotency-Key` header when committing a non-dry-run batch.
 
 Add a comment:
 
@@ -236,17 +232,21 @@ Add a comment:
 curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
+  -H "Idempotency-Key: ops-abc123-1" \
   -d '{
     "baseToken": "W/\"version_123\"",
-    "op": "comment.add",
-    "ref": {
-      "baseToken": "W/\"version_123\"",
-      "ordinal": 0,
-      "contentHash": "abc123"
-    },
-    "quote": "Title",
-    "body": "Consider making this title more specific.",
-    "by": "Codex"
+    "by": "Codex",
+    "operations": [
+      {
+        "op": "comment.add",
+        "ref": {
+          "ordinal": 0,
+          "contentHash": "abc123"
+        },
+        "quote": "Title",
+        "body": "Consider making this title more specific."
+      }
+    ]
   }'
 ```
 
@@ -258,16 +258,19 @@ curl -sS -X POST "$DOC/ops?dryRun=1" \
   -H "X-Agent-Id: $AGENT_ID" \
   -d '{
     "baseToken": "W/\"version_123\"",
-    "op": "suggestion.add",
-    "kind": "replace",
-    "ref": {
-      "baseToken": "W/\"version_123\"",
-      "ordinal": 0,
-      "contentHash": "abc123"
-    },
-    "quote": "Title",
-    "content": "Project Plan",
-    "by": "Codex"
+    "by": "Codex",
+    "operations": [
+      {
+        "op": "suggestion.add",
+        "kind": "replace",
+        "ref": {
+          "ordinal": 0,
+          "contentHash": "abc123"
+        },
+        "quote": "Title",
+        "content": "Project Plan"
+      }
+    ]
   }'
 ```
 
@@ -280,51 +283,44 @@ Reply, resolve, or accept:
 curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
-  -d '{"baseToken":"W/\"version_123\"","op":"comment.reply","parentId":"c_123","body":"Thanks, I will adjust this.","by":"Codex"}'
+  -d '{"baseToken":"W/\"version_123\"","by":"Codex","operations":[{"op":"comment.reply","parentId":"c_123","body":"Thanks, I will adjust this."}]}'
 
 curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
-  -d '{"baseToken":"W/\"version_123\"","op":"comment.resolve","id":"c_123"}'
+  -d '{"baseToken":"W/\"version_123\"","operations":[{"op":"comment.resolve","id":"c_123"}]}'
 
 curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
-  -d '{"baseToken":"W/\"version_123\"","op":"suggestion.accept","id":"s_123"}'
+  -d '{"baseToken":"W/\"version_123\"","operations":[{"op":"suggestion.accept","id":"s_123"}]}'
 ```
 
 ### Leaving Several Annotations
 
-Build each body with `jq -n` so the opaque `baseToken` is escaped correctly, and
-refresh the token from `HEAD` between writes:
+Build the batch body with `jq -n` so the opaque `baseToken` is escaped
+correctly:
 
 ```bash
-token() { curl -sS -I "$DOC" | tr -d '\r' | sed -n 's/^[Ee][Tt][Aa][Gg]: //p'; }
-post_op() {  # $1 = JSON body
-  curl -sS -X POST "$DOC/ops" \
-    -H "Content-Type: application/json" \
-    -H "X-Agent-Id: $AGENT_ID" \
-    -d "$1"
-}
-
-BT=$(token)
-post_op "$(jq -n --arg bt "$BT" \
-  '{baseToken:$bt, op:"comment.add",
-    ref:{baseToken:$bt, ordinal:0, contentHash:"abc123"},
-    quote:"Title", body:"Make this more specific.", by:"Codex"}')
-
-BT=$(token)  # refreshed: the previous write advanced the version
-post_op "$(jq -n --arg bt "$BT" \
-  '{baseToken:$bt, op:"suggestion.add", kind:"replace",
-    ref:{baseToken:$bt, ordinal:3, contentHash:"def456"},
-    quote:"16 GB is workable", content:"16 GB is a reasonable starting point",
-    by:"Codex"}')
+BT=$(curl -sS -I "$DOC" | tr -d '\r' | sed -n 's/^[Ee][Tt][Aa][Gg]: //p')
+curl -sS -X POST "$DOC/ops" \
+  -H "Content-Type: application/json" \
+  -H "X-Agent-Id: $AGENT_ID" \
+  -d "$(jq -n --arg bt "$BT" \
+    '{baseToken:$bt, by:"Codex", operations:[
+      {op:"comment.add",
+       ref:{ordinal:0, contentHash:"abc123"},
+       quote:"Title", body:"Make this more specific."},
+      {op:"suggestion.add", kind:"replace",
+       ref:{ordinal:3, contentHash:"def456"},
+       quote:"16 GB is workable",
+       content:"16 GB is a reasonable starting point"}
+    ]}')"
 ```
 
 Each `ref.contentHash` must match the current `/snapshot` for that block. Reuse
 cached hashes for blocks you have not touched; refetch a hash only for a block
-you already wrote to and are annotating again. `ref.baseToken` must equal the
-request `baseToken`.
+you already wrote to and are annotating again.
 
 ## Events
 

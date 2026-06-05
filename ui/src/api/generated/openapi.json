@@ -2327,14 +2327,10 @@
       "AgentBlockRef": {
         "type": "object",
         "required": [
-          "baseToken",
           "ordinal",
           "contentHash"
         ],
         "properties": {
-          "baseToken": {
-            "type": "string"
-          },
           "contentHash": {
             "type": "string"
           },
@@ -2342,7 +2338,8 @@
             "type": "integer",
             "minimum": 0
           }
-        }
+        },
+        "additionalProperties": false
       },
       "AgentDocumentSnapshot": {
         "type": "object",
@@ -2514,23 +2511,13 @@
           "reject"
         ]
       },
-      "AgentOpsRequest": {
+      "AgentOpsOperationRequest": {
         "type": "object",
         "required": [
-          "baseToken",
           "op"
         ],
         "properties": {
-          "baseToken": {
-            "type": "string"
-          },
           "body": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "by": {
             "type": [
               "string",
               "null"
@@ -2583,22 +2570,43 @@
               }
             ]
           }
-        }
+        },
+        "additionalProperties": false
       },
-      "AgentOpsResponse": {
+      "AgentOpsRequest": {
         "type": "object",
         "required": [
-          "dryRun"
+          "baseToken",
+          "operations"
         ],
         "properties": {
-          "dryRun": {
-            "type": "boolean"
+          "baseToken": {
+            "type": "string"
           },
-          "id": {
+          "by": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentOpsOperationRequest"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "AgentOpsResponse": {
+        "type": "object",
+        "required": [
+          "dryRun",
+          "results"
+        ],
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
           },
           "injection": {
             "type": [
@@ -2622,6 +2630,29 @@
                 "$ref": "#/components/schemas/WriteOutcome"
               }
             ]
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentOpsResultItem"
+            }
+          }
+        }
+      },
+      "AgentOpsResultItem": {
+        "type": "object",
+        "required": [
+          "op"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "op": {
+            "$ref": "#/components/schemas/AgentOpsOperation"
           }
         }
       },

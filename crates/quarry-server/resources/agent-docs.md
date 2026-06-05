@@ -59,7 +59,7 @@ Use a stable agent id for the session, such as `ai:codex:<short-id>` or
 
 - `Content-Type: application/json`
 - `X-Agent-Id: <agent-id>` for presence and event ack identity
-- `Idempotency-Key: <unique-key>` is supported on `/edit` for direct block edits
+- `Idempotency-Key: <unique-key>` is supported on `/edit` and `/ops`
 
 Use a readable `by` value in presence, comments, suggestions, and replies so the
 human can see who acted.
@@ -83,7 +83,6 @@ document version:
   "blocks": [
     {
       "ref": {
-        "baseToken": "W/\"version_123\"",
         "ordinal": 0,
         "contentHash": "abc123"
       },
@@ -127,8 +126,9 @@ validate refs and planned changes without committing them.
 
 ## How Block Refs Work
 
-A block `ref` is a concurrency guard. It includes the block's `baseToken`,
-position, and content hash. If the document changes, old refs may become stale.
+A block `ref` is a concurrency guard. It includes the block position and content
+hash for the current top-level `baseToken`. If the document changes, old refs
+may become stale.
 
 When choosing a target:
 
@@ -155,7 +155,6 @@ curl -sS -X POST "$DOC/edit?dryRun=1" \
       {
         "op": "replace_block",
         "ref": {
-          "baseToken": "W/\"version_123\"",
           "ordinal": 0,
           "contentHash": "abc123"
         },
@@ -187,7 +186,6 @@ curl -sS -X POST "$DOC/edit?dryRun=1" \
       {
         "op": "insert_after",
         "ref": {
-          "baseToken": "W/\"version_123\"",
           "ordinal": 0,
           "contentHash": "abc123"
         },
@@ -229,23 +227,31 @@ Use `/ops` for review feedback. Supported operations are `comment.add`,
 `comment.reply`, `comment.delete`, `comment.resolve`, `suggestion.add`,
 `suggestion.accept`, and `suggestion.reject`.
 
+`/ops` accepts a batch of one or more operations. All operations share one
+top-level `baseToken` and `by` author, resolve refs against the original
+snapshot, and commit atomically.
+
 Add a comment:
 
 ```sh
 curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
+  -H "Idempotency-Key: ops-abc123-1" \
   -d '{
     "baseToken": "W/\"version_123\"",
-    "op": "comment.add",
-    "ref": {
-      "baseToken": "W/\"version_123\"",
-      "ordinal": 0,
-      "contentHash": "abc123"
-    },
-    "quote": "Title",
-    "body": "Consider making this title more specific.",
-    "by": "Codex"
+    "by": "Codex",
+    "operations": [
+      {
+        "op": "comment.add",
+        "ref": {
+          "ordinal": 0,
+          "contentHash": "abc123"
+        },
+        "quote": "Title",
+        "body": "Consider making this title more specific."
+      }
+    ]
   }'
 ```
 
@@ -257,16 +263,19 @@ curl -sS -X POST "$DOC/ops?dryRun=1" \
   -H "X-Agent-Id: $AGENT_ID" \
   -d '{
     "baseToken": "W/\"version_123\"",
-    "op": "suggestion.add",
-    "kind": "replace",
-    "ref": {
-      "baseToken": "W/\"version_123\"",
-      "ordinal": 0,
-      "contentHash": "abc123"
-    },
-    "quote": "Title",
-    "content": "Project Plan",
-    "by": "Codex"
+    "by": "Codex",
+    "operations": [
+      {
+        "op": "suggestion.add",
+        "kind": "replace",
+        "ref": {
+          "ordinal": 0,
+          "contentHash": "abc123"
+        },
+        "quote": "Title",
+        "content": "Project Plan"
+      }
+    ]
   }'
 ```
 
@@ -280,12 +289,12 @@ Reply to or delete comments:
 curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
-  -d '{"baseToken":"W/\"version_123\"","op":"comment.reply","parentId":"c_123","body":"Thanks, I will adjust this.","by":"Codex"}'
+  -d '{"baseToken":"W/\"version_123\"","by":"Codex","operations":[{"op":"comment.reply","parentId":"c_123","body":"Thanks, I will adjust this."}]}'
 
 curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
-  -d '{"baseToken":"W/\"version_123\"","op":"comment.delete","id":"c_123"}'
+  -d '{"baseToken":"W/\"version_123\"","operations":[{"op":"comment.delete","id":"c_123"}]}'
 ```
 
 `comment.reply` requires `parentId` for the root comment and `body`; `id` is
@@ -299,12 +308,12 @@ Resolve a comment or decide a suggestion:
 curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
-  -d '{"baseToken":"W/\"version_123\"","op":"comment.resolve","id":"c_123"}'
+  -d '{"baseToken":"W/\"version_123\"","operations":[{"op":"comment.resolve","id":"c_123"}]}'
 
 curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
-  -d '{"baseToken":"W/\"version_123\"","op":"suggestion.accept","id":"s_123"}'
+  -d '{"baseToken":"W/\"version_123\"","operations":[{"op":"suggestion.accept","id":"s_123"}]}'
 ```
 
 ## Presence

@@ -152,3 +152,93 @@ export interface GraphResponse {
   edges: GraphEdge[];
   truncated: boolean;
 }
+
+export interface AgentBlockRef {
+  ordinal: number;
+  contentHash: string;
+}
+
+export interface AgentSnapshotBlock {
+  ref: AgentBlockRef;
+  markdown: string;
+}
+
+export interface AgentDocumentSnapshot {
+  documentId: string;
+  baseToken: string;
+  blocks: AgentSnapshotBlock[];
+}
+
+export interface AgentEditBlock {
+  markdown: string;
+}
+
+export type AgentEditOperation =
+  | 'replace_block'
+  | 'insert_before'
+  | 'insert_after'
+  | 'delete_block'
+  | 'replace_document';
+
+export interface AgentBlockOperation {
+  op: AgentEditOperation;
+  ref?: AgentBlockRef | null;
+  block?: AgentEditBlock | null;
+  blocks?: AgentEditBlock[] | null;
+  markdown?: string | null;
+}
+
+export interface AgentEditRequest {
+  baseToken: string;
+  operations: AgentBlockOperation[];
+}
+
+export interface AgentEditResponse {
+  dryRun: boolean;
+  outcome?: WriteOutcome | null;
+  markdown?: string | null;
+  injection?: string | null;
+}
+
+export type AgentOpsOperation =
+  | 'comment.add'
+  | 'comment.reply'
+  | 'comment.delete'
+  | 'suggestion.add'
+  | 'suggestion.accept'
+  | 'suggestion.reject'
+  | 'comment.resolve'
+  | 'accept'
+  | 'reject';
+
+export type AgentSuggestionKind = 'insert' | 'delete' | 'remove' | 'replace' | 'substitution';
+
+export interface AgentOpsOperationRequest {
+  op: AgentOpsOperation;
+  ref?: AgentBlockRef | null;
+  quote?: string | null;
+  body?: string | null;
+  parentId?: string | null;
+  content?: string | null;
+  id?: string | null;
+  kind?: AgentSuggestionKind | null;
+}
+
+export interface AgentOpsRequest {
+  baseToken: string;
+  by?: string | null;
+  operations: AgentOpsOperationRequest[];
+}
+
+export interface AgentOpsResultItem {
+  op: AgentOpsOperation;
+  id?: string | null;
+}
+
+export interface AgentOpsResponse {
+  dryRun: boolean;
+  results: AgentOpsResultItem[];
+  outcome?: WriteOutcome | null;
+  markdown?: string | null;
+  injection?: string | null;
+}
