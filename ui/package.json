@@ -10,6 +10,8 @@
     "test:e2e": "playwright test",
     "test:watch": "vitest",
     "typecheck": "tsc -b",
+    "fixtures:generate": "bun run scripts/gen-slate-yjs-fixtures.ts",
+    "fixtures:check": "bun run scripts/gen-slate-yjs-fixtures.ts --check",
     "generate:api": "bun run scripts/generate-api.ts"
   },
   "dependencies": {

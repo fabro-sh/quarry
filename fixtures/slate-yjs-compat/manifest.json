@@ -1,7 +1,6 @@
 {
   "schemaVersion": 1,
   "generatedBy": "ui/scripts/gen-slate-yjs-fixtures.ts",
-  "gitSha": "6c2170e",
   "versions": {
     "@platejs/markdown": "52.1.0",
     "@slate-yjs/core": "1.0.2",

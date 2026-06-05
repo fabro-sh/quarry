@@ -1,6 +1,7 @@
-import { spawnSync } from 'node:child_process';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, relative, resolve, sep } from 'node:path';
+import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { slateNodesToInsertDelta, yTextToSlateElement } from '@slate-yjs/core';
@@ -154,34 +155,45 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const uiRoot = resolve(scriptDir, '..');
 const repoRoot = resolve(uiRoot, '..');
 const fixtureRoot = resolve(repoRoot, 'fixtures/slate-yjs-compat');
-const casesDir = resolve(fixtureRoot, 'cases');
 
-await rm(casesDir, { force: true, recursive: true });
-await mkdir(casesDir, { recursive: true });
+const args = process.argv.slice(2);
+const checkMode = args.includes('--check');
+const unknownArgs = args.filter((arg) => arg !== '--check');
 
-for (const fixture of CASES) {
-  await writeFile(
-    resolve(casesDir, `${fixture.name}.json`),
-    `${JSON.stringify(buildFixture(fixture), null, 2)}\n`
-  );
+if (unknownArgs.length > 0) {
+  throw new Error(`Unknown argument(s): ${unknownArgs.join(', ')}`);
 }
 
-const packageJson = JSON.parse(await readFile(resolve(uiRoot, 'package.json'), 'utf8')) as {
-  dependencies: Record<string, string>;
-};
-const manifest = {
-  schemaVersion: 1,
-  generatedBy: 'ui/scripts/gen-slate-yjs-fixtures.ts',
-  gitSha: commandOutput('git', ['rev-parse', '--short', 'HEAD']) || 'unknown',
-  versions: {
-    '@platejs/markdown': packageJson.dependencies['@platejs/markdown'],
-    '@slate-yjs/core': packageJson.dependencies['@slate-yjs/core'],
-    platejs: packageJson.dependencies.platejs,
-    yjs: packageJson.dependencies.yjs,
-  },
-  cases: CASES.map((fixture) => fixture.name),
-};
-await writeFile(resolve(fixtureRoot, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+let tempFixtureRoot: string | undefined;
+
+try {
+  const outputRoot = checkMode
+    ? (tempFixtureRoot = await mkdtemp(resolve(tmpdir(), 'quarry-slate-yjs-compat-')))
+    : fixtureRoot;
+
+  await generateFixtures(outputRoot);
+
+  if (checkMode) {
+    const differences = await compareFixtureRoots(fixtureRoot, outputRoot);
+
+    if (differences.length > 0) {
+      console.error('Slate/Yjs compatibility fixtures are stale.');
+      console.error('Regenerate them with: cd ui && bun run fixtures:generate');
+      console.error('');
+      console.error('Differences:');
+
+      for (const difference of differences) {
+        console.error(`  ${difference.kind}: ${difference.path}`);
+      }
+
+      process.exitCode = 1;
+    }
+  }
+} finally {
+  if (tempFixtureRoot) {
+    await rm(tempFixtureRoot, { force: true, recursive: true });
+  }
+}
 
 function buildFixture(fixture: FixtureCase) {
   if (!fixture.supported) return fixture;
@@ -202,7 +214,91 @@ function buildFixture(fixture: FixtureCase) {
   };
 }
 
-function commandOutput(command: string, args: string[]) {
-  const result = spawnSync(command, args, { cwd: repoRoot, encoding: 'utf8' });
-  return result.status === 0 ? result.stdout.trim() : '';
+async function generateFixtures(outputRoot: string) {
+  const casesDir = resolve(outputRoot, 'cases');
+  await rm(outputRoot, { force: true, recursive: true });
+  await mkdir(casesDir, { recursive: true });
+
+  for (const fixture of CASES) {
+    await writeFile(
+      resolve(casesDir, `${fixture.name}.json`),
+      `${JSON.stringify(buildFixture(fixture), null, 2)}\n`
+    );
+  }
+
+  const packageJson = JSON.parse(await readFile(resolve(uiRoot, 'package.json'), 'utf8')) as {
+    dependencies: Record<string, string>;
+  };
+  const manifest = {
+    schemaVersion: 1,
+    generatedBy: 'ui/scripts/gen-slate-yjs-fixtures.ts',
+    versions: {
+      '@platejs/markdown': packageJson.dependencies['@platejs/markdown'],
+      '@slate-yjs/core': packageJson.dependencies['@slate-yjs/core'],
+      platejs: packageJson.dependencies.platejs,
+      yjs: packageJson.dependencies.yjs,
+    },
+    cases: CASES.map((fixture) => fixture.name),
+  };
+  await writeFile(resolve(outputRoot, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+interface FixtureDifference {
+  kind: 'changed' | 'missing' | 'extra';
+  path: string;
+}
+
+async function compareFixtureRoots(
+  checkedInRoot: string,
+  generatedRoot: string
+): Promise<FixtureDifference[]> {
+  const checkedInFiles = await collectRelativeFiles(checkedInRoot);
+  const generatedFiles = await collectRelativeFiles(generatedRoot);
+  const checkedInSet = new Set(checkedInFiles);
+  const generatedSet = new Set(generatedFiles);
+  const allFiles = [...new Set([...checkedInFiles, ...generatedFiles])].sort();
+  const differences: FixtureDifference[] = [];
+
+  for (const filePath of allFiles) {
+    if (!checkedInSet.has(filePath)) {
+      differences.push({ kind: 'missing', path: filePath });
+      continue;
+    }
+
+    if (!generatedSet.has(filePath)) {
+      differences.push({ kind: 'extra', path: filePath });
+      continue;
+    }
+
+    const checkedInText = await readFile(resolve(checkedInRoot, filePath), 'utf8');
+    const generatedText = await readFile(resolve(generatedRoot, filePath), 'utf8');
+
+    if (checkedInText !== generatedText) {
+      differences.push({ kind: 'changed', path: filePath });
+    }
+  }
+
+  return differences;
+}
+
+async function collectRelativeFiles(root: string) {
+  const files = await collectFiles(root);
+  return files.map((filePath) => relative(root, filePath).split(sep).join('/')).sort();
+}
+
+async function collectFiles(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files: string[] = [];
+
+  for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
+    const entryPath = resolve(directory, entry.name);
+
+    if (entry.isDirectory()) {
+      files.push(...(await collectFiles(entryPath)));
+    } else if (entry.isFile()) {
+      files.push(entryPath);
+    }
+  }
+
+  return files;
 }

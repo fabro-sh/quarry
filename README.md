@@ -33,7 +33,12 @@ Operational notes are in [docs/operations/install-linux.md](docs/operations/inst
 cargo test --workspace
 cargo check --workspace
 cargo check -p quarry-fuse --target x86_64-unknown-linux-gnu
+cd ui && bun run fixtures:check
+cd ui && bun run typecheck
 ```
+
+If the Slate/Yjs compatibility fixture check reports stale fixtures, regenerate them with
+`cd ui && bun run fixtures:generate`, then rerun `cd ui && bun run fixtures:check`.
 
 Current tests cover storage/CAS lifecycle, concurrent auto-commit writes, explicit transaction commit/rollback behavior, commit-time stale-head rejection for long-running transactions, restart safety for open staged CAS writes, REST ETag/precondition/busy handling, bind-address parsing, OpenAPI exposure, REST library scoping for conflicts and transaction routes, Git import/export marker and reserved-sidecar safety, Git import rollback on failure, sync one-sided changes/conflicts/deletes, sync-state publication failure safety, conflict scoping in REST and CLI, case-distinct Git paths when the filesystem supports them, large-delete safety, local bare-remote fetch/push transport, and FUSE projection semantics including invalidation events, stable storage-backed inodes, handle-scoped truncate/write publication, duplicate close cleanup, and persisted directory metadata.
 
