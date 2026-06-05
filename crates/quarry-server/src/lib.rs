@@ -658,6 +658,7 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
                 "snapshot",
                 "events",
                 "block_edit",
+                "bulk_block_insert",
                 "comments",
                 "suggestions",
             ],
@@ -1152,6 +1153,8 @@ pub struct AgentBlockOperation {
     pub block_ref: Option<AgentBlockRef>,
     #[serde(default)]
     pub block: Option<AgentEditBlock>,
+    #[serde(default)]
+    pub blocks: Option<Vec<AgentEditBlock>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
@@ -1792,10 +1795,21 @@ struct AgentEditPlan {
 
 #[derive(Clone, Debug)]
 enum PlannedAgentEditOp {
-    ReplaceBlock { ordinal: usize, markdown: String },
-    InsertBefore { ordinal: usize, markdown: String },
-    InsertAfter { ordinal: usize, markdown: String },
-    DeleteBlock { ordinal: usize },
+    ReplaceBlock {
+        ordinal: usize,
+        markdown: String,
+    },
+    InsertBefore {
+        ordinal: usize,
+        markdown_blocks: Vec<String>,
+    },
+    InsertAfter {
+        ordinal: usize,
+        markdown_blocks: Vec<String>,
+    },
+    DeleteBlock {
+        ordinal: usize,
+    },
 }
 
 #[derive(Clone)]
@@ -2239,7 +2253,7 @@ fn apply_agent_edit(
         validate_block_ref(block_ref, &request_base_version_id, &original_blocks)?;
         if !targeted_ordinals.insert(block_ref.ordinal) {
             return Err(QuarryError::InvalidPath(format!(
-                "multiple operations target block ordinal {}",
+                "multiple operations target block ordinal {}; use one insert operation with blocks when inserting multiple blocks at the same ref",
                 block_ref.ordinal
             ))
             .into());
@@ -2251,6 +2265,7 @@ fn apply_agent_edit(
 
         match operation.op.as_str() {
             "replace_block" => {
+                reject_operation_blocks(operation)?;
                 let markdown = required_operation_block(operation)?;
                 validate_single_markdown_block(markdown)?;
                 blocks[current_index] = (Some(block_ref.ordinal), markdown.to_string());
@@ -2260,24 +2275,36 @@ fn apply_agent_edit(
                 });
             }
             "insert_before" => {
-                let markdown = required_operation_block(operation)?;
-                validate_single_markdown_block(markdown)?;
-                blocks.insert(current_index, (None, markdown.to_string()));
+                let markdown_blocks = insert_operation_blocks(operation)?;
+                blocks.splice(
+                    current_index..current_index,
+                    markdown_blocks
+                        .iter()
+                        .cloned()
+                        .map(|markdown| (None, markdown)),
+                );
                 ops.push(PlannedAgentEditOp::InsertBefore {
                     ordinal: block_ref.ordinal,
-                    markdown: markdown.to_string(),
+                    markdown_blocks,
                 });
             }
             "insert_after" => {
-                let markdown = required_operation_block(operation)?;
-                validate_single_markdown_block(markdown)?;
-                blocks.insert(current_index + 1, (None, markdown.to_string()));
+                let markdown_blocks = insert_operation_blocks(operation)?;
+                blocks.splice(
+                    current_index + 1..current_index + 1,
+                    markdown_blocks
+                        .iter()
+                        .cloned()
+                        .map(|markdown| (None, markdown)),
+                );
                 ops.push(PlannedAgentEditOp::InsertAfter {
                     ordinal: block_ref.ordinal,
-                    markdown: markdown.to_string(),
+                    markdown_blocks,
                 });
             }
             "delete_block" => {
+                reject_operation_block(operation)?;
+                reject_operation_blocks(operation)?;
                 blocks.remove(current_index);
                 ops.push(PlannedAgentEditOp::DeleteBlock {
                     ordinal: block_ref.ordinal,
@@ -2349,15 +2376,21 @@ fn agent_edit_injection_batch(plan: &AgentEditPlan) -> Result<InjectionBatch, Un
                     new_nodes: built_nodes_for_block(markdown, &new_meta)?,
                 });
             }
-            PlannedAgentEditOp::InsertBefore { ordinal, markdown } => {
+            PlannedAgentEditOp::InsertBefore {
+                ordinal,
+                markdown_blocks,
+            } => {
                 ops.push(InjectionOp::InsertAt {
                     index: *prefix.get(*ordinal).ok_or_else(|| {
                         Unsupported::new(format!("missing original block ordinal {ordinal}"))
                     })?,
-                    new_nodes: built_nodes_for_block(markdown, &new_meta)?,
+                    new_nodes: built_nodes_for_blocks(markdown_blocks, &new_meta)?,
                 });
             }
-            PlannedAgentEditOp::InsertAfter { ordinal, markdown } => {
+            PlannedAgentEditOp::InsertAfter {
+                ordinal,
+                markdown_blocks,
+            } => {
                 let start = *prefix.get(*ordinal).ok_or_else(|| {
                     Unsupported::new(format!("missing original block ordinal {ordinal}"))
                 })?;
@@ -2365,7 +2398,7 @@ fn agent_edit_injection_batch(plan: &AgentEditPlan) -> Result<InjectionBatch, Un
                     index: start
                         .checked_add(original_node_count(*ordinal)?)
                         .ok_or_else(|| Unsupported::new("injection index overflow"))?,
-                    new_nodes: built_nodes_for_block(markdown, &new_meta)?,
+                    new_nodes: built_nodes_for_blocks(markdown_blocks, &new_meta)?,
                 });
             }
             PlannedAgentEditOp::DeleteBlock { ordinal } => {
@@ -2387,6 +2420,17 @@ fn built_nodes_for_block(
 ) -> Result<Vec<quarry_collab_codec::BuiltNode>, Unsupported> {
     let nodes = review_block_to_slate(markdown, meta)?;
     build_nodes(&nodes)
+}
+
+fn built_nodes_for_blocks(
+    markdown_blocks: &[String],
+    meta: &ReviewMeta,
+) -> Result<Vec<quarry_collab_codec::BuiltNode>, Unsupported> {
+    let mut built = Vec::new();
+    for markdown in markdown_blocks {
+        built.extend(built_nodes_for_block(markdown, meta)?);
+    }
+    Ok(built)
 }
 
 struct AgentOpsLiveMutationPlan {
@@ -2862,6 +2906,66 @@ fn required_operation_block(operation: &AgentBlockOperation) -> Result<&str, Api
         .ok_or_else(|| {
             QuarryError::InvalidPath(format!("{} operation missing block", operation.op)).into()
         })
+}
+
+fn reject_operation_block(operation: &AgentBlockOperation) -> Result<(), ApiError> {
+    if operation.block.is_some() {
+        return Err(QuarryError::InvalidPath(format!(
+            "{} operation does not accept block",
+            operation.op
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+fn reject_operation_blocks(operation: &AgentBlockOperation) -> Result<(), ApiError> {
+    if operation.blocks.is_some() {
+        return Err(QuarryError::InvalidPath(format!(
+            "{} operation does not accept blocks",
+            operation.op
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+fn insert_operation_blocks(operation: &AgentBlockOperation) -> Result<Vec<String>, ApiError> {
+    match (&operation.block, &operation.blocks) {
+        (Some(block), None) => {
+            validate_single_markdown_block(&block.markdown)?;
+            Ok(vec![block.markdown.clone()])
+        }
+        (None, Some(blocks)) => {
+            if blocks.is_empty() {
+                return Err(QuarryError::InvalidPath(format!(
+                    "{} operation blocks must not be empty",
+                    operation.op
+                ))
+                .into());
+            }
+            blocks
+                .iter()
+                .map(|block| {
+                    validate_single_markdown_block(&block.markdown)?;
+                    Ok(normalize_bulk_insert_block(&block.markdown))
+                })
+                .collect()
+        }
+        _ => Err(QuarryError::InvalidPath(format!(
+            "{} operation requires exactly one of block or blocks",
+            operation.op
+        ))
+        .into()),
+    }
+}
+
+fn normalize_bulk_insert_block(markdown: &str) -> String {
+    let mut normalized = markdown.to_string();
+    while !normalized.ends_with("\n\n") {
+        normalized.push('\n');
+    }
+    normalized
 }
 
 fn required_ops_text<'a>(value: Option<&'a str>, message: &str) -> Result<&'a str, ApiError> {

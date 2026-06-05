@@ -2294,6 +2294,15 @@
               }
             ]
           },
+          "blocks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/AgentEditBlock"
+            }
+          },
           "op": {
             "$ref": "#/components/schemas/AgentEditOperation"
           },

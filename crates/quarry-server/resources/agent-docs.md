@@ -175,9 +175,36 @@ curl -sS -X POST "$DOC/edit" \
   -d @edit.json
 ```
 
+Insert several blocks at one anchor with `blocks`:
+
+```sh
+curl -sS -X POST "$DOC/edit?dryRun=1" \
+  -H "Content-Type: application/json" \
+  -H "X-Agent-Id: $AGENT_ID" \
+  -d '{
+    "baseToken": "W/\"version_123\"",
+    "operations": [
+      {
+        "op": "insert_after",
+        "ref": {
+          "baseToken": "W/\"version_123\"",
+          "ordinal": 0,
+          "contentHash": "abc123"
+        },
+        "blocks": [
+          { "markdown": "First inserted paragraph\n" },
+          { "markdown": "Second inserted paragraph\n" }
+        ]
+      }
+    ]
+  }'
+```
+
 Each inserted or replacement block must be one Markdown block. Do not send a
 whole multi-section document as one replacement block unless the target block is
-itself one Markdown block.
+itself one Markdown block. For multiple insertions at the same ref, use
+`blocks` on one `insert_before` or `insert_after` operation instead of repeated `insert_after`
+calls on the same ref.
 
 ## Comments And Suggestions
 
