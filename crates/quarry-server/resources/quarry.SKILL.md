@@ -72,7 +72,8 @@ I can edit directly, or leave comments and suggestions for you to review. What w
 
 4. Wait for the user's instruction.
 5. Before each write, use the latest `baseToken` and exact block `ref` values.
-6. After events or stale writes, re-read `/snapshot` and rebuild the request.
+6. After events or stale writes, refresh `baseToken` (re-read `/snapshot`, or
+   `HEAD $DOC` for just the token) and rebuild the request.
 
 ## Presence
 
@@ -115,6 +116,23 @@ Important response fields:
 
 Choose the block whose `markdown` contains the text you want to edit or review.
 If the target spans multiple blocks, use multiple operations.
+
+`baseToken` is opaque. Copy it verbatim into requests and let a real JSON
+encoder escape it — do not parse, unquote, or rebuild it. Its value may itself
+contain quotes (for example `"\"<version>\""`), so hand-assembling request
+bodies in a shell will mis-escape it. Build request JSON with `jq -n` or a
+script, not string interpolation.
+
+To refresh only the token after a write — without re-downloading the document —
+read the `ETag` header from a `HEAD` request:
+
+```bash
+curl -sS -I "$DOC" | tr -d '\r' | sed -n 's/^[Ee][Tt][Aa][Gg]: //p'
+```
+
+The `ETag` value is the current `baseToken`. Re-read the full `/snapshot` only
+when you also need fresh block `ref` values — for example after editing the same
+block you are about to write to again.
 
 ## Direct Edits
 
@@ -188,6 +206,13 @@ Supported `/ops` operations: `comment.add`, `comment.reply`,
 `comment.delete`, `comment.resolve`, `suggestion.add`,
 `suggestion.accept`, `suggestion.reject`.
 
+`/ops` takes one operation per request, and each write advances the document
+version — so the `baseToken` you just used is now stale. To leave several
+comments or suggestions, submit them one at a time and refresh `baseToken`
+between writes. The staleness check is per-document, so even annotations on
+different blocks need a fresh token; only a block's `contentHash` is reusable
+while that block stays untouched (see "Leaving Several Annotations" below).
+
 Add a comment:
 
 ```bash
@@ -251,6 +276,39 @@ curl -sS -X POST "$DOC/ops" \
   -d '{"baseToken":"W/\"version_123\"","op":"suggestion.accept","id":"s_123"}'
 ```
 
+### Leaving Several Annotations
+
+Build each body with `jq -n` so the opaque `baseToken` is escaped correctly, and
+refresh the token from `HEAD` between writes:
+
+```bash
+token() { curl -sS -I "$DOC" | tr -d '\r' | sed -n 's/^[Ee][Tt][Aa][Gg]: //p'; }
+post_op() {  # $1 = JSON body
+  curl -sS -X POST "$DOC/ops" \
+    -H "Content-Type: application/json" \
+    -H "X-Agent-Id: $AGENT_ID" \
+    -d "$1"
+}
+
+BT=$(token)
+post_op "$(jq -n --arg bt "$BT" \
+  '{baseToken:$bt, op:"comment.add",
+    ref:{baseToken:$bt, ordinal:0, contentHash:"abc123"},
+    quote:"Title", body:"Make this more specific.", by:"Codex"}')
+
+BT=$(token)  # refreshed: the previous write advanced the version
+post_op "$(jq -n --arg bt "$BT" \
+  '{baseToken:$bt, op:"suggestion.add", kind:"replace",
+    ref:{baseToken:$bt, ordinal:3, contentHash:"def456"},
+    quote:"16 GB is workable", content:"16 GB is a reasonable starting point",
+    by:"Codex"}')
+```
+
+Each `ref.contentHash` must match the current `/snapshot` for that block. Reuse
+cached hashes for blocks you have not touched; refetch a hash only for a block
+you already wrote to and are annotating again. `ref.baseToken` must equal the
+request `baseToken`.
+
 ## Events
 
 Events are activity signals, not document content. Re-read `/snapshot` after an
@@ -275,7 +333,7 @@ curl -sS -X POST "$ORIGIN/v1/libraries/$LIBRARY_ENCODED/events/ack" \
 
 | Error | Action |
 |---|---|
-| `STALE_BASE` | Re-read `/snapshot`, rebuild with fresh `baseToken` and refs, retry once |
+| `STALE_BASE` | The document advanced. Refresh `baseToken` (`HEAD $DOC`, or `/snapshot` if you also need fresh refs), rebuild, retry once |
 | Missing or invalid `ref` | Use the exact ref from the current snapshot |
 | Unsupported operation | Check `/.well-known/agent.json` for supported operations |
 | Failed dry run | Fix the request before committing |
