@@ -53,8 +53,8 @@ describe('ReviewRail', () => {
     expect(screen.getByText('note')).toBeInTheDocument();
     // Both the comment author and the suggestion author render as "user".
     expect(screen.getAllByText('user').length).toBeGreaterThan(0);
-    // The suggestion card shows the "Add" label and the inserted text.
-    expect(screen.getByText('Add')).toBeInTheDocument();
+    // The suggestion card shows the "Add:" label and the inserted text.
+    expect(screen.getByText('Add:')).toBeInTheDocument();
     expect(screen.getByText('inserted')).toBeInTheDocument();
   });
 

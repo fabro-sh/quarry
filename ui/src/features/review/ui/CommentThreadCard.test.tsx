@@ -58,6 +58,9 @@ describe('CommentThreadCard', () => {
   it('adds a reply through the composer', async () => {
     render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
 
+    act(() => {
+      useReviewStore.getState().setActiveId('c1');
+    });
     await userEvent.type(screen.getByTestId('reply-input'), 'Sounds good');
     await userEvent.click(screen.getByTestId('reply-submit'));
 
@@ -84,6 +87,9 @@ describe('CommentThreadCard', () => {
   it('adds a reply once the root already has a body', async () => {
     render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
 
+    act(() => {
+      useReviewStore.getState().setActiveId('c1');
+    });
     await userEvent.type(screen.getByTestId('reply-input'), 're');
     await userEvent.click(screen.getByTestId('reply-submit'));
 
@@ -101,9 +107,12 @@ describe('CommentThreadCard', () => {
     expect(JSON.stringify(editor.children)).not.toContain('comment_c1');
   });
 
-  it('submits a reply on Enter without shift', async () => {
+  it('submits a reply on Enter', async () => {
     render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
 
+    act(() => {
+      useReviewStore.getState().setActiveId('c1');
+    });
     await userEvent.type(screen.getByTestId('reply-input'), 'Quick reply{Enter}');
 
     const bodies = Object.values(useReviewStore.getState().getMeta().comments).map((entry) => entry.body);
@@ -111,9 +120,48 @@ describe('CommentThreadCard', () => {
   });
 
   it('disables submit when the composer is empty', () => {
-    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
+    render(<CommentThreadCard thread={seedEmptyThread()} editor={makeEditor()} />);
 
     expect(screen.getByTestId('reply-submit')).toBeDisabled();
+  });
+
+  it('hides the reply composer until the card is active', () => {
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
+
+    expect(screen.queryByTestId('reply-input')).not.toBeInTheDocument();
+
+    act(() => {
+      useReviewStore.getState().setActiveId('c1');
+    });
+
+    expect(screen.getByTestId('reply-input')).toBeInTheDocument();
+  });
+
+  it('cancels a reply, clearing the draft and deselecting the card', async () => {
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
+    act(() => {
+      useReviewStore.getState().setActiveId('c1');
+    });
+
+    await userEvent.type(screen.getByTestId('reply-input'), 'half-written');
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel reply' }));
+
+    expect(useReviewStore.getState().activeId).toBeNull();
+    const bodies = Object.values(useReviewStore.getState().getMeta().comments).map((entry) => entry.body);
+    expect(bodies).not.toContain('half-written');
+  });
+
+  it('reveals the reply button only once the input is focused', () => {
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
+    act(() => {
+      useReviewStore.getState().setActiveId('c1');
+    });
+
+    expect(screen.queryByTestId('reply-submit')).not.toBeInTheDocument();
+
+    fireEvent.focus(screen.getByTestId('reply-input'));
+
+    expect(screen.getByTestId('reply-submit')).toBeInTheDocument();
   });
 
   it('marks the comment active on card click', async () => {
@@ -178,11 +226,10 @@ describe('CommentThreadCard', () => {
     scrollIntoView.mockRestore();
   });
 
-  it('resolves the comment from the actions menu', async () => {
+  it('resolves the comment from the resolve checkbox', async () => {
     render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Comment actions' }));
-    await userEvent.click(await screen.findByTestId('resolve-comment'));
+    await userEvent.click(screen.getByTestId('resolve-comment'));
 
     expect(useReviewStore.getState().getMeta().comments.c1.status).toBe('resolved');
   });
@@ -198,7 +245,7 @@ describe('CommentThreadCard', () => {
     expect(JSON.stringify(editor.children)).not.toContain('comment_c1');
   });
 
-  it('shows a Resolved badge and hides the resolve action when resolved', async () => {
+  it('shows a Resolved badge and hides the resolve checkbox when resolved', () => {
     let meta = addComment(emptyReviewMeta(), 'c1', { by: 'reviewer', at, body: 'Done already.' });
     meta = { comments: { c1: { ...meta.comments.c1, status: 'resolved' } }, suggestions: {} };
     useReviewStore.getState().hydrate(meta);
@@ -207,7 +254,6 @@ describe('CommentThreadCard', () => {
     render(<CommentThreadCard thread={thread} editor={makeEditor()} />);
 
     expect(screen.getByText('Resolved')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Comment actions' }));
     expect(screen.queryByTestId('resolve-comment')).not.toBeInTheDocument();
   });
 });

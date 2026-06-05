@@ -686,7 +686,16 @@ export function PlateMarkdownEditor({
         {collabEnabled && collab ? <CollabAwarenessBridge collab={collab} /> : null}
         {readOnly ? null : <FloatingFormatToolbar />}
         <PlateContainer className="relative flex h-full min-h-0">
-          <div className="relative min-w-0 flex-1 overflow-auto">
+          <div
+            className="relative min-w-0 flex-1 overflow-auto"
+            onClick={(event) => {
+              // Clicking anywhere in the document that isn't a comment or
+              // suggestion mark deselects the active rail card.
+              if (!(event.target as HTMLElement).closest('[data-comment-id],[data-suggestion-id]')) {
+                useReviewStore.getState().setActiveId(null);
+              }
+            }}
+          >
             <PlateContent
               aria-label="Plate markdown editor"
               className="min-h-full w-full px-[max(2rem,calc((100%-68ch)/2))] pt-16 pb-8 text-[15px] leading-7 text-ink outline-none [&_[data-slate-placeholder=true]]:text-faint"

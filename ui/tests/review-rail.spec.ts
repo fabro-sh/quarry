@@ -50,6 +50,8 @@ test.describe('Review rail', () => {
     await page.getByRole('treeitem', { name: /Rail/ }).click();
     await expect(page.getByLabel('Plate markdown editor')).toContainText('here');
 
+    // The reply composer only appears once the card is the active thread.
+    await page.getByTestId('comment-card').click();
     await page.getByTestId('reply-input').fill('Looks good now');
     await page.getByTestId('reply-submit').click();
 
@@ -70,9 +72,7 @@ test.describe('Review rail', () => {
     await page.getByRole('treeitem', { name: /Rail/ }).click();
     await expect(page.getByLabel('Plate markdown editor')).toContainText('here');
 
-    // Resolve lives behind the card's actions dropdown (Radix). Open it, then
-    // select the Resolve item.
-    await page.getByRole('button', { name: 'Comment actions' }).click();
+    // Resolve is a checkbox button in the card header, next to the actions menu.
     const resolve = page.getByTestId('resolve-comment');
     await expect(resolve).toBeVisible();
     await resolve.click();

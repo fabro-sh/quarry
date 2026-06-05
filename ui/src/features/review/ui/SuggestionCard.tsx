@@ -23,7 +23,7 @@ const labels: Record<TResolvedSuggestion['type'], string> = {
 };
 
 function Summary({ suggestion }: { suggestion: TResolvedSuggestion }) {
-  const label = <span className="font-medium text-muted">{labels[suggestion.type]}</span>;
+  const label = <span className="font-medium text-muted">{labels[suggestion.type]}:</span>;
 
   if (suggestion.type === 'insert') {
     return (
@@ -52,8 +52,13 @@ function Summary({ suggestion }: { suggestion: TResolvedSuggestion }) {
 
   return (
     <p className="text-sm text-body">
-      {label}
-      {suggestion.newText ? <> <span className="text-accent-ink">{suggestion.newText}</span></> : null}
+      {suggestion.newText ? (
+        <>
+          {label} <span className="text-accent-ink">{suggestion.newText}</span>
+        </>
+      ) : (
+        <span className="font-medium text-muted">{labels[suggestion.type]}</span>
+      )}
     </p>
   );
 }
@@ -76,9 +81,9 @@ export function SuggestionCard({ suggestion, onAccept, onReject }: SuggestionCar
   return (
     <div
       className={cn(
-        'rounded-lg border border-line bg-raised p-3 transition-colors',
-        isHover && !isActive && 'bg-well',
-        isActive && 'ring-2 ring-accent-ring'
+        'group rounded-lg bg-well/40 p-3 transition-colors',
+        isHover && !isActive && 'bg-well/70',
+        isActive && 'bg-well/70 ring-2 ring-accent-ring'
       )}
       data-active={isActive ? 'true' : 'false'}
       data-hover={isHover ? 'true' : 'false'}
@@ -89,17 +94,19 @@ export function SuggestionCard({ suggestion, onAccept, onReject }: SuggestionCar
       ref={ref}
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-well text-xs font-medium text-muted">
+        <div className="flex items-center gap-2.5">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-surface text-xs font-medium text-muted ring-1 ring-inset ring-line">
             {initials(suggestion.userId)}
           </span>
-          <span className="text-sm font-medium text-ink">{suggestion.userId}</span>
-          <span className="text-xs text-faint">{formatRelativeTime(suggestion.createdAt.toISOString())}</span>
+          <div className="flex min-w-0 flex-col">
+            <span className="truncate text-sm font-medium leading-tight text-ink">{suggestion.userId}</span>
+            <span className="text-[11px] leading-tight text-faint">{formatRelativeTime(suggestion.createdAt.toISOString())}</span>
+          </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
           <button
             aria-label="Accept suggestion"
-            className={cn(iconButton, 'text-accent-ink bg-accent-tint')}
+            className={cn(iconButton, 'bg-accent-tint text-accent-ink hover:bg-accent-line hover:text-accent-ink')}
             data-testid="rail-accept"
             onClick={(event) => {
               event.stopPropagation();

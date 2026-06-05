@@ -40,7 +40,7 @@ describe('SuggestionCard', () => {
 
     render(<SuggestionCard suggestion={suggestion} onAccept={onAccept} onReject={onReject} />);
 
-    expect(screen.getByText('Add')).toBeInTheDocument();
+    expect(screen.getByText('Add:')).toBeInTheDocument();
     expect(screen.getByText('more')).toBeInTheDocument();
 
     await userEvent.click(screen.getByTestId('rail-accept'));
@@ -63,7 +63,7 @@ describe('SuggestionCard', () => {
 
     render(<SuggestionCard suggestion={suggestion} onAccept={vi.fn()} onReject={vi.fn()} />);
 
-    expect(screen.getByText('Replace')).toBeInTheDocument();
+    expect(screen.getByText('Replace:')).toBeInTheDocument();
     expect(screen.getByText('old')).toBeInTheDocument();
     expect(screen.getByText('new')).toBeInTheDocument();
   });
