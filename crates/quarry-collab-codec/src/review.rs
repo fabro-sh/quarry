@@ -97,9 +97,8 @@ pub fn review_markdown_to_slate(markdown: &str) -> Result<Vec<Node>, Unsupported
 /// Per-block Slate nodes for a review document's blocks (as produced by the
 /// server's block splitter, so `blocks.concat()` is the whole document). The
 /// trailing endmatter block, when present, yields no nodes because it has no
-/// live representation in the Yjs room. Returns `None` if any body block can't
-/// be reproduced deterministically, so injection callers fall back safely.
-pub fn review_blocks_to_slate(blocks: &[String]) -> Option<Vec<Vec<Node>>> {
+/// live representation in the Yjs room.
+pub fn review_blocks_to_slate(blocks: &[String]) -> Result<Vec<Vec<Node>>, Unsupported> {
     let markdown = blocks.concat();
     let (_, meta) = split_review_endmatter(&markdown);
     let endmatter_ordinal = has_review_endmatter(&markdown)
@@ -110,9 +109,10 @@ pub fn review_blocks_to_slate(blocks: &[String]) -> Option<Vec<Vec<Node>>> {
         .enumerate()
         .map(|(ordinal, block)| {
             if Some(ordinal) == endmatter_ordinal {
-                Some(Vec::new())
+                Ok(Vec::new())
             } else {
-                review_block_to_slate(block, &meta).ok()
+                review_block_to_slate(block, &meta)
+                    .map_err(|error| error.context(format!("block {ordinal}")))
             }
         })
         .collect()
@@ -573,5 +573,14 @@ mod tests {
     #[test]
     fn suggestion_without_endmatter_entry_is_unsupported() {
         assert!(review_block_to_slate("Add {++x++}{#s9} now\n", &ReviewMeta::default()).is_err());
+    }
+
+    #[test]
+    fn block_conversion_preserves_unsupported_reason() {
+        let blocks = vec!["Add {++x++} now\n".to_string()];
+
+        let error = review_blocks_to_slate(&blocks).unwrap_err();
+
+        assert_eq!(error.0, "block 0: review marker without {#id}");
     }
 }

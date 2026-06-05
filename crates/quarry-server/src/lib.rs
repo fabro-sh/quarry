@@ -18,7 +18,7 @@ use pulldown_cmark::{
 };
 use quarry_collab_codec::{
     build_nodes, review_block_to_slate, review_blocks_to_slate, split_review_endmatter, ReviewMeta,
-    ReviewMetaEntry,
+    ReviewMetaEntry, Unsupported,
 };
 use quarry_core::{
     now_timestamp, CollabInviteToken, ConflictRecord, DocumentLink, DocumentListEntry,
@@ -1943,25 +1943,29 @@ async fn agent_edit_document(
 
     let base_version_id = version_id_from_base_token(&request.base_token)?;
     let injected_session_id = format!("agent-injected:{request_hash}");
-    let injection_guard = if let Some(batch) = agent_edit_injection_batch(&plan) {
-        if let Some(room) = state.collab.live_room(&document.id).await {
-            room.begin_injection(batch, &plan.original_blocks, base_version_id.clone())
-                .await
-        } else {
+    let injection_guard = match agent_edit_injection_batch(&plan) {
+        Ok(batch) => {
+            if let Some(room) = state.collab.live_room(&document.id).await {
+                room.begin_injection(batch, &plan.original_blocks, base_version_id.clone())
+                    .await
+            } else {
+                tracing::debug!(
+                    document_id = %document.id,
+                    path,
+                    "agent edit skipped live injection because no live collab room exists"
+                );
+                None
+            }
+        }
+        Err(error) => {
             tracing::debug!(
                 document_id = %document.id,
                 path,
-                "agent edit skipped live injection because no live collab room exists"
+                reason = %error,
+                "agent edit skipped live injection because edit is not codec eligible"
             );
             None
         }
-    } else {
-        tracing::debug!(
-            document_id = %document.id,
-            path,
-            "agent edit skipped live injection because edit is not codec eligible"
-        );
-        None
     };
 
     let outcome = if let Some(guard) = injection_guard {
@@ -2181,25 +2185,35 @@ fn apply_agent_edit(
     })
 }
 
-fn agent_edit_injection_batch(plan: &AgentEditPlan) -> Option<InjectionBatch> {
+fn agent_edit_injection_batch(plan: &AgentEditPlan) -> Result<InjectionBatch, Unsupported> {
     // Per-original-block live node counts. Comment/suggestion marks are
     // reproduced and the trailing endmatter block contributes no live nodes, so
     // this now succeeds for review documents (previously bailed on endmatter).
-    let original_nodes = review_blocks_to_slate(&plan.original_blocks)?;
+    let original_nodes = review_blocks_to_slate(&plan.original_blocks)
+        .map_err(|error| error.context("original blocks"))?;
 
     let mut prefix = Vec::with_capacity(original_nodes.len());
     let mut total = 0u32;
     for nodes in &original_nodes {
         prefix.push(total);
-        total = total.checked_add(u32::try_from(nodes.len()).ok()?)?;
+        let node_count = u32::try_from(nodes.len())
+            .map_err(|_| Unsupported::new("original node count exceeds u32"))?;
+        total = total
+            .checked_add(node_count)
+            .ok_or_else(|| Unsupported::new("original node count overflow"))?;
     }
-    let original_node_count =
-        |ordinal: usize| -> Option<u32> { u32::try_from(original_nodes.get(ordinal)?.len()).ok() };
+    let original_node_count = |ordinal: usize| -> Result<u32, Unsupported> {
+        let nodes = original_nodes
+            .get(ordinal)
+            .ok_or_else(|| Unsupported::new(format!("missing original block ordinal {ordinal}")))?;
+        u32::try_from(nodes.len()).map_err(|_| Unsupported::new("original node count exceeds u32"))
+    };
 
     // New blocks are reproduced against the edited document's own endmatter.
     let (_, new_meta) = split_review_endmatter(&plan.markdown);
-    for block in &plan.blocks {
-        review_block_to_slate(block, &new_meta).ok()?;
+    for (ordinal, block) in plan.blocks.iter().enumerate() {
+        review_block_to_slate(block, &new_meta)
+            .map_err(|error| error.context(format!("edited block {ordinal}")))?;
     }
 
     let mut ops = Vec::with_capacity(plan.ops.len());
@@ -2207,41 +2221,51 @@ fn agent_edit_injection_batch(plan: &AgentEditPlan) -> Option<InjectionBatch> {
         match op {
             PlannedAgentEditOp::ReplaceBlock { ordinal, markdown } => {
                 ops.push(InjectionOp::ReplaceSpan {
-                    start: *prefix.get(*ordinal)?,
+                    start: *prefix.get(*ordinal).ok_or_else(|| {
+                        Unsupported::new(format!("missing original block ordinal {ordinal}"))
+                    })?,
                     old_node_count: original_node_count(*ordinal)?,
                     new_nodes: built_nodes_for_block(markdown, &new_meta)?,
                 });
             }
             PlannedAgentEditOp::InsertBefore { ordinal, markdown } => {
                 ops.push(InjectionOp::InsertAt {
-                    index: *prefix.get(*ordinal)?,
+                    index: *prefix.get(*ordinal).ok_or_else(|| {
+                        Unsupported::new(format!("missing original block ordinal {ordinal}"))
+                    })?,
                     new_nodes: built_nodes_for_block(markdown, &new_meta)?,
                 });
             }
             PlannedAgentEditOp::InsertAfter { ordinal, markdown } => {
-                let start = *prefix.get(*ordinal)?;
+                let start = *prefix.get(*ordinal).ok_or_else(|| {
+                    Unsupported::new(format!("missing original block ordinal {ordinal}"))
+                })?;
                 ops.push(InjectionOp::InsertAt {
-                    index: start.checked_add(original_node_count(*ordinal)?)?,
+                    index: start
+                        .checked_add(original_node_count(*ordinal)?)
+                        .ok_or_else(|| Unsupported::new("injection index overflow"))?,
                     new_nodes: built_nodes_for_block(markdown, &new_meta)?,
                 });
             }
             PlannedAgentEditOp::DeleteBlock { ordinal } => {
                 ops.push(InjectionOp::DeleteSpan {
-                    start: *prefix.get(*ordinal)?,
+                    start: *prefix.get(*ordinal).ok_or_else(|| {
+                        Unsupported::new(format!("missing original block ordinal {ordinal}"))
+                    })?,
                     old_node_count: original_node_count(*ordinal)?,
                 });
             }
         }
     }
-    InjectionBatch::new(ops)
+    InjectionBatch::new(ops).ok_or_else(|| Unsupported::new("empty injection batch"))
 }
 
 fn built_nodes_for_block(
     markdown: &str,
     meta: &ReviewMeta,
-) -> Option<Vec<quarry_collab_codec::BuiltNode>> {
-    let nodes = review_block_to_slate(markdown, meta).ok()?;
-    build_nodes(&nodes).ok()
+) -> Result<Vec<quarry_collab_codec::BuiltNode>, Unsupported> {
+    let nodes = review_block_to_slate(markdown, meta)?;
+    build_nodes(&nodes)
 }
 
 struct AppliedAgentOps {
@@ -3306,8 +3330,31 @@ mod tests {
         };
 
         assert!(
-            agent_edit_injection_batch(&plan).is_some(),
+            agent_edit_injection_batch(&plan).is_ok(),
             "review-comment edit should produce a live injection batch"
+        );
+    }
+
+    #[test]
+    fn injection_batch_reports_codec_rejection_reason() {
+        let original = "Add {++x++} now\n";
+        let original_blocks = split_markdown_blocks(original);
+        let new_block = "Plain replacement\n".to_string();
+        let plan = AgentEditPlan {
+            markdown: new_block.clone(),
+            blocks: vec![new_block.clone()],
+            ops: vec![PlannedAgentEditOp::ReplaceBlock {
+                ordinal: 0,
+                markdown: new_block,
+            }],
+            original_blocks,
+        };
+
+        let error = agent_edit_injection_batch(&plan).unwrap_err();
+
+        assert_eq!(
+            error.0,
+            "original blocks: block 0: review marker without {#id}"
         );
     }
 

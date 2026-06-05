@@ -153,11 +153,28 @@ impl CollabRoom {
         // Reproduce the live room's nodes from the original blocks, including
         // CriticMarkup comment/suggestion marks; the trailing endmatter block
         // yields no nodes. Bails (→ no injection) if any block can't be matched.
-        let expected: Vec<Node> = review_blocks_to_slate(original_blocks)?
-            .into_iter()
-            .flatten()
-            .collect();
-        let expected = clean_gate_nodes(&build_nodes(&expected).ok()?);
+        let expected: Vec<Node> = match review_blocks_to_slate(original_blocks) {
+            Ok(nodes) => nodes.into_iter().flatten().collect(),
+            Err(error) => {
+                tracing::debug!(
+                    document_id = %self.document_id,
+                    reason = %error,
+                    "agent injection gate rejected original blocks because they are not codec eligible"
+                );
+                return None;
+            }
+        };
+        let expected = match build_nodes(&expected) {
+            Ok(nodes) => clean_gate_nodes(&nodes),
+            Err(error) => {
+                tracing::debug!(
+                    document_id = %self.document_id,
+                    reason = %error,
+                    "agent injection gate rejected original blocks because Yjs build failed"
+                );
+                return None;
+            }
+        };
 
         let awareness = self.broadcast.awareness().clone().write_owned().await;
         let live_content_len = {

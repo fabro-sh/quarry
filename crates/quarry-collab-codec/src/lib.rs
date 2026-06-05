@@ -24,4 +24,8 @@ impl Unsupported {
     pub fn new(reason: impl Into<String>) -> Self {
         Self(reason.into())
     }
+
+    pub fn context(self, context: impl AsRef<str>) -> Self {
+        Self(format!("{}: {}", context.as_ref(), self.0))
+    }
 }
