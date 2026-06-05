@@ -109,6 +109,7 @@ import type {
 } from '../api/client';
 import {
   classifyLiveDocumentEvent,
+  isAdoptedFlushVersion,
   type LiveCollabSession,
 } from '../features/collab/session-events';
 import type { CollabFlushAck, CollabRecoveryError } from '../features/collab/flusher-lease';
@@ -116,6 +117,7 @@ import { clearDraft, loadDraft, saveDraft } from '../features/editor/drafts';
 import {
   MarkdownEditor,
   type CollabEditorConfig,
+  type CollabInjectedVersion,
   type EditorMode,
   type ImageApi,
   type WikiLinkApi,
@@ -263,6 +265,7 @@ function Workspace() {
   const [collabExternalChange, setCollabExternalChange] = useState<CollabExternalChange | null>(null);
   const [collabFlushAck, setCollabFlushAck] = useState<CollabFlushAck | null>(null);
   const [collabFlusher, setCollabFlusher] = useState(false);
+  const [collabInjectedVersion, setCollabInjectedVersion] = useState<CollabInjectedVersion | null>(null);
   const [collabRebaseKey, setCollabRebaseKey] = useState(0);
   const [collabRecoveryError, setCollabRecoveryError] = useState<CollabRecoveryError | null>(null);
 
@@ -351,8 +354,92 @@ function Workspace() {
   const recordCollabFlushAck = useCallback((ack: CollabFlushAck) => {
     const session = liveCollabSessionRef.current;
     if (!session) return;
+    const library = activeLibraryRef.current;
+    const path = selectedPathRef.current;
+    const loaded = loadedDocumentRef.current;
     liveCollabSessionRef.current = ackLiveCollabFlush(session, ack.versionId, ack.etag);
-  }, []);
+    if (!library || !path || loaded?.documentId !== session.documentId) return;
+    if (loaded.etag === ack.etag) return;
+
+    clearDraft(library, path, loaded.etag);
+    loadedDocumentRef.current = {
+      library,
+      path,
+      etag: ack.etag,
+      documentId: session.documentId,
+    };
+    setEtag(ack.etag);
+    setCollabFlushAck(ack);
+    if (saveStateRef.current === 'drafted') transitionSaveState('saved');
+    void mutate(
+      ['/v1/document', library, path],
+      {
+        content: contentRef.current,
+        contentType,
+        documentId: session.documentId,
+        etag: ack.etag,
+        path,
+      },
+      { revalidate: false }
+    );
+  }, [contentType, mutate]);
+
+  const adoptInjectedCollabVersion = useCallback(
+    (
+      version: CollabInjectedVersion,
+      result: { content: string; hadLocalEdits: boolean }
+    ) => {
+      const library = activeLibraryRef.current;
+      const path = selectedPathRef.current;
+      if (!library || !path) return;
+      const loaded = loadedDocumentRef.current;
+      const previousEtag = loaded?.etag;
+      const documentId = loaded?.documentId ?? liveCollabSessionRef.current?.documentId ?? '';
+      contentRef.current = result.content;
+      loadedDocumentRef.current = {
+        library,
+        path,
+        etag: version.etag,
+        documentId,
+      };
+      setContent(result.content);
+      setEtag(version.etag);
+      if (previousEtag) clearDraft(library, path, previousEtag);
+      const session = liveCollabSessionRef.current;
+      if (session) {
+        liveCollabSessionRef.current = ackLiveCollabFlush(
+          session,
+          version.versionId,
+          version.etag
+        );
+        setCollabFlushAck({
+          etag: version.etag,
+          sessionId: session.sessionId ?? collabSessionIdRef.current,
+          versionId: version.versionId,
+        });
+      }
+      if (result.hadLocalEdits) {
+        saveDraft(library, path, version.etag, result.content);
+        transitionSaveState('drafted');
+      } else {
+        transitionSaveState('clean');
+      }
+      setCollabExternalChange(null);
+      setCollabInjectedVersion(null);
+      void mutate(
+        ['/v1/document', library, path],
+        {
+          content: result.content,
+          contentType,
+          documentId,
+          etag: version.etag,
+          path,
+        },
+        { revalidate: false }
+      );
+    },
+    [contentType, mutate]
+  );
 
   const recordCollabRecoveryError = useCallback((error: CollabRecoveryError) => {
     setCollabRecoveryError(error);
@@ -469,6 +556,18 @@ function Workspace() {
       if (liveDecision.action === 'ignore_flush_echo') {
         return;
       }
+      if (liveDecision.action === 'adopt_injected') {
+        setCollabInjectedVersion({
+          etag: liveDecision.etag,
+          versionId: liveDecision.versionId,
+        });
+        if (currentPath) {
+          void mutate(['/v1/versions', activeLibrary, currentPath]);
+          void mutate(['/v1/outgoing', activeLibrary, currentPath]);
+          void mutate(['/v1/backlinks', activeLibrary, currentPath]);
+        }
+        return;
+      }
       if (liveDecision.action === 'external_change') {
         if (currentPath) {
           setCollabExternalChange({ kind: 'changed', path: currentPath, etag: payload.etag });
@@ -573,7 +672,8 @@ function Workspace() {
   );
   const { data: document } = useSWR(
     activeLibrary && selectedPath ? ['/v1/document', activeLibrary, selectedPath] : null,
-    () => getDocument(activeLibrary, selectedPath)
+    () => getDocument(activeLibrary, selectedPath),
+    { revalidateOnFocus: false }
   );
   const { data: search = { results: [], cursor: null } } = useSWR(
     activeLibrary && searchQuery ? ['/v1/search', activeLibrary, searchQuery] : null,
@@ -713,7 +813,9 @@ function Workspace() {
     transitionSaveState(draft ? 'drafted' : preserveSavedState ? 'saved' : 'clean');
     setConflictRemote(null);
     setConflictDetails(null);
-    setCollabExternalChange(null);
+    if (!sameDocument) {
+      setCollabExternalChange(null);
+    }
     setSelectedVersionId(null);
     setCompareVersionId(null);
     setCurrentDiffOpen(false);
@@ -766,11 +868,13 @@ function Workspace() {
         sessionId: collabSessionIdRef.current,
       };
       setCollabFlushAck(null);
+      setCollabInjectedVersion(null);
       setCollabRebaseKey(0);
       setCollabRecoveryError(null);
     } else {
       liveCollabSessionRef.current = null;
       setCollabFlushAck(null);
+      setCollabInjectedVersion(null);
       setCollabRebaseKey(0);
       setCollabRecoveryError(null);
     }
@@ -869,7 +973,15 @@ function Workspace() {
         const latestEditorContent = contentRef.current;
         const remoteMatchesLatestEditor = remote.content === latestEditorContent;
         const remoteMatchesSavingRequest = remote.content === savingContent;
-        if (remoteMatchesLatestEditor || remoteMatchesSavingRequest) {
+        // A version this live session already adopted (a flush echo or a
+        // server agent-injection) is not a real conflict — the agent edit is
+        // authoritative and already persisted. Reconcile silently instead of
+        // raising the conflict dialog, even when the browser's re-serialized
+        // markdown differs byte-wise from the stored markdown.
+        const remoteIsAdopted = isAdoptedFlushVersion(liveCollabSessionRef.current, {
+          etag: remote.etag,
+        });
+        if (remoteMatchesLatestEditor || remoteMatchesSavingRequest || remoteIsAdopted) {
           acceptRemoteDocumentVersion(
             savingLibrary,
             savingPath,
@@ -1396,6 +1508,8 @@ function Workspace() {
                   byteSize={selectedEntry?.byte_size}
                   collabSessionId={collabSessionIdRef.current}
                   collabFlushAck={collabFlushAck}
+                  collabInjectedVersion={collabInjectedVersion}
+                  onCollabInjectedAdopted={adoptInjectedCollabVersion}
                   onCollabFlushAck={recordCollabFlushAck}
                   onCollabFlusherChange={changeCollabFlusher}
                   onCollabRecoveryError={recordCollabRecoveryError}
@@ -1585,6 +1699,7 @@ function DocumentBody({
   author,
   byteSize,
   collabFlushAck,
+  collabInjectedVersion,
   collabSessionId,
   collabToken,
   collabRebaseKey,
@@ -1599,12 +1714,14 @@ function DocumentBody({
   onChange,
   onCollabFlushAck,
   onCollabFlusherChange,
+  onCollabInjectedAdopted,
   onCollabRecoveryError,
 }: {
   activeLibrary: string;
   author: string;
   byteSize?: number;
   collabFlushAck: CollabFlushAck | null;
+  collabInjectedVersion: CollabInjectedVersion | null;
   collabSessionId: string;
   collabToken?: string;
   collabRebaseKey: number;
@@ -1619,6 +1736,10 @@ function DocumentBody({
   onChange: (content: string) => void;
   onCollabFlushAck: (ack: CollabFlushAck) => void;
   onCollabFlusherChange: (isFlusher: boolean) => void;
+  onCollabInjectedAdopted: (
+    version: CollabInjectedVersion,
+    result: { content: string; hadLocalEdits: boolean }
+  ) => void;
   onCollabRecoveryError: (error: CollabRecoveryError) => void;
 }) {
   if (isTextContentType(contentType)) {
@@ -1626,8 +1747,10 @@ function DocumentBody({
       ? {
           documentId,
           flushAck: collabFlushAck,
+          injectedVersion: collabInjectedVersion,
           onFlushAck: onCollabFlushAck,
           onFlusherChange: onCollabFlusherChange,
+          onInjectedAdopted: onCollabInjectedAdopted,
           onRecoveryError: onCollabRecoveryError,
           rebaseKey: collabRebaseKey,
           sessionId: collabSessionId,

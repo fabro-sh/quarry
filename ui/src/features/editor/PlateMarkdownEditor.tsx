@@ -44,6 +44,7 @@ import {
 import { isOrderedList, toggleList } from '@platejs/list';
 import { MarkdownPlugin } from '@platejs/markdown';
 import { YjsPlugin } from '@platejs/yjs/react';
+import { YjsEditor } from '@slate-yjs/core';
 import {
   flip,
   offset,
@@ -306,12 +307,22 @@ export type EditorMode = 'editing' | 'suggesting' | 'viewing';
 export interface CollabEditorConfig {
   documentId: string;
   flushAck?: CollabFlushAck | null;
+  injectedVersion?: CollabInjectedVersion | null;
+  onInjectedAdopted?: (
+    version: CollabInjectedVersion,
+    result: { content: string; hadLocalEdits: boolean }
+  ) => void;
   onFlushAck?: (ack: CollabFlushAck) => void;
   onFlusherChange?: (isFlusher: boolean) => void;
   onRecoveryError?: (error: CollabRecoveryError) => void;
   rebaseKey?: number;
   sessionId: string;
   token?: string;
+}
+
+export interface CollabInjectedVersion {
+  etag: string;
+  versionId: string;
 }
 
 interface CollabYjsInitOptions {
@@ -374,6 +385,10 @@ export function PlateMarkdownEditor({
   }
   const lastContentRef = useRef(content);
   const lastSerializedRef = useRef(serialize(initialValueRef.current));
+  const pendingInjectedVersionRef = useRef<CollabInjectedVersion | null>(null);
+  const adoptedInjectedVersionIdRef = useRef<string | null>(null);
+  const hasLocalEditsSinceCleanRef = useRef(false);
+  const remoteChangeSinceCleanRef = useRef(false);
   const [, setCollabInitTick] = useState(0);
   const editorPlugins = useMemo(() => {
     if (!collabEnabled || !collab) return plateMarkdownPlugins;
@@ -430,6 +445,9 @@ export function PlateMarkdownEditor({
     const { value, meta } = markdownToReview(content);
     lastContentRef.current = content;
     lastSerializedRef.current = reviewToMarkdown(value as never, meta);
+    hasLocalEditsSinceCleanRef.current = false;
+    remoteChangeSinceCleanRef.current = false;
+    pendingInjectedVersionRef.current = null;
     storeHydrate(meta);
 
     let disposed = false;
@@ -472,8 +490,55 @@ export function PlateMarkdownEditor({
     // synchronously inside `storeHydrate` with the new meta; the baseline must
     // match that, or a pure load spuriously fires onChange.
     lastSerializedRef.current = reviewToMarkdown(value as never, meta);
+    hasLocalEditsSinceCleanRef.current = false;
+    remoteChangeSinceCleanRef.current = false;
+    pendingInjectedVersionRef.current = null;
     storeHydrate(meta);
   }, [collabEnabled, content, editor, storeHydrate]);
+
+  const adoptInjectedVersion = useCallback(
+    (nextMarkdown: string) => {
+      const injectedVersion = pendingInjectedVersionRef.current;
+      if (!collab || !injectedVersion) return false;
+      pendingInjectedVersionRef.current = null;
+      adoptedInjectedVersionIdRef.current = injectedVersion.versionId;
+      const hadLocalEdits = hasLocalEditsSinceCleanRef.current;
+      lastContentRef.current = nextMarkdown;
+      lastSerializedRef.current = nextMarkdown;
+      remoteChangeSinceCleanRef.current = false;
+      if (!hadLocalEdits) {
+        hasLocalEditsSinceCleanRef.current = false;
+      }
+      const { meta } = markdownToReview(nextMarkdown);
+      storeHydrate(meta);
+      collab.onInjectedAdopted?.(injectedVersion, {
+        content: nextMarkdown,
+        hadLocalEdits,
+      });
+      return true;
+    },
+    [collab, storeHydrate]
+  );
+
+  useEffect(() => {
+    if (!collab?.injectedVersion) return;
+    if (adoptedInjectedVersionIdRef.current === collab.injectedVersion.versionId) return;
+    pendingInjectedVersionRef.current = collab.injectedVersion;
+    // Adopt as soon as the injection's authoritative version is known via the
+    // SSE `agent-injected` signal. We deliberately do NOT gate on a
+    // remote-change flag: `YjsEditor.isLocal` misreports an agent-injected Yjs
+    // update as a local change, so `remoteChangeSinceClean` is never set and the
+    // editor's onValueChange path can't trigger adoption. By the time this runs
+    // the injected content is already in the doc, so serializing it is correct.
+    adoptInjectedVersion(serialize(editor.children as PlateValue));
+  }, [adoptInjectedVersion, collab?.injectedVersion, editor, serialize]);
+
+  useEffect(() => {
+    if (!collab?.flushAck) return;
+    hasLocalEditsSinceCleanRef.current = false;
+    remoteChangeSinceCleanRef.current = false;
+    pendingInjectedVersionRef.current = null;
+  }, [collab?.flushAck?.versionId]);
 
   // Replies/resolves and synced suggestions live in the store, not the editor
   // value, so an editor-value change won't fire. Save on store changes too.
@@ -483,6 +548,7 @@ export function PlateMarkdownEditor({
     return useReviewStore.subscribe(() => {
       const md = serialize(editor.children as PlateValue);
       if (md === lastSerializedRef.current) return;
+      hasLocalEditsSinceCleanRef.current = true;
       lastContentRef.current = md;
       lastSerializedRef.current = md;
       onChange(md);
@@ -503,8 +569,21 @@ export function PlateMarkdownEditor({
             editor.meta.resetting = undefined;
             return;
           }
+          const isLocalChange =
+            !collabEnabled ||
+            !YjsEditor.isYjsEditor(editor) ||
+            YjsEditor.isLocal(editor);
           const nextMarkdown = serialize(value as PlateValue);
+          if (!isLocalChange && pendingInjectedVersionRef.current) {
+            adoptInjectedVersion(nextMarkdown);
+            return;
+          }
           if (nextMarkdown === lastSerializedRef.current) return;
+          if (isLocalChange) {
+            hasLocalEditsSinceCleanRef.current = true;
+          } else {
+            remoteChangeSinceCleanRef.current = true;
+          }
           lastContentRef.current = nextMarkdown;
           lastSerializedRef.current = nextMarkdown;
           onChange(nextMarkdown);

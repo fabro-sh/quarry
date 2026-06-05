@@ -1,4 +1,8 @@
-import { classifyLiveDocumentEvent, type LiveCollabSession } from './session-events';
+import {
+  classifyLiveDocumentEvent,
+  isAdoptedFlushVersion,
+  type LiveCollabSession,
+} from './session-events';
 
 describe('collaboration session event classification', () => {
   const session: LiveCollabSession = {
@@ -94,6 +98,22 @@ describe('collaboration session event classification', () => {
     ).toEqual({ action: 'external_change' });
   });
 
+  it('routes server-injected agent writes to editor adoption', () => {
+    expect(
+      classifyLiveDocumentEvent(
+        {
+          type: 'doc.changed',
+          path: 'notes/daily.md',
+          doc_id: 'doc-1',
+          version_id: 'v3',
+          etag: '"v3"',
+          collab_session_id: 'agent-injected:abc',
+        },
+        session
+      )
+    ).toEqual({ action: 'adopt_injected', versionId: 'v3', etag: '"v3"' });
+  });
+
   it('keeps an externally deleted live document selected for discard or resurrection', () => {
     expect(
       classifyLiveDocumentEvent(
@@ -115,5 +135,32 @@ describe('collaboration session event classification', () => {
         session
       )
     ).toEqual({ action: 'retarget_move', path: 'notes/renamed.md' });
+  });
+});
+
+describe('isAdoptedFlushVersion', () => {
+  const session: LiveCollabSession = {
+    documentId: 'doc-1',
+    path: 'notes/daily.md',
+    sessionId: 'session-1',
+    ackedFlushVersionIds: new Set(['v2']),
+    ackedFlushEtags: new Set(['"v2"']),
+  };
+
+  it('recognizes an adopted version by version id', () => {
+    expect(isAdoptedFlushVersion(session, { versionId: 'v2' })).toBe(true);
+  });
+
+  it('recognizes an adopted version by etag', () => {
+    expect(isAdoptedFlushVersion(session, { etag: '"v2"' })).toBe(true);
+  });
+
+  it('does not recognize an unrelated (genuinely external) version', () => {
+    expect(isAdoptedFlushVersion(session, { versionId: 'v3', etag: '"v3"' })).toBe(false);
+  });
+
+  it('is false for a null session or empty identifiers', () => {
+    expect(isAdoptedFlushVersion(null, { versionId: 'v2', etag: '"v2"' })).toBe(false);
+    expect(isAdoptedFlushVersion(session, {})).toBe(false);
   });
 });
