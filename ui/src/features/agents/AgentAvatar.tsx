@@ -20,7 +20,7 @@ export function AgentAvatar({
   return (
     <span
       className={cn('flex size-7 shrink-0 items-center justify-center rounded-full', className)}
-      style={brand ? { backgroundColor: `${brand}22` } : undefined}
+      style={undefined}
     >
       {kind && brand ? <img alt="" className="size-full p-1" src={agentIconSrc(kind)} /> : fallback}
     </span>
