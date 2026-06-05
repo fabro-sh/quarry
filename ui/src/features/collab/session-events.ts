@@ -1,4 +1,5 @@
 import type { ReviewMetaPatch } from '../review/rfm-types';
+import { collabDebug } from './collab-debug';
 
 export interface DocumentEventPayload {
   type: string;
@@ -9,7 +10,6 @@ export interface DocumentEventPayload {
   version_id?: string | null;
   etag?: string | null;
   collab_session_id?: string | null;
-  review?: ReviewMetaPatch | null;
 }
 
 export interface LiveCollabSession {
@@ -23,7 +23,7 @@ export interface LiveCollabSession {
 export type LiveDocumentEventDecision =
   | { action: 'pass' }
   | { action: 'ignore_flush_echo' }
-  | { action: 'adopt_injected'; etag: string; versionId: string; review?: ReviewMetaPatch | null }
+  | { action: 'agent_injection_refresh' }
   | { action: 'external_change' }
   | { action: 'external_delete' }
   | { action: 'retarget_move'; path: string };
@@ -35,17 +35,8 @@ export function classifyLiveDocumentEvent(
   if (!session || !matchesLiveDocument(payload, session)) return { action: 'pass' };
 
   if (payload.type === 'doc.changed') {
-    if (
-      payload.collab_session_id?.startsWith('agent-injected:') &&
-      payload.version_id &&
-      payload.etag
-    ) {
-      const decision: LiveDocumentEventDecision = {
-        action: 'adopt_injected',
-        etag: payload.etag,
-        versionId: payload.version_id,
-      };
-      return payload.review ? { ...decision, review: payload.review } : decision;
+    if (payload.collab_session_id?.startsWith('agent-injected:')) {
+      return { action: 'agent_injection_refresh' };
     }
     return isOwnFlushEcho(payload, session)
       ? { action: 'ignore_flush_echo' }
@@ -92,4 +83,40 @@ export function isAdoptedFlushVersion(
   if (version.versionId && session.ackedFlushVersionIds?.has(version.versionId)) return true;
   if (version.etag && session.ackedFlushEtags?.has(version.etag)) return true;
   return false;
+}
+
+export interface InjectionEnvelope {
+  etag: string;
+  review?: ReviewMetaPatch | null;
+  versionId: string;
+}
+
+export function parseInjectionEnvelope(raw: unknown): InjectionEnvelope | null {
+  if (!isRecord(raw)) return invalidEnvelope('not_object');
+  const versionId = raw.version_id;
+  const etag = raw.etag;
+  if (typeof versionId !== 'string' || typeof etag !== 'string') {
+    return invalidEnvelope('missing_version_or_etag');
+  }
+
+  if (raw.review === undefined || raw.review === null) {
+    return { etag, versionId };
+  }
+  if (typeof raw.review !== 'string') return invalidEnvelope('review_not_string');
+  try {
+    const review = JSON.parse(raw.review) as unknown;
+    if (!isRecord(review)) return invalidEnvelope('review_not_object');
+    return { etag, review: review as ReviewMetaPatch, versionId };
+  } catch {
+    return invalidEnvelope('review_invalid_json');
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function invalidEnvelope(reason: string): null {
+  collabDebug('inject.envelope.invalid', { reason });
+  return null;
 }

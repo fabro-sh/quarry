@@ -104,6 +104,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import remarkGfm from 'remark-gfm';
+import * as Y from 'yjs';
 import {
   ParagraphPlugin,
   Plate,
@@ -146,7 +147,7 @@ import {
   syncSuggestionsFromValue,
   useReviewStore,
 } from '../review/review-store';
-import type { ReviewMeta, ReviewMetaPatch } from '../review/rfm-types';
+import type { ReviewMeta } from '../review/rfm-types';
 import { acceptSuggestionById, rejectSuggestionById } from '../review/accept-reject';
 import { ReviewRail } from '../review/ui/ReviewRail';
 import { RemoteCursorOverlay } from '../collab/RemoteCursorOverlay';
@@ -160,8 +161,11 @@ import {
 } from '../collab/flusher-lease';
 import { RUST_WS_PROVIDER_TYPE, registerRustWsProviderType } from '../collab/rust-ws-provider';
 import { collabDebug } from '../collab/collab-debug';
+import { parseInjectionEnvelope, type InjectionEnvelope } from '../collab/session-events';
 
 registerRustWsProviderType();
+
+const INJECTION_ROOT = '__quarry_injection';
 
 // Notion-style markdown shortcuts: typing the markdown prefix at the start of a
 // block (or wrapping marks) auto-converts it. Scoped to the surface Quarry
@@ -313,7 +317,7 @@ export type EditorMode = 'editing' | 'suggesting' | 'viewing';
 export interface CollabEditorConfig {
   documentId: string;
   flushAck?: CollabFlushAck | null;
-  injectedVersion?: CollabInjectedVersion | null;
+  loadedEtag?: string | null;
   onInjectedAdopted?: (
     version: CollabInjectedVersion,
     result: { content: string; hadLocalEdits: boolean }
@@ -326,11 +330,7 @@ export interface CollabEditorConfig {
   token?: string;
 }
 
-export interface CollabInjectedVersion {
-  etag: string;
-  review?: ReviewMetaPatch | null;
-  versionId: string;
-}
+export type CollabInjectedVersion = InjectionEnvelope;
 
 interface CollabYjsInitOptions {
   autoConnect: true;
@@ -398,9 +398,11 @@ export function PlateMarkdownEditor({
   const lastSerializedRef = useRef(serialize(initialValueRef.current));
   const pendingInjectedVersionRef = useRef<CollabInjectedVersion | null>(null);
   const adoptedInjectedVersionIdRef = useRef<string | null>(null);
+  const ackedInjectedVersionIdsRef = useRef<Set<string>>(new Set());
+  const injectionFallbackTimerRef = useRef<number | null>(null);
   const hasLocalEditsSinceCleanRef = useRef(false);
   const remoteChangeSinceCleanRef = useRef(false);
-  const [, setCollabInitTick] = useState(0);
+  const [collabInitTick, setCollabInitTick] = useState(0);
   const editorPlugins = useMemo(() => {
     if (!collabEnabled || !collab) return plateMarkdownPlugins;
     return [
@@ -459,6 +461,9 @@ export function PlateMarkdownEditor({
     hasLocalEditsSinceCleanRef.current = false;
     remoteChangeSinceCleanRef.current = false;
     pendingInjectedVersionRef.current = null;
+    const loadedVersionId = versionIdFromEtag(collab.loadedEtag);
+    adoptedInjectedVersionIdRef.current = loadedVersionId;
+    ackedInjectedVersionIdsRef.current = new Set(loadedVersionId ? [loadedVersionId] : []);
     storeHydrate(meta);
 
     let disposed = false;
@@ -504,21 +509,36 @@ export function PlateMarkdownEditor({
     hasLocalEditsSinceCleanRef.current = false;
     remoteChangeSinceCleanRef.current = false;
     pendingInjectedVersionRef.current = null;
+    adoptedInjectedVersionIdRef.current = null;
+    ackedInjectedVersionIdsRef.current = new Set();
     storeHydrate(meta);
   }, [collabEnabled, content, editor, storeHydrate]);
 
-  const adoptInjectedVersion = useCallback(
-    (value: PlateValue) => {
-      const injectedVersion = pendingInjectedVersionRef.current;
-      if (!collab || !injectedVersion) return false;
+  const isInjectedVersionAlreadyAdopted = useCallback((versionId: string) => {
+    return (
+      adoptedInjectedVersionIdRef.current === versionId ||
+      ackedInjectedVersionIdsRef.current.has(versionId)
+    );
+  }, []);
+
+  const consumeInjectionEnvelope = useCallback(
+    (injectedVersion: CollabInjectedVersion, value: PlateValue) => {
+      if (!collab) return false;
+      if (isInjectedVersionAlreadyAdopted(injectedVersion.versionId)) {
+        if (pendingInjectedVersionRef.current?.versionId === injectedVersion.versionId) {
+          pendingInjectedVersionRef.current = null;
+        }
+        return false;
+      }
       const patchedMeta = mergeReviewMetaPatch(storeGetMeta(), injectedVersion.review);
       const nextMarkdown = serializeWithMeta(value, patchedMeta);
-      collabDebug('inject.adoptVersion', {
+      collabDebug('inject.inband', {
         versionId: injectedVersion.versionId,
         hadLocalEdits: hasLocalEditsSinceCleanRef.current,
       });
       pendingInjectedVersionRef.current = null;
       adoptedInjectedVersionIdRef.current = injectedVersion.versionId;
+      ackedInjectedVersionIdsRef.current.add(injectedVersion.versionId);
       const hadLocalEdits = hasLocalEditsSinceCleanRef.current;
       lastContentRef.current = nextMarkdown;
       lastSerializedRef.current = nextMarkdown;
@@ -534,25 +554,61 @@ export function PlateMarkdownEditor({
       });
       return true;
     },
-    [collab, serializeWithMeta, storeGetMeta, storeHydrate]
+    [collab, isInjectedVersionAlreadyAdopted, serializeWithMeta, storeGetMeta, storeHydrate]
+  );
+
+  const scheduleInjectionFallback = useCallback(
+    (injectedVersion: CollabInjectedVersion) => {
+      if (injectionFallbackTimerRef.current !== null) {
+        window.clearTimeout(injectionFallbackTimerRef.current);
+      }
+      injectionFallbackTimerRef.current = window.setTimeout(() => {
+        injectionFallbackTimerRef.current = null;
+        if (pendingInjectedVersionRef.current?.versionId !== injectedVersion.versionId) return;
+        consumeInjectionEnvelope(injectedVersion, editor.children as PlateValue);
+      }, 0);
+    },
+    [consumeInjectionEnvelope, editor]
   );
 
   useEffect(() => {
-    if (!collab?.injectedVersion) return;
-    if (adoptedInjectedVersionIdRef.current === collab.injectedVersion.versionId) return;
-    pendingInjectedVersionRef.current = collab.injectedVersion;
-    collabDebug('inject.arming', { versionId: collab.injectedVersion.versionId });
-    // Adopt as soon as the injection's authoritative version is known via the
-    // SSE `agent-injected` signal. We deliberately do NOT gate on a
-    // remote-change flag: `YjsEditor.isLocal` misreports an agent-injected Yjs
-    // update as a local change, so `remoteChangeSinceClean` is never set and the
-    // editor's onValueChange path can't trigger adoption. By the time this runs
-    // the injected content is already in the doc, so serializing it is correct.
-    adoptInjectedVersion(editor.children as PlateValue);
-  }, [adoptInjectedVersion, collab?.injectedVersion, editor]);
+    if (!collabEnabled) return;
+    const awareness = editor.getOption(YjsPlugin, 'awareness') as { doc?: Y.Doc } | undefined;
+    const doc = awareness?.doc;
+    if (!doc) return;
+    const injectionMap = doc.getMap<unknown>(INJECTION_ROOT);
+    const handleEnvelope = () => {
+      const raw = injectionEnvelopeMapValue(injectionMap);
+      if (!raw) return;
+      const injectedVersion = parseInjectionEnvelope(raw);
+      if (!injectedVersion) return;
+      if (isInjectedVersionAlreadyAdopted(injectedVersion.versionId)) return;
+      pendingInjectedVersionRef.current = injectedVersion;
+      collabDebug('inject.envelope.pending', { versionId: injectedVersion.versionId });
+      scheduleInjectionFallback(injectedVersion);
+    };
+
+    injectionMap.observe(handleEnvelope);
+    handleEnvelope();
+    return () => {
+      injectionMap.unobserve(handleEnvelope);
+      if (injectionFallbackTimerRef.current !== null) {
+        window.clearTimeout(injectionFallbackTimerRef.current);
+        injectionFallbackTimerRef.current = null;
+      }
+    };
+  }, [
+    collabDocumentId,
+    collabEnabled,
+    collabInitTick,
+    editor,
+    isInjectedVersionAlreadyAdopted,
+    scheduleInjectionFallback,
+  ]);
 
   useEffect(() => {
     if (!collab?.flushAck) return;
+    ackedInjectedVersionIdsRef.current.add(collab.flushAck.versionId);
     hasLocalEditsSinceCleanRef.current = false;
     remoteChangeSinceCleanRef.current = false;
     pendingInjectedVersionRef.current = null;
@@ -599,11 +655,24 @@ export function PlateMarkdownEditor({
               changed: nextMarkdown !== lastSerializedRef.current,
             });
           }
-          if (!isLocalChange && pendingInjectedVersionRef.current) {
-            adoptInjectedVersion(value as PlateValue);
+          if (pendingInjectedVersionRef.current) {
+            const injectedVersion = pendingInjectedVersionRef.current;
+            if (consumeInjectionEnvelope(injectedVersion, value as PlateValue)) {
+              if (injectionFallbackTimerRef.current !== null) {
+                window.clearTimeout(injectionFallbackTimerRef.current);
+                injectionFallbackTimerRef.current = null;
+              }
+              return;
+            }
+            pendingInjectedVersionRef.current = null;
+          }
+          if (injectionFallbackTimerRef.current !== null) {
+            window.clearTimeout(injectionFallbackTimerRef.current);
+            injectionFallbackTimerRef.current = null;
+          }
+          if (nextMarkdown === lastSerializedRef.current) {
             return;
           }
-          if (nextMarkdown === lastSerializedRef.current) return;
           if (isLocalChange) {
             hasLocalEditsSinceCleanRef.current = true;
           } else {
@@ -632,6 +701,23 @@ export function PlateMarkdownEditor({
      </ImageProvider>
     </WikiLinkProvider>
   );
+}
+
+function versionIdFromEtag(etag?: string | null): string | null {
+  const value = etag?.trim();
+  if (!value) return null;
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function injectionEnvelopeMapValue(map: Y.Map<unknown>): Record<string, unknown> | null {
+  const version_id = map.get('version_id');
+  const etag = map.get('etag');
+  const review = map.get('review');
+  if (version_id === undefined && etag === undefined && review === undefined) return null;
+  return { etag, review, version_id };
 }
 
 function CollabAwarenessBridge({ collab }: { collab: CollabEditorConfig }) {

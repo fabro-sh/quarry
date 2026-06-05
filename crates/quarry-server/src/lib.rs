@@ -32,12 +32,13 @@ use quarry_git::{
     GitExportResult, GitImportResult, GitSyncResult,
 };
 use quarry_storage::{QuarryStore, StoreEvent, StoreEventKind};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::Mutex;
 use utoipa::{OpenApi, ToSchema};
@@ -1851,6 +1852,11 @@ async fn agent_ops_document(
     }
 
     let base_version_id = version_id_from_base_token(&request.base_token)?;
+    let review_snapshot = if request.op == "comment.add" {
+        review_meta_patch_from_markdown(&applied.markdown)
+    } else {
+        None
+    };
     let mut injected_session_id = None;
     let injection_guard = if request.op == "comment.add" {
         let plan = request
@@ -1864,7 +1870,12 @@ async fn agent_ops_document(
             Ok(plan) => match state.collab.live_room(&document.id).await {
                 Some(room) => {
                     let guard = room
-                        .begin_injection(plan.batch, &plan.original_blocks, base_version_id.clone())
+                        .begin_injection(
+                            plan.batch,
+                            &plan.original_blocks,
+                            base_version_id.clone(),
+                            review_snapshot.clone(),
+                        )
                         .await;
                     if guard.is_some() {
                         let request_hash = agent_ops_request_hash(&request, false)?;
@@ -1911,11 +1922,9 @@ async fn agent_ops_document(
         if let Some(guard) = injection_guard {
             let _commit_outcome = guard.commit(outcome.version.id.clone()).await;
         }
-        state.store.emit_document_put_events_with_review(
-            &outcome,
-            injected_session_id,
-            applied.review.clone(),
-        );
+        state
+            .store
+            .emit_document_put_events(&outcome, injected_session_id);
         outcome
     } else {
         state
@@ -2017,13 +2026,19 @@ async fn agent_edit_document(
 
     let base_version_id = version_id_from_base_token(&request.base_token)?;
     let injected_session_id = format!("agent-injected:{request_hash}");
+    let review_snapshot = review_meta_patch_from_markdown(&plan.markdown);
     // Track why an edit did or didn't reach the live room, so the response can
     // report it (observability for agents and tests) instead of silently
     // falling back to a plain write.
     let (injection_guard, injection_status) = match agent_edit_injection_batch(&plan) {
         Ok(batch) => match state.collab.live_room(&document.id).await {
             Some(room) => match room
-                .begin_injection(batch, &plan.original_blocks, base_version_id.clone())
+                .begin_injection(
+                    batch,
+                    &plan.original_blocks,
+                    base_version_id.clone(),
+                    review_snapshot.clone(),
+                )
                 .await
             {
                 Some(guard) => (Some(guard), "injected"),
@@ -2415,7 +2430,6 @@ fn comment_add_injection_plan(
 struct AppliedAgentOps {
     markdown: String,
     id: Option<String>,
-    review: Option<JsonValue>,
 }
 
 fn apply_agent_ops(
@@ -2431,7 +2445,6 @@ fn apply_agent_ops(
     }
 
     let (body, mut meta) = split_review_endmatter(markdown);
-    let mut review_patch = None;
     let (next_body, applied_id) = match request.op.as_str() {
         "comment.add" => {
             let id = review_id(request.id.as_deref(), "c", markdown, &request.op)?;
@@ -2459,7 +2472,6 @@ fn apply_agent_ops(
                     resolved: None,
                 },
             );
-            review_patch = Some(comment_review_patch(&id, author, &at, body_text));
             (next, Some(id))
         }
         "suggestion.add" => {
@@ -2556,21 +2568,40 @@ fn apply_agent_ops(
     Ok(AppliedAgentOps {
         markdown: assemble_review_document(&next_body, &meta)?,
         id: applied_id,
-        review: review_patch,
     })
 }
 
-fn comment_review_patch(id: &str, author: &str, at: &str, body: &str) -> JsonValue {
-    let mut comments = serde_json::Map::new();
-    comments.insert(
-        id.to_string(),
-        serde_json::json!({
-            "by": author,
-            "at": at,
-            "body": body,
-        }),
-    );
-    serde_json::json!({ "comments": JsonValue::Object(comments) })
+fn review_meta_patch_from_markdown(markdown: &str) -> Option<JsonValue> {
+    let (body, mut meta) = split_review_endmatter(markdown);
+    hydrate_inline_comment_bodies(&body, &mut meta);
+    let value = serde_json::to_value(meta).ok()?;
+    if value.as_object().is_some_and(|object| object.is_empty()) {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn hydrate_inline_comment_bodies(body: &str, meta: &mut ReviewMeta) {
+    for captures in inline_comment_body().captures_iter(body) {
+        let Some(comment_body) = captures.get(2) else {
+            continue;
+        };
+        let Some(id) = captures.get(3) else {
+            continue;
+        };
+        if let Some(entry) = meta.comments.get_mut(id.as_str()) {
+            entry.body = Some(comment_body.as_str().to_string());
+        }
+    }
+}
+
+fn inline_comment_body() -> &'static Regex {
+    static INLINE_COMMENT_BODY: OnceLock<Regex> = OnceLock::new();
+    INLINE_COMMENT_BODY.get_or_init(|| {
+        Regex::new(r"\{==(?s:(.*?))==\}\{>>(?s:(.*?))<<\}\{#([A-Za-z0-9_-]+)\}")
+            .expect("inline comment body regex is valid")
+    })
 }
 
 fn required_operation_block(operation: &AgentBlockOperation) -> Result<&str, ApiError> {
@@ -3521,6 +3552,16 @@ mod tests {
     }
 
     #[test]
+    fn review_meta_patch_from_markdown_includes_inline_comment_bodies() {
+        let markdown = "Quote {==highlight==}{>>Needs support.<<}{#c1} tail\n\n---\ncomments:\n  c1:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n";
+
+        let patch = review_meta_patch_from_markdown(markdown).unwrap();
+
+        assert_eq!(patch["comments"]["c1"]["by"], "ai:codex");
+        assert_eq!(patch["comments"]["c1"]["body"], "Needs support.");
+    }
+
+    #[test]
     fn busy_errors_map_to_service_unavailable_with_retry_after() {
         let response =
             ApiError::from(QuarryError::Busy("database locked".to_string())).into_response();
@@ -3563,7 +3604,6 @@ mod tests {
             applied: None,
             conflicts: None,
             collab_session_id: Some("browser:session-1".to_string()),
-            review: None,
         };
 
         let event_type = store_event_type(&event);
@@ -3577,45 +3617,6 @@ mod tests {
         assert_eq!(payload["version_id"], "version-1");
         assert_eq!(payload["etag"], "\"version-1\"");
         assert_eq!(payload["collab_session_id"], "browser:session-1");
-    }
-
-    #[test]
-    fn document_put_store_events_map_review_patch_to_sse_payloads() {
-        let event = StoreEvent {
-            kind: StoreEventKind::DocumentPut,
-            library_id: "library-id".to_string(),
-            path: Some("notes/daily.md".to_string()),
-            new_path: None,
-            source: Some(DocumentSource::Rest),
-            tx_id: Some("tx-1".to_string()),
-            doc_id: Some("doc-1".to_string()),
-            version_id: Some("version-1".to_string()),
-            conflict_id: None,
-            peer_id: None,
-            applied: None,
-            conflicts: None,
-            collab_session_id: Some("agent-injected:abc".to_string()),
-            review: Some(serde_json::json!({
-                "comments": {
-                    "c1": {
-                        "by": "ai:codex",
-                        "at": "2026-06-05T02:41:00.480Z",
-                        "body": "Needs support."
-                    }
-                }
-            })),
-        };
-
-        let event_type = store_event_type(&event);
-        let payload = store_event_payload("notes", &event_type, &event);
-
-        assert_eq!(payload["type"], "doc.changed");
-        assert_eq!(payload["collab_session_id"], "agent-injected:abc");
-        assert_eq!(payload["review"]["comments"]["c1"]["by"], "ai:codex");
-        assert_eq!(
-            payload["review"]["comments"]["c1"]["body"],
-            "Needs support."
-        );
     }
 
     #[test]
@@ -3634,7 +3635,6 @@ mod tests {
             applied: None,
             conflicts: None,
             collab_session_id: None,
-            review: None,
         };
 
         let event_type = store_event_type(&event);
@@ -3663,7 +3663,6 @@ mod tests {
             applied: None,
             conflicts: None,
             collab_session_id: None,
-            review: None,
         };
 
         let event_type = store_event_type(&event);
@@ -3690,7 +3689,6 @@ mod tests {
             applied: None,
             conflicts: None,
             collab_session_id: None,
-            review: None,
         };
 
         let event_type = store_event_type(&event);
@@ -3718,7 +3716,6 @@ mod tests {
             applied: Some(2),
             conflicts: Some(1),
             collab_session_id: None,
-            review: None,
         };
 
         let event_type = store_event_type(&event);
@@ -3897,9 +3894,6 @@ fn store_event_payload(library: &str, event_type: &str, event: &StoreEvent) -> J
                 "collab_session_id".to_string(),
                 JsonValue::String(collab_session_id.clone()),
             );
-        }
-        if let Some(review) = &event.review {
-            object.insert("review".to_string(), review.clone());
         }
     }
     payload

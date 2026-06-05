@@ -14,9 +14,10 @@ use tower::ServiceExt;
 use yrs::sync::{Message as YMessage, SyncMessage};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
-use yrs::{Doc, OffsetKind, Options, ReadTxn, Transact, Update, XmlTextRef};
+use yrs::{Any, Doc, Map, OffsetKind, Options, ReadTxn, Transact, Update, XmlTextRef};
 
 const COLLAB_ROOT: &str = "content";
+const INJECTION_ROOT: &str = "__quarry_injection";
 
 fn assert_schema_enum_contains(openapi: &Value, schema: &Value, expected: &[&str]) {
     let resolved = if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
@@ -861,14 +862,20 @@ async fn agent_ops_comment_add_injects_into_live_collab_room() {
         .collab_session_id
         .as_deref()
         .is_some_and(|id| id.starts_with("agent-injected:")));
+    let recovery = store
+        .collab_recovery_state(&written.document.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let envelope = injection_envelope_from_update(&recovery.update_v1);
+    assert_eq!(envelope["version_id"], event.version_id.as_deref().unwrap());
     assert_eq!(
-        event.review.as_ref().unwrap()["comments"]["c1"]["body"],
-        "Needs support."
+        envelope["etag"],
+        format!("\"{}\"", event.version_id.as_deref().unwrap())
     );
-    assert_eq!(
-        event.review.as_ref().unwrap()["comments"]["c1"]["by"],
-        "ai:codex"
-    );
+    let review: Value = serde_json::from_str(envelope["review"].as_str().unwrap()).unwrap();
+    assert_eq!(review["comments"]["c1"]["body"], "Needs support.");
+    assert_eq!(review["comments"]["c1"]["by"], "ai:codex");
 
     let response = app
         .clone()
@@ -938,6 +945,7 @@ async fn agent_ops_comment_add_without_live_room_uses_external_write() {
     let snapshot: Value = response_json(snapshot).await;
 
     let response = app
+        .clone()
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentcommentfallback/documents/notes/review.md/ops",
@@ -957,10 +965,26 @@ async fn agent_ops_comment_add_without_live_room_uses_external_write() {
 
     let event = next_document_put_event(&mut events).await;
     assert_eq!(event.collab_session_id, None);
-    assert_eq!(
-        event.review.as_ref().unwrap()["comments"]["c1"]["body"],
-        "Needs support."
-    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentcommentfallback/documents/notes/review.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let markdown = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(markdown.contains("One {==target==}{>>Needs support.<<}{#c1} here."));
+    assert!(markdown.contains("by: ai:codex"));
 }
 
 #[tokio::test]
@@ -2842,6 +2866,29 @@ fn yjs_doc_with_markdown(markdown: &str) -> (Doc, Vec<u8>) {
             .unwrap();
     }
     (doc, update)
+}
+
+fn injection_envelope_from_update(update: &[u8]) -> Value {
+    let doc = Doc::with_options(Options {
+        offset_kind: OffsetKind::Utf16,
+        ..Default::default()
+    });
+    {
+        let mut txn = doc.transact_mut();
+        txn.apply_update(Update::decode_v1(update).unwrap())
+            .unwrap();
+    }
+    let txn = doc.transact();
+    let envelope = txn
+        .get_map(INJECTION_ROOT)
+        .expect("injection envelope root exists");
+    let mut object = serde_json::Map::new();
+    for (key, value) in envelope.iter(&txn) {
+        if let yrs::Out::Any(Any::String(value)) = value {
+            object.insert(key.to_string(), Value::String(value.to_string()));
+        }
+    }
+    Value::Object(object)
 }
 
 async fn wait_for_yjs_comment_mark<S>(socket: &mut S, doc: &Doc, id: &str)

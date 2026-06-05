@@ -20,6 +20,7 @@ quarry-core.workspace = true
 quarry-collab-codec.workspace = true
 quarry-git.workspace = true
 quarry-storage.workspace = true
+regex.workspace = true
 rust-embed = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true

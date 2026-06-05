@@ -116,7 +116,6 @@ import {
 import { collabDebug } from '../features/collab/collab-debug';
 import type { CollabFlushAck, CollabRecoveryError } from '../features/collab/flusher-lease';
 import { clearDraft, loadDraft, saveDraft } from '../features/editor/drafts';
-import type { ReviewMetaPatch } from '../features/review/rfm-types';
 import {
   MarkdownEditor,
   type CollabEditorConfig,
@@ -160,7 +159,6 @@ interface BrowserEventPayload {
   peer_id?: string | null;
   applied?: number | null;
   conflicts?: number | null;
-  review?: ReviewMetaPatch | null;
 }
 
 interface SaveConflictDetails {
@@ -267,7 +265,6 @@ function Workspace() {
   const [collabExternalChange, setCollabExternalChange] = useState<CollabExternalChange | null>(null);
   const [collabFlushAck, setCollabFlushAck] = useState<CollabFlushAck | null>(null);
   const [collabFlusher, setCollabFlusher] = useState(false);
-  const [collabInjectedVersion, setCollabInjectedVersion] = useState<CollabInjectedVersion | null>(null);
   const [collabRebaseKey, setCollabRebaseKey] = useState(0);
   const [collabRecoveryError, setCollabRecoveryError] = useState<CollabRecoveryError | null>(null);
 
@@ -432,7 +429,6 @@ function Workspace() {
         transitionSaveState('clean');
       }
       setCollabExternalChange(null);
-      setCollabInjectedVersion(null);
       void mutate(
         ['/v1/document', library, path],
         {
@@ -572,12 +568,7 @@ function Workspace() {
       if (liveDecision.action === 'ignore_flush_echo') {
         return;
       }
-      if (liveDecision.action === 'adopt_injected') {
-        setCollabInjectedVersion({
-          etag: liveDecision.etag,
-          review: liveDecision.review,
-          versionId: liveDecision.versionId,
-        });
+      if (liveDecision.action === 'agent_injection_refresh') {
         if (currentPath) {
           void mutate(['/v1/versions', activeLibrary, currentPath]);
           void mutate(['/v1/outgoing', activeLibrary, currentPath]);
@@ -885,13 +876,11 @@ function Workspace() {
         sessionId: collabSessionIdRef.current,
       };
       setCollabFlushAck(null);
-      setCollabInjectedVersion(null);
       setCollabRebaseKey(0);
       setCollabRecoveryError(null);
     } else {
       liveCollabSessionRef.current = null;
       setCollabFlushAck(null);
-      setCollabInjectedVersion(null);
       setCollabRebaseKey(0);
       setCollabRecoveryError(null);
     }
@@ -1532,7 +1521,6 @@ function Workspace() {
                   byteSize={selectedEntry?.byte_size}
                   collabSessionId={collabSessionIdRef.current}
                   collabFlushAck={collabFlushAck}
-                  collabInjectedVersion={collabInjectedVersion}
                   onCollabInjectedAdopted={adoptInjectedCollabVersion}
                   onCollabFlushAck={recordCollabFlushAck}
                   onCollabFlusherChange={changeCollabFlusher}
@@ -1543,6 +1531,7 @@ function Workspace() {
                   content={content}
                   contentType={selectedContentType}
                   documentId={collabDocumentId}
+                  etag={etag}
                   image={imageApi}
                   mode={editorMode}
                   path={selectedPath}
@@ -1722,7 +1711,6 @@ function DocumentBody({
   author,
   byteSize,
   collabFlushAck,
-  collabInjectedVersion,
   collabSessionId,
   collabToken,
   collabRebaseKey,
@@ -1730,6 +1718,7 @@ function DocumentBody({
   content,
   contentType,
   documentId,
+  etag,
   image,
   mode,
   path,
@@ -1744,7 +1733,6 @@ function DocumentBody({
   author: string;
   byteSize?: number;
   collabFlushAck: CollabFlushAck | null;
-  collabInjectedVersion: CollabInjectedVersion | null;
   collabSessionId: string;
   collabToken?: string;
   collabRebaseKey: number;
@@ -1752,6 +1740,7 @@ function DocumentBody({
   content: string;
   contentType: string;
   documentId: string;
+  etag: string;
   image: ImageApi;
   mode: EditorMode;
   path: string;
@@ -1770,7 +1759,7 @@ function DocumentBody({
       ? {
           documentId,
           flushAck: collabFlushAck,
-          injectedVersion: collabInjectedVersion,
+          loadedEtag: etag,
           onFlushAck: onCollabFlushAck,
           onFlusherChange: onCollabFlusherChange,
           onInjectedAdopted: onCollabInjectedAdopted,

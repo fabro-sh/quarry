@@ -2,13 +2,14 @@ use axum::body::Bytes;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
+#[cfg(test)]
+use quarry_collab_codec::block_markdown_to_slate;
 use quarry_collab_codec::{
     apply_built, build_nodes, review_blocks_to_slate, strip_trailing_empty_paragraphs,
     xmltext_to_slate, BuiltNode, Node,
 };
-#[cfg(test)]
-use quarry_collab_codec::block_markdown_to_slate;
 use quarry_storage::QuarryStore;
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,12 +28,14 @@ use yrs::sync::{Awareness, DefaultProtocol, Error, Message, Protocol};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 #[cfg(test)]
-use yrs::GetString;
+use yrs::{Any, GetString};
 use yrs::{
-    Doc, OffsetKind, Options, ReadTxn, StateVector, Text, Transact, Update, WriteTxn, XmlTextRef,
+    Doc, Map, OffsetKind, Options, ReadTxn, StateVector, Text, Transact, Update, WriteTxn,
+    XmlTextRef,
 };
 
 pub(crate) const SHARED_ROOT: &str = "content";
+pub(crate) const INJECTION_ROOT: &str = "__quarry_injection";
 const RECOVERY_PERSIST_DEBOUNCE: Duration = Duration::from_millis(50);
 const INJECTION_ORIGIN: &str = "quarry:agent-injection";
 
@@ -144,11 +147,28 @@ impl CollabRoom {
             .map(|content| content.get_string(&txn))
     }
 
+    #[cfg(test)]
+    async fn injection_envelope(&self) -> HashMap<String, String> {
+        let awareness = self.broadcast.awareness().read().await;
+        let txn = awareness.doc().transact();
+        let Some(envelope) = txn.get_map(INJECTION_ROOT) else {
+            return HashMap::new();
+        };
+        envelope
+            .iter(&txn)
+            .filter_map(|(key, value)| match value {
+                yrs::Out::Any(Any::String(value)) => Some((key.to_string(), value.to_string())),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub(crate) async fn begin_injection(
         &self,
         batch: InjectionBatch,
         original_blocks: &[String],
         _base_version_id: String,
+        review: Option<JsonValue>,
     ) -> Option<InjectionGuard> {
         // Reproduce the live room's nodes from the original blocks, including
         // CriticMarkup comment/suggestion marks; the trailing endmatter block
@@ -212,6 +232,7 @@ impl CollabRoom {
             document_id: self.document_id.clone(),
             persistence_failed: self.broadcast.persistence_failed.clone(),
             persistence_failure: self.broadcast.persistence_failure.clone(),
+            review,
             store: self.store.clone(),
         })
     }
@@ -277,6 +298,7 @@ pub(crate) struct InjectionGuard {
     document_id: String,
     persistence_failed: Arc<AtomicBool>,
     persistence_failure: watch::Sender<Option<String>>,
+    review: Option<JsonValue>,
     store: Option<QuarryStore>,
 }
 
@@ -286,6 +308,18 @@ impl InjectionGuard {
             let mut txn = self.awareness.doc().transact_mut_with(INJECTION_ORIGIN);
             let root = root_xml_text_mut(&mut txn).expect("collab root must exist");
             apply_injection_ops(&mut txn, &root, &self.batch.ops);
+            let envelope = txn.get_or_insert_map(INJECTION_ROOT);
+            envelope.insert(&mut txn, "version_id", new_version_id.clone());
+            envelope.insert(&mut txn, "etag", format!("\"{new_version_id}\""));
+            if let Some(review) = &self.review {
+                if let Ok(review_json) = serde_json::to_string(review) {
+                    envelope.insert(&mut txn, "review", review_json);
+                } else {
+                    let _ = envelope.remove(&mut txn, "review");
+                }
+            } else {
+                let _ = envelope.remove(&mut txn, "review");
+            }
         }
 
         let Some(store) = self.store.clone() else {
@@ -920,7 +954,7 @@ mod tests {
         let original_blocks = vec!["Hello\n".to_string()];
 
         let guard = room
-            .begin_injection(batch, &original_blocks, "v1".to_string())
+            .begin_injection(batch, &original_blocks, "v1".to_string(), None)
             .await
             .unwrap();
         assert_eq!(
@@ -932,6 +966,10 @@ mod tests {
             room_slate_children(&room).await,
             block_markdown_to_slate("Hi\n").unwrap()
         );
+        let envelope = room.injection_envelope().await;
+        assert_eq!(envelope.get("version_id").map(String::as_str), Some("v2"));
+        assert_eq!(envelope.get("etag").map(String::as_str), Some("\"v2\""));
+        assert!(!envelope.contains_key("review"));
     }
 
     #[tokio::test]
@@ -954,7 +992,7 @@ mod tests {
         let original_blocks = vec!["Hello\n\n".to_string(), "World\n".to_string()];
 
         let guard = room
-            .begin_injection(batch, &original_blocks, "v1".to_string())
+            .begin_injection(batch, &original_blocks, "v1".to_string(), None)
             .await
             .unwrap();
         assert_eq!(
@@ -983,7 +1021,7 @@ mod tests {
         let original_blocks = vec!["First\n\n".to_string(), "Second\n".to_string()];
 
         assert!(room
-            .begin_injection(batch, &original_blocks, "v1".to_string())
+            .begin_injection(batch, &original_blocks, "v1".to_string(), None)
             .await
             .is_none());
     }
@@ -995,7 +1033,8 @@ mod tests {
         // Seed the live room exactly as the browser would from a commented doc:
         // the comment becomes `comment`/`comment_c1` leaf marks.
         let body = "Para with {==quote==}{>>note<<}{#c1} after\n\n";
-        let endmatter = "---\ncomments:\n  c1:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n";
+        let endmatter =
+            "---\ncomments:\n  c1:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n";
         let doc = format!("{body}{endmatter}");
         let live = quarry_collab_codec::review_markdown_to_slate(&doc).unwrap();
         seed_room_nodes(&room, &build_nodes(&live).unwrap()).await;
@@ -1010,7 +1049,20 @@ mod tests {
         let original_blocks = vec![body.to_string(), endmatter.to_string()];
 
         let guard = room
-            .begin_injection(batch, &original_blocks, "v1".to_string())
+            .begin_injection(
+                batch,
+                &original_blocks,
+                "v1".to_string(),
+                Some(serde_json::json!({
+                    "comments": {
+                        "c1": {
+                            "by": "ai:codex",
+                            "at": "2026-06-05T02:41:00.480Z",
+                            "body": "note"
+                        }
+                    }
+                })),
+            )
             .await
             .expect("review-comment live room should pass the injection gate");
         assert_eq!(
@@ -1021,6 +1073,16 @@ mod tests {
         assert_eq!(
             room_slate_children(&room).await,
             block_markdown_to_slate("Replaced\n").unwrap()
+        );
+        let envelope = room.injection_envelope().await;
+        assert_eq!(envelope.get("version_id").map(String::as_str), Some("v2"));
+        assert_eq!(envelope.get("etag").map(String::as_str), Some("\"v2\""));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                envelope.get("review").expect("review envelope")
+            )
+            .unwrap()["comments"]["c1"]["body"],
+            "note"
         );
     }
 
@@ -1043,7 +1105,7 @@ mod tests {
         let original_blocks = vec!["Hello\n".to_string()];
 
         let guard = room
-            .begin_injection(batch, &original_blocks, "v1".to_string())
+            .begin_injection(batch, &original_blocks, "v1".to_string(), None)
             .await
             .unwrap();
         assert_eq!(

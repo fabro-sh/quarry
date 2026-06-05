@@ -1978,6 +1978,7 @@ dependencies = [
  "quarry-core",
  "quarry-git",
  "quarry-storage",
+ "regex",
  "rust-embed",
  "serde",
  "serde_json",

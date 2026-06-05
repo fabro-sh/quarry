@@ -1,6 +1,7 @@
 import {
   classifyLiveDocumentEvent,
   isAdoptedFlushVersion,
+  parseInjectionEnvelope,
   type LiveCollabSession,
 } from './session-events';
 
@@ -98,7 +99,7 @@ describe('collaboration session event classification', () => {
     ).toEqual({ action: 'external_change' });
   });
 
-  it('routes server-injected agent writes to editor adoption', () => {
+  it('classifies server-injected agent writes as refresh-only wake signals', () => {
     expect(
       classifyLiveDocumentEvent(
         {
@@ -111,34 +112,7 @@ describe('collaboration session event classification', () => {
         },
         session
       )
-    ).toEqual({ action: 'adopt_injected', versionId: 'v3', etag: '"v3"' });
-  });
-
-  it('carries a server-injected review patch to editor adoption', () => {
-    const review = {
-      comments: {
-        c1: {
-          by: 'ai:codex',
-          at: '2026-06-05T02:41:00.480Z',
-          body: 'Needs support.',
-        },
-      },
-    };
-
-    expect(
-      classifyLiveDocumentEvent(
-        {
-          type: 'doc.changed',
-          path: 'notes/daily.md',
-          doc_id: 'doc-1',
-          version_id: 'v3',
-          etag: '"v3"',
-          collab_session_id: 'agent-injected:abc',
-          review,
-        },
-        session
-      )
-    ).toEqual({ action: 'adopt_injected', versionId: 'v3', etag: '"v3"', review });
+    ).toEqual({ action: 'agent_injection_refresh' });
   });
 
   it('keeps an externally deleted live document selected for discard or resurrection', () => {
@@ -162,6 +136,49 @@ describe('collaboration session event classification', () => {
         session
       )
     ).toEqual({ action: 'retarget_move', path: 'notes/renamed.md' });
+  });
+});
+
+describe('parseInjectionEnvelope', () => {
+  it('parses the required version identifiers and optional review JSON string', () => {
+    const review = {
+      comments: {
+        c1: {
+          by: 'ai:codex',
+          at: '2026-06-05T02:41:00.480Z',
+          body: 'Needs support.',
+        },
+      },
+    };
+
+    expect(
+      parseInjectionEnvelope({
+        etag: '"v3"',
+        review: JSON.stringify(review),
+        version_id: 'v3',
+      })
+    ).toEqual({ etag: '"v3"', review, versionId: 'v3' });
+  });
+
+  it('accepts an envelope without review metadata', () => {
+    expect(parseInjectionEnvelope({ etag: '"v3"', version_id: 'v3' })).toEqual({
+      etag: '"v3"',
+      versionId: 'v3',
+    });
+  });
+
+  it('rejects malformed envelopes instead of throwing', () => {
+    expect(parseInjectionEnvelope(null)).toBeNull();
+    expect(parseInjectionEnvelope({ etag: '"v3"' })).toBeNull();
+    expect(parseInjectionEnvelope({ etag: '"v3"', version_id: 3 })).toBeNull();
+    expect(parseInjectionEnvelope({ etag: '"v3"', version_id: 'v3', review: '{' })).toBeNull();
+    expect(
+      parseInjectionEnvelope({
+        etag: '"v3"',
+        review: JSON.stringify(['not', 'object']),
+        version_id: 'v3',
+      })
+    ).toBeNull();
   });
 });
 
