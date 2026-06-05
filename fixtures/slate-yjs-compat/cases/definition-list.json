@@ -1,0 +1,6 @@
+{
+  "name": "definition-list",
+  "supported": false,
+  "reason": "Definition lists are outside the injected Plate surface.",
+  "markdown": "Term\n: Definition\n"
+}

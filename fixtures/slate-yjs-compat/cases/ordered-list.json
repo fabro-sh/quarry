@@ -1,0 +1,53 @@
+{
+  "name": "ordered-list",
+  "supported": true,
+  "markdown": "3. three\n4. four\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "text": "three"
+        }
+      ],
+      "type": "p",
+      "indent": 1,
+      "listStyleType": "decimal",
+      "listStart": 3
+    },
+    {
+      "children": [
+        {
+          "text": "four"
+        }
+      ],
+      "type": "p",
+      "indent": 1,
+      "listStyleType": "decimal",
+      "listStart": 4
+    }
+  ],
+  "observableState": [
+    {
+      "type": "p",
+      "indent": 1,
+      "listStyleType": "decimal",
+      "listStart": 3,
+      "children": [
+        {
+          "text": "three"
+        }
+      ]
+    },
+    {
+      "type": "p",
+      "indent": 1,
+      "listStyleType": "decimal",
+      "listStart": 4,
+      "children": [
+        {
+          "text": "four"
+        }
+      ]
+    }
+  ]
+}

@@ -1897,6 +1897,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "quarry-collab-codec"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "indexmap",
+ "pulldown-cmark",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror",
+ "yrs",
+]
+
+[[package]]
 name = "quarry-core"
 version = "0.1.0"
 dependencies = [
@@ -1959,6 +1974,7 @@ dependencies = [
  "http",
  "mime_guess",
  "pulldown-cmark",
+ "quarry-collab-codec",
  "quarry-core",
  "quarry-git",
  "quarry-storage",

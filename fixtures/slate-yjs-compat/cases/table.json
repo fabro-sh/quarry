@@ -1,0 +1,209 @@
+{
+  "name": "table",
+  "supported": true,
+  "markdown": "| L | C | R |\n| :-- | :-: | --: |\n| **Ana** | `dev` | 3 |\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "L"
+                    }
+                  ],
+                  "type": "p"
+                }
+              ],
+              "type": "th"
+            },
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "C"
+                    }
+                  ],
+                  "type": "p"
+                }
+              ],
+              "type": "th"
+            },
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "R"
+                    }
+                  ],
+                  "type": "p"
+                }
+              ],
+              "type": "th"
+            }
+          ],
+          "type": "tr"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "bold": true,
+                      "text": "Ana"
+                    }
+                  ],
+                  "type": "p"
+                }
+              ],
+              "type": "td"
+            },
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "code": true,
+                      "text": "dev"
+                    }
+                  ],
+                  "type": "p"
+                }
+              ],
+              "type": "td"
+            },
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "3"
+                    }
+                  ],
+                  "type": "p"
+                }
+              ],
+              "type": "td"
+            }
+          ],
+          "type": "tr"
+        }
+      ],
+      "type": "table",
+      "align": [
+        "left",
+        "center",
+        "right"
+      ]
+    }
+  ],
+  "observableState": [
+    {
+      "type": "table",
+      "align": [
+        "left",
+        "center",
+        "right"
+      ],
+      "children": [
+        {
+          "type": "tr",
+          "children": [
+            {
+              "type": "th",
+              "children": [
+                {
+                  "type": "p",
+                  "children": [
+                    {
+                      "text": "L"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "th",
+              "children": [
+                {
+                  "type": "p",
+                  "children": [
+                    {
+                      "text": "C"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "th",
+              "children": [
+                {
+                  "type": "p",
+                  "children": [
+                    {
+                      "text": "R"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "tr",
+          "children": [
+            {
+              "type": "td",
+              "children": [
+                {
+                  "type": "p",
+                  "children": [
+                    {
+                      "bold": true,
+                      "text": "Ana"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "td",
+              "children": [
+                {
+                  "type": "p",
+                  "children": [
+                    {
+                      "code": true,
+                      "text": "dev"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "td",
+              "children": [
+                {
+                  "type": "p",
+                  "children": [
+                    {
+                      "text": "3"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

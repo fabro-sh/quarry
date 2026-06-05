@@ -1,0 +1,6 @@
+{
+  "name": "critic-markup",
+  "supported": false,
+  "reason": "CriticMarkup belongs to the review codec and must fall back.",
+  "markdown": "See {==here==}{#c1}.\n"
+}

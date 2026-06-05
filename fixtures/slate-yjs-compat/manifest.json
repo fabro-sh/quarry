@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "ui/scripts/gen-slate-yjs-fixtures.ts",
+  "gitSha": "31a3737",
+  "versions": {
+    "@platejs/markdown": "52.1.0",
+    "@slate-yjs/core": "1.0.2",
+    "platejs": "52.0.17",
+    "yjs": "13.6.31"
+  },
+  "cases": [
+    "core-inline",
+    "nested-list",
+    "ordered-list",
+    "task-list",
+    "blocks",
+    "table",
+    "utf16",
+    "zero-width-placeholder",
+    "critic-markup",
+    "review-comment",
+    "review-comment-only",
+    "review-suggestion",
+    "review-substitution",
+    "footnote",
+    "definition-list"
+  ]
+}

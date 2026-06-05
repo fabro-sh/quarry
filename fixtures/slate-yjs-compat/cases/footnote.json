@@ -1,0 +1,6 @@
+{
+  "name": "footnote",
+  "supported": false,
+  "reason": "Footnotes are outside the injected Plate surface.",
+  "markdown": "A note [^1].\n\n[^1]: Footnote body.\n"
+}

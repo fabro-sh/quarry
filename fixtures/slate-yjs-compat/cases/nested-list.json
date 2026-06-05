@@ -1,0 +1,69 @@
+{
+  "name": "nested-list",
+  "supported": true,
+  "markdown": "- one\n  - nested\n- two\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "text": "one"
+        }
+      ],
+      "type": "p",
+      "indent": 1,
+      "listStyleType": "disc"
+    },
+    {
+      "children": [
+        {
+          "text": "nested"
+        }
+      ],
+      "type": "p",
+      "indent": 2,
+      "listStyleType": "disc"
+    },
+    {
+      "children": [
+        {
+          "text": "two"
+        }
+      ],
+      "type": "p",
+      "indent": 1,
+      "listStyleType": "disc"
+    }
+  ],
+  "observableState": [
+    {
+      "type": "p",
+      "indent": 1,
+      "listStyleType": "disc",
+      "children": [
+        {
+          "text": "one"
+        }
+      ]
+    },
+    {
+      "type": "p",
+      "indent": 2,
+      "listStyleType": "disc",
+      "children": [
+        {
+          "text": "nested"
+        }
+      ]
+    },
+    {
+      "type": "p",
+      "indent": 1,
+      "listStyleType": "disc",
+      "children": [
+        {
+          "text": "two"
+        }
+      ]
+    }
+  ]
+}

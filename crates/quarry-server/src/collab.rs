@@ -2,6 +2,12 @@ use axum::body::Bytes;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use quarry_collab_codec::{
+    apply_built, build_nodes, review_blocks_to_slate, strip_trailing_empty_paragraphs,
+    xmltext_to_slate, BuiltNode, Node,
+};
+#[cfg(test)]
+use quarry_collab_codec::block_markdown_to_slate;
 use quarry_storage::QuarryStore;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -12,7 +18,7 @@ use std::time::Duration;
 use tokio::select;
 use tokio::sync::broadcast::{channel, Receiver, Sender};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
-use tokio::sync::{watch, Mutex, RwLock};
+use tokio::sync::{watch, Mutex, OwnedRwLockWriteGuard, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use yrs::encoding::write::Write;
@@ -22,10 +28,13 @@ use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 #[cfg(test)]
 use yrs::GetString;
-use yrs::{Doc, ReadTxn, StateVector, Transact, Update, WriteTxn};
+use yrs::{
+    Doc, OffsetKind, Options, ReadTxn, StateVector, Text, Transact, Update, WriteTxn, XmlTextRef,
+};
 
 pub(crate) const SHARED_ROOT: &str = "content";
 const RECOVERY_PERSIST_DEBOUNCE: Duration = Duration::from_millis(50);
+const INJECTION_ORIGIN: &str = "quarry:agent-injection";
 
 type AwarenessRef = Arc<RwLock<Awareness>>;
 
@@ -63,6 +72,10 @@ impl CollabHub {
         room
     }
 
+    pub(crate) async fn live_room(&self, document_id: &str) -> Option<Arc<CollabRoom>> {
+        self.rooms.read().await.get(document_id).cloned()
+    }
+
     #[cfg(test)]
     pub(crate) async fn room_count(&self) -> usize {
         self.rooms.read().await.len()
@@ -70,12 +83,17 @@ impl CollabHub {
 }
 
 pub(crate) struct CollabRoom {
+    document_id: String,
+    store: Option<QuarryStore>,
     broadcast: BroadcastGroup,
 }
 
 impl CollabRoom {
     async fn new(document_id: &str, store: Option<QuarryStore>) -> Self {
-        let doc = Doc::new();
+        let doc = Doc::with_options(Options {
+            offset_kind: OffsetKind::Utf16,
+            ..Default::default()
+        });
         {
             let mut txn = doc.transact_mut();
             // Yjs root Y.Text and Y.XmlText share wire updates; yrs exposes root creation as TextRef.
@@ -94,13 +112,15 @@ impl CollabRoom {
             }
         }
         let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
-        let persistence = store.map(|store| RecoveryPersistence {
+        let persistence = store.clone().map(|store| RecoveryPersistence {
             store,
             document_id: document_id.to_string(),
             debounce: RECOVERY_PERSIST_DEBOUNCE,
         });
 
         Self {
+            document_id: document_id.to_string(),
+            store,
             broadcast: BroadcastGroup::new(awareness, 32, persistence).await,
         }
     }
@@ -122,6 +142,249 @@ impl CollabRoom {
         let txn = awareness.doc().transact();
         txn.get_text(SHARED_ROOT)
             .map(|content| content.get_string(&txn))
+    }
+
+    pub(crate) async fn begin_injection(
+        &self,
+        batch: InjectionBatch,
+        original_blocks: &[String],
+        _base_version_id: String,
+    ) -> Option<InjectionGuard> {
+        // Reproduce the live room's nodes from the original blocks, including
+        // CriticMarkup comment/suggestion marks; the trailing endmatter block
+        // yields no nodes. Bails (→ no injection) if any block can't be matched.
+        let expected: Vec<Node> = review_blocks_to_slate(original_blocks)?
+            .into_iter()
+            .flatten()
+            .collect();
+        let expected = clean_gate_nodes(&build_nodes(&expected).ok()?);
+
+        let awareness = self.broadcast.awareness().clone().write_owned().await;
+        let live_content_len = {
+            let txn = awareness.doc().transact();
+            let root = root_xml_text(&txn)?;
+            let live = xmltext_to_slate(&txn, &root).ok()?;
+            let Node::Element { children, .. } = live else {
+                return None;
+            };
+            let comparable = clean_gate_nodes(&children);
+            let stripped = strip_trailing_empty_paragraphs(&comparable);
+            if stripped != expected {
+                tracing::debug!(
+                    document_id = %self.document_id,
+                    live = %serde_json::to_string(&stripped).unwrap_or_default(),
+                    expected = %serde_json::to_string(&expected).unwrap_or_default(),
+                    "agent injection clean gate rejected live room"
+                );
+                return None;
+            }
+            stripped.len() as u32
+        };
+        if !batch.is_valid_for(live_content_len) {
+            tracing::debug!(
+                document_id = %self.document_id,
+                live_content_len,
+                "agent injection batch rejected for live content length"
+            );
+            return None;
+        }
+
+        Some(InjectionGuard {
+            awareness,
+            batch,
+            document_id: self.document_id.clone(),
+            persistence_failed: self.broadcast.persistence_failed.clone(),
+            persistence_failure: self.broadcast.persistence_failure.clone(),
+            store: self.store.clone(),
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct InjectionBatch {
+    ops: Vec<InjectionOp>,
+}
+
+impl InjectionBatch {
+    pub(crate) fn new(ops: Vec<InjectionOp>) -> Option<Self> {
+        if ops.is_empty() {
+            return None;
+        }
+        Some(Self { ops })
+    }
+
+    fn is_valid_for(&self, content_len: u32) -> bool {
+        self.ops.iter().all(|op| match op {
+            InjectionOp::ReplaceSpan {
+                start,
+                old_node_count,
+                ..
+            }
+            | InjectionOp::DeleteSpan {
+                start,
+                old_node_count,
+            } => start
+                .checked_add(*old_node_count)
+                .is_some_and(|end| end <= content_len),
+            InjectionOp::InsertAt { index, .. } => *index <= content_len,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum InjectionOp {
+    ReplaceSpan {
+        start: u32,
+        old_node_count: u32,
+        new_nodes: Vec<BuiltNode>,
+    },
+    InsertAt {
+        index: u32,
+        new_nodes: Vec<BuiltNode>,
+    },
+    DeleteSpan {
+        start: u32,
+        old_node_count: u32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CommitOutcome {
+    Injected,
+    InjectedRecoveryDegraded,
+}
+
+pub(crate) struct InjectionGuard {
+    awareness: OwnedRwLockWriteGuard<Awareness>,
+    batch: InjectionBatch,
+    document_id: String,
+    persistence_failed: Arc<AtomicBool>,
+    persistence_failure: watch::Sender<Option<String>>,
+    store: Option<QuarryStore>,
+}
+
+impl InjectionGuard {
+    pub(crate) async fn commit(mut self, new_version_id: String) -> CommitOutcome {
+        {
+            let mut txn = self.awareness.doc().transact_mut_with(INJECTION_ORIGIN);
+            let root = root_xml_text_mut(&mut txn).expect("collab root must exist");
+            apply_injection_ops(&mut txn, &root, &self.batch.ops);
+        }
+
+        let Some(store) = self.store.clone() else {
+            return CommitOutcome::Injected;
+        };
+        let update_v1 = self
+            .awareness
+            .doc()
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        match store
+            .put_collab_recovery_state(&self.document_id, Some(new_version_id), update_v1, false)
+            .await
+        {
+            Ok(_) => CommitOutcome::Injected,
+            Err(error) => {
+                let message = format!("failed to persist collab recovery state: {error}");
+                tracing::warn!(
+                    %error,
+                    document_id = %self.document_id,
+                    "failed to persist injected collab recovery state"
+                );
+                self.persistence_failed.store(true, Ordering::SeqCst);
+                signal_recovery_persistence_error_locked(
+                    &mut self.awareness,
+                    &self.document_id,
+                    &message,
+                );
+                let _ = self.persistence_failure.send(Some(message));
+                CommitOutcome::InjectedRecoveryDegraded
+            }
+        }
+    }
+}
+
+fn apply_injection_ops(txn: &mut yrs::TransactionMut<'_>, root: &XmlTextRef, ops: &[InjectionOp]) {
+    let mut ops = ops
+        .iter()
+        .cloned()
+        .enumerate()
+        .collect::<Vec<(usize, InjectionOp)>>();
+    ops.sort_by(|(left_order, left), (right_order, right)| {
+        right
+            .start_index()
+            .cmp(&left.start_index())
+            .then_with(|| right_order.cmp(left_order))
+    });
+    for (_, op) in ops {
+        match op {
+            InjectionOp::ReplaceSpan {
+                start,
+                old_node_count,
+                new_nodes,
+            } => {
+                if old_node_count > 0 {
+                    root.remove_range(txn, start, old_node_count);
+                }
+                apply_built(txn, root, start, &new_nodes);
+            }
+            InjectionOp::InsertAt { index, new_nodes } => {
+                apply_built(txn, root, index, &new_nodes);
+            }
+            InjectionOp::DeleteSpan {
+                start,
+                old_node_count,
+            } => {
+                if old_node_count > 0 {
+                    root.remove_range(txn, start, old_node_count);
+                }
+            }
+        }
+    }
+}
+
+impl InjectionOp {
+    fn start_index(&self) -> u32 {
+        match self {
+            InjectionOp::ReplaceSpan { start, .. } | InjectionOp::DeleteSpan { start, .. } => {
+                *start
+            }
+            InjectionOp::InsertAt { index, .. } => *index,
+        }
+    }
+}
+
+fn root_xml_text<T: ReadTxn>(txn: &T) -> Option<XmlTextRef> {
+    let text = txn.get_text(SHARED_ROOT)?;
+    let root: &XmlTextRef = text.as_ref();
+    Some(root.clone())
+}
+
+fn root_xml_text_mut(txn: &mut yrs::TransactionMut<'_>) -> Option<XmlTextRef> {
+    let text = txn.get_text(SHARED_ROOT)?;
+    let root: &XmlTextRef = text.as_ref();
+    Some(root.clone())
+}
+
+fn clean_gate_nodes(nodes: &[Node]) -> Vec<Node> {
+    nodes.iter().map(clean_gate_node).collect()
+}
+
+fn clean_gate_node(node: &Node) -> Node {
+    match node {
+        Node::Text { text, marks } => Node::Text {
+            text: text.clone(),
+            marks: marks.clone(),
+        },
+        Node::Element {
+            ty,
+            attrs,
+            children,
+        } => {
+            let mut attrs = attrs.clone();
+            attrs.shift_remove("id");
+            Node::element(ty.clone(), attrs, clean_gate_nodes(children))
+        }
     }
 }
 
@@ -192,14 +455,19 @@ impl BroadcastGroup {
         let sink = sender.clone();
         let doc_sub = {
             lock.doc()
-                .observe_update_v1(move |_txn, update| {
+                .observe_update_v1(move |txn, update| {
                     let mut encoder = EncoderV1::new();
                     encoder.write_var(MSG_SYNC);
                     encoder.write_var(MSG_SYNC_UPDATE);
                     encoder.write_buf(&update.update);
                     let _ = sink.send(encoder.to_vec());
-                    if let Some(recovery_tx) = &recovery_tx {
-                        let _ = recovery_tx.send(());
+                    let server_injection = txn
+                        .origin()
+                        .is_some_and(|origin| origin.as_ref() == INJECTION_ORIGIN.as_bytes());
+                    if !server_injection {
+                        if let Some(recovery_tx) = &recovery_tx {
+                            let _ = recovery_tx.send(());
+                        }
                     }
                 })
                 .unwrap()
@@ -441,6 +709,14 @@ async fn signal_recovery_persistence_error(
     message: &str,
 ) {
     let mut awareness = awareness.write().await;
+    signal_recovery_persistence_error_locked(&mut awareness, document_id, message);
+}
+
+fn signal_recovery_persistence_error_locked(
+    awareness: &mut Awareness,
+    document_id: &str,
+    message: &str,
+) {
     let state = serde_json::json!({
         "quarryServer": {
             "recoveryError": {
@@ -611,6 +887,160 @@ mod tests {
 
         drop(client_sink);
         subscription.completed().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn injects_agent_edit_into_equal_live_room() {
+        let hub = CollabHub::default();
+        let room = hub.room("doc-1").await;
+        seed_room(&room, "Hello\n").await;
+        let batch = InjectionBatch::new(vec![InjectionOp::ReplaceSpan {
+            start: 0,
+            old_node_count: 1,
+            new_nodes: built_nodes("Hi\n"),
+        }])
+        .unwrap();
+        let original_blocks = vec!["Hello\n".to_string()];
+
+        let guard = room
+            .begin_injection(batch, &original_blocks, "v1".to_string())
+            .await
+            .unwrap();
+        assert_eq!(
+            guard.commit("v2".to_string()).await,
+            CommitOutcome::Injected
+        );
+
+        assert_eq!(
+            room_slate_children(&room).await,
+            block_markdown_to_slate("Hi\n").unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn injection_gate_ignores_plate_runtime_element_ids() {
+        let hub = CollabHub::default();
+        let room = hub.room("doc-1").await;
+        let live_nodes = block_markdown_to_slate("Hello\n\nWorld\n")
+            .unwrap()
+            .into_iter()
+            .enumerate()
+            .map(|(index, node)| with_plate_id(node, &format!("runtime-{index}")))
+            .collect::<Vec<_>>();
+        seed_room_nodes(&room, &build_nodes(&live_nodes).unwrap()).await;
+        let batch = InjectionBatch::new(vec![InjectionOp::ReplaceSpan {
+            start: 1,
+            old_node_count: 1,
+            new_nodes: built_nodes("Everyone\n"),
+        }])
+        .unwrap();
+        let original_blocks = vec!["Hello\n\n".to_string(), "World\n".to_string()];
+
+        let guard = room
+            .begin_injection(batch, &original_blocks, "v1".to_string())
+            .await
+            .unwrap();
+        assert_eq!(
+            guard.commit("v2".to_string()).await,
+            CommitOutcome::Injected
+        );
+
+        let children = room_slate_children(&room).await;
+        assert_eq!(
+            children[1],
+            block_markdown_to_slate("Everyone\n").unwrap()[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn injection_gate_rejects_untouched_live_block_difference() {
+        let hub = CollabHub::default();
+        let room = hub.room("doc-1").await;
+        seed_room(&room, "Changed\n\nSecond\n").await;
+        let batch = InjectionBatch::new(vec![InjectionOp::ReplaceSpan {
+            start: 1,
+            old_node_count: 1,
+            new_nodes: built_nodes("New second\n"),
+        }])
+        .unwrap();
+        let original_blocks = vec!["First\n\n".to_string(), "Second\n".to_string()];
+
+        assert!(room
+            .begin_injection(batch, &original_blocks, "v1".to_string())
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn injection_gate_accepts_live_room_with_review_comment_marks() {
+        let hub = CollabHub::default();
+        let room = hub.room("doc-1").await;
+        // Seed the live room exactly as the browser would from a commented doc:
+        // the comment becomes `comment`/`comment_c1` leaf marks.
+        let body = "Para with {==quote==}{>>note<<}{#c1} after\n\n";
+        let endmatter = "---\ncomments:\n  c1:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n";
+        let doc = format!("{body}{endmatter}");
+        let live = quarry_collab_codec::review_markdown_to_slate(&doc).unwrap();
+        seed_room_nodes(&room, &build_nodes(&live).unwrap()).await;
+
+        // Replace the commented prose block (1 live node) with plain text.
+        let batch = InjectionBatch::new(vec![InjectionOp::ReplaceSpan {
+            start: 0,
+            old_node_count: 1,
+            new_nodes: built_nodes("Replaced\n"),
+        }])
+        .unwrap();
+        let original_blocks = vec![body.to_string(), endmatter.to_string()];
+
+        let guard = room
+            .begin_injection(batch, &original_blocks, "v1".to_string())
+            .await
+            .expect("review-comment live room should pass the injection gate");
+        assert_eq!(
+            guard.commit("v2".to_string()).await,
+            CommitOutcome::Injected
+        );
+
+        assert_eq!(
+            room_slate_children(&room).await,
+            block_markdown_to_slate("Replaced\n").unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn injection_allows_trailing_scaffold_and_inserts_before_it() {
+        let hub = CollabHub::default();
+        let room = hub.room("doc-1").await;
+        let mut nodes = block_markdown_to_slate("Hello\n").unwrap();
+        nodes.push(Node::element(
+            "p",
+            [("id".to_string(), serde_json::json!("trailing-id"))].into(),
+            vec![Node::text("", Default::default())],
+        ));
+        seed_room_nodes(&room, &build_nodes(&nodes).unwrap()).await;
+        let batch = InjectionBatch::new(vec![InjectionOp::InsertAt {
+            index: 1,
+            new_nodes: built_nodes("Inserted\n"),
+        }])
+        .unwrap();
+        let original_blocks = vec!["Hello\n".to_string()];
+
+        let guard = room
+            .begin_injection(batch, &original_blocks, "v1".to_string())
+            .await
+            .unwrap();
+        assert_eq!(
+            guard.commit("v2".to_string()).await,
+            CommitOutcome::Injected
+        );
+
+        let children = room_slate_children(&room).await;
+        assert_eq!(
+            children[..2].to_vec(),
+            block_markdown_to_slate("Hello\n\nInserted\n").unwrap()
+        );
+        let comparable = clean_gate_nodes(&children);
+        assert!(quarry_collab_codec::is_empty_paragraph(&comparable[2]));
     }
 
     #[tokio::test]
@@ -788,5 +1218,37 @@ mod tests {
                 Some(value) => Poll::Ready(Some(Ok(value))),
             }
         }
+    }
+
+    fn built_nodes(markdown: &str) -> Vec<BuiltNode> {
+        build_nodes(&block_markdown_to_slate(markdown).unwrap()).unwrap()
+    }
+
+    fn with_plate_id(mut node: Node, id: &str) -> Node {
+        if let Node::Element { attrs, .. } = &mut node {
+            attrs.insert("id".to_string(), serde_json::json!(id));
+        }
+        node
+    }
+
+    async fn seed_room(room: &CollabRoom, markdown: &str) {
+        seed_room_nodes(room, &built_nodes(markdown)).await;
+    }
+
+    async fn seed_room_nodes(room: &CollabRoom, nodes: &[BuiltNode]) {
+        let awareness = room.broadcast.awareness().write().await;
+        let mut txn = awareness.doc().transact_mut();
+        let root = root_xml_text_mut(&mut txn).unwrap();
+        apply_built(&mut txn, &root, 0, nodes);
+    }
+
+    async fn room_slate_children(room: &CollabRoom) -> Vec<Node> {
+        let awareness = room.broadcast.awareness().read().await;
+        let txn = awareness.doc().transact();
+        let root = root_xml_text(&txn).unwrap();
+        let Node::Element { children, .. } = xmltext_to_slate(&txn, &root).unwrap() else {
+            panic!("expected fragment");
+        };
+        children
     }
 }

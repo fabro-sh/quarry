@@ -1,0 +1,25 @@
+{
+  "name": "zero-width-placeholder",
+  "supported": true,
+  "markdown": "​\n\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "text": ""
+        }
+      ],
+      "type": "p"
+    }
+  ],
+  "observableState": [
+    {
+      "type": "p",
+      "children": [
+        {
+          "text": ""
+        }
+      ]
+    }
+  ]
+}

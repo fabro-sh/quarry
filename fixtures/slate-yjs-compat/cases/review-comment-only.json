@@ -1,0 +1,42 @@
+{
+  "name": "review-comment-only",
+  "supported": true,
+  "codec": "review",
+  "markdown": "Note {>>aside<<}{#c2} done\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "text": "Note "
+        },
+        {
+          "comment": true,
+          "comment_c2": true,
+          "text": " "
+        },
+        {
+          "text": " done"
+        }
+      ],
+      "type": "p"
+    }
+  ],
+  "observableState": [
+    {
+      "type": "p",
+      "children": [
+        {
+          "text": "Note "
+        },
+        {
+          "comment": true,
+          "comment_c2": true,
+          "text": " "
+        },
+        {
+          "text": " done"
+        }
+      ]
+    }
+  ]
+}

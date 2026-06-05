@@ -1,0 +1,161 @@
+{
+  "name": "core-inline",
+  "supported": true,
+  "markdown": "# Heading\n\nParagraph **bold** *italic* <u>under</u> ~~strike~~ `code` [link](guide.md) [[Doc|Label]].\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "text": "Heading"
+        }
+      ],
+      "type": "h1"
+    },
+    {
+      "children": [
+        {
+          "text": "Paragraph "
+        },
+        {
+          "bold": true,
+          "text": "bold"
+        },
+        {
+          "text": " "
+        },
+        {
+          "italic": true,
+          "text": "italic"
+        },
+        {
+          "text": " "
+        },
+        {
+          "underline": true,
+          "text": "under"
+        },
+        {
+          "text": " "
+        },
+        {
+          "strikethrough": true,
+          "text": "strike"
+        },
+        {
+          "text": " "
+        },
+        {
+          "code": true,
+          "text": "code"
+        },
+        {
+          "text": " "
+        },
+        {
+          "children": [
+            {
+              "text": "link"
+            }
+          ],
+          "type": "a",
+          "url": "guide.md"
+        },
+        {
+          "text": " "
+        },
+        {
+          "type": "wikilink",
+          "target": "Doc",
+          "children": [
+            {
+              "text": ""
+            }
+          ],
+          "alias": "Label"
+        },
+        {
+          "text": "."
+        }
+      ],
+      "type": "p"
+    }
+  ],
+  "observableState": [
+    {
+      "type": "h1",
+      "children": [
+        {
+          "text": "Heading"
+        }
+      ]
+    },
+    {
+      "type": "p",
+      "children": [
+        {
+          "text": "Paragraph "
+        },
+        {
+          "bold": true,
+          "text": "bold"
+        },
+        {
+          "text": " "
+        },
+        {
+          "italic": true,
+          "text": "italic"
+        },
+        {
+          "text": " "
+        },
+        {
+          "underline": true,
+          "text": "under"
+        },
+        {
+          "text": " "
+        },
+        {
+          "strikethrough": true,
+          "text": "strike"
+        },
+        {
+          "text": " "
+        },
+        {
+          "code": true,
+          "text": "code"
+        },
+        {
+          "text": " "
+        },
+        {
+          "type": "a",
+          "url": "guide.md",
+          "children": [
+            {
+              "text": "link"
+            }
+          ]
+        },
+        {
+          "text": " "
+        },
+        {
+          "type": "wikilink",
+          "target": "Doc",
+          "alias": "Label",
+          "children": [
+            {
+              "text": ""
+            }
+          ]
+        },
+        {
+          "text": "."
+        }
+      ]
+    }
+  ]
+}

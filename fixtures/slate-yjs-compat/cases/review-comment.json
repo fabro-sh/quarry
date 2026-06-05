@@ -1,0 +1,42 @@
+{
+  "name": "review-comment",
+  "supported": true,
+  "codec": "review",
+  "markdown": "See {==here==}{>>note<<}{#c1}.\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "text": "See "
+        },
+        {
+          "comment": true,
+          "comment_c1": true,
+          "text": "here"
+        },
+        {
+          "text": "."
+        }
+      ],
+      "type": "p"
+    }
+  ],
+  "observableState": [
+    {
+      "type": "p",
+      "children": [
+        {
+          "text": "See "
+        },
+        {
+          "comment": true,
+          "comment_c1": true,
+          "text": "here"
+        },
+        {
+          "text": "."
+        }
+      ]
+    }
+  ]
+}

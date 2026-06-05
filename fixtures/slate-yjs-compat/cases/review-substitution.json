@@ -1,0 +1,72 @@
+{
+  "name": "review-substitution",
+  "supported": true,
+  "codec": "review",
+  "markdown": "Use {~~old~>new~~}{#s3} please\n\n---\nsuggestions:\n  s3:\n    by: ai:claude\n    at: 2026-06-05T02:41:00.480Z\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "text": "Use "
+        },
+        {
+          "suggestion": true,
+          "suggestion_s3": {
+            "id": "s3",
+            "type": "remove",
+            "userId": "ai:claude",
+            "createdAt": 1780627260480
+          },
+          "text": "old"
+        },
+        {
+          "suggestion": true,
+          "suggestion_s3": {
+            "id": "s3",
+            "type": "insert",
+            "userId": "ai:claude",
+            "createdAt": 1780627260480
+          },
+          "text": "new"
+        },
+        {
+          "text": " please"
+        }
+      ],
+      "type": "p"
+    }
+  ],
+  "observableState": [
+    {
+      "type": "p",
+      "children": [
+        {
+          "text": "Use "
+        },
+        {
+          "suggestion": true,
+          "suggestion_s3": {
+            "id": "s3",
+            "type": "remove",
+            "userId": "ai:claude",
+            "createdAt": 1780627260480
+          },
+          "text": "old"
+        },
+        {
+          "suggestion": true,
+          "suggestion_s3": {
+            "id": "s3",
+            "type": "insert",
+            "userId": "ai:claude",
+            "createdAt": 1780627260480
+          },
+          "text": "new"
+        },
+        {
+          "text": " please"
+        }
+      ]
+    }
+  ]
+}

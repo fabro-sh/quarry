@@ -1,0 +1,99 @@
+{
+  "name": "blocks",
+  "supported": true,
+  "markdown": "![alt](assets/x.png)\n\n```mermaid\ngraph TD; A-->B;\n```\n\n```rust\nfn main() {}\n```\n\n---\n",
+  "canonicalPlate": [
+    {
+      "caption": [
+        {
+          "text": "alt"
+        }
+      ],
+      "children": [
+        {
+          "text": ""
+        }
+      ],
+      "type": "img",
+      "url": "assets/x.png"
+    },
+    {
+      "type": "mermaid",
+      "code": "graph TD; A-->B;",
+      "children": [
+        {
+          "text": ""
+        }
+      ]
+    },
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "text": "fn main() {}"
+            }
+          ],
+          "type": "code_line"
+        }
+      ],
+      "lang": "rust",
+      "type": "code_block"
+    },
+    {
+      "children": [
+        {
+          "text": ""
+        }
+      ],
+      "type": "hr"
+    }
+  ],
+  "observableState": [
+    {
+      "caption": [
+        {
+          "text": "alt"
+        }
+      ],
+      "type": "img",
+      "url": "assets/x.png",
+      "children": [
+        {
+          "text": ""
+        }
+      ]
+    },
+    {
+      "type": "mermaid",
+      "code": "graph TD; A-->B;",
+      "children": [
+        {
+          "text": ""
+        }
+      ]
+    },
+    {
+      "lang": "rust",
+      "type": "code_block",
+      "children": [
+        {
+          "type": "code_line",
+          "children": [
+            {
+              "text": "fn main() {}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "hr",
+      "children": [
+        {
+          "text": ""
+        }
+      ]
+    }
+  ]
+}

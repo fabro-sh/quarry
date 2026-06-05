@@ -1,0 +1,53 @@
+{
+  "name": "task-list",
+  "supported": true,
+  "markdown": "- [ ] Todo\n- [x] Done\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "text": "Todo"
+        }
+      ],
+      "type": "p",
+      "indent": 1,
+      "listStyleType": "todo",
+      "checked": false
+    },
+    {
+      "children": [
+        {
+          "text": "Done"
+        }
+      ],
+      "type": "p",
+      "indent": 1,
+      "listStyleType": "todo",
+      "checked": true
+    }
+  ],
+  "observableState": [
+    {
+      "type": "p",
+      "indent": 1,
+      "listStyleType": "todo",
+      "checked": false,
+      "children": [
+        {
+          "text": "Todo"
+        }
+      ]
+    },
+    {
+      "type": "p",
+      "indent": 1,
+      "listStyleType": "todo",
+      "checked": true,
+      "children": [
+        {
+          "text": "Done"
+        }
+      ]
+    }
+  ]
+}

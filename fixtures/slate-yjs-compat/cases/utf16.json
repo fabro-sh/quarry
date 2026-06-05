@@ -1,0 +1,49 @@
+{
+  "name": "utf16",
+  "supported": true,
+  "markdown": "# 😀 UTF16\n\nA 👍 **B**\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "text": "😀 UTF16"
+        }
+      ],
+      "type": "h1"
+    },
+    {
+      "children": [
+        {
+          "text": "A 👍 "
+        },
+        {
+          "bold": true,
+          "text": "B"
+        }
+      ],
+      "type": "p"
+    }
+  ],
+  "observableState": [
+    {
+      "type": "h1",
+      "children": [
+        {
+          "text": "😀 UTF16"
+        }
+      ]
+    },
+    {
+      "type": "p",
+      "children": [
+        {
+          "text": "A 👍 "
+        },
+        {
+          "bold": true,
+          "text": "B"
+        }
+      ]
+    }
+  ]
+}

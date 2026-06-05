@@ -640,8 +640,32 @@ impl QuarryStore {
         precondition: WritePrecondition,
         collab_session_id: Option<String>,
     ) -> Result<WriteOutcome> {
+        let outcome = self
+            .commit_document_with_collab_session(
+                library,
+                path,
+                content,
+                metadata,
+                content_type,
+                source,
+                precondition,
+            )
+            .await?;
+        self.emit_document_put_events(&outcome, collab_session_id);
+        Ok(outcome)
+    }
+
+    pub async fn commit_document_with_collab_session(
+        &self,
+        library: &str,
+        path: &str,
+        content: Vec<u8>,
+        metadata: JsonValue,
+        content_type: &str,
+        source: DocumentSource,
+        precondition: WritePrecondition,
+    ) -> Result<WriteOutcome> {
         let path = normalize_path(path)?;
-        let source_for_event = source.clone();
         let _operation_guard = self.normal_write_gate().await;
         let _guard = self.write_lock.lock().await;
         let conn = self.conn()?;
@@ -687,13 +711,20 @@ impl QuarryStore {
             })
         }
         .await;
-        let outcome = finish_tx(&conn, result).await?;
+        finish_tx(&conn, result).await
+    }
+
+    pub fn emit_document_put_events(
+        &self,
+        outcome: &WriteOutcome,
+        collab_session_id: Option<String>,
+    ) {
         self.emit_event(StoreEvent {
             kind: StoreEventKind::DocumentPut,
             library_id: outcome.transaction.library_id.clone(),
             path: Some(outcome.document.path.clone()),
             new_path: None,
-            source: Some(source_for_event),
+            source: Some(outcome.transaction.source.clone()),
             tx_id: Some(outcome.transaction.id.clone()),
             doc_id: Some(outcome.document.id.clone()),
             version_id: Some(outcome.version.id.clone()),
@@ -707,7 +738,6 @@ impl QuarryStore {
             outcome.transaction.library_id.clone(),
             outcome.document.path.clone(),
         ));
-        Ok(outcome)
     }
 
     pub async fn get_document(&self, library: &str, path: &str) -> Result<Document> {

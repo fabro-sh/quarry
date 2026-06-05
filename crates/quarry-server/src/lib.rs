@@ -16,6 +16,10 @@ use futures_util::{stream, Stream};
 use pulldown_cmark::{
     Event as MarkdownEvent, Options as MarkdownOptions, Parser as MarkdownParser, Tag,
 };
+use quarry_collab_codec::{
+    build_nodes, review_block_to_slate, review_blocks_to_slate, split_review_endmatter, ReviewMeta,
+    ReviewMetaEntry,
+};
 use quarry_core::{
     now_timestamp, CollabInviteToken, ConflictRecord, DocumentLink, DocumentListEntry,
     DocumentSource, DocumentVersion, DocumentVersionContent, GcReport, GitPeer, GraphEdge,
@@ -37,6 +41,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use utoipa::{OpenApi, ToSchema};
+
+use crate::collab::{InjectionBatch, InjectionOp};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -1756,39 +1762,31 @@ struct AgentEditResult {
     version_id: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+struct AgentEditPlan {
+    markdown: String,
+    blocks: Vec<String>,
+    ops: Vec<PlannedAgentEditOp>,
+    original_blocks: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+enum PlannedAgentEditOp {
+    ReplaceBlock { ordinal: usize, markdown: String },
+    InsertBefore { ordinal: usize, markdown: String },
+    InsertAfter { ordinal: usize, markdown: String },
+    DeleteBlock { ordinal: usize },
+}
+
 #[derive(Clone)]
 struct AgentOpsResult {
     response: AgentOpsResponse,
     version_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-struct ReviewMeta {
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    comments: BTreeMap<String, ReviewMetaEntry>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    suggestions: BTreeMap<String, ReviewMetaEntry>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct ReviewMetaEntry {
-    #[serde(default = "unknown_review_author")]
-    by: String,
-    #[serde(default)]
-    at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    body: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    re: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    resolved: Option<String>,
-}
-
-fn unknown_review_author() -> String {
-    "unknown".to_string()
-}
+// `ReviewMeta` / `ReviewMetaEntry` and the endmatter readers now live in
+// `quarry_collab_codec::review` (single-sourced with the slate conversion that
+// needs them); imported at the top of this module.
 
 async fn agent_presence_document(
     state: &AppState,
@@ -1930,32 +1928,74 @@ async fn agent_edit_document(
     let document = state.store.get_document(library, path).await?;
     let markdown = document_markdown(&document)?;
     let base_token = etag(&document.version.id);
-    let next_markdown = apply_agent_edit(&markdown, &base_token, &request)?;
+    let plan = apply_agent_edit(&markdown, &base_token, &request)?;
 
     if dry_run {
         return Ok(AgentEditResult {
             response: AgentEditResponse {
                 dry_run: true,
                 outcome: None,
-                markdown: Some(next_markdown),
+                markdown: Some(plan.markdown),
             },
             version_id: None,
         });
     }
 
     let base_version_id = version_id_from_base_token(&request.base_token)?;
-    let outcome = state
-        .store
-        .put_document(
-            library,
+    let injected_session_id = format!("agent-injected:{request_hash}");
+    let injection_guard = if let Some(batch) = agent_edit_injection_batch(&plan) {
+        if let Some(room) = state.collab.live_room(&document.id).await {
+            room.begin_injection(batch, &plan.original_blocks, base_version_id.clone())
+                .await
+        } else {
+            tracing::debug!(
+                document_id = %document.id,
+                path,
+                "agent edit skipped live injection because no live collab room exists"
+            );
+            None
+        }
+    } else {
+        tracing::debug!(
+            document_id = %document.id,
             path,
-            next_markdown.into_bytes(),
-            document.version.metadata.clone(),
-            &document.version.content_type,
-            DocumentSource::Rest,
-            WritePrecondition::IfMatch(base_version_id),
-        )
-        .await?;
+            "agent edit skipped live injection because edit is not codec eligible"
+        );
+        None
+    };
+
+    let outcome = if let Some(guard) = injection_guard {
+        let outcome = state
+            .store
+            .commit_document_with_collab_session(
+                library,
+                path,
+                plan.markdown.clone().into_bytes(),
+                document.version.metadata.clone(),
+                &document.version.content_type,
+                DocumentSource::Rest,
+                WritePrecondition::IfMatch(base_version_id.clone()),
+            )
+            .await?;
+        let _commit_outcome = guard.commit(outcome.version.id.clone()).await;
+        state
+            .store
+            .emit_document_put_events(&outcome, Some(injected_session_id));
+        outcome
+    } else {
+        state
+            .store
+            .put_document(
+                library,
+                path,
+                plan.markdown.into_bytes(),
+                document.version.metadata.clone(),
+                &document.version.content_type,
+                DocumentSource::Rest,
+                WritePrecondition::IfMatch(base_version_id),
+            )
+            .await?
+    };
     let version_id = outcome.version.id.clone();
     let response = AgentEditResponse {
         dry_run: false,
@@ -2043,7 +2083,7 @@ fn apply_agent_edit(
     markdown: &str,
     current_base_token: &str,
     request: &AgentEditRequest,
-) -> Result<String, ApiError> {
+) -> Result<AgentEditPlan, ApiError> {
     if request.operations.is_empty() {
         return Err(QuarryError::InvalidPath(
             "edit request must include at least one operation".to_string(),
@@ -2065,6 +2105,7 @@ fn apply_agent_edit(
         .map(|(ordinal, markdown)| (Some(ordinal), markdown))
         .collect::<Vec<_>>();
     let mut targeted_ordinals = HashSet::new();
+    let mut ops = Vec::new();
 
     for operation in &request.operations {
         let block_ref = operation.block_ref.as_ref().ok_or_else(|| {
@@ -2088,19 +2129,34 @@ fn apply_agent_edit(
                 let markdown = required_operation_block(operation)?;
                 validate_single_markdown_block(markdown)?;
                 blocks[current_index] = (Some(block_ref.ordinal), markdown.to_string());
+                ops.push(PlannedAgentEditOp::ReplaceBlock {
+                    ordinal: block_ref.ordinal,
+                    markdown: markdown.to_string(),
+                });
             }
             "insert_before" => {
                 let markdown = required_operation_block(operation)?;
                 validate_single_markdown_block(markdown)?;
                 blocks.insert(current_index, (None, markdown.to_string()));
+                ops.push(PlannedAgentEditOp::InsertBefore {
+                    ordinal: block_ref.ordinal,
+                    markdown: markdown.to_string(),
+                });
             }
             "insert_after" => {
                 let markdown = required_operation_block(operation)?;
                 validate_single_markdown_block(markdown)?;
                 blocks.insert(current_index + 1, (None, markdown.to_string()));
+                ops.push(PlannedAgentEditOp::InsertAfter {
+                    ordinal: block_ref.ordinal,
+                    markdown: markdown.to_string(),
+                });
             }
             "delete_block" => {
                 blocks.remove(current_index);
+                ops.push(PlannedAgentEditOp::DeleteBlock {
+                    ordinal: block_ref.ordinal,
+                });
             }
             other => {
                 return Err(QuarryError::InvalidPath(format!(
@@ -2111,12 +2167,81 @@ fn apply_agent_edit(
         }
     }
 
-    let next_markdown = blocks
+    let final_blocks = blocks
         .into_iter()
         .map(|(_, markdown)| markdown)
-        .collect::<String>();
+        .collect::<Vec<_>>();
+    let next_markdown = final_blocks.iter().cloned().collect::<String>();
     validate_markdown_roundtrip(&next_markdown)?;
-    Ok(next_markdown)
+    Ok(AgentEditPlan {
+        markdown: next_markdown,
+        blocks: final_blocks,
+        ops,
+        original_blocks,
+    })
+}
+
+fn agent_edit_injection_batch(plan: &AgentEditPlan) -> Option<InjectionBatch> {
+    // Per-original-block live node counts. Comment/suggestion marks are
+    // reproduced and the trailing endmatter block contributes no live nodes, so
+    // this now succeeds for review documents (previously bailed on endmatter).
+    let original_nodes = review_blocks_to_slate(&plan.original_blocks)?;
+
+    let mut prefix = Vec::with_capacity(original_nodes.len());
+    let mut total = 0u32;
+    for nodes in &original_nodes {
+        prefix.push(total);
+        total = total.checked_add(u32::try_from(nodes.len()).ok()?)?;
+    }
+    let original_node_count =
+        |ordinal: usize| -> Option<u32> { u32::try_from(original_nodes.get(ordinal)?.len()).ok() };
+
+    // New blocks are reproduced against the edited document's own endmatter.
+    let (_, new_meta) = split_review_endmatter(&plan.markdown);
+    for block in &plan.blocks {
+        review_block_to_slate(block, &new_meta).ok()?;
+    }
+
+    let mut ops = Vec::with_capacity(plan.ops.len());
+    for op in &plan.ops {
+        match op {
+            PlannedAgentEditOp::ReplaceBlock { ordinal, markdown } => {
+                ops.push(InjectionOp::ReplaceSpan {
+                    start: *prefix.get(*ordinal)?,
+                    old_node_count: original_node_count(*ordinal)?,
+                    new_nodes: built_nodes_for_block(markdown, &new_meta)?,
+                });
+            }
+            PlannedAgentEditOp::InsertBefore { ordinal, markdown } => {
+                ops.push(InjectionOp::InsertAt {
+                    index: *prefix.get(*ordinal)?,
+                    new_nodes: built_nodes_for_block(markdown, &new_meta)?,
+                });
+            }
+            PlannedAgentEditOp::InsertAfter { ordinal, markdown } => {
+                let start = *prefix.get(*ordinal)?;
+                ops.push(InjectionOp::InsertAt {
+                    index: start.checked_add(original_node_count(*ordinal)?)?,
+                    new_nodes: built_nodes_for_block(markdown, &new_meta)?,
+                });
+            }
+            PlannedAgentEditOp::DeleteBlock { ordinal } => {
+                ops.push(InjectionOp::DeleteSpan {
+                    start: *prefix.get(*ordinal)?,
+                    old_node_count: original_node_count(*ordinal)?,
+                });
+            }
+        }
+    }
+    InjectionBatch::new(ops)
+}
+
+fn built_nodes_for_block(
+    markdown: &str,
+    meta: &ReviewMeta,
+) -> Option<Vec<quarry_collab_codec::BuiltNode>> {
+    let nodes = review_block_to_slate(markdown, meta).ok()?;
+    build_nodes(&nodes).ok()
 }
 
 struct AppliedAgentOps {
@@ -2441,54 +2566,8 @@ fn invalid_review_marker(id: &str) -> ApiError {
     QuarryError::InvalidPath(format!("review marker {id} is not a suggestion")).into()
 }
 
-fn split_review_endmatter(markdown: &str) -> (String, ReviewMeta) {
-    let Some((delimiter_start, delimiter_end)) = last_endmatter_delimiter(markdown) else {
-        return (markdown.to_string(), ReviewMeta::default());
-    };
-    let yaml = &markdown[delimiter_end..];
-    let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
-        return (markdown.to_string(), ReviewMeta::default());
-    };
-    if !is_review_meta_value(&value) {
-        return (markdown.to_string(), ReviewMeta::default());
-    }
-    let meta = serde_yaml::from_value::<ReviewMeta>(value).unwrap_or_default();
-    (markdown[..delimiter_start].trim_end().to_string(), meta)
-}
-
-fn last_endmatter_delimiter(markdown: &str) -> Option<(usize, usize)> {
-    let bytes = markdown.as_bytes();
-    let mut index = 0usize;
-    let mut last = None;
-    while let Some(offset) = markdown[index..].find("\n---") {
-        let start = index + offset;
-        let mut cursor = start + 4;
-        while cursor < bytes.len() && matches!(bytes[cursor], b' ' | b'\t') {
-            cursor += 1;
-        }
-        let end =
-            if cursor + 1 < bytes.len() && bytes[cursor] == b'\r' && bytes[cursor + 1] == b'\n' {
-                Some(cursor + 2)
-            } else if cursor < bytes.len() && bytes[cursor] == b'\n' {
-                Some(cursor + 1)
-            } else {
-                None
-            };
-        if let Some(end) = end {
-            last = Some((start, end));
-        }
-        index = start + 1;
-    }
-    last
-}
-
-fn is_review_meta_value(value: &serde_yaml::Value) -> bool {
-    let serde_yaml::Value::Mapping(mapping) = value else {
-        return false;
-    };
-    mapping.contains_key(serde_yaml::Value::String("comments".to_string()))
-        || mapping.contains_key(serde_yaml::Value::String("suggestions".to_string()))
-}
+// `split_review_endmatter` / `has_review_endmatter` and their helpers now live
+// in `quarry_collab_codec::review`; imported at the top of this module.
 
 fn assemble_review_document(body: &str, meta: &ReviewMeta) -> Result<String, ApiError> {
     let body = body.trim_end();
@@ -3203,6 +3282,34 @@ fn metadata_from_headers(headers: &HeaderMap, content_type: &str) -> Result<Json
 mod tests {
     use super::*;
     use axum::response::IntoResponse;
+
+    #[test]
+    fn injection_batch_supports_documents_with_review_comments() {
+        // A document carrying a CriticMarkup comment + endmatter used to disable
+        // live injection entirely. Replacing the commented prose block must now
+        // produce a batch (the endmatter block contributes no live nodes).
+        let original = "Quote {==highlight==}{>>note<<}{#c1} tail\n\n---\ncomments:\n  c1:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n";
+        let original_blocks = split_markdown_blocks(original);
+        assert_eq!(original_blocks.len(), 2, "prose block + endmatter block");
+
+        let new_block = "Replaced prose\n\n".to_string();
+        let mut blocks = original_blocks.clone();
+        blocks[0] = new_block.clone();
+        let plan = AgentEditPlan {
+            markdown: blocks.concat(),
+            blocks,
+            ops: vec![PlannedAgentEditOp::ReplaceBlock {
+                ordinal: 0,
+                markdown: new_block,
+            }],
+            original_blocks,
+        };
+
+        assert!(
+            agent_edit_injection_batch(&plan).is_some(),
+            "review-comment edit should produce a live injection batch"
+        );
+    }
 
     #[test]
     fn busy_errors_map_to_service_unavailable_with_retry_after() {

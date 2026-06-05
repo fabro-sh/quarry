@@ -1,0 +1,78 @@
+{
+  "name": "review-suggestion",
+  "supported": true,
+  "codec": "review",
+  "markdown": "Add {++word++}{#s1} and drop {--gone--}{#s2}.\n\n---\nsuggestions:\n  s1:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n  s2:\n    by: ai:claude\n    at: 2026-06-05T02:41:00.480Z\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "text": "Add "
+        },
+        {
+          "suggestion": true,
+          "suggestion_s1": {
+            "id": "s1",
+            "type": "insert",
+            "userId": "ai:codex",
+            "createdAt": 1780627260480
+          },
+          "text": "word"
+        },
+        {
+          "text": " and drop "
+        },
+        {
+          "suggestion": true,
+          "suggestion_s2": {
+            "id": "s2",
+            "type": "remove",
+            "userId": "ai:claude",
+            "createdAt": 1780627260480
+          },
+          "text": "gone"
+        },
+        {
+          "text": "."
+        }
+      ],
+      "type": "p"
+    }
+  ],
+  "observableState": [
+    {
+      "type": "p",
+      "children": [
+        {
+          "text": "Add "
+        },
+        {
+          "suggestion": true,
+          "suggestion_s1": {
+            "id": "s1",
+            "type": "insert",
+            "userId": "ai:codex",
+            "createdAt": 1780627260480
+          },
+          "text": "word"
+        },
+        {
+          "text": " and drop "
+        },
+        {
+          "suggestion": true,
+          "suggestion_s2": {
+            "id": "s2",
+            "type": "remove",
+            "userId": "ai:claude",
+            "createdAt": 1780627260480
+          },
+          "text": "gone"
+        },
+        {
+          "text": "."
+        }
+      ]
+    }
+  ]
+}
