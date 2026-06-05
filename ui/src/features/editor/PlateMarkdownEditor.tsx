@@ -154,6 +154,7 @@ import {
   updateCollabAwareness,
 } from '../collab/flusher-lease';
 import { RUST_WS_PROVIDER_TYPE, registerRustWsProviderType } from '../collab/rust-ws-provider';
+import { collabDebug } from '../collab/collab-debug';
 
 registerRustWsProviderType();
 
@@ -500,6 +501,10 @@ export function PlateMarkdownEditor({
     (nextMarkdown: string) => {
       const injectedVersion = pendingInjectedVersionRef.current;
       if (!collab || !injectedVersion) return false;
+      collabDebug('inject.adoptVersion', {
+        versionId: injectedVersion.versionId,
+        hadLocalEdits: hasLocalEditsSinceCleanRef.current,
+      });
       pendingInjectedVersionRef.current = null;
       adoptedInjectedVersionIdRef.current = injectedVersion.versionId;
       const hadLocalEdits = hasLocalEditsSinceCleanRef.current;
@@ -524,6 +529,7 @@ export function PlateMarkdownEditor({
     if (!collab?.injectedVersion) return;
     if (adoptedInjectedVersionIdRef.current === collab.injectedVersion.versionId) return;
     pendingInjectedVersionRef.current = collab.injectedVersion;
+    collabDebug('inject.arming', { versionId: collab.injectedVersion.versionId });
     // Adopt as soon as the injection's authoritative version is known via the
     // SSE `agent-injected` signal. We deliberately do NOT gate on a
     // remote-change flag: `YjsEditor.isLocal` misreports an agent-injected Yjs
@@ -574,6 +580,13 @@ export function PlateMarkdownEditor({
             !YjsEditor.isYjsEditor(editor) ||
             YjsEditor.isLocal(editor);
           const nextMarkdown = serialize(value as PlateValue);
+          if (!isLocalChange || pendingInjectedVersionRef.current) {
+            collabDebug('editor.change', {
+              isLocal: isLocalChange,
+              pending: !!pendingInjectedVersionRef.current,
+              changed: nextMarkdown !== lastSerializedRef.current,
+            });
+          }
           if (!isLocalChange && pendingInjectedVersionRef.current) {
             adoptInjectedVersion(nextMarkdown);
             return;

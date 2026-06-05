@@ -113,6 +113,7 @@ import {
   isAdoptedFlushVersion,
   type LiveCollabSession,
 } from '../features/collab/session-events';
+import { collabDebug } from '../features/collab/collab-debug';
 import type { CollabFlushAck, CollabRecoveryError } from '../features/collab/flusher-lease';
 import { clearDraft, loadDraft, saveDraft } from '../features/editor/drafts';
 import {
@@ -391,6 +392,11 @@ function Workspace() {
       const library = activeLibraryRef.current;
       const path = selectedPathRef.current;
       if (!library || !path) return;
+      collabDebug('inject.adopt', {
+        versionId: version.versionId,
+        etag: version.etag,
+        hadLocalEdits: result.hadLocalEdits,
+      });
       const loaded = loadedDocumentRef.current;
       const previousEtag = loaded?.etag;
       const documentId = loaded?.documentId ?? liveCollabSessionRef.current?.documentId ?? '';
@@ -552,6 +558,15 @@ function Workspace() {
 
       const currentPath = selectedPathRef.current;
       const liveDecision = classifyLiveDocumentEvent(payload, liveCollabSessionRef.current);
+      if (liveDecision.action !== 'pass') {
+        collabDebug('event.classify', {
+          action: liveDecision.action,
+          type: payload.type,
+          collabSessionId: payload.collab_session_id,
+          versionId: payload.version_id,
+          etag: payload.etag,
+        });
+      }
       if (liveDecision.action === 'ignore_flush_echo') {
         return;
       }
@@ -908,11 +923,13 @@ function Workspace() {
       selectedPathRef.current === savingPath && activeLibraryRef.current === savingLibrary;
 
     transitionSaveState('saving');
+    collabDebug('flush.start', { etag: savingEtag, leader: !!collabFlusherRef.current });
     try {
       const saved = await putDocument(savingLibrary, savingPath, savingContent, savingEtag, contentType, {
         collabSessionId: savingCollabSession?.sessionId ?? undefined,
       });
       const savedEtag = saved.etag || `"${saved.outcome.version.id}"`;
+      collabDebug('flush.ok', { from: savingEtag, to: savedEtag });
       const savedDocumentId = saved.outcome.document.id || savingDocumentId;
       clearDraft(savingLibrary, savingPath, savingEtag);
       if (!onSameDocument()) return;
@@ -980,6 +997,13 @@ function Workspace() {
         const remoteIsAdopted = isAdoptedFlushVersion(liveCollabSessionRef.current, {
           etag: remote.etag,
         });
+        collabDebug('flush.412', {
+          savingEtag,
+          remoteEtag: remote.etag,
+          adopted: remoteIsAdopted,
+          matchedEditor: remoteMatchesLatestEditor,
+          matchedRequest: remoteMatchesSavingRequest,
+        });
         if (remoteMatchesLatestEditor || remoteMatchesSavingRequest || remoteIsAdopted) {
           acceptRemoteDocumentVersion(
             savingLibrary,
@@ -1011,6 +1035,7 @@ function Workspace() {
           );
           return;
         }
+        collabDebug('flush.conflict', { savingEtag, remoteEtag: remote.etag });
         setConflictDetails({ baseEtag: savingEtag, path: savingPath, remoteEtag: remote.etag });
         setConflictRemote(remote.content);
         setEtag(remote.etag);

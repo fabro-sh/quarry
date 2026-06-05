@@ -434,6 +434,9 @@ async fn agent_edit_applies_block_ops_with_dry_run_stale_base_and_idempotency() 
     let body: Value = response_json(response).await;
     assert_eq!(body["dryRun"], false);
     assert_eq!(body["outcome"]["document"]["path"], "notes/one.md");
+    // No browser is connected in this headless test, so the edit reports that it
+    // could not be injected into a live room (vs falling back silently).
+    assert_eq!(body["injection"], "no_live_room");
 
     let response = app
         .clone()

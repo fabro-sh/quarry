@@ -1166,6 +1166,11 @@ pub struct AgentEditResponse {
     pub outcome: Option<WriteOutcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub markdown: Option<String>,
+    /// Whether the edit was injected into a live collab room, or why it fell
+    /// back to a plain write: `injected` | `no_live_room` | `not_codec_eligible`
+    /// | `gate_rejected`. Absent for dry runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub injection: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
@@ -1936,6 +1941,7 @@ async fn agent_edit_document(
                 dry_run: true,
                 outcome: None,
                 markdown: Some(plan.markdown),
+                injection: None,
             },
             version_id: None,
         });
@@ -1943,20 +1949,27 @@ async fn agent_edit_document(
 
     let base_version_id = version_id_from_base_token(&request.base_token)?;
     let injected_session_id = format!("agent-injected:{request_hash}");
-    let injection_guard = match agent_edit_injection_batch(&plan) {
-        Ok(batch) => {
-            if let Some(room) = state.collab.live_room(&document.id).await {
-                room.begin_injection(batch, &plan.original_blocks, base_version_id.clone())
-                    .await
-            } else {
+    // Track why an edit did or didn't reach the live room, so the response can
+    // report it (observability for agents and tests) instead of silently
+    // falling back to a plain write.
+    let (injection_guard, injection_status) = match agent_edit_injection_batch(&plan) {
+        Ok(batch) => match state.collab.live_room(&document.id).await {
+            Some(room) => match room
+                .begin_injection(batch, &plan.original_blocks, base_version_id.clone())
+                .await
+            {
+                Some(guard) => (Some(guard), "injected"),
+                None => (None, "gate_rejected"),
+            },
+            None => {
                 tracing::debug!(
                     document_id = %document.id,
                     path,
                     "agent edit skipped live injection because no live collab room exists"
                 );
-                None
+                (None, "no_live_room")
             }
-        }
+        },
         Err(error) => {
             tracing::debug!(
                 document_id = %document.id,
@@ -1964,7 +1977,7 @@ async fn agent_edit_document(
                 reason = %error,
                 "agent edit skipped live injection because edit is not codec eligible"
             );
-            None
+            (None, "not_codec_eligible")
         }
     };
 
@@ -2005,6 +2018,7 @@ async fn agent_edit_document(
         dry_run: false,
         outcome: Some(outcome),
         markdown: None,
+        injection: Some(injection_status.to_string()),
     };
 
     if let Some(cache_key) = cache_key {
