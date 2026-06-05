@@ -31,6 +31,7 @@ import {
   PanelRightOpen,
   PencilLine,
   Plus,
+  Loader2,
   RotateCcw,
   Search,
   Settings as SettingsIcon,
@@ -184,6 +185,8 @@ interface AddAgentModalState {
   loading: boolean;
   instructions: string;
   error: string;
+  waitingForAgent: boolean;
+  knownAgentIds: string[];
 }
 
 export function App() {
@@ -233,6 +236,8 @@ function Workspace() {
     loading: false,
     instructions: '',
     error: '',
+    waitingForAgent: false,
+    knownAgentIds: [],
   });
   const [lastSyncResult, setLastSyncResult] = useState('');
   const [author, setAuthor] = useState(() => loadAuthor());
@@ -1181,11 +1186,14 @@ function Workspace() {
     if (!activeLibrary || !selectedPath) return;
     const library = activeLibrary;
     const path = selectedPath;
+    const knownAgentIds = agentPresence.presence.map((e) => e.agentId);
     setAddAgentModal({
       open: true,
       loading: true,
       instructions: '',
       error: '',
+      waitingForAgent: false,
+      knownAgentIds,
     });
     try {
       const token = await createCollabInvite(library, path, {
@@ -1208,6 +1216,8 @@ function Workspace() {
           tokenizedDocUrl,
         }),
         error: '',
+        waitingForAgent: false,
+        knownAgentIds,
       });
     } catch (error) {
       setAddAgentModal({
@@ -1215,6 +1225,8 @@ function Workspace() {
         loading: false,
         instructions: '',
         error: error instanceof Error ? error.message : String(error),
+        waitingForAgent: false,
+        knownAgentIds,
       });
     }
   }
@@ -1222,6 +1234,14 @@ function Workspace() {
   function closeAddAgentModal() {
     setAddAgentModal((state) => ({ ...state, open: false }));
   }
+
+  useEffect(() => {
+    if (!addAgentModal.waitingForAgent) return;
+    const newAgent = agentPresence.presence.find(
+      (e) => !addAgentModal.knownAgentIds.includes(e.agentId)
+    );
+    if (newAgent) closeAddAgentModal();
+  }, [agentPresence.presence, addAgentModal.waitingForAgent, addAgentModal.knownAgentIds]);
 
   async function deleteDocumentPath(path: string) {
     if (!activeLibrary) return;
@@ -1663,7 +1683,9 @@ function Workspace() {
         instructions={addAgentModal.instructions}
         loading={addAgentModal.loading}
         open={addAgentModal.open}
+        waitingForAgent={addAgentModal.waitingForAgent}
         onClose={closeAddAgentModal}
+        onCopied={() => setAddAgentModal((s) => ({ ...s, waitingForAgent: true }))}
       />
 
       <SettingsDialog
@@ -2062,22 +2084,19 @@ function AddAgentDialog({
   instructions,
   loading,
   open,
+  waitingForAgent,
   onClose,
+  onCopied,
 }: {
   error: string;
   instructions: string;
   loading: boolean;
   open: boolean;
+  waitingForAgent: boolean;
   onClose: () => void;
+  onCopied: () => void;
 }) {
   const dialogRef = useDialogFocusTrap(open, onClose);
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 2000);
-    return () => clearTimeout(timer);
-  }, [copied]);
 
   if (!open) return null;
 
@@ -2117,14 +2136,18 @@ function AddAgentDialog({
             </pre>
             <button
               className={`${primaryButton} w-full justify-center`}
-              disabled={!instructions || loading}
+              disabled={!instructions || loading || waitingForAgent}
               onClick={() =>
-                void copyText(instructions, 'Agent instructions').then(() => setCopied(true))
+                void copyText(instructions, 'Agent instructions').then(() => onCopied())
               }
               type="button"
             >
-              {copied ? <Check size={14} /> : <Copy size={14} />}
-              {copied ? 'Copied' : 'Copy instructions'}
+              {waitingForAgent ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Copy size={14} />
+              )}
+              {waitingForAgent ? 'Waiting for your agent…' : 'Copy instructions'}
             </button>
           </div>
         </div>
