@@ -181,7 +181,6 @@ interface AddAgentModalState {
   open: boolean;
   loading: boolean;
   instructions: string;
-  inviteLink: string;
   error: string;
 }
 
@@ -231,7 +230,6 @@ function Workspace() {
     open: false,
     loading: false,
     instructions: '',
-    inviteLink: '',
     error: '',
   });
   const [lastSyncResult, setLastSyncResult] = useState('');
@@ -1169,7 +1167,6 @@ function Workspace() {
       open: true,
       loading: true,
       instructions: '',
-      inviteLink: '',
       error: '',
     });
     try {
@@ -1192,7 +1189,6 @@ function Workspace() {
           path,
           tokenizedDocUrl,
         }),
-        inviteLink: tokenizedDocUrl,
         error: '',
       });
     } catch (error) {
@@ -1200,7 +1196,6 @@ function Workspace() {
         open: true,
         loading: false,
         instructions: '',
-        inviteLink: '',
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -1648,7 +1643,6 @@ function Workspace() {
       <AddAgentDialog
         error={addAgentModal.error}
         instructions={addAgentModal.instructions}
-        inviteLink={addAgentModal.inviteLink}
         loading={addAgentModal.loading}
         open={addAgentModal.open}
         onClose={closeAddAgentModal}
@@ -2048,24 +2042,22 @@ function CommandPalette({
 function AddAgentDialog({
   error,
   instructions,
-  inviteLink,
   loading,
   open,
   onClose,
 }: {
   error: string;
   instructions: string;
-  inviteLink: string;
   loading: boolean;
   open: boolean;
   onClose: () => void;
 }) {
   const dialogRef = useDialogFocusTrap(open, onClose);
-  const [copied, setCopied] = useState<'instructions' | 'link' | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (!copied) return;
-    const timer = setTimeout(() => setCopied(null), 2000);
+    const timer = setTimeout(() => setCopied(false), 2000);
     return () => clearTimeout(timer);
   }, [copied]);
 
@@ -2105,28 +2097,17 @@ function AddAgentDialog({
             <pre className="max-h-43 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-line bg-raised p-3 font-mono text-xs leading-5 text-muted">
               {loading ? 'Preparing instructions...' : instructions}
             </pre>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <button
-                className={`${primaryButton} justify-center`}
-                disabled={!instructions || loading}
-                onClick={() =>
-                  void copyText(instructions, 'Agent instructions').then(() => setCopied('instructions'))
-                }
-                type="button"
-              >
-                {copied === 'instructions' ? <Check size={14} /> : <Copy size={14} />}
-                {copied === 'instructions' ? 'Copied' : 'Copy instructions'}
-              </button>
-              <button
-                className={`${secondaryButton} justify-center`}
-                disabled={!inviteLink || loading}
-                onClick={() => void copyText(inviteLink, 'Invite link').then(() => setCopied('link'))}
-                type="button"
-              >
-                {copied === 'link' ? <Check size={14} /> : <Copy size={14} />}
-                {copied === 'link' ? 'Copied link' : 'Copy invite link'}
-              </button>
-            </div>
+            <button
+              className={`${primaryButton} w-full justify-center`}
+              disabled={!instructions || loading}
+              onClick={() =>
+                void copyText(instructions, 'Agent instructions').then(() => setCopied(true))
+              }
+              type="button"
+            >
+              {copied ? <Check size={14} /> : <Copy size={14} />}
+              {copied ? 'Copied' : 'Copy instructions'}
+            </button>
           </div>
         </div>
       </div>

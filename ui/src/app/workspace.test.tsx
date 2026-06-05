@@ -136,12 +136,6 @@ describe('Quarry Browser workspace', () => {
     expect(copied).toContain('POST http://127.0.0.1/v1/libraries/agent-lib/documents/folder/live.md/presence');
     expect(copied).toContain('Connected in Quarry and ready.');
     expect(await within(dialog).findByRole('button', { name: 'Copied' })).toBeInTheDocument();
-
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Copy invite link' }));
-    expect(writeText.mock.lastCall?.[0]).toBe(
-      'http://127.0.0.1/lib/agent-lib/documents/folder/live.md?token=invite-agent'
-    );
-    expect(await within(dialog).findByRole('button', { name: 'Copied link' })).toBeInTheDocument();
   });
 
   it('renders agent presence in the document toolbar', async () => {
