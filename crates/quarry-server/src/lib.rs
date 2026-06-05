@@ -17,8 +17,8 @@ use pulldown_cmark::{
     Event as MarkdownEvent, Options as MarkdownOptions, Parser as MarkdownParser, Tag,
 };
 use quarry_collab_codec::{
-    build_nodes, review_block_to_slate, review_blocks_to_slate, split_review_endmatter, ReviewMeta,
-    ReviewMetaEntry, Unsupported,
+    build_nodes, review_block_to_slate, review_blocks_to_slate, review_markdown_to_slate,
+    split_review_endmatter, ReviewMeta, ReviewMetaEntry, Unsupported,
 };
 use quarry_core::{
     now_timestamp, CollabInviteToken, ConflictRecord, DocumentLink, DocumentListEntry,
@@ -750,6 +750,7 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
                 "insert_before",
                 "insert_after",
                 "delete_block",
+                "replace_document",
             ],
             ops_operations: vec![
                 "comment.add",
@@ -1210,6 +1211,7 @@ pub enum AgentEditOperation {
     InsertBefore,
     InsertAfter,
     DeleteBlock,
+    ReplaceDocument,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
@@ -1222,6 +1224,8 @@ pub struct AgentBlockOperation {
     pub block: Option<AgentEditBlock>,
     #[serde(default)]
     pub blocks: Option<Vec<AgentEditBlock>>,
+    #[serde(default)]
+    pub markdown: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
@@ -1862,6 +1866,7 @@ struct AgentEditPlan {
 
 #[derive(Clone, Debug)]
 enum PlannedAgentEditOp {
+    ReplaceDocument,
     ReplaceBlock {
         ordinal: usize,
         markdown: String,
@@ -2304,6 +2309,31 @@ fn apply_agent_edit(
     }
 
     let original_blocks = split_markdown_blocks(markdown);
+    if request
+        .operations
+        .iter()
+        .any(|operation| operation.op == "replace_document")
+    {
+        if request.operations.len() != 1 {
+            return Err(QuarryError::InvalidPath(
+                "replace_document must be the only operation".to_string(),
+            )
+            .into());
+        }
+        let operation = &request.operations[0];
+        reject_operation_ref(operation)?;
+        reject_operation_block(operation)?;
+        reject_operation_blocks(operation)?;
+        let next_markdown = required_operation_markdown(operation)?.to_string();
+        validate_markdown_roundtrip(&next_markdown)?;
+        return Ok(AgentEditPlan {
+            blocks: split_markdown_blocks(&next_markdown),
+            markdown: next_markdown,
+            ops: vec![PlannedAgentEditOp::ReplaceDocument],
+            original_blocks,
+        });
+    }
+
     let mut blocks = original_blocks
         .iter()
         .cloned()
@@ -2434,6 +2464,13 @@ fn agent_edit_injection_batch(plan: &AgentEditPlan) -> Result<InjectionBatch, Un
     let mut ops = Vec::with_capacity(plan.ops.len());
     for op in &plan.ops {
         match op {
+            PlannedAgentEditOp::ReplaceDocument => {
+                ops.push(InjectionOp::ReplaceSpan {
+                    start: 0,
+                    old_node_count: total,
+                    new_nodes: built_nodes_for_markdown_document(&plan.markdown)?,
+                });
+            }
             PlannedAgentEditOp::ReplaceBlock { ordinal, markdown } => {
                 ops.push(InjectionOp::ReplaceSpan {
                     start: *prefix.get(*ordinal).ok_or_else(|| {
@@ -2479,6 +2516,17 @@ fn agent_edit_injection_batch(plan: &AgentEditPlan) -> Result<InjectionBatch, Un
         }
     }
     InjectionBatch::new(ops).ok_or_else(|| Unsupported::new("empty injection batch"))
+}
+
+fn built_nodes_for_markdown_document(
+    markdown: &str,
+) -> Result<Vec<quarry_collab_codec::BuiltNode>, Unsupported> {
+    if markdown.is_empty() {
+        return Ok(Vec::new());
+    }
+    let nodes = review_markdown_to_slate(markdown)
+        .map_err(|error| error.context("replacement document"))?;
+    build_nodes(&nodes)
 }
 
 fn built_nodes_for_block(
@@ -2973,6 +3021,23 @@ fn required_operation_block(operation: &AgentBlockOperation) -> Result<&str, Api
         .ok_or_else(|| {
             QuarryError::InvalidPath(format!("{} operation missing block", operation.op)).into()
         })
+}
+
+fn required_operation_markdown(operation: &AgentBlockOperation) -> Result<&str, ApiError> {
+    operation.markdown.as_deref().ok_or_else(|| {
+        QuarryError::InvalidPath(format!("{} operation missing markdown", operation.op)).into()
+    })
+}
+
+fn reject_operation_ref(operation: &AgentBlockOperation) -> Result<(), ApiError> {
+    if operation.block_ref.is_some() {
+        return Err(QuarryError::InvalidPath(format!(
+            "{} operation does not accept ref",
+            operation.op
+        ))
+        .into());
+    }
+    Ok(())
 }
 
 fn reject_operation_block(operation: &AgentBlockOperation) -> Result<(), ApiError> {

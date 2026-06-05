@@ -45,6 +45,14 @@ pub struct CollabRecoveryState {
     pub updated_at: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CollabDocumentSeed {
+    pub document_id: String,
+    pub head_version_id: String,
+    pub content_type: String,
+    pub content: Vec<u8>,
+}
+
 pub struct GlobalOperationGuard {
     _guard: OwnedMutexGuard<()>,
 }
@@ -759,6 +767,14 @@ impl QuarryStore {
     ) -> Result<Option<CollabRecoveryState>> {
         let conn = self.conn()?;
         self.collab_recovery_state_conn(&conn, document_id).await
+    }
+
+    pub async fn collab_document_seed(
+        &self,
+        document_id: &str,
+    ) -> Result<Option<CollabDocumentSeed>> {
+        let conn = self.conn()?;
+        self.collab_document_seed_conn(&conn, document_id).await
     }
 
     pub async fn put_collab_recovery_state(
@@ -2834,6 +2850,44 @@ impl QuarryStore {
             .map_err(map_turso_error)?
             .map(|row| collab_recovery_state_from_row(&row))
             .transpose()
+    }
+
+    async fn collab_document_seed_conn(
+        &self,
+        conn: &Connection,
+        document_id: &str,
+    ) -> Result<Option<CollabDocumentSeed>> {
+        let mut rows = conn
+            .query(
+                "SELECT d.id, v.id, v.content_type, v.content_hash, v.inline_content
+                 FROM documents d
+                 JOIN document_versions v ON v.id = d.head_version_id
+                 WHERE d.id = ?1 AND d.deleted_at IS NULL AND d.head_version_id IS NOT NULL
+                 LIMIT 1",
+                params![document_id.to_string()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        let Some(row) = rows.next().await.map_err(map_turso_error)? else {
+            return Ok(None);
+        };
+        let content_hash = opt_text(&row, 3)?;
+        let inline_content = opt_blob(&row, 4)?;
+        let content = match (inline_content, content_hash) {
+            (Some(bytes), None) => bytes,
+            (None, Some(hash)) => self.cas.read(&hash)?,
+            _ => {
+                return Err(QuarryError::Storage(format!(
+                    "head version for document {document_id} violates inline/CAS invariant"
+                )))
+            }
+        };
+        Ok(Some(CollabDocumentSeed {
+            document_id: text(&row, 0)?,
+            head_version_id: text(&row, 1)?,
+            content_type: text(&row, 2)?,
+            content,
+        }))
     }
 
     async fn collab_invite_token_conn(

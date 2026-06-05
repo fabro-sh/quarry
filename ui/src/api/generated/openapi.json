@@ -2303,6 +2303,12 @@
               "$ref": "#/components/schemas/AgentEditBlock"
             }
           },
+          "markdown": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "op": {
             "$ref": "#/components/schemas/AgentEditOperation"
           },
@@ -2377,7 +2383,8 @@
           "replace_block",
           "insert_before",
           "insert_after",
-          "delete_block"
+          "delete_block",
+          "replace_document"
         ]
       },
       "AgentEditRequest": {

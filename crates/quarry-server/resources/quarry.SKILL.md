@@ -137,7 +137,7 @@ block you are about to write to again.
 ## Direct Edits
 
 Supported `/edit` operations: `replace_block`, `insert_before`,
-`insert_after`, `delete_block`.
+`insert_after`, `delete_block`, `replace_document`.
 
 Dry run non-trivial direct edits:
 
@@ -199,6 +199,23 @@ curl -sS -X POST "$DOC/edit?dryRun=1" \
 Each inserted or replacement block must be one Markdown block. When inserting
 multiple blocks at one ref, use `blocks` on one `insert_before` or
 `insert_after` operation instead of repeated `insert_after` calls on the same ref.
+
+To replace the whole document, send exactly one `replace_document` operation.
+It uses the top-level `baseToken` and does not accept `ref`, `block`, or
+`blocks`. Empty Markdown is valid. The replacement is stored as one Markdown
+document, then split into normal snapshot blocks on the next read.
+
+```json
+{
+  "baseToken": "\"version_id\"",
+  "operations": [
+    {
+      "op": "replace_document",
+      "markdown": "# Title\n\nBody\n"
+    }
+  ]
+}
+```
 
 ## Comments And Suggestions
 

@@ -5,15 +5,15 @@ use futures_util::{Sink, SinkExt, Stream, StreamExt};
 #[cfg(test)]
 use quarry_collab_codec::block_markdown_to_slate;
 use quarry_collab_codec::{
-    apply_built, build_nodes, review_blocks_to_slate, strip_trailing_empty_paragraphs,
-    xmltext_to_slate, BuiltNode, Node,
+    apply_built, build_nodes, encode_update_v1_from_built, review_blocks_to_slate,
+    review_markdown_to_slate, strip_trailing_empty_paragraphs, xmltext_to_slate, BuiltNode, Node,
 };
-use quarry_storage::QuarryStore;
+use quarry_storage::{CollabDocumentSeed, QuarryStore};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex as StdMutex, Weak};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::select;
@@ -24,7 +24,7 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use yrs::encoding::write::Write;
 use yrs::sync::protocol::{MSG_SYNC, MSG_SYNC_UPDATE};
-use yrs::sync::{Awareness, DefaultProtocol, Error, Message, Protocol};
+use yrs::sync::{Awareness, DefaultProtocol, Error, Message, Protocol, SyncMessage};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 #[cfg(test)]
@@ -38,6 +38,7 @@ pub(crate) const SHARED_ROOT: &str = "content";
 pub(crate) const INJECTION_ROOT: &str = "__quarry_injection";
 const RECOVERY_PERSIST_DEBOUNCE: Duration = Duration::from_millis(50);
 const INJECTION_ORIGIN: &str = "quarry:agent-injection";
+const SERVER_SEED_ORIGIN: &str = "quarry:server-seed";
 
 type AwarenessRef = Arc<RwLock<Awareness>>;
 
@@ -89,10 +90,12 @@ pub(crate) struct CollabRoom {
     document_id: String,
     store: Option<QuarryStore>,
     broadcast: BroadcastGroup,
+    recovery_state: Arc<RoomRecoveryState>,
 }
 
 impl CollabRoom {
     async fn new(document_id: &str, store: Option<QuarryStore>) -> Self {
+        let initial_state = initial_room_state(store.as_ref(), document_id).await;
         let doc = Doc::with_options(Options {
             offset_kind: OffsetKind::Utf16,
             ..Default::default()
@@ -101,34 +104,41 @@ impl CollabRoom {
             let mut txn = doc.transact_mut();
             // Yjs root Y.Text and Y.XmlText share wire updates; yrs exposes root creation as TextRef.
             txn.get_or_insert_text(SHARED_ROOT);
-            if let Some(recovery) = load_recovery_update(store.as_ref(), document_id).await {
-                match Update::decode_v1(&recovery.update_v1) {
+            if let Some(update_v1) = &initial_state.update_v1 {
+                match Update::decode_v1(update_v1) {
                     Ok(update) => {
                         if let Err(error) = txn.apply_update(update) {
-                            tracing::warn!(%error, %document_id, "failed to apply collab recovery state");
+                            tracing::warn!(%error, %document_id, "failed to apply initial collab state");
                         }
                     }
                     Err(error) => {
-                        tracing::warn!(%error, %document_id, "failed to decode collab recovery state");
+                        tracing::warn!(%error, %document_id, "failed to decode initial collab state");
                     }
                 }
             }
         }
         let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
+        let recovery_state = Arc::new(RoomRecoveryState::new(
+            initial_state.base_version_id,
+            initial_state.dirty,
+        ));
         let persistence = store.clone().map(|store| RecoveryPersistence {
             store,
             document_id: document_id.to_string(),
             debounce: RECOVERY_PERSIST_DEBOUNCE,
+            recovery_state: recovery_state.clone(),
         });
 
         Self {
             document_id: document_id.to_string(),
             store,
             broadcast: BroadcastGroup::new(awareness, 32, persistence).await,
+            recovery_state,
         }
     }
 
     async fn serve_socket(&self, socket: WebSocket) {
+        self.reseed_clean_room_if_head_changed().await;
         let (sink, stream) = socket.split();
         let sink = Arc::new(Mutex::new(AxumSink::from(sink)));
         let stream = AxumStream::from(stream);
@@ -137,6 +147,57 @@ impl CollabRoom {
         if let Err(error) = subscription.completed().await {
             tracing::debug!(%error, "collab websocket closed with protocol error");
         }
+    }
+
+    async fn reseed_clean_room_if_head_changed(&self) {
+        if self.recovery_state.is_dirty() {
+            return;
+        }
+        let current_base = self.recovery_state.base_version_id();
+        let Some(document_seed) =
+            load_collab_document_seed(self.store.as_ref(), &self.document_id).await
+        else {
+            return;
+        };
+        if current_base.as_deref() == Some(document_seed.head_version_id.as_str()) {
+            return;
+        }
+        let Some(seed) = clean_seed_update_from_document_seed(
+            self.store.as_ref(),
+            &self.document_id,
+            document_seed,
+        )
+        .await
+        else {
+            return;
+        };
+
+        {
+            let awareness = self.broadcast.awareness().write().await;
+            let mut txn = awareness.doc().transact_mut_with(SERVER_SEED_ORIGIN);
+            clear_shared_content(&mut txn);
+            match Update::decode_v1(&seed.update_v1) {
+                Ok(update) => {
+                    if let Err(error) = txn.apply_update(update) {
+                        tracing::warn!(
+                            %error,
+                            document_id = %self.document_id,
+                            "failed to apply clean collab reseed update"
+                        );
+                        return;
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        document_id = %self.document_id,
+                        "failed to decode clean collab reseed update"
+                    );
+                    return;
+                }
+            }
+        }
+        self.recovery_state.mark_clean(seed.base_version_id);
     }
 
     #[cfg(test)]
@@ -240,9 +301,174 @@ impl CollabRoom {
             mutation,
             persistence_failed: self.broadcast.persistence_failed.clone(),
             persistence_failure: self.broadcast.persistence_failure.clone(),
+            recovery_state: self.recovery_state.clone(),
             store: self.store.clone(),
         })
     }
+}
+
+struct InitialRoomState {
+    update_v1: Option<Vec<u8>>,
+    base_version_id: Option<String>,
+    dirty: bool,
+}
+
+#[derive(Debug)]
+struct RoomRecoveryState {
+    base_version_id: StdMutex<Option<String>>,
+    dirty: AtomicBool,
+}
+
+impl RoomRecoveryState {
+    fn new(base_version_id: Option<String>, dirty: bool) -> Self {
+        Self {
+            base_version_id: StdMutex::new(base_version_id),
+            dirty: AtomicBool::new(dirty),
+        }
+    }
+
+    fn base_version_id(&self) -> Option<String> {
+        self.base_version_id.lock().unwrap().clone()
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.store(true, Ordering::SeqCst);
+    }
+
+    fn mark_clean(&self, base_version_id: String) {
+        *self.base_version_id.lock().unwrap() = Some(base_version_id);
+        self.dirty.store(false, Ordering::SeqCst);
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.dirty.load(Ordering::SeqCst)
+    }
+}
+
+async fn initial_room_state(store: Option<&QuarryStore>, document_id: &str) -> InitialRoomState {
+    if let Some(recovery) = load_recovery_update(store, document_id).await {
+        return InitialRoomState {
+            update_v1: Some(recovery.update_v1),
+            base_version_id: recovery.base_version_id,
+            dirty: true,
+        };
+    }
+
+    if let Some(seed) = clean_seed_update(store, document_id).await {
+        return InitialRoomState {
+            update_v1: Some(seed.update_v1),
+            base_version_id: Some(seed.base_version_id),
+            dirty: false,
+        };
+    }
+
+    InitialRoomState {
+        update_v1: None,
+        base_version_id: None,
+        dirty: false,
+    }
+}
+
+struct CleanSeedUpdate {
+    base_version_id: String,
+    update_v1: Vec<u8>,
+}
+
+async fn clean_seed_update(
+    store: Option<&QuarryStore>,
+    document_id: &str,
+) -> Option<CleanSeedUpdate> {
+    let seed = load_collab_document_seed(store, document_id).await?;
+    clean_seed_update_from_document_seed(store, document_id, seed).await
+}
+
+async fn load_collab_document_seed(
+    store: Option<&QuarryStore>,
+    document_id: &str,
+) -> Option<CollabDocumentSeed> {
+    let store = store?;
+    match store.collab_document_seed(document_id).await {
+        Ok(Some(seed)) => Some(seed),
+        Ok(None) => return None,
+        Err(error) => {
+            tracing::warn!(%error, %document_id, "failed to load collab document seed");
+            return None;
+        }
+    }
+}
+
+async fn clean_seed_update_from_document_seed(
+    store: Option<&QuarryStore>,
+    document_id: &str,
+    seed: CollabDocumentSeed,
+) -> Option<CleanSeedUpdate> {
+    let store = store?;
+    if !is_markdown_content_type(&seed.content_type) {
+        tracing::debug!(
+            %document_id,
+            content_type = %seed.content_type,
+            "skipping collab server seed for non-markdown document"
+        );
+        return None;
+    }
+    let markdown = match std::str::from_utf8(&seed.content) {
+        Ok(markdown) => markdown,
+        Err(error) => {
+            tracing::warn!(%error, %document_id, "failed to decode markdown collab seed as UTF-8");
+            return None;
+        }
+    };
+    let slate = match review_markdown_to_slate(markdown) {
+        Ok(slate) => slate,
+        Err(error) => {
+            tracing::debug!(
+                %error,
+                %document_id,
+                "skipping collab server seed because markdown is not codec eligible"
+            );
+            return None;
+        }
+    };
+    let built = match build_nodes(&slate) {
+        Ok(built) => built,
+        Err(error) => {
+            tracing::debug!(
+                %error,
+                %document_id,
+                "skipping collab server seed because Slate nodes are not Yjs-buildable"
+            );
+            return None;
+        }
+    };
+    let update_v1 = encode_update_v1_from_built(&built, SHARED_ROOT);
+    if let Err(error) = store
+        .put_collab_recovery_state(
+            document_id,
+            Some(seed.head_version_id.clone()),
+            update_v1.clone(),
+            false,
+        )
+        .await
+    {
+        tracing::warn!(%error, %document_id, "failed to persist clean collab server seed");
+    }
+    Some(CleanSeedUpdate {
+        base_version_id: seed.head_version_id,
+        update_v1,
+    })
+}
+
+fn is_markdown_content_type(content_type: &str) -> bool {
+    matches!(
+        content_type
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "text/markdown" | "text/x-markdown" | "application/markdown" | "application/x-markdown"
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -327,6 +553,7 @@ pub(crate) struct InjectionGuard {
     mutation: LiveMutation,
     persistence_failed: Arc<AtomicBool>,
     persistence_failure: watch::Sender<Option<String>>,
+    recovery_state: Arc<RoomRecoveryState>,
     store: Option<QuarryStore>,
 }
 
@@ -353,6 +580,7 @@ impl InjectionGuard {
         }
 
         let Some(store) = self.store.clone() else {
+            self.recovery_state.mark_clean(new_version_id);
             return CommitOutcome::Injected;
         };
         let update_v1 = self
@@ -364,7 +592,12 @@ impl InjectionGuard {
             .put_collab_recovery_state(&self.document_id, Some(new_version_id), update_v1, false)
             .await
         {
-            Ok(_) => CommitOutcome::Injected,
+            Ok(state) => {
+                if let Some(base_version_id) = state.base_version_id {
+                    self.recovery_state.mark_clean(base_version_id);
+                }
+                CommitOutcome::Injected
+            }
             Err(error) => {
                 let message = format!("failed to persist collab recovery state: {error}");
                 tracing::warn!(
@@ -447,6 +680,93 @@ fn root_xml_text_mut(txn: &mut yrs::TransactionMut<'_>) -> Option<XmlTextRef> {
     Some(root.clone())
 }
 
+fn clear_shared_content(txn: &mut yrs::TransactionMut<'_>) {
+    if let Some(root) = root_xml_text_mut(txn) {
+        let len = root.len(txn);
+        if len > 0 {
+            root.remove_range(txn, 0, len);
+        }
+    }
+    if let Some(envelope) = txn.get_map(INJECTION_ROOT) {
+        let keys = envelope
+            .iter(txn)
+            .map(|(key, _)| key.to_string())
+            .collect::<Vec<_>>();
+        for key in keys {
+            let _ = envelope.remove(txn, key.as_str());
+        }
+    }
+}
+
+fn adopt_clean_duplicate_seed_update(
+    awareness: &mut Awareness,
+    recovery_state: &RoomRecoveryState,
+    payload: &[u8],
+    suppress_next_seed_broadcast: &AtomicBool,
+) -> Option<Message> {
+    if recovery_state.is_dirty() {
+        return None;
+    }
+    let Ok(Message::Sync(SyncMessage::Update(update_v1))) = Message::decode_v1(payload) else {
+        return None;
+    };
+    let Some(current) = slate_children_from_doc(awareness.doc()) else {
+        return None;
+    };
+    let incoming = Doc::with_options(Options {
+        offset_kind: OffsetKind::Utf16,
+        ..Default::default()
+    });
+    {
+        let mut txn = incoming.transact_mut();
+        txn.get_or_insert_text(SHARED_ROOT);
+        let Ok(update) = Update::decode_v1(&update_v1) else {
+            return None;
+        };
+        if txn.apply_update(update).is_err() {
+            return None;
+        }
+    }
+    let Some(incoming) = slate_children_from_doc(&incoming) else {
+        return None;
+    };
+    if comparable_seed_nodes(&incoming) != comparable_seed_nodes(&current) {
+        return None;
+    }
+
+    suppress_next_seed_broadcast.store(true, Ordering::SeqCst);
+    {
+        let mut txn = awareness.doc().transact_mut_with(SERVER_SEED_ORIGIN);
+        clear_shared_content(&mut txn);
+        let Ok(update) = Update::decode_v1(&update_v1) else {
+            suppress_next_seed_broadcast.store(false, Ordering::SeqCst);
+            return None;
+        };
+        if let Err(error) = txn.apply_update(update) {
+            suppress_next_seed_broadcast.store(false, Ordering::SeqCst);
+            tracing::warn!(%error, "failed to adopt clean duplicate collab seed update");
+            return None;
+        }
+    }
+    if suppress_next_seed_broadcast.load(Ordering::SeqCst) {
+        suppress_next_seed_broadcast.store(false, Ordering::SeqCst);
+    }
+    Some(Message::Sync(SyncMessage::Update(update_v1)))
+}
+
+fn slate_children_from_doc(doc: &Doc) -> Option<Vec<Node>> {
+    let txn = doc.transact();
+    let root = root_xml_text(&txn)?;
+    let Node::Element { children, .. } = xmltext_to_slate(&txn, &root).ok()? else {
+        return None;
+    };
+    Some(children)
+}
+
+fn comparable_seed_nodes(nodes: &[Node]) -> Vec<Node> {
+    strip_trailing_empty_paragraphs(&clean_gate_nodes(nodes))
+}
+
 fn clean_gate_nodes(nodes: &[Node]) -> Vec<Node> {
     nodes.iter().map(clean_gate_node).collect()
 }
@@ -489,6 +809,7 @@ struct RecoveryPersistence {
     store: QuarryStore,
     document_id: String,
     debounce: Duration,
+    recovery_state: Arc<RoomRecoveryState>,
 }
 
 struct BroadcastGroup {
@@ -501,6 +822,8 @@ struct BroadcastGroup {
     persistence_failed: Arc<AtomicBool>,
     persistence_failure: watch::Sender<Option<String>>,
     recovery_persister: Option<JoinHandle<()>>,
+    recovery_state: Option<Arc<RoomRecoveryState>>,
+    suppress_next_seed_broadcast: Arc<AtomicBool>,
 }
 
 unsafe impl Send for BroadcastGroup {}
@@ -514,8 +837,13 @@ impl BroadcastGroup {
     ) -> Self {
         let (sender, receiver) = channel(buffer_capacity);
         let persistence_failed = Arc::new(AtomicBool::new(false));
+        let suppress_next_seed_broadcast = Arc::new(AtomicBool::new(false));
         let (persistence_failure, _persistence_failure_rx) = watch::channel(None);
         let awareness_c = Arc::downgrade(&awareness);
+        let recovery_state = persistence
+            .as_ref()
+            .map(|persistence| persistence.recovery_state.clone());
+        let recovery_state_for_doc = recovery_state.clone();
         let (recovery_tx, recovery_persister) = persistence
             .map(|persistence| {
                 let (tx, rx) = unbounded_channel();
@@ -534,18 +862,28 @@ impl BroadcastGroup {
 
         let mut lock = awareness.write().await;
         let sink = sender.clone();
+        let suppress_seed_broadcast = suppress_next_seed_broadcast.clone();
         let doc_sub = {
             lock.doc()
                 .observe_update_v1(move |txn, update| {
+                    let server_injection = txn
+                        .origin()
+                        .is_some_and(|origin| origin.as_ref() == INJECTION_ORIGIN.as_bytes());
+                    let server_seed = txn
+                        .origin()
+                        .is_some_and(|origin| origin.as_ref() == SERVER_SEED_ORIGIN.as_bytes());
+                    if server_seed && suppress_seed_broadcast.swap(false, Ordering::SeqCst) {
+                        return;
+                    }
                     let mut encoder = EncoderV1::new();
                     encoder.write_var(MSG_SYNC);
                     encoder.write_var(MSG_SYNC_UPDATE);
                     encoder.write_buf(&update.update);
                     let _ = sink.send(encoder.to_vec());
-                    let server_injection = txn
-                        .origin()
-                        .is_some_and(|origin| origin.as_ref() == INJECTION_ORIGIN.as_bytes());
-                    if !server_injection {
+                    if !server_injection && !server_seed {
+                        if let Some(recovery_state) = &recovery_state_for_doc {
+                            recovery_state.mark_dirty();
+                        }
                         if let Some(recovery_tx) = &recovery_tx {
                             let _ = recovery_tx.send(());
                         }
@@ -592,6 +930,8 @@ impl BroadcastGroup {
             persistence_failed,
             persistence_failure,
             recovery_persister,
+            recovery_state,
+            suppress_next_seed_broadcast,
         }
     }
 
@@ -654,6 +994,8 @@ impl BroadcastGroup {
         let stream_task = {
             let awareness = self.awareness().clone();
             let persistence_failed = self.persistence_failed.clone();
+            let recovery_state = self.recovery_state.clone();
+            let suppress_next_seed_broadcast = self.suppress_next_seed_broadcast.clone();
             let mut failure = self.persistence_failure.subscribe();
             tokio::spawn(async move {
                 loop {
@@ -678,7 +1020,26 @@ impl BroadcastGroup {
                             let payload = result.map_err(|error| Error::Other(Box::new(error)))?;
                             let replies = {
                                 let mut awareness = awareness.write().await;
-                                protocol.handle(&mut awareness, &payload)?
+                                if let Some(recovery_state) = &recovery_state {
+                                    if let Some(reply) = adopt_clean_duplicate_seed_update(
+                                        &mut awareness,
+                                        recovery_state,
+                                        &payload,
+                                        &suppress_next_seed_broadcast,
+                                    ) {
+                                        vec![reply]
+                                    } else {
+                                        protocol
+                                            .handle(&mut awareness, &payload)?
+                                            .into_iter()
+                                            .collect()
+                                    }
+                                } else {
+                                    protocol
+                                        .handle(&mut awareness, &payload)?
+                                        .into_iter()
+                                        .collect()
+                                }
                             };
 
                             for reply in replies {
@@ -767,7 +1128,12 @@ async fn persist_recovery_snapshot(
     };
     if let Err(error) = persistence
         .store
-        .put_collab_recovery_state(&persistence.document_id, None, update_v1, true)
+        .put_collab_recovery_state(
+            &persistence.document_id,
+            persistence.recovery_state.base_version_id(),
+            update_v1,
+            true,
+        )
         .await
     {
         let message = format!("failed to persist collab recovery state: {error}");
@@ -1197,20 +1563,7 @@ mod tests {
 
         let hub = CollabHub::new(store.clone());
         let room = hub.room(&document_id).await;
-        let (server_sink, mut client_stream) = test_channel(8);
-        let (mut client_sink, server_stream) = test_channel(8);
-        let subscription = room
-            .broadcast
-            .subscribe(Arc::new(Mutex::new(server_sink)), server_stream);
-
-        let update = vec![
-            1, 1, 7, 0, 4, 1, 7, 99, 111, 110, 116, 101, 110, 116, 5, 104, 101, 108, 108, 111, 0,
-        ];
-        client_sink
-            .send(Message::Sync(SyncMessage::Update(update)).encode_v1())
-            .await
-            .unwrap();
-        let _ = client_stream.next().await.unwrap().unwrap();
+        replace_room_markdown(&room, "hello\n").await;
 
         let state = wait_for_recovery_state(&store, &document_id).await;
         assert_eq!(state.document_id, document_id);
@@ -1218,14 +1571,205 @@ mod tests {
         assert!(state.dirty);
         assert!(!state.update_v1.is_empty());
 
-        drop(client_sink);
-        subscription.completed().await.unwrap();
         drop(room);
         drop(hub);
 
         let restored_hub = CollabHub::new(store);
         let restored = restored_hub.room(&document_id).await;
-        assert_eq!(restored.content_text().await.as_deref(), Some("hello"));
+        assert_eq!(
+            room_slate_children(&restored).await,
+            block_markdown_to_slate("hello\n").unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn seeds_clean_room_from_current_markdown_head() {
+        let (_root, store, document_id, head_version_id) =
+            store_with_markdown_document("collabseed", "# Untitled\n\nDraft\n").await;
+
+        let hub = CollabHub::new(store.clone());
+        let room = hub.room(&document_id).await;
+
+        let state =
+            wait_for_recovery_state_matching(&store, &document_id, |state| !state.dirty).await;
+        assert_eq!(state.document_id, document_id);
+        assert_eq!(
+            state.base_version_id.as_deref(),
+            Some(head_version_id.as_str())
+        );
+        assert!(!state.update_v1.is_empty());
+        assert_eq!(
+            room_slate_children(&room).await,
+            block_markdown_to_slate("# Untitled\n\nDraft\n").unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn initial_client_sync_does_not_mark_seeded_recovery_dirty() {
+        let (_root, store, document_id, head_version_id) =
+            store_with_markdown_document("collabsync", "# Untitled\n").await;
+        let hub = CollabHub::new(store.clone());
+        let room = hub.room(&document_id).await;
+        let _ = wait_for_recovery_state_matching(&store, &document_id, |state| !state.dirty).await;
+        let (server_sink, mut client_stream) = test_channel(8);
+        let (mut client_sink, server_stream) = test_channel(8);
+        let subscription = room
+            .broadcast
+            .subscribe(Arc::new(Mutex::new(server_sink)), server_stream);
+        let client_doc = Doc::with_options(Options {
+            offset_kind: OffsetKind::Utf16,
+            ..Default::default()
+        });
+
+        client_sink
+            .send(
+                Message::Sync(SyncMessage::SyncStep1(client_doc.transact().state_vector()))
+                    .encode_v1(),
+            )
+            .await
+            .unwrap();
+
+        let reply = client_stream.next().await.unwrap().unwrap();
+        assert!(matches!(
+            Message::decode_v1(&reply).unwrap(),
+            Message::Sync(SyncMessage::SyncStep2(_))
+        ));
+        sleep(RECOVERY_PERSIST_DEBOUNCE * 2).await;
+        let state = store
+            .collab_recovery_state(&document_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            state.base_version_id.as_deref(),
+            Some(head_version_id.as_str())
+        );
+        assert!(!state.dirty);
+
+        drop(client_sink);
+        subscription.completed().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn duplicate_clean_client_seed_update_stays_clean_without_duplicating_content() {
+        let markdown = "See {==this==}{>>Check it<<}{#c1}.\n\n---\ncomments:\n  c1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user\n";
+        let (_root, store, document_id, head_version_id) =
+            store_with_markdown_document("collabdupe", markdown).await;
+        let hub = CollabHub::new(store.clone());
+        let room = hub.room(&document_id).await;
+        let _ = wait_for_recovery_state_matching(&store, &document_id, |state| !state.dirty).await;
+        let (server_sink, mut client_stream) = test_channel(8);
+        let (mut client_sink, server_stream) = test_channel(8);
+        let subscription = room
+            .broadcast
+            .subscribe(Arc::new(Mutex::new(server_sink)), server_stream);
+        let update = encode_update_v1_from_built(
+            &build_nodes(&review_markdown_to_slate(markdown).unwrap()).unwrap(),
+            SHARED_ROOT,
+        );
+
+        client_sink
+            .send(Message::Sync(SyncMessage::Update(update)).encode_v1())
+            .await
+            .unwrap();
+
+        let _ = client_stream.next().await.unwrap().unwrap();
+        sleep(RECOVERY_PERSIST_DEBOUNCE * 2).await;
+        let state = store
+            .collab_recovery_state(&document_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            state.base_version_id.as_deref(),
+            Some(head_version_id.as_str())
+        );
+        assert!(!state.dirty);
+        assert_eq!(
+            room_slate_children(&room).await,
+            review_markdown_to_slate(markdown).unwrap()
+        );
+
+        drop(client_sink);
+        subscription.completed().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn first_real_client_edit_marks_dirty_preserving_original_base() {
+        let (_root, store, document_id, original_version_id) =
+            store_with_markdown_document("collabdirty", "Original\n").await;
+        let hub = CollabHub::new(store.clone());
+        let room = hub.room(&document_id).await;
+        let _ = wait_for_recovery_state_matching(&store, &document_id, |state| !state.dirty).await;
+        let next_version_id = put_markdown(&store, "collabdirty", "live.md", "External\n").await;
+        assert_ne!(original_version_id, next_version_id);
+
+        replace_room_markdown(&room, "Client edit\n").await;
+
+        let state = wait_for_recovery_state(&store, &document_id).await;
+        assert_eq!(
+            state.base_version_id.as_deref(),
+            Some(original_version_id.as_str())
+        );
+        assert!(state.dirty);
+        assert_eq!(
+            room_slate_children(&room).await,
+            block_markdown_to_slate("Client edit\n").unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn clean_room_reseeds_from_new_head_before_next_socket_join() {
+        let (_root, store, document_id, original_version_id) =
+            store_with_markdown_document("collabreseeds", "Original\n").await;
+        let hub = CollabHub::new(store.clone());
+        let room = hub.room(&document_id).await;
+        let _ = wait_for_recovery_state_matching(&store, &document_id, |state| !state.dirty).await;
+        let next_version_id =
+            put_markdown(&store, "collabreseeds", "live.md", "Manual update\n").await;
+        assert_ne!(original_version_id, next_version_id);
+
+        room.reseed_clean_room_if_head_changed().await;
+
+        let state =
+            wait_for_recovery_state_matching(&store, &document_id, |state| !state.dirty).await;
+        assert_eq!(
+            state.base_version_id.as_deref(),
+            Some(next_version_id.as_str())
+        );
+        assert_eq!(
+            room_slate_children(&room).await,
+            block_markdown_to_slate("Manual update\n").unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn dirty_room_does_not_reseed_from_external_head_change() {
+        let (_root, store, document_id, original_version_id) =
+            store_with_markdown_document("collabdirtyreseed", "Original\n").await;
+        let hub = CollabHub::new(store.clone());
+        let room = hub.room(&document_id).await;
+        let _ = wait_for_recovery_state_matching(&store, &document_id, |state| !state.dirty).await;
+        replace_room_markdown(&room, "Client edit\n").await;
+        let dirty = wait_for_recovery_state(&store, &document_id).await;
+        assert_eq!(
+            dirty.base_version_id.as_deref(),
+            Some(original_version_id.as_str())
+        );
+        let _ = put_markdown(&store, "collabdirtyreseed", "live.md", "External update\n").await;
+
+        room.reseed_clean_room_if_head_changed().await;
+
+        let state = wait_for_recovery_state(&store, &document_id).await;
+        assert_eq!(
+            state.base_version_id.as_deref(),
+            Some(original_version_id.as_str())
+        );
+        assert!(state.dirty);
+        assert_eq!(
+            room_slate_children(&room).await,
+            block_markdown_to_slate("Client edit\n").unwrap()
+        );
     }
 
     #[tokio::test]
@@ -1243,6 +1787,7 @@ mod tests {
             store,
             document_id: "missing-document".to_string(),
             debounce: Duration::from_millis(1),
+            recovery_state: Arc::new(RoomRecoveryState::new(None, false)),
         };
         let failed = AtomicBool::new(false);
         let (failure_tx, failure_rx) = watch::channel(None);
@@ -1268,14 +1813,72 @@ mod tests {
         assert!(state.contains("missing-document"));
     }
 
+    async fn store_with_markdown_document(
+        library_slug: &str,
+        markdown: &str,
+    ) -> (tempfile::TempDir, QuarryStore, String, String) {
+        let root = tempfile::tempdir().unwrap();
+        let store = QuarryStore::open(StoreConfig {
+            db_path: root.path().join("quarry.db"),
+            cas_path: root.path().join("cas"),
+            lock_path: None,
+        })
+        .await
+        .unwrap();
+        let library = store.create_library(library_slug).await.unwrap();
+        let written = store
+            .put_document(
+                &library.slug,
+                "live.md",
+                markdown.as_bytes().to_vec(),
+                serde_json::json!({"content_type":"text/markdown"}),
+                "text/markdown",
+                DocumentSource::Rest,
+                WritePrecondition::None,
+            )
+            .await
+            .unwrap();
+        (root, store, written.document.id, written.version.id)
+    }
+
+    async fn put_markdown(
+        store: &QuarryStore,
+        library_slug: &str,
+        path: &str,
+        markdown: &str,
+    ) -> String {
+        store
+            .put_document(
+                library_slug,
+                path,
+                markdown.as_bytes().to_vec(),
+                serde_json::json!({"content_type":"text/markdown"}),
+                "text/markdown",
+                DocumentSource::Rest,
+                WritePrecondition::None,
+            )
+            .await
+            .unwrap()
+            .version
+            .id
+    }
+
     async fn wait_for_recovery_state(
         store: &QuarryStore,
         document_id: &str,
     ) -> quarry_storage::CollabRecoveryState {
+        wait_for_recovery_state_matching(store, document_id, |state| state.dirty).await
+    }
+
+    async fn wait_for_recovery_state_matching(
+        store: &QuarryStore,
+        document_id: &str,
+        matches: impl Fn(&quarry_storage::CollabRecoveryState) -> bool,
+    ) -> quarry_storage::CollabRecoveryState {
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 if let Some(state) = store.collab_recovery_state(document_id).await.unwrap() {
-                    if state.dirty {
+                    if matches(&state) {
                         return state;
                     }
                 }
@@ -1367,6 +1970,17 @@ mod tests {
         let mut txn = awareness.doc().transact_mut();
         let root = root_xml_text_mut(&mut txn).unwrap();
         apply_built(&mut txn, &root, 0, nodes);
+    }
+
+    async fn replace_room_markdown(room: &CollabRoom, markdown: &str) {
+        let awareness = room.broadcast.awareness().write().await;
+        let mut txn = awareness.doc().transact_mut();
+        let root = root_xml_text_mut(&mut txn).unwrap();
+        let len = root.len(&txn);
+        if len > 0 {
+            root.remove_range(&mut txn, 0, len);
+        }
+        apply_built(&mut txn, &root, 0, &built_nodes(markdown));
     }
 
     async fn room_slate_children(room: &CollabRoom) -> Vec<Node> {

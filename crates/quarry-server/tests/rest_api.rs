@@ -1,6 +1,6 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Method, Request, StatusCode};
-use futures_util::{SinkExt, Stream, StreamExt};
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use quarry_collab_codec::{
     build_nodes, encode_update_v1_from_built, review_markdown_to_slate, xmltext_to_slate, Node,
 };
@@ -492,6 +492,204 @@ async fn agent_edit_applies_block_ops_with_dry_run_stale_base_and_idempotency() 
 }
 
 #[tokio::test]
+async fn agent_edit_replace_document_supports_dry_run_commit_idempotency_stale_base_and_empty() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentreplace").await.unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "notes/whole.md",
+            b"One\n\nTwo\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreplace/documents/notes/whole.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let snapshot: Value = response_json(response).await;
+    let base_token = snapshot["baseToken"].as_str().unwrap().to_string();
+    let replacement = "# Title\n\nBody\n";
+    let edit = serde_json::json!({
+        "baseToken": base_token,
+        "operations": [{
+            "op": "replace_document",
+            "markdown": replacement
+        }]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentreplace/documents/notes/whole.md/edit?dryRun=1",
+            edit.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["dryRun"], true);
+    assert_eq!(body["markdown"], replacement);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/agentreplace/documents/notes/whole.md/edit")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("Idempotency-Key", "replace-whole")
+                .body(Body::from(edit.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let first_edit_etag = response.headers()[header::ETAG]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let body: Value = response_json(response).await;
+    assert_eq!(body["dryRun"], false);
+    assert_eq!(body["outcome"]["document"]["path"], "notes/whole.md");
+    assert_eq!(body["injection"], "no_live_room");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreplace/documents/notes/whole.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+        replacement
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreplace/documents/notes/whole.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let replaced_snapshot: Value = response_json(response).await;
+    let blocks = replaced_snapshot["blocks"].as_array().unwrap();
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks[0]["markdown"], "# Title\n\n");
+    assert_eq!(blocks[1]["markdown"], "Body\n");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/agentreplace/documents/notes/whole.md/edit")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("Idempotency-Key", "replace-whole")
+                .body(Body::from(edit.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::ETAG], first_edit_etag);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentreplace/documents/notes/whole.md/edit",
+            edit,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    let body: Value = response_json(response).await;
+    assert!(body["error"].as_str().unwrap().contains("STALE_BASE"));
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentreplace/documents/notes/whole.md/edit",
+            serde_json::json!({
+                "baseToken": replaced_snapshot["baseToken"].as_str().unwrap(),
+                "operations": [{
+                    "op": "replace_document",
+                    "markdown": ""
+                }]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreplace/documents/notes/whole.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+        ""
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreplace/documents/notes/whole.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let empty_snapshot: Value = response_json(response).await;
+    assert!(empty_snapshot["blocks"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn agent_edit_supports_insert_and_delete_block_ops() {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {
@@ -864,6 +1062,123 @@ async fn agent_edit_rejects_invalid_bulk_insert_shapes() {
 }
 
 #[tokio::test]
+async fn agent_edit_rejects_invalid_replace_document_shapes() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentreplacebad").await.unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "bad.md",
+            b"One\n\nTwo\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreplacebad/documents/bad.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let snapshot: Value = response_json(response).await;
+    let base_token = snapshot["baseToken"].as_str().unwrap();
+    let first_ref = snapshot["blocks"][0]["ref"].clone();
+
+    let invalid_cases = [
+        (
+            serde_json::json!({
+                "operations": [{
+                    "op": "replace_document"
+                }]
+            }),
+            "replace_document operation missing markdown",
+        ),
+        (
+            serde_json::json!({
+                "operations": [
+                    {
+                        "op": "replace_document",
+                        "markdown": "Replacement\n"
+                    },
+                    {
+                        "op": "delete_block",
+                        "ref": first_ref.clone()
+                    }
+                ]
+            }),
+            "replace_document must be the only operation",
+        ),
+        (
+            serde_json::json!({
+                "operations": [{
+                    "op": "replace_document",
+                    "ref": first_ref.clone(),
+                    "markdown": "Replacement\n"
+                }]
+            }),
+            "replace_document operation does not accept ref",
+        ),
+        (
+            serde_json::json!({
+                "operations": [{
+                    "op": "replace_document",
+                    "block": { "markdown": "Replacement\n" },
+                    "markdown": "Replacement\n"
+                }]
+            }),
+            "replace_document operation does not accept block",
+        ),
+        (
+            serde_json::json!({
+                "operations": [{
+                    "op": "replace_document",
+                    "blocks": [{ "markdown": "Replacement\n" }],
+                    "markdown": "Replacement\n"
+                }]
+            }),
+            "replace_document operation does not accept blocks",
+        ),
+    ];
+
+    for (request, expected_error) in invalid_cases {
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                Method::POST,
+                "/v1/libraries/agentreplacebad/documents/bad.md/edit?dryRun=1",
+                serde_json::json!({
+                    "baseToken": base_token,
+                    "operations": request["operations"].clone()
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: Value = response_json(response).await;
+        assert!(
+            body["error"].as_str().unwrap().contains(expected_error),
+            "expected error to contain {expected_error:?}, got {body:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn agent_edit_bulk_insert_injects_into_live_collab_room() {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {
@@ -946,6 +1261,100 @@ async fn agent_edit_bulk_insert_injects_into_live_collab_room() {
 
     wait_for_yjs_plain_text(&mut socket, &client_doc, "OneABTwo").await;
     assert_eq!(yjs_plain_text(&client_doc), "OneABTwo");
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn agent_edit_replace_document_injects_into_live_collab_room() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentlivereplace").await.unwrap();
+    let written = store
+        .put_document(
+            &library.slug,
+            "notes/live.md",
+            b"One\n\nTwo\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_app = app.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, server_app).await.unwrap();
+    });
+
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/{}", written.document.id))
+            .await
+            .unwrap();
+    let client_doc = empty_yjs_doc();
+    sync_yjs_doc_from_socket(&mut socket, &client_doc).await;
+    assert_eq!(yjs_plain_text(&client_doc), "OneTwo");
+
+    let snapshot = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentlivereplace/documents/notes/live.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(snapshot.status(), StatusCode::OK);
+    let snapshot: Value = response_json(snapshot).await;
+    let replacement = "# New\n\nFresh body\n";
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentlivereplace/documents/notes/live.md/edit",
+            serde_json::json!({
+                "baseToken": snapshot["baseToken"].as_str().unwrap(),
+                "operations": [{
+                    "op": "replace_document",
+                    "markdown": replacement
+                }]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["injection"], "injected");
+
+    wait_for_yjs_plain_text(&mut socket, &client_doc, "NewFresh body").await;
+    assert_eq!(yjs_plain_text(&client_doc), "NewFresh body");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentlivereplace/documents/notes/live.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+        replacement
+    );
 
     server.abort();
 }
@@ -1426,16 +1835,8 @@ async fn agent_ops_comment_add_injects_into_live_collab_room() {
         tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/{}", written.document.id))
             .await
             .unwrap();
-    let (client_doc, update) = yjs_doc_with_markdown("One target here.\n\nSecond paragraph.\n");
-    socket
-        .send(TungsteniteMessage::Binary(
-            YMessage::Sync(SyncMessage::Update(update))
-                .encode_v1()
-                .into(),
-        ))
-        .await
-        .unwrap();
-    wait_for_yjs_sync_update(&mut socket, &client_doc).await;
+    let client_doc = empty_yjs_doc();
+    sync_yjs_doc_from_socket(&mut socket, &client_doc).await;
 
     let snapshot = app
         .clone()
@@ -1568,16 +1969,8 @@ async fn agent_ops_suggestion_add_kinds_inject_into_live_collab_room() {
         ))
         .await
         .unwrap();
-        let (client_doc, update) = yjs_doc_with_markdown("One target here.\n");
-        socket
-            .send(TungsteniteMessage::Binary(
-                YMessage::Sync(SyncMessage::Update(update))
-                    .encode_v1()
-                    .into(),
-            ))
-            .await
-            .unwrap();
-        wait_for_yjs_sync_update(&mut socket, &client_doc).await;
+        let client_doc = empty_yjs_doc();
+        sync_yjs_doc_from_socket(&mut socket, &client_doc).await;
 
         let snapshot = app
             .clone()
@@ -1679,16 +2072,8 @@ async fn agent_ops_accept_reject_inject_and_remove_suggestion_metadata() {
         tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/{}", written.document.id))
             .await
             .unwrap();
-    let (client_doc, update) = yjs_doc_with_markdown(markdown);
-    socket
-        .send(TungsteniteMessage::Binary(
-            YMessage::Sync(SyncMessage::Update(update))
-                .encode_v1()
-                .into(),
-        ))
-        .await
-        .unwrap();
-    wait_for_yjs_sync_update(&mut socket, &client_doc).await;
+    let client_doc = empty_yjs_doc();
+    sync_yjs_doc_from_socket(&mut socket, &client_doc).await;
     assert!(yjs_has_suggestion_mark(&client_doc, "s1"));
     assert!(yjs_has_suggestion_mark(&client_doc, "s2"));
 
@@ -1822,16 +2207,8 @@ async fn agent_ops_comment_resolve_injects_metadata_only_live_patch() {
         tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/{}", written.document.id))
             .await
             .unwrap();
-    let (client_doc, update) = yjs_doc_with_markdown(markdown);
-    socket
-        .send(TungsteniteMessage::Binary(
-            YMessage::Sync(SyncMessage::Update(update))
-                .encode_v1()
-                .into(),
-        ))
-        .await
-        .unwrap();
-    wait_for_yjs_sync_update(&mut socket, &client_doc).await;
+    let client_doc = empty_yjs_doc();
+    sync_yjs_doc_from_socket(&mut socket, &client_doc).await;
     assert_eq!(yjs_plain_text(&client_doc), "See this.");
 
     let response = app
@@ -1907,16 +2284,8 @@ async fn agent_ops_comment_reply_and_reply_delete_inject_metadata_only_live_patc
         tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/{}", written.document.id))
             .await
             .unwrap();
-    let (client_doc, update) = yjs_doc_with_markdown(markdown);
-    socket
-        .send(TungsteniteMessage::Binary(
-            YMessage::Sync(SyncMessage::Update(update))
-                .encode_v1()
-                .into(),
-        ))
-        .await
-        .unwrap();
-    wait_for_yjs_sync_update(&mut socket, &client_doc).await;
+    let client_doc = empty_yjs_doc();
+    sync_yjs_doc_from_socket(&mut socket, &client_doc).await;
     assert_eq!(yjs_plain_text(&client_doc), "See this.");
 
     let response = app
@@ -2034,16 +2403,8 @@ async fn agent_ops_comment_delete_root_injects_content_and_removes_replies() {
         tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/{}", written.document.id))
             .await
             .unwrap();
-    let (client_doc, update) = yjs_doc_with_markdown(markdown);
-    socket
-        .send(TungsteniteMessage::Binary(
-            YMessage::Sync(SyncMessage::Update(update))
-                .encode_v1()
-                .into(),
-        ))
-        .await
-        .unwrap();
-    wait_for_yjs_sync_update(&mut socket, &client_doc).await;
+    let client_doc = empty_yjs_doc();
+    sync_yjs_doc_from_socket(&mut socket, &client_doc).await;
     assert!(yjs_has_comment_mark(&client_doc, "c1"));
 
     let response = app
@@ -2543,6 +2904,7 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
     assert!(docs.contains("comment.reply"));
     assert!(docs.contains("comment.delete"));
     assert!(docs.contains("\"blocks\""));
+    assert!(docs.contains("replace_document"));
     assert!(docs.contains("repeated `insert_after`"));
     assert!(!docs.contains(
         "does not currently support Proof operations such as `rewrite.apply` or `comment.reply`"
@@ -2586,6 +2948,11 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
         .unwrap()
         .iter()
         .any(|operation| operation == "replace_block"));
+    assert!(body["edit_operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|operation| operation == "replace_document"));
     assert!(body["ops_operations"]
         .as_array()
         .unwrap()
@@ -3462,10 +3829,15 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
             "insert_before",
             "insert_after",
             "delete_block",
+            "replace_document",
         ],
     );
     assert!(
         openapi["components"]["schemas"]["AgentBlockOperation"]["properties"]["blocks"].is_object()
+    );
+    assert!(
+        openapi["components"]["schemas"]["AgentBlockOperation"]["properties"]["markdown"]
+            .is_object()
     );
     assert_schema_enum_contains(
         &openapi,
@@ -4195,16 +4567,38 @@ fn yjs_doc_with_markdown(markdown: &str) -> (Doc, Vec<u8>) {
     let nodes = review_markdown_to_slate(markdown).unwrap();
     let built = build_nodes(&nodes).unwrap();
     let update = encode_update_v1_from_built(&built, COLLAB_ROOT);
-    let doc = Doc::with_options(Options {
-        offset_kind: OffsetKind::Utf16,
-        ..Default::default()
-    });
+    let doc = empty_yjs_doc();
     {
         let mut txn = doc.transact_mut();
         txn.apply_update(Update::decode_v1(&update).unwrap())
             .unwrap();
     }
     (doc, update)
+}
+
+fn empty_yjs_doc() -> Doc {
+    Doc::with_options(Options {
+        offset_kind: OffsetKind::Utf16,
+        ..Default::default()
+    })
+}
+
+async fn sync_yjs_doc_from_socket<S>(socket: &mut S, doc: &Doc)
+where
+    S: Sink<TungsteniteMessage>
+        + Stream<Item = Result<TungsteniteMessage, tokio_tungstenite::tungstenite::Error>>
+        + Unpin,
+    <S as Sink<TungsteniteMessage>>::Error: std::fmt::Debug,
+{
+    socket
+        .send(TungsteniteMessage::Binary(
+            YMessage::Sync(SyncMessage::SyncStep1(doc.transact().state_vector()))
+                .encode_v1()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    wait_for_yjs_sync_update(socket, doc).await;
 }
 
 fn injection_envelope_from_update(update: &[u8]) -> Value {
@@ -4310,9 +4704,15 @@ where
 }
 
 fn apply_yjs_message(doc: &Doc, bytes: &[u8]) -> bool {
-    let Ok(YMessage::Sync(SyncMessage::Update(update))) = YMessage::decode_v1(bytes) else {
-        return false;
+    let update = match YMessage::decode_v1(bytes) {
+        Ok(YMessage::Sync(SyncMessage::Update(update) | SyncMessage::SyncStep2(update))) => update,
+        _ => {
+            return false;
+        }
     };
+    if update.is_empty() {
+        return false;
+    }
     let mut txn = doc.transact_mut();
     txn.apply_update(Update::decode_v1(&update).unwrap())
         .unwrap();

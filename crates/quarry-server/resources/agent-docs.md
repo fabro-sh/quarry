@@ -138,10 +138,10 @@ When choosing a target:
 - If a write reports `STALE_BASE`, discard old refs, fetch a fresh snapshot, and
   rebuild the operation from the new refs.
 
-## Direct Block Edits
+## Direct Edits
 
-Direct block edit operations are `replace_block`, `insert_before`,
-`insert_after`, and `delete_block`.
+Direct edit operations are `replace_block`, `insert_before`, `insert_after`,
+`delete_block`, and `replace_document`.
 
 Dry run a replacement:
 
@@ -205,6 +205,23 @@ whole multi-section document as one replacement block unless the target block is
 itself one Markdown block. For multiple insertions at the same ref, use
 `blocks` on one `insert_before` or `insert_after` operation instead of repeated `insert_after`
 calls on the same ref.
+
+To replace the whole document, send exactly one `replace_document` operation.
+It uses the top-level `baseToken` and does not accept `ref`, `block`, or
+`blocks`. Empty Markdown is valid. The replacement is stored as one Markdown
+document, then split into normal snapshot blocks on the next read.
+
+```json
+{
+  "baseToken": "\"version_id\"",
+  "operations": [
+    {
+      "op": "replace_document",
+      "markdown": "# Title\n\nBody\n"
+    }
+  ]
+}
+```
 
 ## Comments And Suggestions
 
