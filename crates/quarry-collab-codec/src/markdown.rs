@@ -25,19 +25,33 @@ pub fn block_markdown_to_slate(markdown: &str) -> Result<Vec<Node>, Unsupported>
 /// into review marks afterwards (see `crate::review`); the editor/collab path
 /// keeps using `block_markdown_to_slate`, which still rejects them.
 pub fn block_markdown_to_slate_raw(markdown: &str) -> Result<Vec<Node>, Unsupported> {
-    // Match the browser's remark parser, which enables neither smart punctuation
-    // nor heading-id attributes:
-    //   - smart punctuation rewrites `--` → en-dash, corrupting `{--del--}`;
-    //   - heading attributes consume a trailing `{#id}` on a heading as the
-    //     heading's id, stripping the CriticMarkup `{#id}` so a commented heading
-    //     parses as a marker without an id (and review conversion then bails).
-    let options =
-        Options::all() & !Options::ENABLE_SMART_PUNCTUATION & !Options::ENABLE_HEADING_ATTRIBUTES;
-    let events = Parser::new_ext(markdown, options)
+    let events = Parser::new_ext(markdown, browser_compatible_markdown_options())
         .map(|event| event.into_static())
         .collect::<Vec<_>>();
     let mut parser = EventParser { events, index: 0 };
     normalize_insert_nodes(parser.parse_top_level()?).pipe(Ok)
+}
+
+fn browser_compatible_markdown_options() -> Options {
+    // Keep this as an explicit allowlist instead of `Options::all()` so new
+    // pulldown-cmark extensions cannot silently change the Rust shadow codec.
+    //
+    // Some enabled extensions still parse to unsupported events below; that is
+    // intentional because the browser can also recognize those syntaxes and the
+    // injection path must fail closed rather than accept them as plain text.
+    Options::ENABLE_TABLES
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
+        | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS
+        | Options::ENABLE_OLD_FOOTNOTES
+        | Options::ENABLE_MATH
+        | Options::ENABLE_GFM
+        | Options::ENABLE_DEFINITION_LIST
+        | Options::ENABLE_SUPERSCRIPT
+        | Options::ENABLE_SUBSCRIPT
+        | Options::ENABLE_WIKILINKS
 }
 
 trait Pipe: Sized {
@@ -913,4 +927,31 @@ fn empty_element(ty: &str) -> Node {
 
 fn empty_text() -> Node {
     Node::text("", Attrs::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parser_options_are_explicitly_allowlisted() {
+        let expected = Options::ENABLE_TABLES
+            | Options::ENABLE_FOOTNOTES
+            | Options::ENABLE_STRIKETHROUGH
+            | Options::ENABLE_TASKLISTS
+            | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
+            | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS
+            | Options::ENABLE_OLD_FOOTNOTES
+            | Options::ENABLE_MATH
+            | Options::ENABLE_GFM
+            | Options::ENABLE_DEFINITION_LIST
+            | Options::ENABLE_SUPERSCRIPT
+            | Options::ENABLE_SUBSCRIPT
+            | Options::ENABLE_WIKILINKS;
+
+        let actual = browser_compatible_markdown_options();
+        assert_eq!(actual, expected);
+        assert!(!actual.contains(Options::ENABLE_SMART_PUNCTUATION));
+        assert!(!actual.contains(Options::ENABLE_HEADING_ATTRIBUTES));
+    }
 }
