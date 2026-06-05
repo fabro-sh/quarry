@@ -1,70 +1,80 @@
 # Quarry Agent Docs
 
-Quarry exposes local REST APIs for agents on `/v1`. Use these docs when an agent has a Quarry locator URL, library slug, and document path and needs to read, review, or edit a collaborative Markdown document.
+Quarry is a local-first collaborative Markdown editor for humans and agents. Use
+plain HTTP requests against the local `/v1` API to read, comment, suggest, and
+edit documents. Browser automation is not needed for normal agent work.
 
-## Quickstart
+The main Quarry-specific rule: edits are block-scoped. Read `/snapshot`, copy
+the current `baseToken` and exact block `ref` values, then send those values
+back to `/edit` or `/ops`. Never synthesize refs.
 
-Set these placeholders first:
+## Two-Minute Version
 
-```sh
-ORIGIN="http://127.0.0.1:7831"
-LIBRARY="main"
-PATH_ENCODED="notes/Project%20Plan.md"
-AGENT_ID="ai:codex:abc123"
-AGENT_NAME="Codex"
-DOC="$ORIGIN/v1/libraries/$LIBRARY/documents/$PATH_ENCODED"
+1. If you received a Quarry link, extract the origin, library, and document path.
+2. Register presence with a stable `X-Agent-Id`.
+3. Read `GET /snapshot`.
+4. Reply with the required ready message.
+5. Wait for the user's instruction before editing.
+6. Use `/ops` for comments and suggestions; use `/edit` for direct block edits.
+7. If the document changed, re-read `/snapshot` and retry once with fresh refs.
+
+## I Just Received A Quarry Link
+
+Quarry invite links look like this:
+
+```text
+http://127.0.0.1:5173/lib/team%20notes/documents/folder/live%20doc.md?token=invite-token
 ```
 
-For nested document paths, encode each path segment and keep `/` separators. For example, `notes/Project Plan.md` becomes `notes/Project%20Plan.md`.
+Use the link as a locator. The origin is the API origin, the library is the
+segment after `/lib/`, and the document path is the portion after `/documents/`.
+Keep document path segments URL-encoded in REST URLs and preserve `/` separators.
 
-1. Register presence.
-2. Read `/snapshot`.
-3. Reply to the user with the required ready message.
-4. Watch events while working.
-5. Edit only after the user asks.
+```sh
+ORIGIN="http://127.0.0.1:5173"
+LIBRARY_ENCODED="team%20notes"
+LIBRARY="team notes"
+PATH_ENCODED="folder/live%20doc.md"
+AGENT_ID="ai:codex:abc123"
+AGENT_NAME="Codex"
+DOC="$ORIGIN/v1/libraries/$LIBRARY_ENCODED/documents/$PATH_ENCODED"
+```
+
+For a raw document path like `notes/Project Plan.md`, encode each path segment
+and keep slash separators: `notes/Project%20Plan.md`.
 
 ## Auth And Locator Tokens
 
-Quarry REST agent APIs are trusted-localhost for now. Browser invite URL tokens identify the shared document for browser/collab joins, but REST agent endpoints on this host do not currently enforce bearer-token auth.
+Quarry REST agent APIs are trusted-localhost for now. The `?token=` value in a
+browser invite URL identifies the shared document for browser/collab joins, but
+REST agent endpoints on this host do not currently enforce bearer-token auth.
 
-Use the locator URL to find the Quarry origin, library, document path, and invite context. Do not send the locator token as a REST bearer token unless future discovery metadata explicitly says to do so.
+Do not send the locator token as a REST bearer token unless future discovery
+metadata explicitly says to do so. Check `/.well-known/agent.json` when in doubt.
 
 ## Headers And Identity
 
-Use a stable agent id for the session, such as `ai:codex:<short-id>` or `ai:claude:<short-id>`.
+Use a stable agent id for the session, such as `ai:codex:<short-id>` or
+`ai:claude:<short-id>`.
 
 - `Content-Type: application/json`
 - `X-Agent-Id: <agent-id>` for presence and event ack identity
 - `Idempotency-Key: <unique-key>` is supported on `/edit` for direct block edits
 
-## Presence
+Use a readable `by` value in presence, comments, suggestions, and replies so the
+human can see who acted.
 
-Register or update presence before reading:
+## Read The Document
 
-```sh
-curl -sS -X POST "$DOC/presence" \
-  -H "Content-Type: application/json" \
-  -H "X-Agent-Id: $AGENT_ID" \
-  -d '{"status":"reading","by":"Codex"}'
-```
-
-Statuses: `reading`, `thinking`, `acting`, `waiting`, `completed`, `error`.
-
-List presence for the same document:
-
-```sh
-curl -sS "$DOC/presence"
-```
-
-## Snapshot Reads
-
-Prefer a block snapshot before editing or reviewing:
+Prefer the block snapshot:
 
 ```sh
 curl -sS "$DOC/snapshot"
 ```
 
-Snapshot responses contain `documentId`, `baseToken`, and `blocks`. Each block has a `ref` and Markdown content:
+Snapshot responses contain `documentId`, `baseToken`, and `blocks`. Each block
+has Markdown content and a `ref` that identifies that exact block in that exact
+document version:
 
 ```json
 {
@@ -83,7 +93,8 @@ Snapshot responses contain `documentId`, `baseToken`, and `blocks`. Each block h
 }
 ```
 
-Use the latest `baseToken` and exact block `ref` values for `/edit` and `/ops`.
+Use the latest top-level `baseToken` and the exact `ref` from the current
+snapshot for `/edit` and `/ops`.
 
 Fallback full document read:
 
@@ -101,40 +112,38 @@ Connected in Quarry and ready.
 I can edit directly, or leave comments and suggestions for you to review. What would you like me to do?
 ```
 
-## Events
+Do not edit before this reply unless the user already gave a clear edit
+instruction in the same request.
 
-Prefer the document event stream:
+## Choose The Right Operation
 
-```sh
-curl -N "$DOC/events/stream"
-```
+Use `/ops` when the user asks for review, feedback, comments, suggestions, or
+track-change style proposals.
 
-If a stream is not practical, poll pending events:
+Use `/edit` when the user asks you to directly change document content.
 
-```sh
-curl -sS "$ORIGIN/v1/libraries/$LIBRARY/events/pending?after=0"
-```
+Use `?dryRun=1` before non-trivial direct edits or review operations. Dry runs
+validate refs and planned changes without committing them.
 
-The poll response contains `events` and `nextAfter`. Store `nextAfter` and pass it as `after` on the next poll.
+## How Block Refs Work
 
-`doc.changed` events are sparse wake signals. They include revision metadata such as `version_id`/`etag` and may include `collab_session_id`. When live `/ops` mutations are injected into an open browser editor, `collab_session_id` starts with `agent-injected:`. The event may include a review metadata patch such as `review.comments`, `review.suggestions`, `review.removeComments`, or `review.removeSuggestions`.
+A block `ref` is a concurrency guard. It includes the block's `baseToken`,
+position, and content hash. If the document changes, old refs may become stale.
 
-Ack processed events when useful:
+When choosing a target:
 
-```sh
-curl -sS -X POST "$ORIGIN/v1/libraries/$LIBRARY/events/ack" \
-  -H "Content-Type: application/json" \
-  -H "X-Agent-Id: $AGENT_ID" \
-  -d '{"eventId": 42}'
-```
+- Pick the block whose `markdown` contains the text you want to edit or review.
+- Copy the whole `ref` object from the current snapshot.
+- If the target spans multiple blocks, use multiple operations.
+- If a write reports `STALE_BASE`, discard old refs, fetch a fresh snapshot, and
+  rebuild the operation from the new refs.
 
-Refresh the snapshot after activity arrives and before replying, commenting, suggesting, or editing.
+## Direct Block Edits
 
-## Block Edits
+Direct block edit operations are `replace_block`, `insert_before`,
+`insert_after`, and `delete_block`.
 
-Use direct block edits only after the user asks you to edit. Operations are `replace_block`, `insert_before`, `insert_after`, and `delete_block`.
-
-Dry run first for non-trivial edits:
+Dry run a replacement:
 
 ```sh
 curl -sS -X POST "$DOC/edit?dryRun=1" \
@@ -166,11 +175,15 @@ curl -sS -X POST "$DOC/edit" \
   -d @edit.json
 ```
 
-Each inserted or replacement block must be a single Markdown block. If a response reports `STALE_BASE`, fetch a new snapshot and retry with the new `baseToken` and block refs.
+Each inserted or replacement block must be one Markdown block. Do not send a
+whole multi-section document as one replacement block unless the target block is
+itself one Markdown block.
 
 ## Comments And Suggestions
 
-Use `/ops` for review feedback. It supports `comment.add`, `comment.reply`, `comment.delete`, `suggestion.add`, `suggestion.accept`, `suggestion.reject`, and `comment.resolve`.
+Use `/ops` for review feedback. Supported operations are `comment.add`,
+`comment.reply`, `comment.delete`, `comment.resolve`, `suggestion.add`,
+`suggestion.accept`, and `suggestion.reject`.
 
 Add a comment:
 
@@ -213,9 +226,11 @@ curl -sS -X POST "$DOC/ops?dryRun=1" \
   }'
 ```
 
-Suggestion kinds are `insert`, `delete`, `remove`, `replace`, and `substitution`. `replace` and `substitution` require `content`. `insert` requires `content`. `delete` and `remove` use the quoted text or block anchor.
+Suggestion kinds are `insert`, `delete`, `remove`, `replace`, and
+`substitution`. `insert`, `replace`, and `substitution` require `content`.
+`delete` and `remove` use the quoted text or block anchor.
 
-Reply to, delete, resolve, or decide review items:
+Reply to or delete comments:
 
 ```sh
 curl -sS -X POST "$DOC/ops" \
@@ -229,7 +244,12 @@ curl -sS -X POST "$DOC/ops" \
   -d '{"baseToken":"W/\"version_123\"","op":"comment.delete","id":"c_123"}'
 ```
 
-`comment.reply` requires `parentId` for a root comment and `body`; `id` is optional. `comment.delete` accepts a root comment id or reply id. Deleting a root removes its inline comment mark and direct replies. Deleting a reply removes only that reply metadata.
+`comment.reply` requires `parentId` for the root comment and `body`; `id` is
+optional. `comment.delete` accepts a root comment id or reply id. Deleting a
+root removes its inline comment mark and direct replies. Deleting a reply
+removes only that reply metadata.
+
+Resolve a comment or decide a suggestion:
 
 ```sh
 curl -sS -X POST "$DOC/ops" \
@@ -243,20 +263,116 @@ curl -sS -X POST "$DOC/ops" \
   -d '{"baseToken":"W/\"version_123\"","op":"suggestion.accept","id":"s_123"}'
 ```
 
-## Error Handling
+## Presence
 
-- `STALE_BASE`: the document changed since your snapshot. Fetch `/snapshot` again and retry against the new `baseToken`.
+Register or update presence before reading, commenting, suggesting, or editing:
+
+```sh
+curl -sS -X POST "$DOC/presence" \
+  -H "Content-Type: application/json" \
+  -H "X-Agent-Id: $AGENT_ID" \
+  -d '{"status":"reading","by":"Codex"}'
+```
+
+Statuses are `reading`, `thinking`, `acting`, `waiting`, `completed`, and
+`error`.
+
+List presence for the same document:
+
+```sh
+curl -sS "$DOC/presence"
+```
+
+## Events
+
+Events are activity signals for long-lived agents. They are not the source of
+truth for document text. Re-read `/snapshot` after an event before replying,
+commenting, suggesting, or editing.
+
+Prefer the document event stream:
+
+```sh
+curl -N "$DOC/events/stream"
+```
+
+If a stream is not practical, poll pending events:
+
+```sh
+curl -sS "$ORIGIN/v1/libraries/$LIBRARY_ENCODED/events/pending?after=0"
+```
+
+The poll response contains `events` and `nextAfter`. Store `nextAfter` and pass
+it as `after` on the next poll.
+
+`doc.changed` events are sparse wake signals. They include revision metadata
+such as `version_id`/`etag` and may include `collab_session_id`. When live
+`/ops` mutations are injected into an open browser editor, `collab_session_id`
+starts with `agent-injected:`. The event may include a review metadata patch
+such as `review.comments`, `review.suggestions`, `review.removeComments`, or
+`review.removeSuggestions`.
+
+Ack processed events when useful:
+
+```sh
+curl -sS -X POST "$ORIGIN/v1/libraries/$LIBRARY_ENCODED/events/ack" \
+  -H "Content-Type: application/json" \
+  -H "X-Agent-Id: $AGENT_ID" \
+  -d '{"eventId": 42}'
+```
+
+## Errors And Retry Rules
+
+- `STALE_BASE`: the document changed since your snapshot. Fetch `/snapshot`
+  again, rebuild the request with the new `baseToken` and block refs, and retry
+  once.
 - Missing or invalid `ref`: use the exact block ref from the current snapshot.
-- Unsupported operation: check `/.well-known/agent.json` for current `edit_operations` and `ops_operations`.
-- Stream lag or pending events: refresh the snapshot before continuing.
+  Do not invent refs or reuse refs from a previous version.
+- Unsupported operation: check `/.well-known/agent.json` for current
+  `edit_operations` and `ops_operations`.
+- Stream lag or pending events: refresh `/snapshot` before continuing.
+- Failed dry run: fix the request before committing the same operation.
+
+If a retryable write still fails after one fresh snapshot, stop and report the
+raw error to the user instead of guessing.
+
+## Discovery And Schemas
+
+Use discovery when you need current route metadata or schemas:
+
+```sh
+curl -sS "$ORIGIN/.well-known/agent.json"
+curl -sS "$ORIGIN/v1/openapi.json"
+curl -sS "$ORIGIN/quarry.SKILL.md"
+```
+
+Discovery includes route hints, auth mode, supported presence statuses,
+supported edit operations, supported review operations, and known limitations.
 
 ## Known Limitations
 
-- REST agent endpoints currently trust localhost and do not enforce bearer-token auth.
-- Invite URL tokens are document locators for browser/collab joins, not REST auth tokens.
-- Quarry does not currently support Proof operations such as `rewrite.apply`.
-- Direct block edits operate on whole Markdown blocks, not arbitrary character ranges.
+- REST agent endpoints currently trust localhost and do not enforce bearer-token
+  auth.
+- Invite URL tokens are document locators for browser/collab joins, not REST
+  auth tokens.
+- Direct block edits operate on whole Markdown blocks, not arbitrary character
+  ranges.
 - Inserted or replacement content for `/edit` must be one Markdown block.
+- Quarry does not currently support Proof-only operations such as
+  `rewrite.apply`.
+
+## When Quarry Looks Wrong
+
+If a read, write, event, or browser-visible state looks wrong, collect raw
+evidence before summarizing:
+
+- Exact request URL, method, status, and response body
+- Library, document path, and agent id
+- `baseToken` and block `ref` values used
+- Event id, `nextAfter`, and `collab_session_id` if relevant
+- Whether a fresh `/snapshot` and one safe retry changed the outcome
+- Any visible mismatch between REST responses and the open browser document
+
+Then report the evidence to the user. Do not keep retrying destructive writes.
 
 ## Safety Rules
 
@@ -267,4 +383,5 @@ curl -sS -X POST "$DOC/ops" \
 - Refresh the snapshot after any event and after any stale write.
 - Use `?dryRun=1` before risky edits or suggestions.
 - Include a readable `by` value so the user can see who acted.
-- Fetch `/.well-known/agent.json` and `/v1/openapi.json` when you need current route metadata or schemas.
+- Fetch `/.well-known/agent.json` and `/v1/openapi.json` when you need current
+  route metadata or schemas.
