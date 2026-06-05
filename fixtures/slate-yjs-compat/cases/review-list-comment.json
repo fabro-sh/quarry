@@ -1,0 +1,60 @@
+{
+  "name": "review-list-comment",
+  "supported": true,
+  "codec": "review",
+  "markdown": "- First {==item==}{>>needs work<<}{#c3}\n- Plain item\n\n---\ncomments:\n  c3:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "text": "First "
+        },
+        {
+          "comment": true,
+          "comment_c3": true,
+          "text": "item"
+        }
+      ],
+      "type": "p",
+      "indent": 1,
+      "listStyleType": "disc"
+    },
+    {
+      "children": [
+        {
+          "text": "Plain item"
+        }
+      ],
+      "type": "p",
+      "indent": 1,
+      "listStyleType": "disc"
+    }
+  ],
+  "observableState": [
+    {
+      "type": "p",
+      "indent": 1,
+      "listStyleType": "disc",
+      "children": [
+        {
+          "text": "First "
+        },
+        {
+          "comment": true,
+          "comment_c3": true,
+          "text": "item"
+        }
+      ]
+    },
+    {
+      "type": "p",
+      "indent": 1,
+      "listStyleType": "disc",
+      "children": [
+        {
+          "text": "Plain item"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "name": "review-code-literal",
+  "supported": true,
+  "codec": "review",
+  "markdown": "Literal `{==code==}{#c9}` and real {==text==}{>>note<<}{#c5}\n\n---\ncomments:\n  c5:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "text": "Literal "
+        },
+        {
+          "code": true,
+          "text": "{==code==}{#c9}"
+        },
+        {
+          "text": " and real "
+        },
+        {
+          "comment": true,
+          "comment_c5": true,
+          "text": "text"
+        }
+      ],
+      "type": "p"
+    }
+  ],
+  "observableState": [
+    {
+      "type": "p",
+      "children": [
+        {
+          "text": "Literal "
+        },
+        {
+          "code": true,
+          "text": "{==code==}{#c9}"
+        },
+        {
+          "text": " and real "
+        },
+        {
+          "comment": true,
+          "comment_c5": true,
+          "text": "text"
+        }
+      ]
+    }
+  ]
+}

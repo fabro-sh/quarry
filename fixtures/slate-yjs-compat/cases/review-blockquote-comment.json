@@ -1,0 +1,36 @@
+{
+  "name": "review-blockquote-comment",
+  "supported": true,
+  "codec": "review",
+  "markdown": "> See {==quote==}{>>note<<}{#c4}\n\n---\ncomments:\n  c4:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "text": "See "
+        },
+        {
+          "comment": true,
+          "comment_c4": true,
+          "text": "quote"
+        }
+      ],
+      "type": "blockquote"
+    }
+  ],
+  "observableState": [
+    {
+      "type": "blockquote",
+      "children": [
+        {
+          "text": "See "
+        },
+        {
+          "comment": true,
+          "comment_c4": true,
+          "text": "quote"
+        }
+      ]
+    }
+  ]
+}

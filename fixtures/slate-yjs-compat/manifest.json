@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "generatedBy": "ui/scripts/gen-slate-yjs-fixtures.ts",
-  "gitSha": "6f89caa",
+  "gitSha": "6c2170e",
   "versions": {
     "@platejs/markdown": "52.1.0",
     "@slate-yjs/core": "1.0.2",
@@ -19,6 +19,11 @@
     "zero-width-placeholder",
     "critic-markup",
     "review-heading-comment",
+    "review-heading-suggestion",
+    "review-list-comment",
+    "review-table-suggestion",
+    "review-blockquote-comment",
+    "review-code-literal",
     "review-comment",
     "review-comment-only",
     "review-suggestion",

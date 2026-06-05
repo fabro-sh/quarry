@@ -1,0 +1,166 @@
+{
+  "name": "review-table-suggestion",
+  "supported": true,
+  "codec": "review",
+  "markdown": "| Field | Value |\n| - | - |\n| Status | {++ready++}{#s5} |\n\n---\nsuggestions:\n  s5:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Field"
+                    }
+                  ],
+                  "type": "p"
+                }
+              ],
+              "type": "th"
+            },
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Value"
+                    }
+                  ],
+                  "type": "p"
+                }
+              ],
+              "type": "th"
+            }
+          ],
+          "type": "tr"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "text": "Status"
+                    }
+                  ],
+                  "type": "p"
+                }
+              ],
+              "type": "td"
+            },
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "suggestion": true,
+                      "suggestion_s5": {
+                        "id": "s5",
+                        "type": "insert",
+                        "userId": "ai:codex",
+                        "createdAt": 1780627260480
+                      },
+                      "text": "ready"
+                    }
+                  ],
+                  "type": "p"
+                }
+              ],
+              "type": "td"
+            }
+          ],
+          "type": "tr"
+        }
+      ],
+      "type": "table",
+      "align": [
+        null,
+        null
+      ]
+    }
+  ],
+  "observableState": [
+    {
+      "type": "table",
+      "align": [
+        null,
+        null
+      ],
+      "children": [
+        {
+          "type": "tr",
+          "children": [
+            {
+              "type": "th",
+              "children": [
+                {
+                  "type": "p",
+                  "children": [
+                    {
+                      "text": "Field"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "th",
+              "children": [
+                {
+                  "type": "p",
+                  "children": [
+                    {
+                      "text": "Value"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "tr",
+          "children": [
+            {
+              "type": "td",
+              "children": [
+                {
+                  "type": "p",
+                  "children": [
+                    {
+                      "text": "Status"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "td",
+              "children": [
+                {
+                  "type": "p",
+                  "children": [
+                    {
+                      "suggestion": true,
+                      "suggestion_s5": {
+                        "id": "s5",
+                        "type": "insert",
+                        "userId": "ai:codex",
+                        "createdAt": 1780627260480
+                      },
+                      "text": "ready"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

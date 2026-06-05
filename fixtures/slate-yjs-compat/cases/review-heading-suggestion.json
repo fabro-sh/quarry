@@ -1,0 +1,52 @@
+{
+  "name": "review-heading-suggestion",
+  "supported": true,
+  "codec": "review",
+  "markdown": "# Keep {--rough--}{#s4} title\n\n---\nsuggestions:\n  s4:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "text": "Keep "
+        },
+        {
+          "suggestion": true,
+          "suggestion_s4": {
+            "id": "s4",
+            "type": "remove",
+            "userId": "ai:codex",
+            "createdAt": 1780627260480
+          },
+          "text": "rough"
+        },
+        {
+          "text": " title"
+        }
+      ],
+      "type": "h1"
+    }
+  ],
+  "observableState": [
+    {
+      "type": "h1",
+      "children": [
+        {
+          "text": "Keep "
+        },
+        {
+          "suggestion": true,
+          "suggestion_s4": {
+            "id": "s4",
+            "type": "remove",
+            "userId": "ai:codex",
+            "createdAt": 1780627260480
+          },
+          "text": "rough"
+        },
+        {
+          "text": " title"
+        }
+      ]
+    }
+  ]
+}

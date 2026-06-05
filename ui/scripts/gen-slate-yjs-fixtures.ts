@@ -76,6 +76,41 @@ const CASES: FixtureCase[] = [
       '# {==Local Light==}{>>note<<}{#c1}\n\nBody line.\n\n---\ncomments:\n  c1:\n    by: Claude\n    at: 2026-06-05T12:15:45.171Z\n',
   },
   {
+    name: 'review-heading-suggestion',
+    supported: true,
+    codec: 'review',
+    markdown:
+      '# Keep {--rough--}{#s4} title\n\n---\nsuggestions:\n  s4:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n',
+  },
+  {
+    name: 'review-list-comment',
+    supported: true,
+    codec: 'review',
+    markdown:
+      '- First {==item==}{>>needs work<<}{#c3}\n- Plain item\n\n---\ncomments:\n  c3:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n',
+  },
+  {
+    name: 'review-table-suggestion',
+    supported: true,
+    codec: 'review',
+    markdown:
+      '| Field | Value |\n| - | - |\n| Status | {++ready++}{#s5} |\n\n---\nsuggestions:\n  s5:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n',
+  },
+  {
+    name: 'review-blockquote-comment',
+    supported: true,
+    codec: 'review',
+    markdown:
+      '> See {==quote==}{>>note<<}{#c4}\n\n---\ncomments:\n  c4:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n',
+  },
+  {
+    name: 'review-code-literal',
+    supported: true,
+    codec: 'review',
+    markdown:
+      'Literal `{==code==}{#c9}` and real {==text==}{>>note<<}{#c5}\n\n---\ncomments:\n  c5:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n',
+  },
+  {
     name: 'review-comment',
     supported: true,
     codec: 'review',

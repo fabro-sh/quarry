@@ -4,6 +4,7 @@ use quarry_collab_codec::{
 };
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use yrs::{Doc, OffsetKind, Options, Transact, WriteTxn, XmlTextRef};
 
@@ -52,6 +53,27 @@ fn slate_yjs_compat_fixtures_match_ui_oracle() {
                 fixture.name
             );
         }
+    }
+}
+
+#[test]
+fn compat_manifest_covers_review_mark_intersections() {
+    let fixture_root = fixture_root();
+    let manifest: Manifest = read_json(fixture_root.join("manifest.json"));
+    let cases = manifest.cases.into_iter().collect::<BTreeSet<_>>();
+    let required = [
+        "review-heading-suggestion",
+        "review-list-comment",
+        "review-table-suggestion",
+        "review-blockquote-comment",
+        "review-code-literal",
+    ];
+
+    for case in required {
+        assert!(
+            cases.contains(case),
+            "missing required review compatibility fixture {case}"
+        );
     }
 }
 
