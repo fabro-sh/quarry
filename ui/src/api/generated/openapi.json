@@ -531,6 +531,109 @@
         }
       }
     },
+    "/v1/libraries/{library}/documents/{path}/edit": {
+      "post": {
+        "tags": [],
+        "operationId": "document_edit_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "dryRun",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DryRunValue"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentEditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentEditResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/events/stream": {
+      "get": {
+        "tags": [],
+        "operationId": "document_events_stream_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Document-scoped server-sent event stream"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/libraries/{library}/documents/{path}/metadata": {
       "patch": {
         "tags": [],
@@ -623,6 +726,70 @@
         }
       }
     },
+    "/v1/libraries/{library}/documents/{path}/ops": {
+      "post": {
+        "tags": [],
+        "operationId": "document_ops_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "dryRun",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DryRunValue"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentOpsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentOpsResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/libraries/{library}/documents/{path}/outgoing-links": {
       "get": {
         "tags": [],
@@ -652,6 +819,309 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LinkCollection"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/presence": {
+      "get": {
+        "tags": [],
+        "operationId": "agent_presence_list_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPresenceListResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [],
+        "operationId": "agent_presence_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentPresenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPresenceResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/share": {
+      "get": {
+        "tags": [],
+        "operationId": "document_share_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CollabInviteToken"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [],
+        "operationId": "document_share_create_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCollabInviteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollabInviteToken"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/share/{token}/revoke": {
+      "post": {
+        "tags": [],
+        "operationId": "document_share_revoke_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollabInviteToken"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/snapshot": {
+      "get": {
+        "tags": [],
+        "operationId": "document_snapshot_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDocumentSnapshot"
                 }
               }
             }
@@ -871,6 +1341,111 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WriteOutcome"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/events/ack": {
+      "post": {
+        "tags": [],
+        "operationId": "agent_events_ack",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentEventsAckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentEventsAckResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/events/pending": {
+      "get": {
+        "tags": [],
+        "operationId": "agent_events_pending",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPendingEventsResponse"
                 }
               }
             }
@@ -1693,6 +2268,463 @@
   },
   "components": {
     "schemas": {
+      "AgentBlockOperation": {
+        "type": "object",
+        "required": [
+          "op"
+        ],
+        "properties": {
+          "block": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AgentEditBlock"
+              }
+            ]
+          },
+          "op": {
+            "$ref": "#/components/schemas/AgentEditOperation"
+          },
+          "ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AgentBlockRef"
+              }
+            ]
+          }
+        }
+      },
+      "AgentBlockRef": {
+        "type": "object",
+        "required": [
+          "baseToken",
+          "ordinal",
+          "contentHash"
+        ],
+        "properties": {
+          "baseToken": {
+            "type": "string"
+          },
+          "contentHash": {
+            "type": "string"
+          },
+          "ordinal": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "AgentDocumentSnapshot": {
+        "type": "object",
+        "required": [
+          "documentId",
+          "baseToken",
+          "blocks"
+        ],
+        "properties": {
+          "baseToken": {
+            "type": "string"
+          },
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentSnapshotBlock"
+            }
+          },
+          "documentId": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentEditBlock": {
+        "type": "object",
+        "required": [
+          "markdown"
+        ],
+        "properties": {
+          "markdown": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentEditOperation": {
+        "type": "string",
+        "enum": [
+          "replace_block",
+          "insert_before",
+          "insert_after",
+          "delete_block"
+        ]
+      },
+      "AgentEditRequest": {
+        "type": "object",
+        "required": [
+          "baseToken",
+          "operations"
+        ],
+        "properties": {
+          "baseToken": {
+            "type": "string"
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentBlockOperation"
+            }
+          }
+        }
+      },
+      "AgentEditResponse": {
+        "type": "object",
+        "required": [
+          "dryRun"
+        ],
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "markdown": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WriteOutcome"
+              }
+            ]
+          }
+        }
+      },
+      "AgentEventRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "event",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Value"
+          },
+          "event": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "AgentEventsAckRequest": {
+        "type": "object",
+        "required": [
+          "eventId"
+        ],
+        "properties": {
+          "agentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "eventId": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "AgentEventsAckResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "agentId",
+          "ackedThrough"
+        ],
+        "properties": {
+          "ackedThrough": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AgentOpsOperation": {
+        "type": "string",
+        "enum": [
+          "comment.add",
+          "suggestion.add",
+          "suggestion.accept",
+          "suggestion.reject",
+          "comment.resolve",
+          "accept",
+          "reject"
+        ]
+      },
+      "AgentOpsRequest": {
+        "type": "object",
+        "required": [
+          "baseToken",
+          "op"
+        ],
+        "properties": {
+          "baseToken": {
+            "type": "string"
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AgentSuggestionKind"
+              }
+            ]
+          },
+          "op": {
+            "$ref": "#/components/schemas/AgentOpsOperation"
+          },
+          "quote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AgentBlockRef"
+              }
+            ]
+          }
+        }
+      },
+      "AgentOpsResponse": {
+        "type": "object",
+        "required": [
+          "dryRun"
+        ],
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "markdown": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WriteOutcome"
+              }
+            ]
+          }
+        }
+      },
+      "AgentPendingEventsResponse": {
+        "type": "object",
+        "required": [
+          "events",
+          "nextAfter"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentEventRecord"
+            }
+          },
+          "nextAfter": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "AgentPresenceEntry": {
+        "type": "object",
+        "required": [
+          "library",
+          "path",
+          "documentId",
+          "agentId",
+          "status",
+          "updatedAt"
+        ],
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "documentId": {
+            "type": "string"
+          },
+          "library": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentPresenceListResponse": {
+        "type": "object",
+        "required": [
+          "presence"
+        ],
+        "properties": {
+          "presence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentPresenceEntry"
+            }
+          }
+        }
+      },
+      "AgentPresenceRequest": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "agentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/AgentPresenceStatus"
+          }
+        }
+      },
+      "AgentPresenceResponse": {
+        "type": "object",
+        "required": [
+          "current",
+          "presence"
+        ],
+        "properties": {
+          "current": {
+            "$ref": "#/components/schemas/AgentPresenceEntry"
+          },
+          "presence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentPresenceEntry"
+            }
+          }
+        }
+      },
+      "AgentPresenceStatus": {
+        "type": "string",
+        "enum": [
+          "reading",
+          "thinking",
+          "acting",
+          "waiting",
+          "completed",
+          "error"
+        ]
+      },
+      "AgentSnapshotBlock": {
+        "type": "object",
+        "required": [
+          "ref",
+          "markdown"
+        ],
+        "properties": {
+          "markdown": {
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/AgentBlockRef"
+          }
+        }
+      },
+      "AgentSuggestionKind": {
+        "type": "string",
+        "enum": [
+          "insert",
+          "delete",
+          "remove",
+          "replace",
+          "substitution"
+        ]
+      },
       "BeginTransactionRequest": {
         "type": "object",
         "properties": {
@@ -1717,6 +2749,41 @@
                 "$ref": "#/components/schemas/Value"
               }
             ]
+          }
+        }
+      },
+      "CollabInviteToken": {
+        "type": "object",
+        "required": [
+          "id",
+          "document_id",
+          "role",
+          "created_at"
+        ],
+        "properties": {
+          "by_hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "document_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
           }
         }
       },
@@ -1777,6 +2844,23 @@
           "open",
           "resolved"
         ]
+      },
+      "CreateCollabInviteRequest": {
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "byHint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          }
+        }
       },
       "CreateLibraryRequest": {
         "type": "object",
@@ -2007,6 +3091,17 @@
             "$ref": "#/components/schemas/DocumentVersion"
           }
         }
+      },
+      "DryRunValue": {
+        "type": "string",
+        "enum": [
+          "1",
+          "true",
+          "yes",
+          "0",
+          "false",
+          "no"
+        ]
       },
       "ErrorResponse": {
         "type": "object",

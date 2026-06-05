@@ -442,6 +442,7 @@ async fn browser_asset(uri: Uri) -> Response {
         BeginTransactionRequest,
         ErrorResponse,
         MoveRequest,
+        DryRunValue,
         Library,
         DocumentListEntry,
         DocumentVersion,
@@ -454,6 +455,10 @@ async fn browser_asset(uri: Uri) -> Response {
         AgentEditResponse,
         AgentBlockOperation,
         AgentEditBlock,
+        AgentEditOperation,
+        AgentOpsOperation,
+        AgentSuggestionKind,
+        AgentPresenceStatus,
         AgentPresenceRequest,
         AgentPresenceResponse,
         AgentPresenceListResponse,
@@ -997,10 +1002,22 @@ pub struct AgentEventsAckResponse {
     pub acked_through: u64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPresenceStatus {
+    Reading,
+    Thinking,
+    Acting,
+    Waiting,
+    Completed,
+    Error,
+}
+
 #[derive(Clone, Debug, Deserialize, ToSchema)]
 pub struct AgentPresenceRequest {
     #[serde(default, rename = "agentId")]
     pub agent_id: Option<String>,
+    #[schema(value_type = AgentPresenceStatus)]
     pub status: String,
     #[serde(default)]
     pub by: Option<String>,
@@ -1050,6 +1067,22 @@ struct DocumentActionQuery {
     dry_run: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub enum DryRunValue {
+    #[serde(rename = "1")]
+    One,
+    #[serde(rename = "true")]
+    True,
+    #[serde(rename = "yes")]
+    Yes,
+    #[serde(rename = "0")]
+    Zero,
+    #[serde(rename = "false")]
+    False,
+    #[serde(rename = "no")]
+    No,
+}
+
 impl DocumentActionQuery {
     fn dry_run(&self) -> Result<bool, ApiError> {
         let Some(value) = self.dry_run.as_deref() else {
@@ -1094,7 +1127,17 @@ pub struct AgentEditBlock {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentEditOperation {
+    ReplaceBlock,
+    InsertBefore,
+    InsertAfter,
+    DeleteBlock,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct AgentBlockOperation {
+    #[schema(value_type = AgentEditOperation)]
     pub op: String,
     #[serde(default, rename = "ref")]
     pub block_ref: Option<AgentBlockRef>,
@@ -1120,9 +1163,38 @@ pub struct AgentEditResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub enum AgentOpsOperation {
+    #[serde(rename = "comment.add")]
+    CommentAdd,
+    #[serde(rename = "suggestion.add")]
+    SuggestionAdd,
+    #[serde(rename = "suggestion.accept")]
+    SuggestionAccept,
+    #[serde(rename = "suggestion.reject")]
+    SuggestionReject,
+    #[serde(rename = "comment.resolve")]
+    CommentResolve,
+    #[serde(rename = "accept")]
+    Accept,
+    #[serde(rename = "reject")]
+    Reject,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSuggestionKind {
+    Insert,
+    Delete,
+    Remove,
+    Replace,
+    Substitution,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct AgentOpsRequest {
     #[serde(rename = "baseToken")]
     pub base_token: String,
+    #[schema(value_type = AgentOpsOperation)]
     pub op: String,
     #[serde(default, rename = "ref")]
     pub block_ref: Option<AgentBlockRef>,
@@ -1137,6 +1209,7 @@ pub struct AgentOpsRequest {
     #[serde(default)]
     pub id: Option<String>,
     #[serde(default, alias = "suggestionType")]
+    #[schema(value_type = Option<AgentSuggestionKind>)]
     pub kind: Option<String>,
 }
 
@@ -1641,7 +1714,7 @@ async fn post_document_action(
 #[utoipa::path(
     post,
     path = "/v1/libraries/{library}/documents/{path}/edit",
-    params(("library" = String, Path), ("path" = String, Path), ("dryRun" = Option<String>, Query)),
+    params(("library" = String, Path), ("path" = String, Path), ("dryRun" = Option<DryRunValue>, Query)),
     request_body = AgentEditRequest,
     responses((status = 200, body = AgentEditResponse), (status = 412, body = ErrorResponse))
 )]
@@ -1670,7 +1743,7 @@ async fn agent_presence_openapi() {}
 #[utoipa::path(
     post,
     path = "/v1/libraries/{library}/documents/{path}/ops",
-    params(("library" = String, Path), ("path" = String, Path), ("dryRun" = Option<String>, Query)),
+    params(("library" = String, Path), ("path" = String, Path), ("dryRun" = Option<DryRunValue>, Query)),
     request_body = AgentOpsRequest,
     responses((status = 200, body = AgentOpsResponse), (status = 412, body = ErrorResponse))
 )]

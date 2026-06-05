@@ -12,6 +12,56 @@ use yrs::sync::{Message as YMessage, SyncMessage};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 
+fn assert_schema_enum_contains(openapi: &Value, schema: &Value, expected: &[&str]) {
+    let resolved = if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        let name = reference
+            .strip_prefix("#/components/schemas/")
+            .expect("schema enum references must point at components schemas");
+        &openapi["components"]["schemas"][name]
+    } else if let Some(one_of) = schema.get("oneOf").and_then(Value::as_array) {
+        one_of
+            .iter()
+            .find(|candidate| candidate.get("enum").is_some() || candidate.get("$ref").is_some())
+            .expect("nullable enum schema must include an enum branch")
+    } else {
+        schema
+    };
+    let resolved = if let Some(reference) = resolved.get("$ref").and_then(Value::as_str) {
+        let name = reference
+            .strip_prefix("#/components/schemas/")
+            .expect("schema enum references must point at components schemas");
+        &openapi["components"]["schemas"][name]
+    } else {
+        resolved
+    };
+    let values = resolved["enum"]
+        .as_array()
+        .expect("schema property should expose enum values");
+    for expected_value in expected {
+        assert!(
+            values.iter().any(|value| value == expected_value),
+            "schema enum {values:?} should include {expected_value}"
+        );
+    }
+}
+
+fn assert_path_parameter_enum_contains(
+    openapi: &Value,
+    path: &str,
+    method: &str,
+    name: &str,
+    expected: &[&str],
+) {
+    let parameters = openapi["paths"][path][method]["parameters"]
+        .as_array()
+        .expect("path operation should expose parameters");
+    let parameter = parameters
+        .iter()
+        .find(|parameter| parameter["name"] == name)
+        .expect("path operation should expose named parameter");
+    assert_schema_enum_contains(openapi, &parameter["schema"], expected);
+}
+
 #[tokio::test]
 async fn rest_api_supports_documents_transactions_etags_and_openapi() {
     let root = tempfile::tempdir().unwrap();
@@ -1762,6 +1812,60 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
     assert!(openapi["paths"]["/v1/events"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/events/stream"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/events/pending"].is_object());
+    assert_schema_enum_contains(
+        &openapi,
+        &openapi["components"]["schemas"]["AgentBlockOperation"]["properties"]["op"],
+        &[
+            "replace_block",
+            "insert_before",
+            "insert_after",
+            "delete_block",
+        ],
+    );
+    assert_schema_enum_contains(
+        &openapi,
+        &openapi["components"]["schemas"]["AgentOpsRequest"]["properties"]["op"],
+        &[
+            "comment.add",
+            "suggestion.add",
+            "suggestion.accept",
+            "suggestion.reject",
+            "comment.resolve",
+            "accept",
+            "reject",
+        ],
+    );
+    assert_schema_enum_contains(
+        &openapi,
+        &openapi["components"]["schemas"]["AgentOpsRequest"]["properties"]["kind"],
+        &["insert", "delete", "remove", "replace", "substitution"],
+    );
+    assert_schema_enum_contains(
+        &openapi,
+        &openapi["components"]["schemas"]["AgentPresenceRequest"]["properties"]["status"],
+        &[
+            "reading",
+            "thinking",
+            "acting",
+            "waiting",
+            "completed",
+            "error",
+        ],
+    );
+    assert_path_parameter_enum_contains(
+        &openapi,
+        "/v1/libraries/{library}/documents/{path}/edit",
+        "post",
+        "dryRun",
+        &["1", "true", "yes", "0", "false", "no"],
+    );
+    assert_path_parameter_enum_contains(
+        &openapi,
+        "/v1/libraries/{library}/documents/{path}/ops",
+        "post",
+        "dryRun",
+        &["1", "true", "yes", "0", "false", "no"],
+    );
 }
 
 #[tokio::test]
