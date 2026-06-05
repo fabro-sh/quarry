@@ -1,5 +1,4 @@
 # FUSE Mount Masks Implementation Plan
-
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox syntax for progress tracking.
 
 **Goal:** Add mount-local FUSE masks so selected path prefixes can be hidden or made read-only for one Quarry mount.
@@ -8,48 +7,73 @@
 
 **Tech Stack:** Rust workspace, `clap`, `fuse3`, `tokio`, existing `quarry-fuse`, `quarry-cli`, and `quarry-storage`.
 
----
-
+* * *
 ## Current State
-
 - `quarry mount <library> <mountpoint>` creates a writable auto-commit Linux FUSE projection.
+  
 - `quarry mount ... --read-only` makes the whole FUSE projection read-only.
+  
 - `FuseProjection::open(store, library, read_only)` has only a global read-only flag.
+  
 - Mutating projection methods call `ensure_writable()` before storage writes.
+  
 - Directory listings are built from committed documents plus persisted `dir_metadata`.
-
+  
 ## Target Behavior
-
 - `--mask <path-prefix>` hides that prefix and its descendants.
+  
 - `--mask hide:<path-prefix>` is the explicit hidden form.
+  
 - `--mask ro:<path-prefix>` makes that prefix and its descendants read-only.
+  
 - Hidden wins over read-only.
+  
 - Prefix matching is path-component aware: `private` matches `private` and `private/a.md`, not `privateer`.
+  
 - Empty/root mask prefixes are rejected. Use existing global `--read-only` for whole-mount immutability.
+  
 - Masks apply only to the mount process that received them.
-
+  
 ## Proposed Files
-
 - Modify `crates/quarry-fuse/src/lib.rs`
+  
   - Add `MountMasks`.
+    
   - Add `FuseProjection::open_with_masks`.
+    
   - Add `mount_library_with_masks`.
+    
   - Enforce hidden and read-only masks in projection methods.
+    
 - Modify `crates/quarry-fuse/tests/projection.rs`
+  
   - Add parser, hidden projection, and read-only projection tests.
+    
 - Modify `crates/quarry-cli/src/lib.rs`
+  
   - Add `--mask` parsing and pass masks to FUSE.
+    
   - Add CLI parser coverage.
+    
 - Modify `docs/operations/fuse.md`
+  
   - Document mask syntax and semantics.
-
+    
 ## Task 1: Add Mount Mask Model
-
 **Files:**
-- Modify: `crates/quarry-fuse/src/lib.rs`
-- Test: `crates/quarry-fuse/tests/projection.rs`
 
-- [ ] **Step 1: Write failing parser and matcher tests**
+- [ ] 
+  
+  Modify: `crates/quarry-fuse/src/lib.rs`
+  
+- [ ] 
+  
+  Test: `crates/quarry-fuse/tests/projection.rs`
+  
+- [ ] 
+  
+  **Step 1: Write failing parser and matcher tests**
+  
 
 Add `MountMasks` to the test imports:
 
@@ -92,7 +116,10 @@ fn mount_masks_reject_empty_prefixes_and_unknown_modes() {
 }
 ```
 
-- [ ] **Step 2: Run the focused failing tests**
+- [ ] 
+  
+  **Step 2: Run the focused failing tests**
+  
 
 Run:
 
@@ -102,7 +129,10 @@ cargo test -p quarry-fuse mount_masks_
 
 Expected: FAIL because `MountMasks` does not exist yet.
 
-- [ ] **Step 3: Add the mask model**
+- [ ] 
+  
+  **Step 3: Add the mask model**
+  
 
 In `crates/quarry-fuse/src/lib.rs`, add this type after `OpenHandle`:
 
@@ -219,7 +249,10 @@ fn path_contains_prefix(path: &str, prefix: &str) -> bool {
 }
 ```
 
-- [ ] **Step 4: Run the parser tests**
+- [ ] 
+  
+  **Step 4: Run the parser tests**
+  
 
 Run:
 
@@ -229,20 +262,30 @@ cargo test -p quarry-fuse mount_masks_
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] 
+  
+  **Step 5: Commit**
+  
 
 ```sh
 git add crates/quarry-fuse/src/lib.rs crates/quarry-fuse/tests/projection.rs
 git commit -m "feat: add FUSE mount mask parser"
 ```
-
 ## Task 2: Enforce Hidden Masks In Reads And Listings
-
 **Files:**
-- Modify: `crates/quarry-fuse/src/lib.rs`
-- Test: `crates/quarry-fuse/tests/projection.rs`
 
-- [ ] **Step 1: Write failing projection tests**
+- [ ] 
+  
+  Modify: `crates/quarry-fuse/src/lib.rs`
+  
+- [ ] 
+  
+  Test: `crates/quarry-fuse/tests/projection.rs`
+  
+- [ ] 
+  
+  **Step 1: Write failing projection tests**
+  
 
 Add this test to `crates/quarry-fuse/tests/projection.rs`:
 
@@ -306,7 +349,10 @@ async fn projection_hides_masked_paths_from_listings_and_reads() {
 }
 ```
 
-- [ ] **Step 2: Run the focused failing test**
+- [ ] 
+  
+  **Step 2: Run the focused failing test**
+  
 
 Run:
 
@@ -316,7 +362,10 @@ cargo test -p quarry-fuse projection_hides_masked_paths_from_listings_and_reads
 
 Expected: FAIL because `FuseProjection::open_with_masks` does not exist.
 
-- [ ] **Step 3: Thread masks into `FuseProjection`**
+- [ ] 
+  
+  **Step 3: Thread masks into** `FuseProjection`
+  
 
 Add a `masks` field:
 
@@ -381,7 +430,10 @@ pub async fn open_with_masks(
 }
 ```
 
-- [ ] **Step 4: Apply hidden checks to reads and listings**
+- [ ] 
+  
+  **Step 4: Apply hidden checks to reads and listings**
+  
 
 Add `self.masks.ensure_visible(&path)?;` to `attr`, `list_dir`, and `read_file` immediately after path normalization.
 
@@ -425,7 +477,10 @@ for document in self
 
 Add equivalent `if self.masks.is_hidden(dir)? { continue; }` checks in the loops over `explicit_dirs` and `store.list_directories`.
 
-- [ ] **Step 5: Run the hidden projection test**
+- [ ] 
+  
+  **Step 5: Run the hidden projection test**
+  
 
 Run:
 
@@ -435,20 +490,30 @@ cargo test -p quarry-fuse projection_hides_masked_paths_from_listings_and_reads
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] 
+  
+  **Step 6: Commit**
+  
 
 ```sh
 git add crates/quarry-fuse/src/lib.rs crates/quarry-fuse/tests/projection.rs
 git commit -m "feat: hide masked FUSE paths"
 ```
-
 ## Task 3: Enforce Read-Only Masks For Mutations
-
 **Files:**
-- Modify: `crates/quarry-fuse/src/lib.rs`
-- Test: `crates/quarry-fuse/tests/projection.rs`
 
-- [ ] **Step 1: Write failing read-only projection tests**
+- [ ] 
+  
+  Modify: `crates/quarry-fuse/src/lib.rs`
+  
+- [ ] 
+  
+  Test: `crates/quarry-fuse/tests/projection.rs`
+  
+- [ ] 
+  
+  **Step 1: Write failing read-only projection tests**
+  
 
 Add this test to `crates/quarry-fuse/tests/projection.rs`:
 
@@ -560,7 +625,10 @@ async fn projection_rejects_directory_rename_containing_protected_descendants() 
 }
 ```
 
-- [ ] **Step 2: Run the focused failing tests**
+- [ ] 
+  
+  **Step 2: Run the focused failing tests**
+  
 
 Run:
 
@@ -571,7 +639,10 @@ cargo test -p quarry-fuse projection_rejects_directory_rename_containing_protect
 
 Expected: FAIL because mutating methods only honor the global read-only flag.
 
-- [ ] **Step 3: Add path-specific write guards**
+- [ ] 
+  
+  **Step 3: Add path-specific write guards**
+  
 
 In `impl FuseProjection`, keep `ensure_writable` for global read-only and add:
 
@@ -593,7 +664,10 @@ fn ensure_rename_allowed(&self, from_path: &str, to_path: &str) -> Result<()> {
 }
 ```
 
-- [ ] **Step 4: Replace mutating method guards**
+- [ ] 
+  
+  **Step 4: Replace mutating method guards**
+  
 
 For methods taking a path, normalize first and then call the path-specific guard:
 
@@ -605,13 +679,21 @@ self.ensure_writable_path(&path)?;
 Apply this to:
 
 - `create_file`
+  
 - `open_file_for_write`
+  
 - `open_file_for_write_truncating`
+  
 - `mkdir_with_optional_mode`
+  
 - `set_directory_metadata`
+  
 - `unlink`
+  
 - `rmdir`
+  
 - `set_len`
+  
 
 For handle methods, guard the handle path before modifying or committing:
 
@@ -638,7 +720,10 @@ let to_path = normalize_mount_path(to_path)?;
 self.ensure_rename_allowed(&from_path, &to_path)?;
 ```
 
-- [ ] **Step 5: Run the read-only projection tests**
+- [ ] 
+  
+  **Step 5: Run the read-only projection tests**
+  
 
 Run:
 
@@ -649,7 +734,10 @@ cargo test -p quarry-fuse projection_rejects_directory_rename_containing_protect
 
 Expected: PASS.
 
-- [ ] **Step 6: Run existing FUSE projection tests**
+- [ ] 
+  
+  **Step 6: Run existing FUSE projection tests**
+  
 
 Run:
 
@@ -659,20 +747,30 @@ cargo test -p quarry-fuse
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] 
+  
+  **Step 7: Commit**
+  
 
 ```sh
 git add crates/quarry-fuse/src/lib.rs crates/quarry-fuse/tests/projection.rs
 git commit -m "feat: enforce read-only FUSE masks"
 ```
-
 ## Task 4: Add CLI Mask Parsing And Mount Wiring
-
 **Files:**
-- Modify: `crates/quarry-cli/src/lib.rs`
-- Modify: `crates/quarry-fuse/src/lib.rs`
 
-- [ ] **Step 1: Write failing CLI parser test**
+- [ ] 
+  
+  Modify: `crates/quarry-cli/src/lib.rs`
+  
+- [ ] 
+  
+  Modify: `crates/quarry-fuse/src/lib.rs`
+  
+- [ ] 
+  
+  **Step 1: Write failing CLI parser test**
+  
 
 Add this test to the `#[cfg(test)]` module in `crates/quarry-cli/src/lib.rs`:
 
@@ -700,7 +798,10 @@ fn mount_accepts_repeated_masks_and_keeps_global_read_only() {
 }
 ```
 
-- [ ] **Step 2: Run the focused failing CLI test**
+- [ ] 
+  
+  **Step 2: Run the focused failing CLI test**
+  
 
 Run:
 
@@ -710,7 +811,10 @@ cargo test -p quarry-cli mount_accepts_repeated_masks_and_keeps_global_read_only
 
 Expected: FAIL because `MountCommand` has no `mask` field.
 
-- [ ] **Step 3: Add `mount_library_with_masks` in `quarry-fuse`**
+- [ ] 
+  
+  **Step 3: Add** `mount_library_with_masks` **in** `quarry-fuse`
+  
 
 In `crates/quarry-fuse/src/lib.rs`, add a wrapper while preserving the existing public function:
 
@@ -763,7 +867,10 @@ pub async fn mount_library(
 
 Add `MountMasks` to the Linux module `use super::{...}` list.
 
-- [ ] **Step 4: Parse masks in the CLI and pass them to FUSE**
+- [ ] 
+  
+  **Step 4: Parse masks in the CLI and pass them to FUSE**
+  
 
 Change the FUSE import:
 
@@ -812,7 +919,10 @@ if let Some(addr) = command.serve_addr {
 }
 ```
 
-- [ ] **Step 5: Run CLI parser tests**
+- [ ] 
+  
+  **Step 5: Run CLI parser tests**
+  
 
 Run:
 
@@ -822,7 +932,10 @@ cargo test -p quarry-cli mount_accepts_repeated_masks_and_keeps_global_read_only
 
 Expected: PASS.
 
-- [ ] **Step 6: Run affected package tests**
+- [ ] 
+  
+  **Step 6: Run affected package tests**
+  
 
 Run:
 
@@ -833,19 +946,26 @@ cargo test -p quarry-fuse
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] 
+  
+  **Step 7: Commit**
+  
 
 ```sh
 git add crates/quarry-cli/src/lib.rs crates/quarry-fuse/src/lib.rs
 git commit -m "feat: wire FUSE masks into quarry mount"
 ```
-
 ## Task 5: Document And Verify
-
 **Files:**
-- Modify: `docs/operations/fuse.md`
 
-- [ ] **Step 1: Update FUSE docs**
+- [ ] 
+  
+  Modify: `docs/operations/fuse.md`
+  
+- [ ] 
+  
+  **Step 1: Update FUSE docs**
+  
 
 In `docs/operations/fuse.md`, after the current `--read-only` paragraph, add:
 
@@ -869,7 +989,10 @@ Mask rules:
 - Masks are mount-local and do not affect REST, Git, other CLI commands, or other mounts.
 ````
 
-- [ ] **Step 2: Run package tests**
+- [ ] 
+  
+  **Step 2: Run package tests**
+  
 
 Run:
 
@@ -880,7 +1003,10 @@ cargo test -p quarry-cli
 
 Expected: PASS.
 
-- [ ] **Step 3: Run workspace check**
+- [ ] 
+  
+  **Step 3: Run workspace check**
+  
 
 Run:
 
@@ -890,15 +1016,18 @@ cargo check --workspace
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit docs**
+- [ ] 
+  
+  **Step 4: Commit docs**
+  
 
 ```sh
 git add docs/operations/fuse.md
 git commit -m "docs: document FUSE mount masks"
 ```
-
 ## Self-Review
-
 - Spec coverage: The plan covers mount-local scope, prefix-only masks, default hidden masks, explicit `hide:` masks, `ro:` masks, hidden-over-read-only precedence, empty prefix rejection, hidden `ENOENT` behavior, read-only mutation rejection, existing global `--read-only`, docs, and tests.
+  
 - Placeholder scan: The plan contains concrete commands, expected outcomes, file paths, and code snippets. It does not use placeholder markers or unspecified implementation steps.
+  
 - Type consistency: The plan consistently uses `MountMasks`, `MountMasks::parse_specs`, `FuseProjection::open_with_masks`, and `mount_library_with_masks`.
