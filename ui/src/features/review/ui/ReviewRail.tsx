@@ -1,7 +1,11 @@
 import { useEditorSelector, type PlateEditor } from 'platejs/react';
 import { useMemo } from 'react';
 
-import { acceptSuggestionById, rejectSuggestionById } from '../accept-reject';
+import {
+  acceptSuggestionById,
+  rejectSuggestionById,
+  type SuggestionResolution,
+} from '../accept-reject';
 import { draftAnchorText, hasCommentDraft } from '../comment-draft';
 import { resolveSuggestions } from '../resolve-suggestions';
 import { buildThreads, useReviewStore } from '../review-store';
@@ -16,7 +20,13 @@ import { SuggestionCard } from './SuggestionCard';
 //
 // Ordering: comments first, then suggestions. Anchoring each card to its
 // position in the document is a deferred follow-up.
-export function ReviewRail({ editor }: { editor: PlateEditor }) {
+export function ReviewRail({
+  editor,
+  onSuggestionResolved,
+}: {
+  editor: PlateEditor;
+  onSuggestionResolved?: (id: string, resolution: SuggestionResolution) => void;
+}) {
   const meta = useReviewStore((s) => s.meta);
   const threads = useMemo(() => buildThreads(meta), [meta]);
   const suggestions = useEditorSelector((ed) => resolveSuggestions(ed.children), []);
@@ -38,8 +48,14 @@ export function ReviewRail({ editor }: { editor: PlateEditor }) {
       {suggestions.map((suggestion) => (
         <SuggestionCard
           key={suggestion.suggestionId}
-          onAccept={(id) => acceptSuggestionById(editor, id)}
-          onReject={(id) => rejectSuggestionById(editor, id)}
+          onAccept={(id) => {
+            acceptSuggestionById(editor, id);
+            onSuggestionResolved?.(id, 'accept');
+          }}
+          onReject={(id) => {
+            rejectSuggestionById(editor, id);
+            onSuggestionResolved?.(id, 'reject');
+          }}
           suggestion={suggestion}
         />
       ))}

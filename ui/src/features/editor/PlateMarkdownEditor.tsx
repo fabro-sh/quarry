@@ -149,7 +149,12 @@ import {
   useReviewStore,
 } from '../review/review-store';
 import type { ReviewMeta } from '../review/rfm-types';
-import { acceptSuggestionById, rejectSuggestionById } from '../review/accept-reject';
+import {
+  acceptSuggestionById,
+  rejectSuggestionById,
+  resolveSuggestionInMarkdown,
+  type SuggestionResolution,
+} from '../review/accept-reject';
 import { ReviewRail } from '../review/ui/ReviewRail';
 import { RemoteCursorOverlay } from '../collab/RemoteCursorOverlay';
 import {
@@ -167,6 +172,8 @@ import { parseInjectionEnvelope, type InjectionEnvelope } from '../collab/sessio
 registerRustWsProviderType();
 
 const INJECTION_ROOT = '__quarry_injection';
+const REVIEW_RESOLUTION_PUBLISH_ATTEMPTS = 20;
+const REVIEW_RESOLUTION_PUBLISH_INTERVAL_MS = 50;
 
 // Notion-style markdown shortcuts: typing the markdown prefix at the start of a
 // block (or wrapping marks) auto-converts it. Scoped to the surface Quarry
@@ -401,6 +408,8 @@ export function PlateMarkdownEditor({
   const adoptedInjectedVersionIdRef = useRef<string | null>(null);
   const ackedInjectedVersionIdsRef = useRef<Set<string>>(new Set());
   const injectionFallbackTimerRef = useRef<number | null>(null);
+  const reviewResolutionPublishTimerRef = useRef<number | null>(null);
+  const yjsChangeFallbackTimerRef = useRef<number | null>(null);
   const hasLocalEditsSinceCleanRef = useRef(false);
   const remoteChangeSinceCleanRef = useRef(false);
   const [collabInitTick, setCollabInitTick] = useState(0);
@@ -562,6 +571,65 @@ export function PlateMarkdownEditor({
     [collab, isInjectedVersionAlreadyAdopted, serializeWithMeta, storeGetMeta, storeHydrate]
   );
 
+  const publishSerializedMarkdown = useCallback(
+    (nextMarkdown: string, isLocalChange: boolean) => {
+      if (nextMarkdown === lastSerializedRef.current) return false;
+      if (isLocalChange) {
+        hasLocalEditsSinceCleanRef.current = true;
+      } else {
+        remoteChangeSinceCleanRef.current = true;
+      }
+      lastContentRef.current = nextMarkdown;
+      lastSerializedRef.current = nextMarkdown;
+      onChange(nextMarkdown);
+      return true;
+    },
+    [onChange]
+  );
+
+  const publishSerializedValue = useCallback(
+    (value: PlateValue, isLocalChange: boolean) => {
+      return publishSerializedMarkdown(serialize(value), isLocalChange);
+    },
+    [publishSerializedMarkdown, serialize]
+  );
+
+  const scheduleReviewResolutionPublish = useCallback((attempt = 0) => {
+    if (reviewResolutionPublishTimerRef.current !== null) {
+      window.clearTimeout(reviewResolutionPublishTimerRef.current);
+    }
+    reviewResolutionPublishTimerRef.current = window.setTimeout(() => {
+      reviewResolutionPublishTimerRef.current = null;
+      if (publishSerializedValue(editor.children as PlateValue, true)) return;
+      if (attempt + 1 < REVIEW_RESOLUTION_PUBLISH_ATTEMPTS) {
+        scheduleReviewResolutionPublish(attempt + 1);
+      }
+    }, attempt === 0 ? 0 : REVIEW_RESOLUTION_PUBLISH_INTERVAL_MS);
+  }, [editor, publishSerializedValue]);
+
+  const publishResolvedSuggestion = useCallback(
+    (id: string, resolution: SuggestionResolution) => {
+      const resolvedMarkdown = resolveSuggestionInMarkdown(
+        lastSerializedRef.current,
+        id,
+        resolution
+      );
+      setExternalValueRevision((revision) => revision + 1);
+      if (resolvedMarkdown && publishSerializedMarkdown(resolvedMarkdown, true)) return;
+      scheduleReviewResolutionPublish();
+    },
+    [publishSerializedMarkdown, scheduleReviewResolutionPublish]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (reviewResolutionPublishTimerRef.current !== null) {
+        window.clearTimeout(reviewResolutionPublishTimerRef.current);
+        reviewResolutionPublishTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const scheduleInjectionFallback = useCallback(
     (injectedVersion: CollabInjectedVersion) => {
       if (injectionFallbackTimerRef.current !== null) {
@@ -612,6 +680,39 @@ export function PlateMarkdownEditor({
   ]);
 
   useEffect(() => {
+    if (!collabEnabled || collabInitTick === 0) return;
+    const awareness = editor.getOption(YjsPlugin, 'awareness') as { doc?: Y.Doc } | undefined;
+    const doc = awareness?.doc;
+    if (!doc) return;
+    let disposed = false;
+
+    const publishFromSharedDoc = () => {
+      if (disposed) return;
+      if (yjsChangeFallbackTimerRef.current !== null) {
+        window.clearTimeout(yjsChangeFallbackTimerRef.current);
+      }
+      yjsChangeFallbackTimerRef.current = window.setTimeout(() => {
+        yjsChangeFallbackTimerRef.current = null;
+        if (disposed) return;
+        if (pendingInjectedVersionRef.current) return;
+        const isLocalChange = !YjsEditor.isYjsEditor(editor) || YjsEditor.isLocal(editor);
+        setExternalValueRevision((revision) => revision + 1);
+        publishSerializedValue(editor.children as PlateValue, isLocalChange);
+      }, 0);
+    };
+
+    doc.on('update', publishFromSharedDoc);
+    return () => {
+      disposed = true;
+      doc.off('update', publishFromSharedDoc);
+      if (yjsChangeFallbackTimerRef.current !== null) {
+        window.clearTimeout(yjsChangeFallbackTimerRef.current);
+        yjsChangeFallbackTimerRef.current = null;
+      }
+    };
+  }, [collabDocumentId, collabEnabled, collabInitTick, editor, publishSerializedValue]);
+
+  useEffect(() => {
     if (!collab?.flushAck) return;
     ackedInjectedVersionIdsRef.current.add(collab.flushAck.versionId);
     hasLocalEditsSinceCleanRef.current = false;
@@ -625,14 +726,9 @@ export function PlateMarkdownEditor({
   // exactly one editor at a time (this subscription assumes a single editor).
   useEffect(() => {
     return useReviewStore.subscribe(() => {
-      const md = serialize(editor.children as PlateValue);
-      if (md === lastSerializedRef.current) return;
-      hasLocalEditsSinceCleanRef.current = true;
-      lastContentRef.current = md;
-      lastSerializedRef.current = md;
-      onChange(md);
+      publishSerializedValue(editor.children as PlateValue, true);
     });
-  }, [editor, onChange, serialize]);
+  }, [editor, publishSerializedValue]);
 
   // Viewing is the only read-only mode; autosave never freezes the surface.
   const readOnly = mode === 'viewing';
@@ -675,22 +771,16 @@ export function PlateMarkdownEditor({
             window.clearTimeout(injectionFallbackTimerRef.current);
             injectionFallbackTimerRef.current = null;
           }
-          if (nextMarkdown === lastSerializedRef.current) {
-            return;
-          }
-          if (isLocalChange) {
-            hasLocalEditsSinceCleanRef.current = true;
-          } else {
-            remoteChangeSinceCleanRef.current = true;
-          }
-          lastContentRef.current = nextMarkdown;
-          lastSerializedRef.current = nextMarkdown;
-          onChange(nextMarkdown);
+          publishSerializedMarkdown(nextMarkdown, isLocalChange);
         }}
       >
         <PlateValueRevisionBridge revision={externalValueRevision} />
         {collabEnabled && collab ? <CollabAwarenessBridge collab={collab} /> : null}
-        {readOnly ? null : <FloatingFormatToolbar />}
+        {readOnly ? null : (
+          <FloatingFormatToolbar
+            onSuggestionResolved={publishResolvedSuggestion}
+          />
+        )}
         <PlateContainer className="relative flex h-full min-h-0">
           <div
             className="relative min-w-0 flex-1 overflow-auto"
@@ -710,7 +800,10 @@ export function PlateMarkdownEditor({
               spellCheck={false}
             />
           </div>
-          <ReviewRail editor={editor} />
+          <ReviewRail
+            editor={editor}
+            onSuggestionResolved={publishResolvedSuggestion}
+          />
         </PlateContainer>
       </Plate>
      </ImageProvider>
@@ -812,7 +905,11 @@ function CollabAwarenessBridge({ collab }: { collab: CollabEditorConfig }) {
   return null;
 }
 
-function FloatingFormatToolbar() {
+function FloatingFormatToolbar({
+  onSuggestionResolved,
+}: {
+  onSuggestionResolved: (id: string, resolution: SuggestionResolution) => void;
+}) {
   const editor = useEditorRef();
   const focusedEditorId = useEventEditorValue('focus');
   const state = useFloatingToolbarState({
@@ -868,7 +965,7 @@ function FloatingFormatToolbar() {
       </TodoListButton>
       <div aria-hidden="true" className="mx-0.5 h-5 w-px bg-line" />
       <CommentButton />
-      <SuggestionActions />
+      <SuggestionActions onSuggestionResolved={onSuggestionResolved} />
     </div>
   );
 }
@@ -878,7 +975,11 @@ function FloatingFormatToolbar() {
 // this is the minimal reachable surface so the accept/reject behavior exists in
 // the editor. The id under the selection drives `acceptSuggestionById` /
 // `rejectSuggestionById` from the tested command layer.
-function SuggestionActions() {
+function SuggestionActions({
+  onSuggestionResolved,
+}: {
+  onSuggestionResolved: (id: string, resolution: SuggestionResolution) => void;
+}) {
   const editor = useEditorRef();
   const suggestionId = useEditorSelector((ed) => {
     const entry = ed.getApi(SuggestionPlugin).suggestion.node({ isText: true });
@@ -895,6 +996,7 @@ function SuggestionActions() {
         onMouseDown={(event) => event.preventDefault()}
         onClick={() => {
           acceptSuggestionById(editor, suggestionId);
+          onSuggestionResolved(suggestionId, 'accept');
           editor.tf.focus();
         }}
         title="Accept suggestion"
@@ -909,6 +1011,7 @@ function SuggestionActions() {
         onMouseDown={(event) => event.preventDefault()}
         onClick={() => {
           rejectSuggestionById(editor, suggestionId);
+          onSuggestionResolved(suggestionId, 'reject');
           editor.tf.focus();
         }}
         title="Reject suggestion"

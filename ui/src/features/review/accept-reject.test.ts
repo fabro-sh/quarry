@@ -1,11 +1,17 @@
-import { NodeApi } from 'platejs';
-import { ParagraphPlugin, createPlateEditor } from 'platejs/react';
+import { NodeApi, type Value } from 'platejs';
+import { ParagraphPlugin, createPlateEditor, type PlateEditor } from 'platejs/react';
 import { describe, expect, it } from 'vitest';
 import { reviewKit } from '../editor/review-kit';
-import { acceptSuggestionById, rejectSuggestionById } from './accept-reject';
+import {
+  acceptSuggestionById,
+  rejectSuggestionById,
+  resolveSuggestionInMarkdown,
+} from './accept-reject';
+import { markdownToReview } from './rfm-codec';
 
 // One paragraph: "keep " then an inserted "ins" (suggestion s1, type insert),
-// then "mid " then a removed "del" (suggestion s2, type remove).
+// then "mid " then a removed "del" (suggestion s2, type remove), then a
+// replacement pair for s3.
 function buildEditor() {
   return createPlateEditor({
     plugins: [ParagraphPlugin, ...reviewKit],
@@ -25,17 +31,28 @@ function buildEditor() {
             suggestion: true,
             suggestion_s2: { id: 's2', type: 'remove', userId: 'user', createdAt: 0 },
           } as never,
+          { text: 'swap ' },
+          {
+            text: 'old',
+            suggestion: true,
+            suggestion_s3: { id: 's3', type: 'remove', userId: 'user', createdAt: 0 },
+          } as never,
+          {
+            text: 'new',
+            suggestion: true,
+            suggestion_s3: { id: 's3', type: 'insert', userId: 'user', createdAt: 0 },
+          } as never,
         ],
       },
     ],
   });
 }
 
-function docText(editor: ReturnType<typeof buildEditor>): string {
+function docText(editor: PlateEditor): string {
   return editor.children.map((node) => NodeApi.string(node)).join('');
 }
 
-function suggestionKeys(editor: ReturnType<typeof buildEditor>): string[] {
+function suggestionKeys(editor: PlateEditor): string[] {
   const keys: string[] = [];
   for (const [node] of editor.api.nodes({ at: [] })) {
     for (const key of Object.keys(node)) {
@@ -92,5 +109,64 @@ describe('accept/reject suggestions', () => {
     rejectSuggestionById(editor, 'nope');
 
     expect(docText(editor)).toBe(before);
+  });
+
+  it('accept on a replacement keeps new text and drops both marks', () => {
+    const editor = buildEditor();
+
+    acceptSuggestionById(editor, 's3');
+
+    expect(docText(editor)).toContain('swap new');
+    expect(docText(editor)).not.toContain('swap oldnew');
+    expect(suggestionKeys(editor)).not.toContain('suggestion_s3');
+  });
+
+  it('accepts a replacement parsed from CriticMarkup', () => {
+    const { value } = markdownToReview(
+      'Review {~~suggestion target~>agent suggestion replacement~~}{#agent-suggestion-smoke} here.\n\n---\nsuggestions:\n  agent-suggestion-smoke:\n    by: Codex\n    at: "2026-01-01T00:00:00.000Z"\n'
+    );
+    const editor = createPlateEditor({
+      plugins: [ParagraphPlugin, ...reviewKit],
+      value: value as Value,
+    });
+
+    acceptSuggestionById(editor, 'agent-suggestion-smoke');
+
+    expect(docText(editor)).toContain('Review agent suggestion replacement here.');
+    expect(docText(editor)).not.toContain('suggestion target');
+    expect(suggestionKeys(editor)).not.toContain('suggestion_agent-suggestion-smoke');
+  });
+
+  it('reject on a replacement keeps old text and drops both marks', () => {
+    const editor = buildEditor();
+
+    rejectSuggestionById(editor, 's3');
+
+    expect(docText(editor)).toContain('swap old');
+    expect(docText(editor)).not.toContain('swap oldnew');
+    expect(suggestionKeys(editor)).not.toContain('suggestion_s3');
+  });
+
+  it('accepts a substitution in serialized Markdown and drops its metadata', () => {
+    const markdown =
+      'Use {~~rough~>specific~~}{#s1} wording.\n\n---\nsuggestions:\n  s1:\n    by: AI\n    at: "2026-01-01T00:00:00.000Z"\n  s2:\n    by: user\n    at: "2026-01-02T00:00:00.000Z"\n';
+
+    const resolved = resolveSuggestionInMarkdown(markdown, 's1', 'accept');
+
+    expect(resolved).toContain('Use specific wording.');
+    expect(resolved).not.toContain('s1:');
+    expect(resolved).toContain('s2:');
+  });
+
+  it('rejects an insertion in serialized Markdown', () => {
+    const markdown = 'Keep this{++ extra++}{#s1}.\n\n---\nsuggestions:\n  s1:\n    by: AI\n    at: "2026-01-01T00:00:00.000Z"\n';
+
+    expect(resolveSuggestionInMarkdown(markdown, 's1', 'reject')).toBe('Keep this.\n');
+  });
+
+  it('rejects a deletion in serialized Markdown', () => {
+    const markdown = 'Keep {--this --}{#s1}text.\n';
+
+    expect(resolveSuggestionInMarkdown(markdown, 's1', 'reject')).toBe('Keep this text.\n');
   });
 });
