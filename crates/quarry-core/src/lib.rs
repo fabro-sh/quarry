@@ -140,7 +140,7 @@ pub struct DocumentVersion {
     #[serde(default)]
     pub transaction_provenance: Option<JsonValue>,
     pub content_hash: Option<String>,
-    #[schema(value_type = Option<String>, format = Binary)]
+    #[serde(skip)]
     pub inline_content: Option<Vec<u8>>,
     pub metadata: JsonValue,
     pub content_type: String,
@@ -375,4 +375,41 @@ pub fn parent_dirs(path: &str) -> Vec<String> {
     }
     dirs.reverse();
     dirs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn document_version_omits_inline_content_from_json() {
+        // inline_content is a storage detail (small content inlined as a BLOB). It
+        // must never be serialized into API responses, where it ballooned write
+        // payloads ~20x as a per-byte integer array. The Rust field stays so
+        // storage can populate it; serde just drops it from the wire.
+        let version = DocumentVersion {
+            id: "v1".into(),
+            document_id: "d1".into(),
+            tx_id: "t1".into(),
+            transaction_source: None,
+            transaction_actor: None,
+            transaction_message: None,
+            transaction_provenance: None,
+            content_hash: Some("abc123".into()),
+            inline_content: Some(b"# Title\n".to_vec()),
+            metadata: JsonValue::Null,
+            content_type: "text/markdown".into(),
+            byte_size: 8,
+            created_at: "2026-06-05T00:00:00Z".into(),
+        };
+
+        let json = serde_json::to_value(&version).expect("serialize");
+        assert!(
+            json.get("inline_content").is_none(),
+            "inline_content must not appear in serialized JSON"
+        );
+        // Identifying metadata still travels so clients can reference the content.
+        assert_eq!(json["content_hash"], "abc123");
+        assert_eq!(json["byte_size"], 8);
+    }
 }
