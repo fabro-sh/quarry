@@ -28,7 +28,12 @@ export function ReviewRail({
   onSuggestionResolved?: (id: string, resolution: SuggestionResolution) => void;
 }) {
   const meta = useReviewStore((s) => s.meta);
-  const threads = useMemo(() => buildThreads(meta), [meta]);
+  // The rail is the working surface for open threads only; resolved threads live
+  // in the right pane's Comments tab (where they can be reopened).
+  const threads = useMemo(
+    () => buildThreads(meta).filter((thread) => thread.entry.status !== 'resolved'),
+    [meta]
+  );
   const suggestions = useEditorSelector((ed) => resolveSuggestions(ed.children), []);
   const hasDraft = useEditorSelector((ed) => hasCommentDraft(ed), []);
   const draftText = useEditorSelector((ed) => draftAnchorText(ed), []);

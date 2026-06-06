@@ -129,6 +129,7 @@ import { AgentAvatar } from '../features/agents/AgentAvatar';
 import { agentKind } from '../features/agents/agents';
 import { imageAssetPath, resolveImageSrc } from '../features/editor/image';
 import { loadAuthor, saveAuthor } from '../features/review/identity';
+import { CommentsPanel } from '../features/review/ui/CommentsPanel';
 import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../features/tree/tree-model';
 import { cn } from '../lib/utils';
 import { buildAddAgentPrompt, buildTokenizedDocumentUrl } from './agent-invite';
@@ -137,7 +138,7 @@ type SaveState = 'clean' | 'dirty' | 'drafted' | 'saving' | 'saved' | 'stale' | 
 type EventState = 'idle' | 'connecting' | 'open' | 'polling' | 'error';
 type ThemePreference = 'light' | 'dark';
 type TreeOpenState = Record<string, boolean>;
-type RightPaneTab = 'links' | 'versions' | 'conflicts';
+type RightPaneTab = 'links' | 'versions' | 'conflicts' | 'comments';
 const EVENT_POLL_INTERVAL_MS = 5_000;
 // How long after the last edit autosave pushes the draft to the server. Long
 // enough to coalesce a burst of typing into one version, short enough to feel
@@ -3568,6 +3569,12 @@ function RightPane({
             <ConflictList conflicts={conflicts} onOpen={onOpenConflict} onResolve={onResolveConflict} />
           </>
         ) : null}
+        {selectedTab === 'comments' ? (
+          <>
+            <h2 className={rightHeading}>{selectedTabLabel}</h2>
+            <CommentsPanel />
+          </>
+        ) : null}
       </section>
     </aside>
   );
@@ -4335,4 +4342,5 @@ const rightPaneTabs: Array<{ key: RightPaneTab; label: string }> = [
   { key: 'links', label: 'Links' },
   { key: 'versions', label: 'Versions' },
   { key: 'conflicts', label: 'Conflicts' },
+  { key: 'comments', label: 'Comments' },
 ];

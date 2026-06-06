@@ -56,6 +56,17 @@ export function resolveComment(meta: ReviewMeta, id: string, summary?: string): 
   return next;
 }
 
+export function reopenComment(meta: ReviewMeta, id: string): ReviewMeta {
+  const existing = meta.comments[id];
+  if (!existing) return meta;
+  const next = cloneMeta(meta);
+  const entry = { ...existing };
+  delete entry.status;
+  delete entry.resolved;
+  next.comments[id] = entry;
+  return next;
+}
+
 export function deleteComment(meta: ReviewMeta, id: string): ReviewMeta {
   const next = cloneMeta(meta);
   delete next.comments[id];

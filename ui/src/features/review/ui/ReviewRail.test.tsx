@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { reviewKit } from '../../editor/review-kit';
-import { addComment, useReviewStore } from '../review-store';
+import { addComment, resolveComment, useReviewStore } from '../review-store';
 import { emptyReviewMeta } from '../rfm-types';
 import { ReviewRail } from './ReviewRail';
 
@@ -56,6 +56,21 @@ describe('ReviewRail', () => {
     // The suggestion card shows the "Add:" label and the inserted text.
     expect(screen.getByText('Add:')).toBeInTheDocument();
     expect(screen.getByText('inserted')).toBeInTheDocument();
+  });
+
+  it('hides resolved comment threads', () => {
+    const editor = createPlateEditor({
+      plugins: [ParagraphPlugin, ...reviewKit],
+      value: [{ type: 'p', children: [{ text: 'noted', comment: true, comment_c1: true }] }],
+    });
+    const withComment = addComment(emptyReviewMeta(), 'c1', { by: 'user', at, body: 'resolved note' });
+    useReviewStore.getState().hydrate(resolveComment(withComment, 'c1'));
+
+    render(withPlate(editor, <ReviewRail editor={editor} />));
+
+    // The only thread is resolved, so the rail has nothing to show and hides.
+    expect(screen.queryByText('resolved note')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('review-rail')).not.toBeInTheDocument();
   });
 
   it('renders nothing when there are no comments or suggestions', () => {
