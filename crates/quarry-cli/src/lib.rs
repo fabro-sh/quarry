@@ -12,6 +12,95 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+mod logging {
+    use tracing_subscriber::EnvFilter;
+
+    pub const DEVELOPMENT_FILTER: &str = "warn,quarry=debug,quarry_cli=debug,quarry_server=debug,quarry_storage=debug,quarry_git=debug,quarry_fuse=debug,quarry_cas=debug,quarry_collab_codec=debug";
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct LogConfig {
+        pub filter: String,
+        pub format: LogFormat,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum LogFormat {
+        Pretty,
+        Json,
+    }
+
+    impl LogConfig {
+        pub fn from_env() -> Self {
+            let rust_log = std::env::var("RUST_LOG").ok();
+            let format = std::env::var("QUARRY_LOG_FORMAT").ok();
+            Self::from_env_values(rust_log.as_deref(), format.as_deref())
+        }
+
+        pub fn from_env_values(rust_log: Option<&str>, format: Option<&str>) -> Self {
+            let requested_filter = rust_log
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(DEVELOPMENT_FILTER);
+            let filter = if EnvFilter::try_new(requested_filter).is_ok() {
+                requested_filter.to_string()
+            } else {
+                DEVELOPMENT_FILTER.to_string()
+            };
+
+            Self {
+                filter,
+                format: LogFormat::from_env_value(format),
+            }
+        }
+
+        fn env_filter(&self) -> EnvFilter {
+            EnvFilter::try_new(&self.filter).unwrap_or_else(|_| EnvFilter::new(DEVELOPMENT_FILTER))
+        }
+    }
+
+    impl LogFormat {
+        fn from_env_value(value: Option<&str>) -> Self {
+            match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+                Some("json") => Self::Json,
+                _ => Self::Pretty,
+            }
+        }
+
+        fn as_str(self) -> &'static str {
+            match self {
+                Self::Pretty => "pretty",
+                Self::Json => "json",
+            }
+        }
+    }
+
+    pub fn init() {
+        let config = LogConfig::from_env();
+        let result = match config.format {
+            LogFormat::Pretty => tracing_subscriber::fmt()
+                .with_env_filter(config.env_filter())
+                .with_writer(std::io::stderr)
+                .pretty()
+                .try_init(),
+            LogFormat::Json => tracing_subscriber::fmt()
+                .with_env_filter(config.env_filter())
+                .with_writer(std::io::stderr)
+                .json()
+                .flatten_event(true)
+                .try_init(),
+        };
+
+        if result.is_ok() {
+            tracing::debug!(
+                event = "logging.initialized",
+                log_format = config.format.as_str(),
+                filter = %config.filter,
+                "logging initialized"
+            );
+        }
+    }
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "quarry")]
 #[command(about = "Local-first document substrate for agents and developer tools")]
@@ -344,9 +433,7 @@ pub async fn run() -> Result<()> {
 }
 
 fn init_tracing() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init();
+    logging::init();
 }
 
 async fn wait_for_shutdown(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
@@ -542,6 +629,64 @@ fn copy_dir(source: &Path, destination: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_logging_config_enables_quarry_crates_at_debug_and_dependencies_at_warn() {
+        let config = logging::LogConfig::from_env_values(None, None);
+
+        assert_eq!(config.format, logging::LogFormat::Pretty);
+        assert!(config
+            .filter
+            .split(',')
+            .any(|directive| directive == "warn"));
+        for crate_name in [
+            "quarry",
+            "quarry_cli",
+            "quarry_server",
+            "quarry_storage",
+            "quarry_git",
+            "quarry_fuse",
+            "quarry_cas",
+            "quarry_collab_codec",
+        ] {
+            assert!(
+                config
+                    .filter
+                    .split(',')
+                    .any(|directive| directive == format!("{crate_name}=debug")),
+                "default filter should enable {crate_name} at debug: {}",
+                config.filter
+            );
+        }
+    }
+
+    #[test]
+    fn rust_log_overrides_development_default_filter() {
+        let config = logging::LogConfig::from_env_values(Some("info,quarry_storage=trace"), None);
+
+        assert_eq!(config.filter, "info,quarry_storage=trace");
+    }
+
+    #[test]
+    fn json_log_format_is_selected_from_env() {
+        let config = logging::LogConfig::from_env_values(None, Some("json"));
+
+        assert_eq!(config.format, logging::LogFormat::Json);
+    }
+
+    #[test]
+    fn invalid_log_format_falls_back_to_pretty() {
+        let config = logging::LogConfig::from_env_values(None, Some("yaml"));
+
+        assert_eq!(config.format, logging::LogFormat::Pretty);
+    }
+
+    #[test]
+    fn invalid_rust_log_falls_back_to_development_default_filter() {
+        let config = logging::LogConfig::from_env_values(Some("quarry=debug,="), None);
+
+        assert_eq!(config.filter, logging::DEVELOPMENT_FILTER);
+    }
 
     #[test]
     fn serve_addr_defaults_to_loopback_and_can_be_overridden() {

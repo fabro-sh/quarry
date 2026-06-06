@@ -15,13 +15,14 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::select;
 use tokio::sync::broadcast::{channel, Receiver, Sender};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio::sync::{watch, Mutex, OwnedRwLockWriteGuard, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use uuid::Uuid;
 use yrs::encoding::write::Write;
 use yrs::sync::protocol::{MSG_SYNC, MSG_SYNC_UPDATE};
 use yrs::sync::{Awareness, DefaultProtocol, Error, Message, Protocol, SyncMessage};
@@ -108,11 +109,27 @@ impl CollabRoom {
                 match Update::decode_v1(update_v1) {
                     Ok(update) => {
                         if let Err(error) = txn.apply_update(update) {
-                            tracing::warn!(%error, %document_id, "failed to apply initial collab state");
+                            tracing::warn!(
+                                event = "collab.recovery.loaded",
+                                %error,
+                                %document_id,
+                                outcome = "failed",
+                                reason_code = "apply_initial_state_failed",
+                                reason = "failed to apply initial collab state",
+                                "failed to apply initial collab state"
+                            );
                         }
                     }
                     Err(error) => {
-                        tracing::warn!(%error, %document_id, "failed to decode initial collab state");
+                        tracing::warn!(
+                            event = "collab.recovery.loaded",
+                            %error,
+                            %document_id,
+                            outcome = "failed",
+                            reason_code = "decode_initial_state_failed",
+                            reason = "failed to decode initial collab state",
+                            "failed to decode initial collab state"
+                        );
                     }
                 }
             }
@@ -129,23 +146,60 @@ impl CollabRoom {
             recovery_state: recovery_state.clone(),
         });
 
+        tracing::debug!(
+            event = "collab.room.created",
+            document_id,
+            base_version_id = recovery_state.base_version_id().as_deref().unwrap_or(""),
+            dirty = recovery_state.is_dirty(),
+            "collab room created"
+        );
+
         Self {
             document_id: document_id.to_string(),
             store,
-            broadcast: BroadcastGroup::new(awareness, 32, persistence).await,
+            broadcast: BroadcastGroup::new(document_id.to_string(), awareness, 32, persistence)
+                .await,
             recovery_state,
         }
     }
 
     async fn serve_socket(&self, socket: WebSocket) {
+        let collab_session_id = Uuid::new_v4().to_string();
+        tracing::debug!(
+            event = "collab.socket.opened",
+            document_id = %self.document_id,
+            collab_session_id = %collab_session_id,
+            "collab socket opened"
+        );
         self.reseed_clean_room_if_head_changed().await;
         let (sink, stream) = socket.split();
         let sink = Arc::new(Mutex::new(AxumSink::from(sink)));
         let stream = AxumStream::from(stream);
-        let subscription = self.broadcast.subscribe(sink, stream);
+        let subscription = self
+            .broadcast
+            .subscribe(collab_session_id.clone(), sink, stream);
 
-        if let Err(error) = subscription.completed().await {
-            tracing::debug!(%error, "collab websocket closed with protocol error");
+        match subscription.completed().await {
+            Ok(()) => {
+                tracing::debug!(
+                    event = "collab.socket.closed",
+                    document_id = %self.document_id,
+                    collab_session_id = %collab_session_id,
+                    outcome = "closed",
+                    "collab socket closed"
+                );
+            }
+            Err(error) => {
+                tracing::debug!(
+                    event = "collab.socket.closed",
+                    document_id = %self.document_id,
+                    collab_session_id = %collab_session_id,
+                    outcome = "protocol_error",
+                    reason_code = "protocol_error",
+                    reason = %error,
+                    "collab websocket closed with protocol error"
+                );
+            }
         }
     }
 
@@ -180,8 +234,12 @@ impl CollabRoom {
                 Ok(update) => {
                     if let Err(error) = txn.apply_update(update) {
                         tracing::warn!(
+                            event = "collab.recovery.loaded",
                             %error,
                             document_id = %self.document_id,
+                            outcome = "failed",
+                            reason_code = "apply_clean_reseed_failed",
+                            reason = "failed to apply clean collab reseed update",
                             "failed to apply clean collab reseed update"
                         );
                         return;
@@ -189,8 +247,12 @@ impl CollabRoom {
                 }
                 Err(error) => {
                     tracing::warn!(
+                        event = "collab.recovery.loaded",
                         %error,
                         document_id = %self.document_id,
+                        outcome = "failed",
+                        reason_code = "decode_clean_reseed_failed",
+                        reason = "failed to decode clean collab reseed update",
                         "failed to decode clean collab reseed update"
                     );
                     return;
@@ -237,7 +299,10 @@ impl CollabRoom {
             Ok(nodes) => nodes.into_iter().flatten().collect(),
             Err(error) => {
                 tracing::debug!(
+                    event = "collab.agent_injection.rejected",
                     document_id = %self.document_id,
+                    outcome = "rejected",
+                    reason_code = "original_blocks_not_codec_eligible",
                     reason = %error,
                     "agent injection gate rejected original blocks because they are not codec eligible"
                 );
@@ -248,7 +313,10 @@ impl CollabRoom {
             Ok(nodes) => clean_gate_nodes(&nodes),
             Err(error) => {
                 tracing::debug!(
+                    event = "collab.agent_injection.rejected",
                     document_id = %self.document_id,
+                    outcome = "rejected",
+                    reason_code = "original_blocks_yjs_build_failed",
                     reason = %error,
                     "agent injection gate rejected original blocks because Yjs build failed"
                 );
@@ -268,9 +336,13 @@ impl CollabRoom {
             let stripped = strip_trailing_empty_paragraphs(&comparable);
             if stripped != expected {
                 tracing::debug!(
+                    event = "collab.agent_injection.rejected",
                     document_id = %self.document_id,
-                    live = %serde_json::to_string(&stripped).unwrap_or_default(),
-                    expected = %serde_json::to_string(&expected).unwrap_or_default(),
+                    outcome = "rejected",
+                    reason_code = "live_room_mismatch",
+                    reason = "live room content does not match the expected base",
+                    live_blocks = stripped.len(),
+                    expected_blocks = expected.len(),
                     "agent injection clean gate rejected live room"
                 );
                 return None;
@@ -280,7 +352,11 @@ impl CollabRoom {
         if let Some(batch) = &mutation.batch {
             if !batch.is_valid_for(live_content_len) {
                 tracing::debug!(
+                    event = "collab.agent_injection.rejected",
                     document_id = %self.document_id,
+                    outcome = "rejected",
+                    reason_code = "batch_range_invalid",
+                    reason = "agent injection batch was invalid for live content length",
                     live_content_len,
                     "agent injection batch rejected for live content length"
                 );
@@ -289,7 +365,11 @@ impl CollabRoom {
         }
         if mutation.batch.is_none() && mutation.review.is_none() {
             tracing::debug!(
+                event = "collab.agent_injection.rejected",
                 document_id = %self.document_id,
+                outcome = "rejected",
+                reason_code = "empty_mutation",
+                reason = "agent injection mutation was empty",
                 "agent injection rejected empty live mutation"
             );
             return None;
@@ -347,6 +427,16 @@ impl RoomRecoveryState {
 
 async fn initial_room_state(store: Option<&QuarryStore>, document_id: &str) -> InitialRoomState {
     if let Some(recovery) = load_recovery_update(store, document_id).await {
+        tracing::debug!(
+            event = "collab.recovery.loaded",
+            %document_id,
+            base_version_id = recovery.base_version_id.as_deref().unwrap_or(""),
+            dirty = recovery.dirty,
+            update_bytes = recovery.update_v1.len(),
+            source = "dirty_recovery_state",
+            outcome = "loaded",
+            "collab recovery state loaded"
+        );
         return InitialRoomState {
             update_v1: Some(recovery.update_v1),
             base_version_id: recovery.base_version_id,
@@ -355,6 +445,15 @@ async fn initial_room_state(store: Option<&QuarryStore>, document_id: &str) -> I
     }
 
     if let Some(seed) = clean_seed_update(store, document_id).await {
+        tracing::debug!(
+            event = "collab.recovery.loaded",
+            %document_id,
+            base_version_id = %seed.base_version_id,
+            update_bytes = seed.update_v1.len(),
+            source = "clean_document_seed",
+            outcome = "loaded",
+            "collab clean seed loaded"
+        );
         return InitialRoomState {
             update_v1: Some(seed.update_v1),
             base_version_id: Some(seed.base_version_id),
@@ -362,6 +461,15 @@ async fn initial_room_state(store: Option<&QuarryStore>, document_id: &str) -> I
         };
     }
 
+    tracing::debug!(
+        event = "collab.recovery.loaded",
+        %document_id,
+        source = "empty",
+        outcome = "missing",
+        reason_code = "no_recovery_or_seed",
+        reason = "no collab recovery state or document seed was available",
+        "collab room has no recovery seed"
+    );
     InitialRoomState {
         update_v1: None,
         base_version_id: None,
@@ -391,7 +499,16 @@ async fn load_collab_document_seed(
         Ok(Some(seed)) => Some(seed),
         Ok(None) => return None,
         Err(error) => {
-            tracing::warn!(%error, %document_id, "failed to load collab document seed");
+            tracing::warn!(
+                event = "collab.recovery.loaded",
+                %error,
+                %document_id,
+                source = "document_seed",
+                outcome = "failed",
+                reason_code = "load_document_seed_failed",
+                reason = "failed to load collab document seed",
+                "failed to load collab document seed"
+            );
             return None;
         }
     }
@@ -405,8 +522,13 @@ async fn clean_seed_update_from_document_seed(
     let store = store?;
     if !is_markdown_content_type(&seed.content_type) {
         tracing::debug!(
+            event = "collab.recovery.loaded",
             %document_id,
             content_type = %seed.content_type,
+            source = "document_seed",
+            outcome = "skipped",
+            reason_code = "not_markdown",
+            reason = "document content type is not markdown",
             "skipping collab server seed for non-markdown document"
         );
         return None;
@@ -414,7 +536,16 @@ async fn clean_seed_update_from_document_seed(
     let markdown = match std::str::from_utf8(&seed.content) {
         Ok(markdown) => markdown,
         Err(error) => {
-            tracing::warn!(%error, %document_id, "failed to decode markdown collab seed as UTF-8");
+            tracing::warn!(
+                event = "collab.recovery.loaded",
+                %error,
+                %document_id,
+                source = "document_seed",
+                outcome = "failed",
+                reason_code = "seed_not_utf8",
+                reason = "failed to decode markdown collab seed as UTF-8",
+                "failed to decode markdown collab seed as UTF-8"
+            );
             return None;
         }
     };
@@ -422,8 +553,13 @@ async fn clean_seed_update_from_document_seed(
         Ok(slate) => slate,
         Err(error) => {
             tracing::debug!(
+                event = "collab.recovery.loaded",
                 %error,
                 %document_id,
+                source = "document_seed",
+                outcome = "skipped",
+                reason_code = "markdown_not_codec_eligible",
+                reason = "markdown is not codec eligible",
                 "skipping collab server seed because markdown is not codec eligible"
             );
             return None;
@@ -433,14 +569,28 @@ async fn clean_seed_update_from_document_seed(
         Ok(built) => built,
         Err(error) => {
             tracing::debug!(
+                event = "collab.recovery.loaded",
                 %error,
                 %document_id,
+                source = "document_seed",
+                outcome = "skipped",
+                reason_code = "slate_not_yjs_buildable",
+                reason = "Slate nodes are not Yjs-buildable",
                 "skipping collab server seed because Slate nodes are not Yjs-buildable"
             );
             return None;
         }
     };
     let update_v1 = encode_update_v1_from_built(&built, SHARED_ROOT);
+    tracing::debug!(
+        event = "collab.recovery.persist.started",
+        %document_id,
+        base_version_id = %seed.head_version_id,
+        dirty = false,
+        update_bytes = update_v1.len(),
+        source = "document_seed",
+        "persisting clean collab server seed"
+    );
     if let Err(error) = store
         .put_collab_recovery_state(
             document_id,
@@ -450,7 +600,28 @@ async fn clean_seed_update_from_document_seed(
         )
         .await
     {
-        tracing::warn!(%error, %document_id, "failed to persist clean collab server seed");
+        tracing::warn!(
+            event = "collab.recovery.persist.failed",
+            %error,
+            %document_id,
+            base_version_id = %seed.head_version_id,
+            dirty = false,
+            source = "document_seed",
+            outcome = "failed",
+            reason_code = "persist_clean_seed_failed",
+            reason = "failed to persist clean collab server seed",
+            "failed to persist clean collab server seed"
+        );
+    } else {
+        tracing::debug!(
+            event = "collab.recovery.persist.completed",
+            %document_id,
+            base_version_id = %seed.head_version_id,
+            dirty = false,
+            source = "document_seed",
+            outcome = "persisted",
+            "persisted clean collab server seed"
+        );
     }
     Some(CleanSeedUpdate {
         base_version_id: seed.head_version_id,
@@ -580,7 +751,14 @@ impl InjectionGuard {
         }
 
         let Some(store) = self.store.clone() else {
-            self.recovery_state.mark_clean(new_version_id);
+            self.recovery_state.mark_clean(new_version_id.clone());
+            tracing::debug!(
+                event = "collab.agent_injection.committed",
+                document_id = %self.document_id,
+                version_id = %new_version_id,
+                outcome = "committed",
+                "agent injection committed without recovery store"
+            );
             return CommitOutcome::Injected;
         };
         let update_v1 = self
@@ -588,22 +766,53 @@ impl InjectionGuard {
             .doc()
             .transact()
             .encode_state_as_update_v1(&StateVector::default());
+        tracing::debug!(
+            event = "collab.recovery.persist.started",
+            document_id = %self.document_id,
+            base_version_id = %new_version_id,
+            dirty = false,
+            update_bytes = update_v1.len(),
+            source = "agent_injection",
+            "persisting injected collab recovery state"
+        );
         match store
             .put_collab_recovery_state(&self.document_id, Some(new_version_id), update_v1, false)
             .await
         {
             Ok(state) => {
                 if let Some(base_version_id) = state.base_version_id {
-                    self.recovery_state.mark_clean(base_version_id);
+                    self.recovery_state.mark_clean(base_version_id.clone());
+                    tracing::debug!(
+                        event = "collab.recovery.persist.completed",
+                        document_id = %self.document_id,
+                        base_version_id = %base_version_id,
+                        dirty = state.dirty,
+                        source = "agent_injection",
+                        outcome = "persisted",
+                        "persisted injected collab recovery state"
+                    );
                 }
                 CommitOutcome::Injected
             }
             Err(error) => {
                 let message = format!("failed to persist collab recovery state: {error}");
                 tracing::warn!(
+                    event = "collab.recovery.persist.failed",
                     %error,
                     document_id = %self.document_id,
+                    source = "agent_injection",
+                    outcome = "failed",
+                    reason_code = "persist_injected_recovery_failed",
+                    reason = "failed to persist injected collab recovery state",
                     "failed to persist injected collab recovery state"
+                );
+                tracing::warn!(
+                    event = "collab.agent_injection.recovery_degraded",
+                    document_id = %self.document_id,
+                    outcome = "degraded",
+                    reason_code = "recovery_persist_failed",
+                    reason = "agent injection committed but recovery persistence failed",
+                    "agent injection recovery degraded"
                 );
                 self.persistence_failed.store(true, Ordering::SeqCst);
                 signal_recovery_persistence_error_locked(
@@ -744,7 +953,14 @@ fn adopt_clean_duplicate_seed_update(
         };
         if let Err(error) = txn.apply_update(update) {
             suppress_next_seed_broadcast.store(false, Ordering::SeqCst);
-            tracing::warn!(%error, "failed to adopt clean duplicate collab seed update");
+            tracing::warn!(
+                event = "collab.recovery.loaded",
+                %error,
+                outcome = "failed",
+                reason_code = "adopt_clean_duplicate_seed_failed",
+                reason = "failed to adopt clean duplicate collab seed update",
+                "failed to adopt clean duplicate collab seed update"
+            );
             return None;
         }
     }
@@ -798,7 +1014,16 @@ async fn load_recovery_update(
         Ok(Some(state)) if state.dirty && !state.update_v1.is_empty() => Some(state),
         Ok(_) => None,
         Err(error) => {
-            tracing::warn!(%error, %document_id, "failed to load collab recovery state");
+            tracing::warn!(
+                event = "collab.recovery.loaded",
+                %error,
+                %document_id,
+                source = "dirty_recovery_state",
+                outcome = "failed",
+                reason_code = "load_recovery_state_failed",
+                reason = "failed to load collab recovery state",
+                "failed to load collab recovery state"
+            );
             None
         }
     }
@@ -813,6 +1038,7 @@ struct RecoveryPersistence {
 }
 
 struct BroadcastGroup {
+    document_id: String,
     _awareness_sub: yrs::Subscription,
     _doc_sub: yrs::Subscription,
     awareness_ref: AwarenessRef,
@@ -831,6 +1057,7 @@ unsafe impl Sync for BroadcastGroup {}
 
 impl BroadcastGroup {
     async fn new(
+        document_id: String,
         awareness: AwarenessRef,
         buffer_capacity: usize,
         persistence: Option<RecoveryPersistence>,
@@ -863,6 +1090,7 @@ impl BroadcastGroup {
         let mut lock = awareness.write().await;
         let sink = sender.clone();
         let suppress_seed_broadcast = suppress_next_seed_broadcast.clone();
+        let doc_update_document_id = document_id.clone();
         let doc_sub = {
             lock.doc()
                 .observe_update_v1(move |txn, update| {
@@ -879,7 +1107,23 @@ impl BroadcastGroup {
                     encoder.write_var(MSG_SYNC);
                     encoder.write_var(MSG_SYNC_UPDATE);
                     encoder.write_buf(&update.update);
-                    let _ = sink.send(encoder.to_vec());
+                    let encoded = encoder.to_vec();
+                    let update_bytes = encoded.len();
+                    if sink.send(encoded).is_ok() {
+                        tracing::debug!(
+                            event = "collab.update.broadcast",
+                            document_id = %doc_update_document_id,
+                            update_bytes,
+                            source = if server_injection {
+                                "agent_injection"
+                            } else if server_seed {
+                                "server_seed"
+                            } else {
+                                "client"
+                            },
+                            "collab document update broadcast"
+                        );
+                    }
                     if !server_injection && !server_seed {
                         if let Some(recovery_state) = &recovery_state_for_doc {
                             recovery_state.mark_dirty();
@@ -894,13 +1138,22 @@ impl BroadcastGroup {
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sink = sender.clone();
+        let awareness_document_id = document_id.clone();
         let awareness_sub = lock.on_update(move |_awareness, event, _origin| {
             if tx.send(event.all_changes()).is_err() {
-                tracing::warn!("failed to queue collab awareness update");
+                tracing::warn!(
+                    event = "collab.awareness.broadcast.failed",
+                    document_id = %awareness_document_id,
+                    outcome = "failed",
+                    reason_code = "queue_awareness_update_failed",
+                    reason = "failed to queue collab awareness update",
+                    "failed to queue collab awareness update"
+                );
             }
         });
         drop(lock);
 
+        let awareness_document_id = document_id.clone();
         let awareness_updater = tokio::task::spawn(async move {
             while let Some(changed_clients) = rx.recv().await {
                 let Some(awareness) = awareness_c.upgrade() else {
@@ -909,18 +1162,35 @@ impl BroadcastGroup {
                 let awareness = awareness.read().await;
                 match awareness.update_with_clients(changed_clients) {
                     Ok(update) => {
-                        if sink.send(Message::Awareness(update).encode_v1()).is_err() {
-                            tracing::warn!("failed to broadcast collab awareness update");
+                        let encoded = Message::Awareness(update).encode_v1();
+                        if sink.send(encoded).is_err() {
+                            tracing::warn!(
+                                event = "collab.awareness.broadcast.failed",
+                                document_id = %awareness_document_id,
+                                outcome = "failed",
+                                reason_code = "broadcast_channel_closed",
+                                reason = "failed to broadcast collab awareness update",
+                                "failed to broadcast collab awareness update"
+                            );
                         }
                     }
                     Err(error) => {
-                        tracing::warn!(%error, "failed to compute collab awareness update");
+                        tracing::warn!(
+                            event = "collab.awareness.broadcast.failed",
+                            document_id = %awareness_document_id,
+                            %error,
+                            outcome = "failed",
+                            reason_code = "compute_awareness_update_failed",
+                            reason = "failed to compute collab awareness update",
+                            "failed to compute collab awareness update"
+                        );
                     }
                 }
             }
         });
 
         Self {
+            document_id,
             _awareness_sub: awareness_sub,
             _doc_sub: doc_sub,
             awareness_ref: awareness,
@@ -939,18 +1209,24 @@ impl BroadcastGroup {
         &self.awareness_ref
     }
 
-    fn subscribe<S, St, E>(&self, sink: Arc<Mutex<S>>, stream: St) -> Subscription
+    fn subscribe<S, St, E>(
+        &self,
+        collab_session_id: String,
+        sink: Arc<Mutex<S>>,
+        stream: St,
+    ) -> Subscription
     where
         S: SinkExt<Vec<u8>> + Send + Sync + Unpin + 'static,
         St: StreamExt<Item = Result<Vec<u8>, E>> + Send + Sync + Unpin + 'static,
         <S as Sink<Vec<u8>>>::Error: std::error::Error + Send + Sync,
         E: std::error::Error + Send + Sync + 'static,
     {
-        self.subscribe_with(sink, stream, DefaultProtocol)
+        self.subscribe_with(collab_session_id, sink, stream, DefaultProtocol)
     }
 
     fn subscribe_with<S, St, E, P>(
         &self,
+        collab_session_id: String,
         sink: Arc<Mutex<S>>,
         mut stream: St,
         protocol: P,
@@ -966,6 +1242,8 @@ impl BroadcastGroup {
             let sink = sink.clone();
             let mut receiver = self.sender.subscribe();
             let mut failure = self.persistence_failure.subscribe();
+            let document_id = self.document_id.clone();
+            let collab_session_id = collab_session_id.clone();
             tokio::spawn(async move {
                 loop {
                     select! {
@@ -981,10 +1259,18 @@ impl BroadcastGroup {
                             let Ok(msg) = message else {
                                 return Ok(());
                             };
+                            let update_bytes = msg.len();
                             let mut sink = sink.lock().await;
                             if let Err(error) = sink.send(msg).await {
                                 return Err(Error::Other(Box::new(error)));
                             }
+                            tracing::debug!(
+                                event = "collab.update.broadcast",
+                                document_id = %document_id,
+                                collab_session_id = %collab_session_id,
+                                update_bytes,
+                                "collab update sent to socket"
+                            );
                         }
                     }
                 }
@@ -997,6 +1283,8 @@ impl BroadcastGroup {
             let recovery_state = self.recovery_state.clone();
             let suppress_next_seed_broadcast = self.suppress_next_seed_broadcast.clone();
             let mut failure = self.persistence_failure.subscribe();
+            let document_id = self.document_id.clone();
+            let collab_session_id = collab_session_id.clone();
             tokio::spawn(async move {
                 loop {
                     select! {
@@ -1018,6 +1306,13 @@ impl BroadcastGroup {
                                 ));
                             }
                             let payload = result.map_err(|error| Error::Other(Box::new(error)))?;
+                            tracing::debug!(
+                                event = "collab.update.received",
+                                document_id = %document_id,
+                                collab_session_id = %collab_session_id,
+                                update_bytes = payload.len(),
+                                "collab update received from socket"
+                            );
                             let replies = {
                                 let mut awareness = awareness.write().await;
                                 if let Some(recovery_state) = &recovery_state {
@@ -1043,10 +1338,20 @@ impl BroadcastGroup {
                             };
 
                             for reply in replies {
+                                let encoded = reply.encode_v1();
+                                let update_bytes = encoded.len();
                                 let mut sink = sink.lock().await;
-                                sink.send(reply.encode_v1())
+                                sink.send(encoded)
                                     .await
                                     .map_err(|error| Error::Other(Box::new(error)))?;
+                                tracing::debug!(
+                                    event = "collab.update.broadcast",
+                                    document_id = %document_id,
+                                    collab_session_id = %collab_session_id,
+                                    update_bytes,
+                                    source = "protocol_reply",
+                                    "collab protocol reply sent to socket"
+                                );
                             }
                         }
                     }
@@ -1118,6 +1423,7 @@ async fn persist_recovery_snapshot(
     let Some(awareness) = awareness.upgrade() else {
         return false;
     };
+    let started = Instant::now();
     let update_v1 = {
         let awareness = awareness.read().await;
         let update = awareness
@@ -1126,6 +1432,15 @@ async fn persist_recovery_snapshot(
             .encode_state_as_update_v1(&StateVector::default());
         update
     };
+    tracing::debug!(
+        event = "collab.recovery.persist.started",
+        document_id = %persistence.document_id,
+        base_version_id = persistence.recovery_state.base_version_id().as_deref().unwrap_or(""),
+        dirty = true,
+        update_bytes = update_v1.len(),
+        source = "debounced_recovery",
+        "persisting collab recovery snapshot"
+    );
     if let Err(error) = persistence
         .store
         .put_collab_recovery_state(
@@ -1138,8 +1453,15 @@ async fn persist_recovery_snapshot(
     {
         let message = format!("failed to persist collab recovery state: {error}");
         tracing::warn!(
+            event = "collab.recovery.persist.failed",
             %error,
             document_id = %persistence.document_id,
+            base_version_id = persistence.recovery_state.base_version_id().as_deref().unwrap_or(""),
+            dirty = true,
+            source = "debounced_recovery",
+            outcome = "failed",
+            reason_code = "persist_recovery_snapshot_failed",
+            reason = "failed to persist collab recovery state",
             "failed to persist collab recovery state"
         );
         persistence_failed.store(true, Ordering::SeqCst);
@@ -1147,6 +1469,16 @@ async fn persist_recovery_snapshot(
         let _ = persistence_failure.send(Some(message));
         return false;
     }
+    tracing::debug!(
+        event = "collab.recovery.persist.completed",
+        document_id = %persistence.document_id,
+        base_version_id = persistence.recovery_state.base_version_id().as_deref().unwrap_or(""),
+        dirty = true,
+        source = "debounced_recovery",
+        outcome = "persisted",
+        duration_ms = started.elapsed().as_millis() as u64,
+        "persisted collab recovery snapshot"
+    );
     true
 }
 
@@ -1174,8 +1506,12 @@ fn signal_recovery_persistence_error_locked(
     });
     if let Err(error) = awareness.set_local_state(state) {
         tracing::warn!(
+            event = "collab.awareness.broadcast.failed",
             %error,
             %document_id,
+            outcome = "failed",
+            reason_code = "set_local_recovery_error_failed",
+            reason = "failed to broadcast collab recovery persistence error",
             "failed to broadcast collab recovery persistence error"
         );
     }
@@ -1315,9 +1651,11 @@ mod tests {
         let room = hub.room("doc-1").await;
         let (server_sink, mut client_stream) = test_channel(8);
         let (mut client_sink, server_stream) = test_channel(8);
-        let subscription = room
-            .broadcast
-            .subscribe(Arc::new(Mutex::new(server_sink)), server_stream);
+        let subscription = room.broadcast.subscribe(
+            "test-session-xml".to_string(),
+            Arc::new(Mutex::new(server_sink)),
+            server_stream,
+        );
 
         let update = vec![
             1, 1, 7, 0, 4, 1, 7, 99, 111, 110, 116, 101, 110, 116, 5, 104, 101, 108, 108, 111, 0,
@@ -1613,9 +1951,11 @@ mod tests {
         let _ = wait_for_recovery_state_matching(&store, &document_id, |state| !state.dirty).await;
         let (server_sink, mut client_stream) = test_channel(8);
         let (mut client_sink, server_stream) = test_channel(8);
-        let subscription = room
-            .broadcast
-            .subscribe(Arc::new(Mutex::new(server_sink)), server_stream);
+        let subscription = room.broadcast.subscribe(
+            "test-session-initial-sync".to_string(),
+            Arc::new(Mutex::new(server_sink)),
+            server_stream,
+        );
         let client_doc = Doc::with_options(Options {
             offset_kind: OffsetKind::Utf16,
             ..Default::default()
@@ -1660,9 +2000,11 @@ mod tests {
         let _ = wait_for_recovery_state_matching(&store, &document_id, |state| !state.dirty).await;
         let (server_sink, mut client_stream) = test_channel(8);
         let (mut client_sink, server_stream) = test_channel(8);
-        let subscription = room
-            .broadcast
-            .subscribe(Arc::new(Mutex::new(server_sink)), server_stream);
+        let subscription = room.broadcast.subscribe(
+            "test-session-duplicate-seed".to_string(),
+            Arc::new(Mutex::new(server_sink)),
+            server_stream,
+        );
         let update = encode_update_v1_from_built(
             &build_nodes(&review_markdown_to_slate(markdown).unwrap()).unwrap(),
             SHARED_ROOT,

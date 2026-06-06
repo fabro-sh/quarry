@@ -7,6 +7,7 @@ use std::future::Future;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::{Mutex, Notify, RwLock};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -573,6 +574,16 @@ impl FuseProjection {
         } else {
             WritePrecondition::None
         };
+        let started = Instant::now();
+        tracing::debug!(
+            event = "fuse.write.started",
+            library = %self.library,
+            path = %handle.path,
+            content_type,
+            content_bytes = handle.content.len(),
+            created = handle.created,
+            "FUSE write started"
+        );
         let outcome = self
             .store
             .put_document(
@@ -586,6 +597,18 @@ impl FuseProjection {
             )
             .await?;
         self.remember_parent_dirs(&handle.path).await;
+        tracing::debug!(
+            event = "fuse.write.published",
+            library = %self.library,
+            library_id = %outcome.transaction.library_id,
+            path = %outcome.document.path,
+            tx_id = %outcome.transaction.id,
+            doc_id = %outcome.document.id,
+            version_id = %outcome.version.id,
+            content_bytes = outcome.version.byte_size,
+            duration_ms = started.elapsed().as_millis() as u64,
+            "FUSE write published"
+        );
         Ok(outcome)
     }
 
@@ -697,7 +720,12 @@ where
 async fn mount_shutdown_signal() {
     let ctrl_c = async {
         if let Err(error) = tokio::signal::ctrl_c().await {
-            tracing::warn!(%error, "failed to listen for Ctrl-C");
+            tracing::warn!(
+                event = "shutdown.signal.listen_failed",
+                signal = "ctrl_c",
+                %error,
+                "failed to listen for Ctrl-C"
+            );
         }
     };
 
@@ -709,7 +737,12 @@ async fn mount_shutdown_signal() {
                     signal.recv().await;
                 }
                 Err(error) => {
-                    tracing::warn!(%error, "failed to listen for SIGTERM");
+                    tracing::warn!(
+                        event = "shutdown.signal.listen_failed",
+                        signal = "sigterm",
+                        %error,
+                        "failed to listen for SIGTERM"
+                    );
                     std::future::pending::<()>().await;
                 }
             }
@@ -725,7 +758,10 @@ async fn mount_shutdown_signal() {
         ctrl_c.await;
     }
 
-    tracing::info!("shutdown signal received");
+    tracing::info!(
+        event = "shutdown.signal.received",
+        "shutdown signal received"
+    );
 }
 
 fn watch_store_events(
@@ -738,13 +774,31 @@ fn watch_store_events(
         loop {
             match events.recv().await {
                 Ok(event) if event.library_id == library_id => {
-                    invalidation_generation.fetch_add(1, Ordering::SeqCst);
+                    let generation = invalidation_generation.fetch_add(1, Ordering::SeqCst) + 1;
                     invalidation_notify.notify_waiters();
+                    tracing::debug!(
+                        event = "fuse.invalidate.received",
+                        library_id = %library_id,
+                        path = event.path.as_deref().unwrap_or(""),
+                        new_path = event.new_path.as_deref().unwrap_or(""),
+                        tx_id = event.tx_id.as_deref().unwrap_or(""),
+                        doc_id = event.doc_id.as_deref().unwrap_or(""),
+                        version_id = event.version_id.as_deref().unwrap_or(""),
+                        generation,
+                        "FUSE invalidation received"
+                    );
                 }
                 Ok(_) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    invalidation_generation.fetch_add(1, Ordering::SeqCst);
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    let generation = invalidation_generation.fetch_add(1, Ordering::SeqCst) + 1;
                     invalidation_notify.notify_waiters();
+                    tracing::warn!(
+                        event = "fuse.invalidate.lagged",
+                        library_id = %library_id,
+                        skipped,
+                        generation,
+                        "FUSE invalidation stream lagged"
+                    );
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
@@ -834,6 +888,13 @@ mod linux_mount {
             .read_only(read_only)
             .default_permissions(false);
 
+        tracing::info!(
+            event = "fuse.mount.started",
+            library,
+            mountpoint = %mountpoint.display(),
+            read_only,
+            "FUSE mount started"
+        );
         let handle = match Session::new(options.clone())
             .mount_with_unprivileged(projection.clone(), mountpoint)
             .await
@@ -850,6 +911,7 @@ mod linux_mount {
         };
 
         tracing::info!(
+            event = "fuse.mount.established",
             library,
             mountpoint = %mountpoint.display(),
             read_only,
@@ -858,6 +920,7 @@ mod linux_mount {
         shutdown.await;
         handle.unmount().await?;
         tracing::info!(
+            event = "fuse.mount.unmounted",
             library,
             mountpoint = %mountpoint.display(),
             "FUSE mount unmounted"

@@ -3,6 +3,99 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 #[test]
+fn cli_default_debug_logs_stay_on_stderr_and_stdout_stays_payload_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let source = temp.path().join("hello.md");
+    std::fs::write(&source, "hello from cli\n").unwrap();
+
+    let output = quarry_command()
+        .args(["init", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("{}\n", root.display())
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("logging.initialized"));
+
+    let output = quarry_command()
+        .args([
+            "--root",
+            root.to_str().unwrap(),
+            "put",
+            "notes",
+            "notes/hello.md",
+            source.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("document.put.started"));
+    let written: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(written["document"]["path"], "notes/hello.md");
+
+    let output = quarry_command()
+        .args(["--root", root.to_str().unwrap(), "list", "notes"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let listed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+
+    let output = quarry_command()
+        .args([
+            "--root",
+            root.to_str().unwrap(),
+            "get",
+            "notes",
+            "notes/hello.md",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "hello from cli\n");
+
+    let conflict_id = {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let store = quarry_storage::QuarryStore::open(quarry_storage::StoreConfig {
+                db_path: root.join("quarry.db"),
+                cas_path: root.join("cas"),
+                lock_path: None,
+            })
+            .await
+            .unwrap();
+            store
+                .record_conflict(
+                    "notes",
+                    "notes/hello.md",
+                    written["version"]["id"].as_str().map(ToString::to_string),
+                    None,
+                )
+                .await
+                .unwrap()
+                .id
+        })
+    };
+    let output = quarry_command()
+        .args([
+            "--root",
+            root.to_str().unwrap(),
+            "conflicts",
+            "resolve",
+            "notes",
+            &conflict_id,
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let resolved: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(resolved["status"], "resolved");
+}
+
+#[test]
 fn cli_conflict_resolve_rejects_conflicts_from_another_library() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("root");
@@ -322,7 +415,10 @@ fn run_quarry<const N: usize>(args: [&str; N]) {
 }
 
 fn quarry_command() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_quarry"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_quarry"));
+    command.env_remove("RUST_LOG");
+    command.env_remove("QUARRY_LOG_FORMAT");
+    command
 }
 
 fn unused_loopback_addr() -> std::net::SocketAddr {

@@ -30,6 +30,7 @@ tower.workspace = true
 tracing.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
+uuid.workspace = true
 yrs.workspace = true
 
 [dev-dependencies]

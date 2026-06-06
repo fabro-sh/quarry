@@ -12,6 +12,7 @@ use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use utoipa::ToSchema;
 use walkdir::WalkDir;
 
@@ -81,7 +82,17 @@ async fn push_peer_inner(
     library: &str,
     peer_id: &str,
 ) -> Result<GitSyncResult> {
+    let started = Instant::now();
     let peer = peer_config(store, library, peer_id).await?;
+    tracing::debug!(
+        event = "git.push.started",
+        library,
+        peer_id,
+        branch = %peer.branch,
+        repo = %peer.repo.display(),
+        remote_present = peer.remote.is_some(),
+        "Git push started"
+    );
     let branch = peer.branch.clone();
     let export = export_worktree(
         store,
@@ -99,11 +110,17 @@ async fn push_peer_inner(
     }
     record_exported_sync_state(store, library, peer_id, &peer.repo).await?;
     tracing::info!(
+        event = "git.push.completed",
         library,
         peer_id,
         branch,
         exported_paths = export.exported_paths.len(),
-        remote = peer.remote.as_deref().unwrap_or(""),
+        remote_url = peer
+            .remote
+            .as_deref()
+            .map(redact_remote_url)
+            .unwrap_or_default(),
+        duration_ms = started.elapsed().as_millis() as u64,
         "Git push completed"
     );
     Ok(GitSyncResult {
@@ -131,7 +148,17 @@ async fn pull_peer_inner(
     library: &str,
     peer_id: &str,
 ) -> Result<GitSyncResult> {
+    let started = Instant::now();
     let peer = peer_config(store, library, peer_id).await?;
+    tracing::debug!(
+        event = "git.pull.started",
+        library,
+        peer_id,
+        branch = %peer.branch,
+        repo = %peer.repo.display(),
+        remote_present = peer.remote.is_some(),
+        "Git pull started"
+    );
     if let Some(remote) = &peer.remote {
         fetch_remote_worktree(&peer.repo, remote, &peer.branch)?;
     }
@@ -139,11 +166,17 @@ async fn pull_peer_inner(
     let import = import_worktree(store, library, &peer.repo).await?;
     record_exported_sync_state(store, library, peer_id, &peer.repo).await?;
     tracing::info!(
+        event = "git.pull.completed",
         library,
         peer_id,
         branch = peer.branch,
         imported_paths = import.imported_paths.len(),
-        remote = peer.remote.as_deref().unwrap_or(""),
+        remote_url = peer
+            .remote
+            .as_deref()
+            .map(redact_remote_url)
+            .unwrap_or_default(),
+        duration_ms = started.elapsed().as_millis() as u64,
         "Git pull completed"
     );
     Ok(GitSyncResult {
@@ -171,7 +204,17 @@ async fn sync_peer_inner(
     library: &str,
     peer_id: &str,
 ) -> Result<GitSyncResult> {
+    let started = Instant::now();
     let peer = peer_config(store, library, peer_id).await?;
+    tracing::debug!(
+        event = "git.sync.started",
+        library,
+        peer_id,
+        branch = %peer.branch,
+        repo = %peer.repo.display(),
+        remote_present = peer.remote.is_some(),
+        "Git sync started"
+    );
     if let Some(remote) = &peer.remote {
         fetch_remote_worktree(&peer.repo, remote, &peer.branch)?;
     }
@@ -253,6 +296,13 @@ async fn sync_peer_inner(
                         Some(outcome.version.id.clone()),
                     )
                     .await?;
+                log_git_conflict_recorded(
+                    &library_record,
+                    peer_id,
+                    &path,
+                    Some(&conflict_path),
+                    &conflict,
+                );
                 conflict_paths.push(conflict_path);
                 conflicts.push(conflict);
             }
@@ -265,6 +315,7 @@ async fn sync_peer_inner(
                         None,
                     )
                     .await?;
+                log_git_conflict_recorded(&library_record, peer_id, &path, None, &conflict);
                 conflicts.push(conflict);
             }
             (Some(_doc), None, false, true) => {
@@ -295,6 +346,13 @@ async fn sync_peer_inner(
                         Some(outcome.version.id.clone()),
                     )
                     .await?;
+                log_git_conflict_recorded(
+                    &library_record,
+                    peer_id,
+                    &path,
+                    Some(&conflict_path),
+                    &conflict,
+                );
                 deleted_sync_paths.insert(path.clone());
                 conflict_paths.push(conflict_path);
                 conflicts.push(conflict);
@@ -359,13 +417,16 @@ async fn sync_peer_inner(
         store.upsert_sync_state(peer_id, path, None, None).await?;
     }
     tracing::info!(
+        event = "git.sync.completed",
         library = library_record.slug,
+        library_id = %library_record.id,
         peer_id,
         branch = peer.branch,
         imported_paths = imported_paths.len(),
         exported_paths = export.exported_paths.len(),
         conflicts = conflicts.len(),
-        remote = peer.remote.as_deref().unwrap_or(""),
+        remote_url = peer.remote.as_deref().map(redact_remote_url).unwrap_or_default(),
+        duration_ms = started.elapsed().as_millis() as u64,
         "Git sync completed"
     );
 
@@ -738,6 +799,7 @@ fn commit_all(repo_dir: &Path, branch: &str, message: &str) -> Result<Option<Str
 }
 
 fn fetch_remote_worktree(repo_dir: &Path, remote_url: &str, branch: &str) -> Result<()> {
+    let started = Instant::now();
     if repo_dir.join(".git").exists() {
         let repo = Repository::open(repo_dir).map_err(map_git)?;
         let mut remote = ensure_remote(&repo, remote_url)?;
@@ -746,6 +808,14 @@ fn fetch_remote_worktree(repo_dir: &Path, remote_url: &str, branch: &str) -> Res
             .fetch(&[branch], Some(&mut options), None)
             .map_err(map_git)?;
         checkout_remote_branch(&repo, branch)?;
+        tracing::debug!(
+            event = "git.remote.fetch.completed",
+            repo = %repo_dir.display(),
+            branch,
+            remote_url = %redact_remote_url(remote_url),
+            duration_ms = started.elapsed().as_millis() as u64,
+            "Git remote fetch completed"
+        );
         return Ok(());
     }
 
@@ -765,6 +835,14 @@ fn fetch_remote_worktree(repo_dir: &Path, remote_url: &str, branch: &str) -> Res
     let mut builder = RepoBuilder::new();
     builder.branch(branch);
     builder.clone(remote_url, repo_dir).map_err(map_git)?;
+    tracing::debug!(
+        event = "git.remote.fetch.completed",
+        repo = %repo_dir.display(),
+        branch,
+        remote_url = %redact_remote_url(remote_url),
+        duration_ms = started.elapsed().as_millis() as u64,
+        "Git remote clone completed"
+    );
     Ok(())
 }
 
@@ -783,6 +861,7 @@ fn checkout_remote_branch(repo: &Repository, branch: &str) -> Result<()> {
 }
 
 fn push_remote(repo_dir: &Path, remote_url: &str, branch: &str) -> Result<()> {
+    let started = Instant::now();
     let repo = Repository::open(repo_dir).map_err(map_git)?;
     let mut remote = ensure_remote(&repo, remote_url)?;
     let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
@@ -790,7 +869,50 @@ fn push_remote(repo_dir: &Path, remote_url: &str, branch: &str) -> Result<()> {
     remote
         .push(&[&refspec], Some(&mut options))
         .map_err(map_git)?;
+    tracing::debug!(
+        event = "git.remote.push.completed",
+        repo = %repo_dir.display(),
+        branch,
+        remote_url = %redact_remote_url(remote_url),
+        duration_ms = started.elapsed().as_millis() as u64,
+        "Git remote push completed"
+    );
     Ok(())
+}
+
+fn log_git_conflict_recorded(
+    library: &quarry_core::Library,
+    peer_id: &str,
+    path: &str,
+    conflict_path: Option<&str>,
+    conflict: &ConflictRecord,
+) {
+    tracing::debug!(
+        event = "git.conflict.recorded",
+        library = %library.slug,
+        library_id = %library.id,
+        peer_id,
+        path,
+        conflict_path = conflict_path.unwrap_or(""),
+        conflict_id = %conflict.id,
+        ours_version_id = conflict.ours_version_id.as_deref().unwrap_or(""),
+        theirs_version_id = conflict.theirs_version_id.as_deref().unwrap_or(""),
+        "Git conflict recorded"
+    );
+}
+
+fn redact_remote_url(remote_url: &str) -> String {
+    let Some((scheme, rest)) = remote_url.split_once("://") else {
+        return remote_url.to_string();
+    };
+    let Some((userinfo, host_and_path)) = rest.split_once('@') else {
+        return remote_url.to_string();
+    };
+    if userinfo.is_empty() {
+        remote_url.to_string()
+    } else {
+        format!("{scheme}://<redacted>@{host_and_path}")
+    }
 }
 
 fn ensure_remote<'repo>(repo: &'repo Repository, remote_url: &str) -> Result<git2::Remote<'repo>> {
@@ -969,4 +1091,25 @@ fn enforce_delete_safety(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redacts_url_userinfo_without_touching_plain_remotes() {
+        assert_eq!(
+            redact_remote_url("https://token:secret@example.com/acme/repo.git"),
+            "https://<redacted>@example.com/acme/repo.git"
+        );
+        assert_eq!(
+            redact_remote_url("https://example.com/acme/repo.git"),
+            "https://example.com/acme/repo.git"
+        );
+        assert_eq!(
+            redact_remote_url("git@example.com:acme/repo.git"),
+            "git@example.com:acme/repo.git"
+        );
+    }
 }

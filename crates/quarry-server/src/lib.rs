@@ -4,10 +4,11 @@ mod collab;
 use axum::body::Body;
 use axum::body::Bytes;
 use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{Path, Query, State};
+use axum::extract::{MatchedPath, Path, Query, Request, State};
 #[cfg(feature = "bundle_ui")]
 use axum::http::Uri;
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
@@ -43,6 +44,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::Mutex;
 use utoipa::{OpenApi, ToSchema};
+use uuid::Uuid;
 
 use crate::collab::{InjectionBatch, InjectionOp, LiveMutation};
 
@@ -150,6 +152,7 @@ impl AgentIdempotencyCache {
 }
 
 const AGENT_EVENT_JOURNAL_CAPACITY: usize = 4096;
+const REQUEST_ID_HEADER: &str = "x-quarry-request-id";
 
 #[derive(Clone, Default)]
 struct AgentEventJournal {
@@ -178,7 +181,12 @@ impl AgentEventJournal {
                 match receiver.recv().await {
                     Ok(event) => journal.push(event).await,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                        tracing::warn!(skipped, "agent event journal lagged");
+                        tracing::warn!(
+                            event = "sse.stream.lagged",
+                            stream = "agent_event_journal",
+                            skipped,
+                            "agent event journal lagged"
+                        );
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 }
@@ -355,6 +363,8 @@ pub fn router(store: QuarryStore) -> Router {
     #[cfg(feature = "bundle_ui")]
     let router = router.fallback(get(browser_asset));
 
+    let router = router.layer(middleware::from_fn(request_tracing_middleware));
+
     let collab = collab::CollabHub::new(store.clone());
     router.with_state(AppState {
         store,
@@ -363,6 +373,49 @@ pub fn router(store: QuarryStore) -> Router {
         agent_events,
         agent_presence: AgentPresenceRegistry::default(),
     })
+}
+
+async fn request_tracing_middleware(request: Request, next: Next) -> Response {
+    let started = std::time::Instant::now();
+    let request_id_header = request
+        .headers()
+        .get(REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok().filter(|value| !value.trim().is_empty()))
+        .and_then(|value| HeaderValue::from_str(value).ok())
+        .unwrap_or_else(|| HeaderValue::from_str(&Uuid::new_v4().to_string()).unwrap());
+    let request_id = request_id_header.to_str().unwrap_or_default().to_string();
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let matched_route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|matched| matched.as_str().to_string());
+
+    tracing::debug!(
+        event = "http.request.started",
+        request_id = %request_id,
+        method = %method,
+        path = %path,
+        matched_route = matched_route.as_deref().unwrap_or("unknown"),
+        "http request started"
+    );
+
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(REQUEST_ID_HEADER, request_id_header);
+    let duration_ms = started.elapsed().as_millis() as u64;
+    tracing::debug!(
+        event = "http.request.completed",
+        request_id = %request_id,
+        method = %method,
+        path = %path,
+        matched_route = matched_route.as_deref().unwrap_or("unknown"),
+        status = response.status().as_u16(),
+        duration_ms,
+        "http request completed"
+    );
+    response
 }
 
 pub async fn serve(store: QuarryStore, addr: SocketAddr) -> std::io::Result<()> {
@@ -379,7 +432,11 @@ where
 {
     warn_if_non_loopback(addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!(%addr, "quarry REST server listening");
+    tracing::info!(
+        event = "server.listening",
+        %addr,
+        "quarry REST server listening"
+    );
     let (shutdown_started_tx, shutdown_started_rx) = tokio::sync::oneshot::channel::<()>();
     let server = axum::serve(listener, router(store))
         .with_graceful_shutdown(async move {
@@ -396,7 +453,11 @@ where
             match tokio::time::timeout(Duration::from_secs(10), &mut server).await {
                 Ok(result) => result,
                 Err(_) => {
-                    tracing::warn!("quarry REST server did not finish graceful shutdown within 10 seconds");
+                    tracing::warn!(
+                        event = "shutdown.timeout",
+                        timeout_ms = 10_000_u64,
+                        "quarry REST server did not finish graceful shutdown within 10 seconds"
+                    );
                     Ok(())
                 }
             }
@@ -407,7 +468,12 @@ where
 pub async fn shutdown_signal() {
     let ctrl_c = async {
         if let Err(error) = tokio::signal::ctrl_c().await {
-            tracing::warn!(%error, "failed to listen for Ctrl-C");
+            tracing::warn!(
+                event = "shutdown.signal.listen_failed",
+                signal = "ctrl_c",
+                %error,
+                "failed to listen for Ctrl-C"
+            );
         }
     };
 
@@ -419,7 +485,12 @@ pub async fn shutdown_signal() {
                     signal.recv().await;
                 }
                 Err(error) => {
-                    tracing::warn!(%error, "failed to listen for SIGTERM");
+                    tracing::warn!(
+                        event = "shutdown.signal.listen_failed",
+                        signal = "sigterm",
+                        %error,
+                        "failed to listen for SIGTERM"
+                    );
                     std::future::pending::<()>().await;
                 }
             }
@@ -435,13 +506,24 @@ pub async fn shutdown_signal() {
         ctrl_c.await;
     }
 
-    tracing::info!("shutdown signal received");
+    tracing::info!(
+        event = "shutdown.signal.received",
+        "shutdown signal received"
+    );
 }
 
 fn warn_if_non_loopback(addr: SocketAddr) {
     if should_warn_non_loopback(addr) {
         eprintln!(
             "warning: Quarry phase one has no auth; binding REST to non-loopback address {addr}"
+        );
+        tracing::warn!(
+            event = "api.non_loopback_auth_warning",
+            %addr,
+            outcome = "degraded",
+            reason_code = "rest_auth_not_enabled",
+            reason = "REST server is bound to a non-loopback address while phase-one auth is not enabled",
+            "REST server bound to non-loopback address without auth"
         );
     }
 }
@@ -895,18 +977,42 @@ async fn events_for_library(
     document_path: Option<String>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let library = store.get_library(library).await?;
+    tracing::debug!(
+        event = "sse.stream.opened",
+        library = %library.slug,
+        library_id = %library.id,
+        path = document_path.as_deref().unwrap_or(""),
+        "SSE stream opened"
+    );
     let receiver = store.subscribe_events();
     let stream = stream::unfold(
         (receiver, library.id, library.slug, document_path),
         |(mut receiver, library_id, library_slug, document_path)| async move {
             loop {
                 match receiver.recv().await {
-                    Ok(event)
-                        if event.library_id == library_id
-                            && event_matches_document_filter(&event, document_path.as_deref()) =>
+                    Ok(store_event)
+                        if store_event.library_id == library_id
+                            && event_matches_document_filter(
+                                &store_event,
+                                document_path.as_deref(),
+                            ) =>
                     {
-                        let event_type = store_event_type(&event);
-                        let payload = store_event_payload(&library_slug, &event_type, &event);
+                        let event_type = store_event_type(&store_event);
+                        let payload = store_event_payload(&library_slug, &event_type, &store_event);
+                        tracing::debug!(
+                            event = "sse.event.sent",
+                            library = %library_slug,
+                            library_id = %library_id,
+                            sse_event = %event_type,
+                            path = store_event.path.as_deref().unwrap_or(""),
+                            new_path = store_event.new_path.as_deref().unwrap_or(""),
+                            tx_id = store_event.tx_id.as_deref().unwrap_or(""),
+                            doc_id = store_event.doc_id.as_deref().unwrap_or(""),
+                            version_id = store_event.version_id.as_deref().unwrap_or(""),
+                            conflict_id = store_event.conflict_id.as_deref().unwrap_or(""),
+                            collab_session_id = store_event.collab_session_id.as_deref().unwrap_or(""),
+                            "SSE event sent"
+                        );
                         let event = Event::default().event(event_type).data(payload.to_string());
                         return Some((
                             Ok(event),
@@ -915,6 +1021,13 @@ async fn events_for_library(
                     }
                     Ok(_) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(
+                            event = "sse.stream.lagged",
+                            library = %library_slug,
+                            library_id = %library_id,
+                            skipped,
+                            "SSE stream lagged"
+                        );
                         let event_type = "stream.lagged".to_string();
                         let payload = serde_json::json!({
                             "type": event_type,
@@ -927,7 +1040,15 @@ async fn events_for_library(
                             (receiver, library_id, library_slug, document_path),
                         ));
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::debug!(
+                            event = "sse.stream.closed",
+                            library = %library_slug,
+                            library_id = %library_id,
+                            "SSE stream closed"
+                        );
+                        return None;
+                    }
                 }
             }
         },
@@ -1014,6 +1135,8 @@ async fn agent_events_ack(
 async fn admin_gc(State(state): State<AppState>) -> Result<Json<GcReport>, ApiError> {
     let report = state.store.gc().await?;
     tracing::info!(
+        event = "storage.gc.completed",
+        source = "admin_api",
         reachable_blobs = report.reachable,
         removed_blobs = report.removed,
         "admin GC completed"
@@ -1750,9 +1873,13 @@ async fn put_document(
         {
             if !matches!(error, QuarryError::NotFound(_)) {
                 tracing::warn!(
+                    event = "collab.agent_injection.recovery_degraded",
                     %error,
                     document_id = %outcome.document.id,
                     version_id = %outcome.version.id,
+                    outcome = "degraded",
+                    reason_code = "mark_recovery_clean_failed",
+                    reason = "failed to mark collab recovery state clean after browser flush",
                     "failed to mark collab recovery state clean after browser flush"
                 );
             }
@@ -2042,12 +2169,23 @@ async fn agent_ops_document(
     let base_version_id = version_id_from_base_token(&request.base_token)?;
     let live_room = state.collab.live_room(&document.id).await;
     let (injection_guard, injection_status, injected_session_id) = if let Some(room) = live_room {
+        tracing::debug!(
+            event = "collab.agent_injection.attempted",
+            document_id = %document.id,
+            path,
+            operation = "agent_ops",
+            "agent ops live injection attempted"
+        );
         let plan = match agent_ops_live_mutation_plan(&markdown, &applied) {
             Ok(plan) => plan,
             Err(error) => {
                 tracing::debug!(
+                    event = "collab.agent_injection.rejected",
                     document_id = %document.id,
                     path,
+                    operation = "agent_ops",
+                    outcome = "rejected",
+                    reason_code = "not_codec_eligible",
                     reason = %error,
                     "agent ops live mutation rejected because operation is not codec eligible"
                 );
@@ -2064,8 +2202,13 @@ async fn agent_ops_document(
             (None, Some(review)) => LiveMutation::metadata(review),
             (None, None) => {
                 tracing::debug!(
+                    event = "collab.agent_injection.rejected",
                     document_id = %document.id,
                     path,
+                    operation = "agent_ops",
+                    outcome = "rejected",
+                    reason_code = "empty_mutation",
+                    reason = "agent ops produced no live mutation",
                     "agent ops live mutation rejected because it was empty"
                 );
                 return Err(live_gate_rejected_error());
@@ -2076,8 +2219,13 @@ async fn agent_ops_document(
             .await
         else {
             tracing::debug!(
+                event = "collab.agent_injection.rejected",
                 document_id = %document.id,
                 path,
+                operation = "agent_ops",
+                outcome = "rejected",
+                reason_code = "gate_rejected",
+                reason = "live room did not match the expected base",
                 "agent ops live mutation gate rejected live room"
             );
             return Err(live_gate_rejected_error());
@@ -2089,8 +2237,13 @@ async fn agent_ops_document(
         )
     } else {
         tracing::debug!(
+            event = "collab.agent_injection.rejected",
             document_id = %document.id,
             path,
+            operation = "agent_ops",
+            outcome = "skipped",
+            reason_code = "no_live_room",
+            reason = "no live collab room exists",
             "agent ops skipped live injection because no live collab room exists"
         );
         (None, "no_live_room".to_string(), None)
@@ -2113,6 +2266,16 @@ async fn agent_ops_document(
         state
             .store
             .emit_document_put_events(&outcome, injected_session_id);
+        tracing::debug!(
+            event = "collab.agent_injection.committed",
+            document_id = %outcome.document.id,
+            path = %outcome.document.path,
+            tx_id = %outcome.transaction.id,
+            version_id = %outcome.version.id,
+            operation = "agent_ops",
+            outcome = "committed",
+            "agent ops live injection committed"
+        );
         outcome
     } else {
         state
@@ -2238,21 +2401,47 @@ async fn agent_edit_document(
     // falling back to a plain write.
     let (injection_guard, injection_status) = match agent_edit_injection_batch(&plan) {
         Ok(batch) => match state.collab.live_room(&document.id).await {
-            Some(room) => match room
-                .begin_live_mutation(
-                    LiveMutation::content(batch, review_snapshot.clone()),
-                    &plan.original_blocks,
-                    base_version_id.clone(),
-                )
-                .await
-            {
-                Some(guard) => (Some(guard), "injected"),
-                None => (None, "gate_rejected"),
-            },
-            None => {
+            Some(room) => {
                 tracing::debug!(
+                    event = "collab.agent_injection.attempted",
                     document_id = %document.id,
                     path,
+                    operation = "agent_edit",
+                    "agent edit live injection attempted"
+                );
+                match room
+                    .begin_live_mutation(
+                        LiveMutation::content(batch, review_snapshot.clone()),
+                        &plan.original_blocks,
+                        base_version_id.clone(),
+                    )
+                    .await
+                {
+                    Some(guard) => (Some(guard), "injected"),
+                    None => {
+                        tracing::debug!(
+                            event = "collab.agent_injection.rejected",
+                            document_id = %document.id,
+                            path,
+                            operation = "agent_edit",
+                            outcome = "rejected",
+                            reason_code = "gate_rejected",
+                            reason = "live room did not match the expected base",
+                            "agent edit live mutation gate rejected live room"
+                        );
+                        (None, "gate_rejected")
+                    }
+                }
+            }
+            None => {
+                tracing::debug!(
+                    event = "collab.agent_injection.rejected",
+                    document_id = %document.id,
+                    path,
+                    operation = "agent_edit",
+                    outcome = "skipped",
+                    reason_code = "no_live_room",
+                    reason = "no live collab room exists",
                     "agent edit skipped live injection because no live collab room exists"
                 );
                 (None, "no_live_room")
@@ -2260,8 +2449,12 @@ async fn agent_edit_document(
         },
         Err(error) => {
             tracing::debug!(
+                event = "collab.agent_injection.rejected",
                 document_id = %document.id,
                 path,
+                operation = "agent_edit",
+                outcome = "skipped",
+                reason_code = "not_codec_eligible",
                 reason = %error,
                 "agent edit skipped live injection because edit is not codec eligible"
             );
@@ -2286,6 +2479,16 @@ async fn agent_edit_document(
         state
             .store
             .emit_document_put_events(&outcome, Some(injected_session_id));
+        tracing::debug!(
+            event = "collab.agent_injection.committed",
+            document_id = %outcome.document.id,
+            path = %outcome.document.path,
+            tx_id = %outcome.transaction.id,
+            version_id = %outcome.version.id,
+            operation = "agent_edit",
+            outcome = "committed",
+            "agent edit live injection committed"
+        );
         outcome
     } else {
         state
@@ -4247,19 +4450,55 @@ impl From<QuarryError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let mut response = (
-            self.status,
-            Json(ErrorResponse {
-                error: self.message,
-            }),
-        )
-            .into_response();
-        if self.status == StatusCode::SERVICE_UNAVAILABLE {
+        let status = self.status;
+        let message = self.message;
+        let reason_code = api_error_reason_code(status);
+        tracing::debug!(
+            event = "api.error.returned",
+            status = status.as_u16(),
+            outcome = "error",
+            reason_code,
+            reason = %message,
+            "API error returned"
+        );
+        if status == StatusCode::PRECONDITION_FAILED {
+            tracing::debug!(
+                event = "api.precondition.failed",
+                status = status.as_u16(),
+                outcome = "rejected",
+                reason_code,
+                reason = %message,
+                "API precondition failed"
+            );
+        }
+        if status == StatusCode::SERVICE_UNAVAILABLE {
+            tracing::warn!(
+                event = "api.busy.returned",
+                status = status.as_u16(),
+                outcome = "busy",
+                reason_code,
+                reason = %message,
+                "API busy response returned"
+            );
+        }
+        let mut response = (status, Json(ErrorResponse { error: message })).into_response();
+        if status == StatusCode::SERVICE_UNAVAILABLE {
             response
                 .headers_mut()
                 .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
         }
         response
+    }
+}
+
+fn api_error_reason_code(status: StatusCode) -> &'static str {
+    match status {
+        StatusCode::NOT_FOUND => "not_found",
+        StatusCode::PRECONDITION_FAILED => "precondition_failed",
+        StatusCode::CONFLICT => "conflict",
+        StatusCode::SERVICE_UNAVAILABLE => "busy",
+        StatusCode::BAD_REQUEST => "bad_request",
+        _ => "internal_error",
     }
 }
 

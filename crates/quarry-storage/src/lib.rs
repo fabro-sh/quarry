@@ -16,8 +16,8 @@ use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{broadcast, Mutex, OwnedMutexGuard};
+use std::time::{Duration, Instant};
+use tokio::sync::{broadcast, Mutex, MutexGuard, OwnedMutexGuard};
 use turso::{params, Builder, Connection, Database, Row, Rows, Value};
 use uuid::Uuid;
 
@@ -116,6 +116,69 @@ struct StagedChange {
     new_path: Option<String>,
 }
 
+fn log_store_event_emitted(event: &StoreEvent) {
+    tracing::debug!(
+        event = "storage.event.emitted",
+        store_event = %store_event_name(&event.kind),
+        library_id = %event.library_id,
+        path = event.path.as_deref().unwrap_or(""),
+        new_path = event.new_path.as_deref().unwrap_or(""),
+        tx_id = event.tx_id.as_deref().unwrap_or(""),
+        doc_id = event.doc_id.as_deref().unwrap_or(""),
+        version_id = event.version_id.as_deref().unwrap_or(""),
+        source = event.source.as_ref().map(DocumentSource::as_str).unwrap_or(""),
+        conflict_id = event.conflict_id.as_deref().unwrap_or(""),
+        peer_id = event.peer_id.as_deref().unwrap_or(""),
+        applied = event.applied.unwrap_or(0),
+        conflicts = event.conflicts.unwrap_or(0),
+        collab_session_id = event.collab_session_id.as_deref().unwrap_or(""),
+        "store event emitted"
+    );
+}
+
+fn log_store_event_domain(event: &StoreEvent) {
+    tracing::debug!(
+        event = %store_event_name(&event.kind),
+        library_id = %event.library_id,
+        path = event.path.as_deref().unwrap_or(""),
+        new_path = event.new_path.as_deref().unwrap_or(""),
+        tx_id = event.tx_id.as_deref().unwrap_or(""),
+        doc_id = event.doc_id.as_deref().unwrap_or(""),
+        version_id = event.version_id.as_deref().unwrap_or(""),
+        source = event.source.as_ref().map(DocumentSource::as_str).unwrap_or(""),
+        conflict_id = event.conflict_id.as_deref().unwrap_or(""),
+        peer_id = event.peer_id.as_deref().unwrap_or(""),
+        applied = event.applied.unwrap_or(0),
+        conflicts = event.conflicts.unwrap_or(0),
+        collab_session_id = event.collab_session_id.as_deref().unwrap_or(""),
+        "store domain event"
+    );
+}
+
+fn store_event_name(kind: &StoreEventKind) -> &'static str {
+    match kind {
+        StoreEventKind::DocumentPut => "document.put.committed",
+        StoreEventKind::DocumentDelete => "document.delete.committed",
+        StoreEventKind::DocumentMove => "document.move.committed",
+        StoreEventKind::LinksIndexed => "links.indexed",
+        StoreEventKind::DirectoryPut => "directory.put.committed",
+        StoreEventKind::DirectoryDelete => "directory.delete.committed",
+        StoreEventKind::DirectoryMove => "directory.move.committed",
+        StoreEventKind::ConflictCreated => "conflict.created",
+        StoreEventKind::ConflictResolved => "conflict.resolved",
+        StoreEventKind::LibraryReindexed => "library.reindexed",
+        StoreEventKind::GitSyncCompleted => "git.sync.completed",
+    }
+}
+
+fn precondition_name(precondition: &WritePrecondition) -> &'static str {
+    match precondition {
+        WritePrecondition::None => "none",
+        WritePrecondition::IfMatch(_) => "if_match",
+        WritePrecondition::IfNoneMatch => "if_none_match",
+    }
+}
+
 impl Drop for LockGuard {
     fn drop(&mut self) {
         if let Some(path) = &self.path {
@@ -129,6 +192,13 @@ impl Drop for LockGuard {
 
 impl QuarryStore {
     pub async fn open(config: StoreConfig) -> Result<Self> {
+        let started = Instant::now();
+        tracing::debug!(
+            event = "storage.open.started",
+            db_path = %config.db_path.display(),
+            cas_path = %config.cas_path.display(),
+            "opening Quarry store"
+        );
         if let Some(parent) = config.db_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -151,6 +221,13 @@ impl QuarryStore {
             _lock_guard: Arc::new(lock_guard),
         };
         store.migrate().await?;
+        tracing::debug!(
+            event = "storage.open.completed",
+            db_path = %db_path,
+            cas_path = %store.cas.root().display(),
+            duration_ms = started.elapsed().as_millis() as u64,
+            "opened Quarry store"
+        );
         Ok(store)
     }
 
@@ -163,13 +240,35 @@ impl QuarryStore {
     }
 
     fn emit_event(&self, event: StoreEvent) {
+        log_store_event_emitted(&event);
+        log_store_event_domain(&event);
         let _ = self.event_tx.send(event);
     }
 
     pub async fn acquire_global_operation_lock(&self) -> GlobalOperationGuard {
-        GlobalOperationGuard {
-            _guard: self.operation_lock.clone().lock_owned().await,
-        }
+        tracing::debug!(
+            event = "storage.global_operation.waiting",
+            "waiting for global operation lock"
+        );
+        let guard = self.operation_lock.clone().lock_owned().await;
+        tracing::debug!(
+            event = "storage.global_operation.acquired",
+            "acquired global operation lock"
+        );
+        GlobalOperationGuard { _guard: guard }
+    }
+
+    async fn acquire_write_lock(&self) -> MutexGuard<'_, ()> {
+        tracing::debug!(
+            event = "storage.write_lock.waiting",
+            "waiting for storage write lock"
+        );
+        let guard = self.write_lock.lock().await;
+        tracing::debug!(
+            event = "storage.write_lock.acquired",
+            "acquired storage write lock"
+        );
+        guard
     }
 
     pub async fn run_global_operation<F, T>(&self, future: F) -> Result<T>
@@ -202,7 +301,7 @@ impl QuarryStore {
     pub async fn create_library(&self, slug: &str) -> Result<Library> {
         validate_slug(slug)?;
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -265,7 +364,7 @@ impl QuarryStore {
     ) -> Result<DirectoryMetadata> {
         let path = normalize_directory_path(path)?;
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -333,7 +432,7 @@ impl QuarryStore {
         }
         let source_for_event = source.clone();
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -405,7 +504,7 @@ impl QuarryStore {
         }
         let source_for_event = source.clone();
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -508,7 +607,7 @@ impl QuarryStore {
             ));
         }
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -680,8 +779,20 @@ impl QuarryStore {
         precondition: WritePrecondition,
     ) -> Result<WriteOutcome> {
         let path = normalize_path(path)?;
+        let content_bytes = content.len();
+        let started = Instant::now();
+        tracing::debug!(
+            event = "document.put.started",
+            library,
+            path = %path,
+            source = source.as_str(),
+            precondition = precondition_name(&precondition),
+            content_type,
+            content_bytes,
+            "document put started"
+        );
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -725,7 +836,21 @@ impl QuarryStore {
             })
         }
         .await;
-        finish_tx(&conn, result).await
+        let outcome = finish_tx(&conn, result).await?;
+        tracing::debug!(
+            event = "document.put.committed",
+            library_id = %outcome.transaction.library_id,
+            path = %outcome.document.path,
+            tx_id = %outcome.transaction.id,
+            doc_id = %outcome.document.id,
+            version_id = %outcome.version.id,
+            source = outcome.transaction.source.as_str(),
+            content_type = %outcome.version.content_type,
+            content_bytes = outcome.version.byte_size,
+            duration_ms = started.elapsed().as_millis() as u64,
+            "document put committed"
+        );
+        Ok(outcome)
     }
 
     pub fn emit_document_put_events(
@@ -784,7 +909,7 @@ impl QuarryStore {
         update_v1: Vec<u8>,
         dirty: bool,
     ) -> Result<CollabRecoveryState> {
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -835,7 +960,7 @@ impl QuarryStore {
         document_id: &str,
         base_version_id: Option<String>,
     ) -> Result<Option<CollabRecoveryState>> {
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -870,7 +995,7 @@ impl QuarryStore {
     ) -> Result<CollabInviteToken> {
         let role = normalize_collab_invite_role(role)?;
         let path = normalize_path(path)?;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -924,7 +1049,7 @@ impl QuarryStore {
     }
 
     pub async fn revoke_collab_invite_token(&self, token_id: &str) -> Result<CollabInviteToken> {
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -1171,7 +1296,7 @@ impl QuarryStore {
 
     pub async fn reindex_library(&self, library: &str) -> Result<ReindexReport> {
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -1559,7 +1684,7 @@ impl QuarryStore {
         let path = normalize_path(path)?;
         let source_for_event = source.clone();
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -1629,7 +1754,7 @@ impl QuarryStore {
         let to_path = normalize_path(to_path)?;
         let source_for_event = source.clone();
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -1770,7 +1895,7 @@ impl QuarryStore {
         }
         let source_for_event = source.clone();
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -1887,7 +2012,7 @@ impl QuarryStore {
         provenance: JsonValue,
     ) -> Result<TransactionRecord> {
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -1895,7 +2020,15 @@ impl QuarryStore {
             insert_transaction_conn(&conn, &library.id, source, actor, message, provenance).await
         }
         .await;
-        finish_tx(&conn, result).await
+        let tx = finish_tx(&conn, result).await?;
+        tracing::debug!(
+            event = "storage.transaction.begin",
+            library_id = %tx.library_id,
+            tx_id = %tx.id,
+            source = tx.source.as_str(),
+            "storage transaction began"
+        );
+        Ok(tx)
     }
 
     pub async fn list_transactions(&self, library: &str) -> Result<Vec<TransactionRecord>> {
@@ -1931,7 +2064,7 @@ impl QuarryStore {
     ) -> Result<DocumentVersion> {
         let path = normalize_path(path)?;
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -1962,7 +2095,7 @@ impl QuarryStore {
     pub async fn stage_delete(&self, tx_id: &str, path: &str) -> Result<()> {
         let path = normalize_path(path)?;
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -1996,7 +2129,7 @@ impl QuarryStore {
     ) -> Result<DocumentVersion> {
         let path = normalize_path(path)?;
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -2036,7 +2169,7 @@ impl QuarryStore {
         let from_path = normalize_path(from_path)?;
         let to_path = normalize_path(to_path)?;
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -2069,8 +2202,14 @@ impl QuarryStore {
     }
 
     pub async fn commit_transaction(&self, tx_id: &str) -> Result<TransactionRecord> {
+        let started = Instant::now();
+        tracing::debug!(
+            event = "storage.transaction.commit.started",
+            tx_id,
+            "storage transaction commit started"
+        );
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -2294,12 +2433,21 @@ impl QuarryStore {
         for event in events {
             self.emit_event(event);
         }
+        tracing::debug!(
+            event = "storage.transaction.commit.completed",
+            library_id = %tx.library_id,
+            tx_id = %tx.id,
+            source = tx.source.as_str(),
+            duration_ms = started.elapsed().as_millis() as u64,
+            "storage transaction commit completed"
+        );
         Ok(tx)
     }
 
     pub async fn rollback_transaction(&self, tx_id: &str) -> Result<TransactionRecord> {
+        let started = Instant::now();
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -2314,12 +2462,21 @@ impl QuarryStore {
             self.transaction_conn(&conn, tx_id).await
         }
         .await;
-        finish_tx(&conn, result).await
+        let tx = finish_tx(&conn, result).await?;
+        tracing::debug!(
+            event = "storage.transaction.rollback",
+            library_id = %tx.library_id,
+            tx_id = %tx.id,
+            source = tx.source.as_str(),
+            duration_ms = started.elapsed().as_millis() as u64,
+            "storage transaction rolled back"
+        );
+        Ok(tx)
     }
 
     pub async fn create_git_peer(&self, library: &str, config: JsonValue) -> Result<GitPeer> {
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -2414,7 +2571,7 @@ impl QuarryStore {
     ) -> Result<SyncStateEntry> {
         let path = normalize_path(path)?;
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -2484,7 +2641,7 @@ impl QuarryStore {
     ) -> Result<ConflictRecord> {
         let path = normalize_path(path)?;
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -2540,7 +2697,7 @@ impl QuarryStore {
 
     pub async fn resolve_conflict(&self, conflict_id: &str) -> Result<ConflictRecord> {
         let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
@@ -2582,7 +2739,7 @@ impl QuarryStore {
     }
 
     async fn gc_inner(&self) -> Result<GcReport> {
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         let mut rows = conn
             .query(
@@ -2602,9 +2759,10 @@ impl QuarryStore {
         }
         let report = self.cas.gc(reachable)?;
         tracing::info!(
+            event = "storage.gc.completed",
             reachable_blobs = report.reachable,
             removed_blobs = report.removed,
-            "CAS GC completed"
+            "storage GC completed"
         );
         Ok(report)
     }
@@ -2654,21 +2812,85 @@ impl QuarryStore {
     ) -> Result<()> {
         let current = self.document_identity_conn(conn, library_id, path).await?;
         match precondition {
-            WritePrecondition::None => Ok(()),
+            WritePrecondition::None => {
+                tracing::debug!(
+                    event = "storage.precondition.checked",
+                    library_id,
+                    path,
+                    precondition = "none",
+                    outcome = "accepted",
+                    "storage precondition checked"
+                );
+                Ok(())
+            }
             WritePrecondition::IfNoneMatch => {
                 if current.is_some() {
+                    tracing::debug!(
+                        event = "storage.precondition.rejected",
+                        library_id,
+                        path,
+                        precondition = "if_none_match",
+                        outcome = "rejected",
+                        reason_code = "document_exists",
+                        reason = "If-None-Match requires the document to be absent",
+                        "storage precondition rejected"
+                    );
                     Err(QuarryError::PreconditionFailed(format!("{path} exists")))
                 } else {
+                    tracing::debug!(
+                        event = "storage.precondition.checked",
+                        library_id,
+                        path,
+                        precondition = "if_none_match",
+                        outcome = "accepted",
+                        "storage precondition checked"
+                    );
                     Ok(())
                 }
             }
             WritePrecondition::IfMatch(expected) => {
-                let actual = current
-                    .and_then(|(_, version)| version)
-                    .ok_or_else(|| QuarryError::PreconditionFailed(format!("{path} missing")))?;
+                let actual = match current.and_then(|(_, version)| version) {
+                    Some(actual) => actual,
+                    None => {
+                        tracing::debug!(
+                            event = "storage.precondition.rejected",
+                            library_id,
+                            path,
+                            precondition = "if_match",
+                            outcome = "rejected",
+                            expected_version_id = %expected,
+                            reason_code = "document_missing",
+                            reason = "If-Match requires an existing document head",
+                            "storage precondition rejected"
+                        );
+                        return Err(QuarryError::PreconditionFailed(format!("{path} missing")));
+                    }
+                };
                 if &actual == expected {
+                    tracing::debug!(
+                        event = "storage.precondition.checked",
+                        library_id,
+                        path,
+                        precondition = "if_match",
+                        outcome = "accepted",
+                        expected_version_id = %expected,
+                        version_id = %actual,
+                        "storage precondition checked"
+                    );
                     Ok(())
                 } else {
+                    tracing::debug!(
+                        event = "storage.precondition.rejected",
+                        library_id,
+                        path,
+                        precondition = "if_match",
+                        outcome = "rejected",
+                        expected_version_id = %expected,
+                        version_id = %actual,
+                        reason_code = "version_mismatch",
+                        reason = "If-Match did not match the current document head",
+                        "storage precondition rejected"
+                    );
                     Err(QuarryError::PreconditionFailed(format!(
                         "{path} head is {actual}, expected {expected}"
                     )))

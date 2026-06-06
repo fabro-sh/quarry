@@ -19,6 +19,75 @@ use yrs::{Any, Doc, Map, OffsetKind, Options, ReadTxn, Transact, Update, XmlText
 const COLLAB_ROOT: &str = "content";
 const INJECTION_ROOT: &str = "__quarry_injection";
 
+#[tokio::test]
+async fn rest_api_attaches_and_preserves_request_ids() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let app = router(store);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_id = first
+        .headers()
+        .get("x-quarry-request-id")
+        .expect("response should include a generated request id")
+        .to_str()
+        .unwrap()
+        .to_string();
+    uuid::Uuid::parse_str(&first_id).expect("generated request id should be a UUID");
+
+    let second = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let second_id = second
+        .headers()
+        .get("x-quarry-request-id")
+        .expect("response should include a generated request id")
+        .to_str()
+        .unwrap()
+        .to_string();
+    uuid::Uuid::parse_str(&second_id).expect("generated request id should be a UUID");
+    assert_ne!(first_id, second_id);
+
+    let supplied = "req-from-client";
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/health")
+                .header("x-quarry-request-id", supplied)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.headers()["x-quarry-request-id"], supplied);
+}
+
 fn assert_schema_enum_contains(openapi: &Value, schema: &Value, expected: &[&str]) {
     let resolved = if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
         let name = reference
