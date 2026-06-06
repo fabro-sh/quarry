@@ -100,7 +100,7 @@ Important response fields:
 
 ```json
 {
-  "baseToken": "W/\"version_123\"",
+  "baseToken": "version_123",
   "blocks": [
     {
       "ref": {
@@ -116,11 +116,9 @@ Important response fields:
 Choose the block whose `markdown` contains the text you want to edit or review.
 If the target spans multiple blocks, use multiple operations.
 
-`baseToken` is opaque. Copy it verbatim into requests and let a real JSON
-encoder escape it — do not parse, unquote, or rebuild it. Its value may itself
-contain quotes (for example `"\"<version>\""`), so hand-assembling request
-bodies in a shell will mis-escape it. Build request JSON with `jq -n` or a
-script, not string interpolation.
+`baseToken` is opaque. Copy the raw value from `/snapshot` verbatim into
+requests. Write endpoints also accept ETag-shaped values copied from HTTP
+`ETag` headers, such as `"version_123"` or `W/"version_123"`.
 
 To refresh only the token after a write — without re-downloading the document —
 read the `ETag` header from a `HEAD` request:
@@ -129,9 +127,10 @@ read the `ETag` header from a `HEAD` request:
 curl -sS -I "$DOC" | tr -d '\r' | sed -n 's/^[Ee][Tt][Aa][Gg]: //p'
 ```
 
-The `ETag` value is the current `baseToken`. Re-read the full `/snapshot` only
-when you also need fresh block `ref` values — for example after editing the same
-block you are about to write to again.
+The `ETag` value is also accepted as a write `baseToken`, while `/snapshot`
+returns the easier raw form. Re-read the full `/snapshot` when you also need
+fresh block `ref` values — for example after editing the same block you are
+about to write to again.
 
 ## Direct Edits
 
@@ -145,7 +144,7 @@ curl -sS -X POST "$DOC/edit?dryRun=1" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
   -d '{
-    "baseToken": "W/\"version_123\"",
+    "baseToken": "version_123",
     "operations": [
       {
         "op": "replace_block",
@@ -176,7 +175,7 @@ curl -sS -X POST "$DOC/edit?dryRun=1" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
   -d '{
-    "baseToken": "W/\"version_123\"",
+    "baseToken": "version_123",
     "operations": [
       {
         "op": "insert_after",
@@ -204,7 +203,7 @@ document, then split into normal snapshot blocks on the next read.
 
 ```json
 {
-  "baseToken": "\"version_id\"",
+  "baseToken": "version_123",
   "operations": [
     {
       "op": "replace_document",
@@ -234,7 +233,7 @@ curl -sS -X POST "$DOC/ops" \
   -H "X-Agent-Id: $AGENT_ID" \
   -H "Idempotency-Key: ops-abc123-1" \
   -d '{
-    "baseToken": "W/\"version_123\"",
+    "baseToken": "version_123",
     "by": "Codex",
     "operations": [
       {
@@ -257,7 +256,7 @@ curl -sS -X POST "$DOC/ops?dryRun=1" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
   -d '{
-    "baseToken": "W/\"version_123\"",
+    "baseToken": "version_123",
     "by": "Codex",
     "operations": [
       {
@@ -283,23 +282,23 @@ Reply, resolve, or accept:
 curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
-  -d '{"baseToken":"W/\"version_123\"","by":"Codex","operations":[{"op":"comment.reply","parentId":"c_123","body":"Thanks, I will adjust this."}]}'
+  -d '{"baseToken":"version_123","by":"Codex","operations":[{"op":"comment.reply","parentId":"c_123","body":"Thanks, I will adjust this."}]}'
 
 curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
-  -d '{"baseToken":"W/\"version_123\"","operations":[{"op":"comment.resolve","id":"c_123"}]}'
+  -d '{"baseToken":"version_123","operations":[{"op":"comment.resolve","id":"c_123"}]}'
 
 curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
-  -d '{"baseToken":"W/\"version_123\"","operations":[{"op":"suggestion.accept","id":"s_123"}]}'
+  -d '{"baseToken":"version_123","operations":[{"op":"suggestion.accept","id":"s_123"}]}'
 ```
 
 ### Leaving Several Annotations
 
-Build the batch body with `jq -n` so the opaque `baseToken` is escaped
-correctly:
+If you refresh the token from `HEAD`, build the batch body with `jq -n` so the
+header value is encoded as JSON:
 
 ```bash
 BT=$(curl -sS -I "$DOC" | tr -d '\r' | sed -n 's/^[Ee][Tt][Aa][Gg]: //p')

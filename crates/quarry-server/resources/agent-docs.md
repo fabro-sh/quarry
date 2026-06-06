@@ -79,7 +79,7 @@ document version:
 ```json
 {
   "documentId": "doc_123",
-  "baseToken": "W/\"version_123\"",
+  "baseToken": "version_123",
   "blocks": [
     {
       "ref": {
@@ -93,7 +93,13 @@ document version:
 ```
 
 Use the latest top-level `baseToken` and the exact `ref` from the current
-snapshot for `/edit` and `/ops`.
+snapshot for `/edit` and `/ops`. `/snapshot` returns the easiest JSON form: the
+raw version id. Write endpoints also accept ETag-shaped values copied from
+HTTP `ETag` headers, such as `"version_123"` or `W/"version_123"`.
+
+If you only need to refresh the token after a write and do not need fresh block
+refs, you can read the `ETag` header with `HEAD $DOC`. Re-read `/snapshot` when
+you need current block refs.
 
 Fallback full document read:
 
@@ -150,7 +156,7 @@ curl -sS -X POST "$DOC/edit?dryRun=1" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
   -d '{
-    "baseToken": "W/\"version_123\"",
+    "baseToken": "version_123",
     "operations": [
       {
         "op": "replace_block",
@@ -181,7 +187,7 @@ curl -sS -X POST "$DOC/edit?dryRun=1" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
   -d '{
-    "baseToken": "W/\"version_123\"",
+    "baseToken": "version_123",
     "operations": [
       {
         "op": "insert_after",
@@ -211,7 +217,7 @@ document, then split into normal snapshot blocks on the next read.
 
 ```json
 {
-  "baseToken": "\"version_id\"",
+  "baseToken": "version_123",
   "operations": [
     {
       "op": "replace_document",
@@ -239,7 +245,7 @@ curl -sS -X POST "$DOC/ops" \
   -H "X-Agent-Id: $AGENT_ID" \
   -H "Idempotency-Key: ops-abc123-1" \
   -d '{
-    "baseToken": "W/\"version_123\"",
+    "baseToken": "version_123",
     "by": "Codex",
     "operations": [
       {
@@ -262,7 +268,7 @@ curl -sS -X POST "$DOC/ops?dryRun=1" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
   -d '{
-    "baseToken": "W/\"version_123\"",
+    "baseToken": "version_123",
     "by": "Codex",
     "operations": [
       {
@@ -289,12 +295,12 @@ Reply to or delete comments:
 curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
-  -d '{"baseToken":"W/\"version_123\"","by":"Codex","operations":[{"op":"comment.reply","parentId":"c_123","body":"Thanks, I will adjust this."}]}'
+  -d '{"baseToken":"version_123","by":"Codex","operations":[{"op":"comment.reply","parentId":"c_123","body":"Thanks, I will adjust this."}]}'
 
 curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
-  -d '{"baseToken":"W/\"version_123\"","operations":[{"op":"comment.delete","id":"c_123"}]}'
+  -d '{"baseToken":"version_123","operations":[{"op":"comment.delete","id":"c_123"}]}'
 ```
 
 `comment.reply` requires `parentId` for the root comment and `body`; `id` is
@@ -308,12 +314,12 @@ Resolve a comment or decide a suggestion:
 curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
-  -d '{"baseToken":"W/\"version_123\"","operations":[{"op":"comment.resolve","id":"c_123"}]}'
+  -d '{"baseToken":"version_123","operations":[{"op":"comment.resolve","id":"c_123"}]}'
 
 curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
-  -d '{"baseToken":"W/\"version_123\"","operations":[{"op":"suggestion.accept","id":"s_123"}]}'
+  -d '{"baseToken":"version_123","operations":[{"op":"suggestion.accept","id":"s_123"}]}'
 ```
 
 ## Presence

@@ -1986,9 +1986,10 @@ async fn agent_ops_document(
     query: &DocumentActionQuery,
     library: &str,
     path: &str,
-    request: AgentOpsRequest,
+    mut request: AgentOpsRequest,
 ) -> Result<AgentOpsResult, ApiError> {
     let dry_run = query.dry_run()?;
+    request.base_token = version_id_from_base_token(&request.base_token)?;
     let request_hash = agent_ops_request_hash(&request, dry_run)?;
     let idempotency_key = optional_header(headers, "idempotency-key")?
         .map(|value| value.trim().to_string())
@@ -2013,7 +2014,7 @@ async fn agent_ops_document(
 
     let document = state.store.get_document(library, path).await?;
     let markdown = document_markdown(&document)?;
-    let base_token = etag(&document.version.id);
+    let base_token = document.version.id.clone();
     let author = request
         .by
         .as_deref()
@@ -2130,7 +2131,7 @@ async fn agent_ops_document(
     let version_id = outcome.version.id.clone();
     let response = AgentOpsResponse {
         dry_run: false,
-        next_base_token: Some(etag(&version_id)),
+        next_base_token: Some(version_id.clone()),
         results: applied.results,
         outcome: Some(outcome),
         markdown: None,
@@ -2170,7 +2171,7 @@ async fn agent_document_snapshot(
 ) -> Result<AgentDocumentSnapshot, ApiError> {
     let document = store.get_document(library, path).await?;
     let markdown = document_markdown(&document)?;
-    let base_token = etag(&document.version.id);
+    let base_token = document.version.id;
     let blocks = snapshot_blocks(&markdown);
     Ok(AgentDocumentSnapshot {
         document_id: document.id,
@@ -2185,9 +2186,10 @@ async fn agent_edit_document(
     query: &DocumentActionQuery,
     library: &str,
     path: &str,
-    request: AgentEditRequest,
+    mut request: AgentEditRequest,
 ) -> Result<AgentEditResult, ApiError> {
     let dry_run = query.dry_run()?;
+    request.base_token = version_id_from_base_token(&request.base_token)?;
     let request_hash = agent_edit_request_hash(&request, dry_run)?;
     let idempotency_key = optional_header(headers, "idempotency-key")?
         .map(|value| value.trim().to_string())
@@ -2212,7 +2214,7 @@ async fn agent_edit_document(
 
     let document = state.store.get_document(library, path).await?;
     let markdown = document_markdown(&document)?;
-    let base_token = etag(&document.version.id);
+    let base_token = document.version.id.clone();
     let plan = apply_agent_edit(&markdown, &base_token, &request)?;
 
     if dry_run {
@@ -2302,7 +2304,7 @@ async fn agent_edit_document(
     let version_id = outcome.version.id.clone();
     let response = AgentEditResponse {
         dry_run: false,
-        next_base_token: Some(etag(&version_id)),
+        next_base_token: Some(version_id.clone()),
         outcome: Some(outcome),
         markdown: None,
         injection: Some(injection_status.to_string()),
@@ -3667,17 +3669,45 @@ fn is_markdown_block_tag(tag: &Tag<'_>) -> bool {
 }
 
 fn version_id_from_base_token(base_token: &str) -> Result<String, ApiError> {
-    let token = base_token
-        .trim()
-        .strip_prefix("W/")
-        .unwrap_or_else(|| base_token.trim())
-        .trim()
-        .trim_matches('"')
-        .to_string();
+    let token = base_token.trim();
     if token.is_empty() {
-        return Err(stale_base_error());
+        return Err(invalid_base_token_error());
+    }
+
+    if let Some(weak_token) = token.strip_prefix("W/") {
+        return quoted_base_token_inner(weak_token).map(str::to_string);
+    }
+
+    if token.starts_with('"') || token.ends_with('"') {
+        return quoted_base_token_inner(token).map(str::to_string);
+    }
+
+    validate_base_token_inner(token).map(str::to_string)
+}
+
+fn quoted_base_token_inner(token: &str) -> Result<&str, ApiError> {
+    let Some(inner) = token
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+    else {
+        return Err(invalid_base_token_error());
+    };
+    validate_base_token_inner(inner)
+}
+
+fn validate_base_token_inner(token: &str) -> Result<&str, ApiError> {
+    if token.is_empty()
+        || token
+            .chars()
+            .any(|character| matches!(character, '"' | '\\'))
+    {
+        return Err(invalid_base_token_error());
     }
     Ok(token)
+}
+
+fn invalid_base_token_error() -> ApiError {
+    QuarryError::InvalidPath("INVALID_BASE_TOKEN".to_string()).into()
 }
 
 fn stale_base_error() -> ApiError {
