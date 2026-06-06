@@ -3121,13 +3121,6 @@
           "id": {
             "type": "string"
           },
-          "inline_content": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "binary"
-          },
           "metadata": {
             "$ref": "#/components/schemas/Value"
           },

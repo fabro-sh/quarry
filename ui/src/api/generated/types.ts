@@ -25,7 +25,7 @@ export interface DocumentVersion {
   transaction_message: string | null;
   transaction_provenance: Record<string, unknown> | null;
   content_hash: string | null;
-  inline_content: number[] | null;
+  inline_content?: number[] | null;
   metadata: Record<string, unknown>;
   content_type: string;
   byte_size: number;
