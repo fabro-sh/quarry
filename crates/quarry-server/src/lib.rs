@@ -3787,11 +3787,38 @@ struct AppliedAgentOps {
 }
 
 #[derive(Clone, Debug)]
+struct ScheduledBlockEditFallback {
+    range: std::ops::Range<usize>,
+    replacement: String,
+    anchor_desc: String,
+}
+
+#[derive(Clone, Debug)]
 struct ScheduledBlockEdit {
     ordinal: usize,
     range: std::ops::Range<usize>,
     replacement: String,
     order: usize,
+    op: String,
+    id: String,
+    anchor_desc: String,
+    overlap_fallback: Option<ScheduledBlockEditFallback>,
+}
+
+impl ScheduledBlockEdit {
+    fn fallback_for_overlap(&self) -> Option<Self> {
+        let fallback = self.overlap_fallback.as_ref()?;
+        Some(Self {
+            ordinal: self.ordinal,
+            range: fallback.range.clone(),
+            replacement: fallback.replacement.clone(),
+            order: self.order,
+            op: self.op.clone(),
+            id: self.id.clone(),
+            anchor_desc: fallback.anchor_desc.clone(),
+            overlap_fallback: None,
+        })
+    }
 }
 
 fn apply_agent_ops_batch(
@@ -3843,6 +3870,15 @@ fn apply_agent_ops_batch(
                     .ok_or_else(stale_base_error)?;
                 let range = anchor_range(block, operation.quote.as_deref())?;
                 let anchor = block[range.clone()].to_string();
+                let overlap_fallback =
+                    operation
+                        .quote
+                        .is_none()
+                        .then(|| ScheduledBlockEditFallback {
+                            range: range.end..range.end,
+                            replacement: format!("{{>>{body_text}<<}}{{#{id}}}"),
+                            anchor_desc: "block comment marker".to_string(),
+                        });
                 schedule_block_edit(
                     &mut edits,
                     &mut changed_ordinals,
@@ -3851,6 +3887,10 @@ fn apply_agent_ops_batch(
                         range,
                         replacement: format!("{{=={anchor}==}}{{>>{body_text}<<}}{{#{id}}}"),
                         order,
+                        op: operation.op.clone(),
+                        id: id.clone(),
+                        anchor_desc: describe_quote_anchor(operation.quote.as_deref()),
+                        overlap_fallback,
                     },
                 )?;
                 meta.comments.insert(
@@ -3937,6 +3977,10 @@ fn apply_agent_ops_batch(
                             range: block_range,
                             replacement,
                             order,
+                            op: operation.op.clone(),
+                            id: id.to_string(),
+                            anchor_desc: "existing marker".to_string(),
+                            overlap_fallback: None,
                         },
                     )?;
                     let mut removed_ids = vec![id.to_string()];
@@ -3975,19 +4019,33 @@ fn apply_agent_ops_batch(
                     .unwrap_or("substitution")
                     .trim()
                     .to_ascii_lowercase();
-                let (range, replacement) = match kind.as_str() {
+                let (range, replacement, anchor_desc) = match kind.as_str() {
                     "insert" => {
                         let content = required_ops_text(
                             operation.content.as_deref(),
                             "insert missing content",
                         )?;
                         let index = block_insertion_index(block, operation.quote.as_deref())?;
-                        (index..index, format!("{{++{content}++}}{{#{id}}}"))
+                        let anchor_desc = match operation.quote.as_deref() {
+                            Some(quote) => {
+                                format!("insert after {:?}", truncate_anchor_text(quote))
+                            }
+                            None => "end of block".to_string(),
+                        };
+                        (
+                            index..index,
+                            format!("{{++{content}++}}{{#{id}}}"),
+                            anchor_desc,
+                        )
                     }
                     "delete" | "remove" => {
                         let range = anchor_range(block, operation.quote.as_deref())?;
                         let anchor = block[range.clone()].to_string();
-                        (range, format!("{{--{anchor}--}}{{#{id}}}"))
+                        (
+                            range,
+                            format!("{{--{anchor}--}}{{#{id}}}"),
+                            describe_quote_anchor(operation.quote.as_deref()),
+                        )
                     }
                     "replace" | "substitution" => {
                         let content = required_ops_text(
@@ -3996,7 +4054,11 @@ fn apply_agent_ops_batch(
                         )?;
                         let range = anchor_range(block, operation.quote.as_deref())?;
                         let anchor = block[range.clone()].to_string();
-                        (range, format!("{{~~{anchor}~>{content}~~}}{{#{id}}}"))
+                        (
+                            range,
+                            format!("{{~~{anchor}~>{content}~~}}{{#{id}}}"),
+                            describe_quote_anchor(operation.quote.as_deref()),
+                        )
                     }
                     other => {
                         return Err(QuarryError::InvalidPath(format!(
@@ -4013,6 +4075,10 @@ fn apply_agent_ops_batch(
                         range,
                         replacement,
                         order,
+                        op: operation.op.clone(),
+                        id: id.clone(),
+                        anchor_desc,
+                        overlap_fallback: None,
                     },
                 )?;
                 meta.suggestions.insert(
@@ -4044,6 +4110,10 @@ fn apply_agent_ops_batch(
                         range: block_range,
                         replacement,
                         order,
+                        op: operation.op.clone(),
+                        id: id.to_string(),
+                        anchor_desc: "existing marker".to_string(),
+                        overlap_fallback: None,
                     },
                 )?;
                 meta.suggestions.remove(id);
@@ -4065,6 +4135,10 @@ fn apply_agent_ops_batch(
                         range: block_range,
                         replacement,
                         order,
+                        op: operation.op.clone(),
+                        id: id.to_string(),
+                        anchor_desc: "existing marker".to_string(),
+                        overlap_fallback: None,
                     },
                 )?;
                 meta.suggestions.remove(id);
@@ -4117,19 +4191,63 @@ fn ensure_review_id_available_for_batch(
     Ok(())
 }
 
+fn truncate_anchor_text(text: &str) -> String {
+    const MAX: usize = 40;
+    let trimmed = text.trim();
+    let kept: String = trimmed.chars().take(MAX).collect();
+    if trimmed.chars().count() > MAX {
+        format!("{kept}…")
+    } else {
+        kept
+    }
+}
+
+fn describe_quote_anchor(quote: Option<&str>) -> String {
+    match quote {
+        Some(quote) => format!("quote {:?}", truncate_anchor_text(quote)),
+        None => "whole block".to_string(),
+    }
+}
+
+fn describe_scheduled_edit(edit: &ScheduledBlockEdit) -> String {
+    format!(
+        "operations[{}] #{} ({}, {})",
+        edit.order, edit.id, edit.op, edit.anchor_desc
+    )
+}
+
 fn schedule_block_edit(
     edits: &mut Vec<ScheduledBlockEdit>,
     changed_ordinals: &mut Vec<usize>,
-    edit: ScheduledBlockEdit,
+    mut edit: ScheduledBlockEdit,
 ) -> Result<(), ApiError> {
-    for existing in edits
-        .iter()
-        .filter(|existing| existing.ordinal == edit.ordinal)
-    {
-        if block_edit_ranges_conflict(&existing.range, &edit.range) {
+    loop {
+        let Some(existing_index) = conflicting_scheduled_edit_index(edits, &edit, None) else {
+            break;
+        };
+        if let Some(fallback) = edit.fallback_for_overlap() {
+            if conflicting_scheduled_edit_index(edits, &fallback, None).is_none() {
+                edit = fallback;
+                continue;
+            }
+        }
+        if let Some(fallback) = edits[existing_index].fallback_for_overlap() {
+            let fallback_conflicts_with_existing =
+                conflicting_scheduled_edit_index(edits, &fallback, Some(existing_index)).is_some();
+            let fallback_conflicts_with_new = fallback.ordinal == edit.ordinal
+                && block_edit_ranges_conflict(&fallback.range, &edit.range);
+            if !fallback_conflicts_with_existing && !fallback_conflicts_with_new {
+                edits[existing_index] = fallback;
+                continue;
+            }
+        }
+        {
+            let existing = &edits[existing_index];
             return Err(QuarryError::Conflict(format!(
-                "ops operations overlap original block {}",
-                edit.ordinal
+                "ops operations overlap original block {}: {} overlaps {}",
+                edit.ordinal,
+                describe_scheduled_edit(existing),
+                describe_scheduled_edit(&edit),
             ))
             .into());
         }
@@ -4140,6 +4258,20 @@ fn schedule_block_edit(
     }
     edits.push(edit);
     Ok(())
+}
+
+fn conflicting_scheduled_edit_index(
+    edits: &[ScheduledBlockEdit],
+    edit: &ScheduledBlockEdit,
+    skip_index: Option<usize>,
+) -> Option<usize> {
+    edits
+        .iter()
+        .enumerate()
+        .filter(|(index, existing)| Some(*index) != skip_index && existing.ordinal == edit.ordinal)
+        .find_map(|(index, existing)| {
+            block_edit_ranges_conflict(&existing.range, &edit.range).then_some(index)
+        })
 }
 
 fn block_edit_ranges_conflict(

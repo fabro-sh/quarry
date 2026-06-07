@@ -3109,6 +3109,117 @@ async fn agent_ops_batch_same_block_overlap_rules() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body: Value = response_json(response).await;
+    let error = body["error"].as_str().unwrap();
+    assert!(error.contains("operations[0] #c2 (comment.add"));
+    assert!(error.contains("operations[1] #s4 (suggestion.add"));
+}
+
+#[tokio::test]
+async fn agent_ops_batch_allows_quote_less_block_comment_with_same_block_suggestion() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store
+        .create_library("agentbatchblockcomment")
+        .await
+        .unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            b"alpha beta gamma\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let snapshot = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentbatchblockcomment/documents/notes/review.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let snapshot: Value = response_json(snapshot).await;
+    let base_token = snapshot["baseToken"].as_str().unwrap();
+    let block_ref = snapshot["blocks"][0]["ref"].clone();
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentbatchblockcomment/documents/notes/review.md/ops?dryRun=1",
+            serde_json::json!({
+                "baseToken": base_token,
+                "operations": [
+                    {
+                        "op": "comment.add",
+                        "id": "c1",
+                        "ref": block_ref.clone(),
+                        "body": "This explains the suggested rewrite."
+                    },
+                    {
+                        "op": "suggestion.add",
+                        "id": "s1",
+                        "kind": "replace",
+                        "ref": block_ref,
+                        "content": "delta"
+                    }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert!(body["markdown"].as_str().unwrap().contains(
+        "{~~alpha beta gamma~>delta~~}{#s1}{>>This explains the suggested rewrite.<<}{#c1}"
+    ));
+
+    let response = app
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentbatchblockcomment/documents/notes/review.md/ops?dryRun=1",
+            serde_json::json!({
+                "baseToken": base_token,
+                "operations": [
+                    {
+                        "op": "suggestion.add",
+                        "id": "s2",
+                        "kind": "replace",
+                        "ref": snapshot["blocks"][0]["ref"].clone(),
+                        "content": "theta"
+                    },
+                    {
+                        "op": "comment.add",
+                        "id": "c2",
+                        "ref": snapshot["blocks"][0]["ref"].clone(),
+                        "body": "This explains the second rewrite."
+                    }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert!(body["markdown"].as_str().unwrap().contains(
+        "{~~alpha beta gamma~>theta~~}{#s2}{>>This explains the second rewrite.<<}{#c2}"
+    ));
 }
 
 #[tokio::test]
