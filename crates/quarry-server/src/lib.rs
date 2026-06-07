@@ -47,7 +47,9 @@ use tokio::sync::Mutex;
 use utoipa::{OpenApi, ToSchema};
 use uuid::Uuid;
 
-use crate::collab::{InjectionBatch, InjectionOp, LiveMutation};
+use crate::collab::{
+    persist_clean_recovery_seed_for_version, InjectionBatch, InjectionOp, LiveMutation,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -2052,27 +2054,29 @@ async fn put_document(
         )
         .await?;
     if browser_origin {
-        if let Err(error) = state
-            .store
-            .mark_collab_recovery_state_clean(
-                &outcome.document.id,
-                Some(outcome.version.id.clone()),
-            )
-            .await
+        if !persist_clean_recovery_seed_for_version(
+            &state.store,
+            &outcome.document.id,
+            &outcome.version.id,
+            &content_type,
+            body.as_ref(),
+        )
+        .await
         {
-            if !matches!(error, QuarryError::NotFound(_)) {
-                tracing::warn!(
-                    event = "collab.agent_injection.recovery_degraded",
-                    %error,
-                    document_id = %outcome.document.id,
-                    version_id = %outcome.version.id,
-                    outcome = "degraded",
-                    reason_code = "mark_recovery_clean_failed",
-                    reason = "failed to mark collab recovery state clean after browser flush",
-                    "failed to mark collab recovery state clean after browser flush"
-                );
-            }
+            tracing::warn!(
+                event = "collab.agent_injection.recovery_degraded",
+                document_id = %outcome.document.id,
+                version_id = %outcome.version.id,
+                outcome = "degraded",
+                reason_code = "persist_clean_seed_failed",
+                reason = "failed to persist clean collab recovery seed after browser flush",
+                "failed to persist clean collab recovery seed after browser flush"
+            );
         }
+        state
+            .collab
+            .mark_room_recovery_clean(&outcome.document.id, outcome.version.id.clone())
+            .await;
     }
     json_with_etag(StatusCode::OK, &outcome, &outcome.version.id)
 }

@@ -86,6 +86,12 @@ impl CollabHub {
         self.rooms.read().await.get(document_id).cloned()
     }
 
+    pub(crate) async fn mark_room_recovery_clean(&self, document_id: &str, version_id: String) {
+        if let Some(room) = self.live_room(document_id).await {
+            room.mark_recovery_clean(version_id);
+        }
+    }
+
     #[cfg(test)]
     pub(crate) async fn room_count(&self) -> usize {
         self.rooms.read().await.len()
@@ -265,6 +271,10 @@ impl CollabRoom {
             }
         }
         self.recovery_state.mark_clean(seed.base_version_id);
+    }
+
+    fn mark_recovery_clean(&self, version_id: String) {
+        self.recovery_state.mark_clean(version_id);
     }
 
     #[cfg(test)]
@@ -559,6 +569,30 @@ async fn clean_seed_update_from_document_seed(
     seed: CollabDocumentSeed,
 ) -> Option<CleanSeedUpdate> {
     let store = store?;
+    let clean_seed = build_clean_seed_update_from_document_seed(document_id, seed)?;
+    if let Err(error) =
+        persist_clean_seed_update(store, document_id, &clean_seed, "document_seed").await
+    {
+        tracing::warn!(
+            event = "collab.recovery.persist.failed",
+            %error,
+            %document_id,
+            base_version_id = %clean_seed.base_version_id,
+            dirty = false,
+            source = "document_seed",
+            outcome = "failed",
+            reason_code = "persist_clean_seed_failed",
+            reason = "failed to persist clean collab server seed",
+            "failed to persist clean collab server seed"
+        );
+    }
+    Some(clean_seed)
+}
+
+fn build_clean_seed_update_from_document_seed(
+    document_id: &str,
+    seed: CollabDocumentSeed,
+) -> Option<CleanSeedUpdate> {
     if !crate::is_markdown_content_type(&seed.content_type) {
         tracing::debug!(
             event = "collab.recovery.loaded",
@@ -623,51 +657,121 @@ async fn clean_seed_update_from_document_seed(
     };
     let update_v1 =
         encode_update_v1_from_built_with_review(&built, SHARED_ROOT, REVIEW_ROOT, &review_meta);
-    tracing::debug!(
-        event = "collab.recovery.persist.started",
-        %document_id,
-        base_version_id = %seed.head_version_id,
-        dirty = false,
-        update_bytes = update_v1.len(),
-        source = "document_seed",
-        "persisting clean collab server seed"
-    );
-    if let Err(error) = store
-        .put_collab_recovery_state(
-            document_id,
-            Some(seed.head_version_id.clone()),
-            update_v1.clone(),
-            false,
-        )
-        .await
-    {
-        tracing::warn!(
-            event = "collab.recovery.persist.failed",
-            %error,
-            %document_id,
-            base_version_id = %seed.head_version_id,
-            dirty = false,
-            source = "document_seed",
-            outcome = "failed",
-            reason_code = "persist_clean_seed_failed",
-            reason = "failed to persist clean collab server seed",
-            "failed to persist clean collab server seed"
-        );
-    } else {
-        tracing::debug!(
-            event = "collab.recovery.persist.completed",
-            %document_id,
-            base_version_id = %seed.head_version_id,
-            dirty = false,
-            source = "document_seed",
-            outcome = "persisted",
-            "persisted clean collab server seed"
-        );
-    }
     Some(CleanSeedUpdate {
         base_version_id: seed.head_version_id,
         update_v1,
     })
+}
+
+async fn persist_clean_seed_update(
+    store: &QuarryStore,
+    document_id: &str,
+    seed: &CleanSeedUpdate,
+    source: &str,
+) -> quarry_core::Result<()> {
+    tracing::debug!(
+        event = "collab.recovery.persist.started",
+        %document_id,
+        base_version_id = %seed.base_version_id,
+        dirty = false,
+        update_bytes = seed.update_v1.len(),
+        source,
+        "persisting clean collab server seed"
+    );
+    store
+        .put_collab_recovery_state(
+            document_id,
+            Some(seed.base_version_id.clone()),
+            seed.update_v1.clone(),
+            false,
+        )
+        .await?;
+    tracing::debug!(
+        event = "collab.recovery.persist.completed",
+        %document_id,
+        base_version_id = %seed.base_version_id,
+        dirty = false,
+        source,
+        outcome = "persisted",
+        "persisted clean collab server seed"
+    );
+    Ok(())
+}
+
+pub(crate) async fn persist_clean_recovery_seed_for_version(
+    store: &QuarryStore,
+    document_id: &str,
+    version_id: &str,
+    content_type: &str,
+    content: &[u8],
+) -> bool {
+    let document_seed = CollabDocumentSeed {
+        document_id: document_id.to_string(),
+        head_version_id: version_id.to_string(),
+        content_type: content_type.to_string(),
+        content: content.to_vec(),
+    };
+    let Some(clean_seed) = build_clean_seed_update_from_document_seed(document_id, document_seed)
+    else {
+        tracing::warn!(
+            event = "collab.recovery.persist.failed",
+            %document_id,
+            base_version_id = %version_id,
+            dirty = false,
+            source = "browser_flush",
+            outcome = "degraded",
+            reason_code = "clean_seed_generation_failed",
+            reason = "failed to generate clean collab recovery seed; writing empty clean state",
+            "failed to generate clean collab recovery seed; writing empty clean state"
+        );
+        return persist_empty_clean_recovery_state(store, document_id, version_id).await;
+    };
+    match persist_clean_seed_update(store, document_id, &clean_seed, "browser_flush").await {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(
+                event = "collab.recovery.persist.failed",
+                %error,
+                %document_id,
+                base_version_id = %clean_seed.base_version_id,
+                dirty = false,
+                source = "browser_flush",
+                outcome = "failed",
+                reason_code = "persist_clean_seed_failed",
+                reason = "failed to persist clean collab recovery seed after browser flush",
+                "failed to persist clean collab recovery seed after browser flush"
+            );
+            false
+        }
+    }
+}
+
+async fn persist_empty_clean_recovery_state(
+    store: &QuarryStore,
+    document_id: &str,
+    version_id: &str,
+) -> bool {
+    match store
+        .put_collab_recovery_state(document_id, Some(version_id.to_string()), Vec::new(), false)
+        .await
+    {
+        Ok(_) => true,
+        Err(error) => {
+            tracing::warn!(
+                event = "collab.recovery.persist.failed",
+                %error,
+                %document_id,
+                base_version_id = %version_id,
+                dirty = false,
+                source = "browser_flush",
+                outcome = "failed",
+                reason_code = "persist_empty_clean_state_failed",
+                reason = "failed to persist empty clean collab recovery state after browser flush",
+                "failed to persist empty clean collab recovery state after browser flush"
+            );
+            false
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -31,6 +31,7 @@ import {
   BaseTableCellPlugin,
   BaseTablePlugin,
   BaseTableRowPlugin,
+  normalizeTablesInValue,
   tableMdRules,
 } from './table';
 import { applyWikiLinks, BaseWikiLinkPlugin, wikiLinkMdRules } from './wiki-link';
@@ -70,11 +71,15 @@ export const baseMarkdownPlugins = [
 ];
 
 export function markdownToPlateValue(markdown: string): PlateValue {
-  return applyMermaid(applyWikiLinks(editor().api.markdown.deserialize(markdown) as never)) as PlateValue;
+  return normalizeTablesInValue(
+    applyMermaid(applyWikiLinks(editor().api.markdown.deserialize(markdown) as never)) as never
+  ) as PlateValue;
 }
 
 export function plateValueToMarkdown(value: PlateValue): string {
-  const cleaned = stripTrailingEmptyParagraphs(stripPlaceholders(applyWikiLinks(value as never)));
+  const cleaned = stripTrailingEmptyParagraphs(
+    normalizeTablesInValue(stripPlaceholders(applyWikiLinks(value as never)))
+  );
   return editor().api.markdown.serialize({ value: cleaned as never });
 }
 

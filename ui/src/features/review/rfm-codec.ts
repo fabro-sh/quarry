@@ -6,7 +6,7 @@ import { baseMarkdownPlugins, stripTrailingEmptyParagraphs } from '../editor/mar
 import { remarkInlineMarks } from '../editor/remark-inline-marks';
 import { stripPlaceholders } from '../editor/image';
 import { applyMermaid } from '../editor/mermaid';
-import { tableMdRules } from '../editor/table';
+import { normalizeTablesInValue, tableMdRules } from '../editor/table';
 import { applyWikiLinks } from '../editor/wiki-link';
 import { applyCriticMarkup } from './apply-critic-markup';
 import { collapseSubstitutions, expandSubstitutions } from './collapse-substitutions';
@@ -41,7 +41,10 @@ export function markdownToReview(markdown: string): ReviewDocument {
   const { body, meta } = splitEndmatter(markdown);
   const rawValue = deserializeEditor().api.markdown.deserialize(expandSubstitutions(body));
   const reviewed = applyCriticMarkup(rawValue, meta ?? emptyReviewMeta());
-  return { value: applyMermaid(applyWikiLinks(reviewed.value)), meta: reviewed.meta };
+  return {
+    value: normalizeTablesInValue(applyMermaid(applyWikiLinks(reviewed.value)) as never),
+    meta: reviewed.meta,
+  };
 }
 
 /** Collect the comment/suggestion ids still present as marks in the value. */
@@ -104,7 +107,9 @@ export function reviewToMarkdown(value: Descendant[], meta: ReviewMeta): string 
   // typed (but the editor hasn't turned into a chip yet) still serializes as
   // `[[...]]` rather than being escaped to `\[\[...]]`. Drop in-flight upload
   // placeholders — they aren't part of the saved document.
-  const wikied = stripTrailingEmptyParagraphs(stripPlaceholders(applyWikiLinks(value)));
+  const wikied = normalizeTablesInValue(
+    stripTrailingEmptyParagraphs(stripPlaceholders(applyWikiLinks(value)))
+  );
   const live = liveIds(wikied);
   const pruned = pruneMeta(meta, live);
   const body = collapseSubstitutions(serializeReviewBody(wikied, pruned));

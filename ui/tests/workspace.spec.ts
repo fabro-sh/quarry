@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page, type Route } from 'playwright/test';
+import { expect, test, type Locator, type Page, type Route } from 'playwright/test';
 
 interface MockDocument {
   byteSize?: number;
@@ -404,25 +404,53 @@ test.describe('Quarry Browser smoke flows', () => {
   test('column alignment follows its column when a column is inserted', async ({ page }) => {
     const api = await installMockApi(page, {
       documents: [
-        { content: '# Doc\n\n| A | B |\n| --- | --- |\n| x | y |\n', id: 'doc-t4b', metadata: { title: 'T4b' }, path: 't4b.md', version: 'v1' },
+        { content: '# Doc\n\n| A | B |\n| :-: | --- |\n| x | y |\n', id: 'doc-t4b', metadata: { title: 'T4b' }, path: 't4b.md', version: 'v1' },
       ],
     });
     await page.goto('/');
     await page.getByRole('treeitem', { name: /T4b/ }).click();
     const editor = page.getByLabel('Plate markdown editor');
-    // Center-align column A.
-    await editor.locator('th', { hasText: 'A' }).hover();
-    await editor.getByRole('button', { name: 'Column options' }).first().click();
-    await page.getByRole('menuitem', { name: 'Align center' }).click();
-    await expect.poll(() => api.lastSavedBody('t4b.md')).toContain(':-:');
     // Insert a column to the LEFT of A; the centered column must move to slot 2,
     // so a plain delimiter now precedes the centered one.
     await editor.locator('th', { hasText: 'A' }).hover();
     await editor.getByRole('button', { name: 'Column options' }).first().click();
-    await page.getByRole('menuitem', { name: 'Insert column left' }).click();
+    await page.getByRole('menu').getByRole('menuitem', { name: 'Insert column left' }).click();
     // GFM serializes the empty column's delimiter minimally (`-`), so a plain
     // delimiter now precedes the centered one — the center moved off column 0.
+    await expectRectangularRows(editor.locator('table'), [3, 3]);
     await expect.poll(() => api.lastSavedBody('t4b.md')).toMatch(/-+\s*\|\s*:-:/);
+  });
+
+  test('inserting a table column to the right keeps every row rectangular', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        { content: '# Doc\n\n| A | B |\n| --- | --- |\n| x | y |\n', id: 'doc-t4c', metadata: { title: 'T4c' }, path: 't4c.md', version: 'v1' },
+      ],
+    });
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /T4c/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    const aHeader = editor.locator('th', { hasText: 'A' });
+    await aHeader.hover();
+    await aHeader.getByRole('button', { name: 'Column options' }).click();
+    await page.getByRole('menuitem', { name: 'Insert column right' }).click();
+
+    await expectRectangularRows(editor.locator('table'), [3, 3]);
+  });
+
+  test('the table add-column control keeps every row rectangular', async ({ page }) => {
+    await installMockApi(page, {
+      documents: [
+        { content: '# Doc\n\n| A | B |\n| --- | --- |\n| x | y |\n', id: 'doc-t4d', metadata: { title: 'T4d' }, path: 't4d.md', version: 'v1' },
+      ],
+    });
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /T4d/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await editor.locator('table').hover();
+    await editor.getByRole('button', { name: 'Add column' }).click();
+
+    await expectRectangularRows(editor.locator('table'), [3, 3]);
   });
 
   test('deletes a table column', async ({ page }) => {
@@ -441,6 +469,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.getByRole('menuitem', { name: 'Delete column' }).click();
     await expect(editor.locator('th')).toHaveCount(2);
     await expect(editor.locator('th', { hasText: 'B' })).toHaveCount(0);
+    await expectRectangularRows(editor.locator('table'), [2, 2]);
     // Saved markdown reflects the deletion (poll past the empty-initial-body).
     await expect.poll(() => api.lastSavedBody('t6.md')).toContain('C');
     expect(api.lastSavedBody('t6.md')).not.toContain('B');
@@ -2332,6 +2361,16 @@ function documentContentType(document: MockDocument) {
 
 function documentByteSize(document: MockDocument) {
   return document.byteSize ?? document.content.length;
+}
+
+async function expectRectangularRows(table: Locator, expectedCellCounts: number[]) {
+  await expect
+    .poll(() =>
+      table.locator('tr').evaluateAll((rows) =>
+        rows.map((row) => row.querySelectorAll('th,td').length)
+      )
+    )
+    .toEqual(expectedCellCounts);
 }
 
 async function notFound(route: Route) {

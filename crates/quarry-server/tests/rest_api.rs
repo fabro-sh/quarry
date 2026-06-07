@@ -5239,7 +5239,7 @@ async fn document_delete_events_echo_origin_id_and_doc_id() {
 }
 
 #[tokio::test]
-async fn document_put_with_browser_origin_marks_recovery_state_clean() {
+async fn document_put_with_browser_origin_persists_fresh_clean_recovery_seed() {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
@@ -5261,11 +5261,12 @@ async fn document_put_with_browser_origin_marks_recovery_state_clean() {
         )
         .await
         .unwrap();
+    let (_, stale_update) = yjs_doc_with_markdown("stale\n");
     store
         .put_collab_recovery_state(
             &written.document.id,
             Some(written.version.id.clone()),
-            vec![1, 2, 3],
+            stale_update.clone(),
             true,
         )
         .await
@@ -5296,6 +5297,17 @@ async fn document_put_with_browser_origin_marks_recovery_state_clean() {
         .unwrap();
     assert!(!recovery.dirty);
     assert_eq!(recovery.base_version_id.as_deref(), Some(next_version));
+    assert_ne!(recovery.update_v1, stale_update);
+    let recovered = empty_yjs_doc();
+    {
+        let mut txn = recovered.transact_mut();
+        txn.apply_update(Update::decode_v1(&recovery.update_v1).unwrap())
+            .unwrap();
+    }
+    assert_eq!(
+        yjs_slate_children(&recovered),
+        review_markdown_to_slate("new\n").unwrap()
+    );
 }
 
 #[tokio::test]

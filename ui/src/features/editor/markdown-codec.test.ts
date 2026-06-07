@@ -118,6 +118,46 @@ describe('markdown codec', () => {
     expect(plateValueToMarkdown(withSizes)).toBe(plateValueToMarkdown(value));
   });
 
+  it('repairs malformed table values before serializing', () => {
+    const value = [
+      {
+        type: 'table',
+        align: ['left'],
+        colSizes: [120, 120],
+        children: [
+          {
+            type: 'tr',
+            children: [
+              { type: 'td', colSpan: 2, children: [{ type: 'p', children: [{ text: 'A' }] }] },
+              { type: 'th', children: [{ type: 'p', children: [{ text: 'B' }] }] },
+              { type: 'th', children: [{ type: 'p', children: [{ text: 'C' }] }] },
+            ],
+          },
+          {
+            type: 'tr',
+            children: [
+              { type: 'td', children: [{ type: 'p', children: [{ text: '1' }] }] },
+              { type: 'td', children: [{ type: 'p', children: [{ text: '2' }] }] },
+              { type: 'td', children: [{ type: 'p', children: [{ text: '3' }] }] },
+              { type: 'td', rowSpan: 2, children: [{ type: 'p', children: [{ text: 'keep' }] }] },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const out = plateValueToMarkdown(value as never);
+    const reparsed = markdownToPlateValue(out);
+
+    expect(out).toContain('keep');
+    expect((reparsed[0] as { align?: unknown }).align).toEqual(['left', null, null, null]);
+    expect(
+      ((reparsed[0] as { children: Array<{ children: unknown[] }> }).children).map(
+        (row) => row.children.length
+      )
+    ).toEqual([4, 4]);
+  });
+
   it('drops upload placeholders when serializing', () => {
     const value = [
       { type: 'p', children: [{ text: 'Keep me.' }] },

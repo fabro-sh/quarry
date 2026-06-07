@@ -2,7 +2,7 @@ import { ResizeHandle } from '@platejs/resizable';
 import {
   TableCellHeaderPlugin,
   TableCellPlugin,
-  TablePlugin,
+  TablePlugin as PlateTablePlugin,
   TableProvider,
   TableRowPlugin,
   useTableCellElement,
@@ -23,7 +23,24 @@ import {
 } from 'platejs/react';
 
 import { cn } from '../../lib/utils';
-import { columnAlignOf, type TableAlign, type TTableElementWithAlign } from './table';
+import {
+  columnAlignOf,
+  emptyTableCell,
+  normalizeTableEntry,
+  type TableAlign,
+  type TTableElementWithAlign,
+} from './table';
+
+export const TablePlugin = PlateTablePlugin.configure({
+  options: { disableMerge: true },
+}).overrideEditor(({ editor, tf: { normalizeNode } }) => ({
+  transforms: {
+    normalizeNode(entry) {
+      if (normalizeTableEntry(editor, entry as never)) return;
+      normalizeNode(entry);
+    },
+  },
+}));
 
 export const TableElement = withHOC(TableProvider, function TableElement(props: PlateElementProps) {
   const { editor, element } = props;
@@ -92,6 +109,7 @@ export function TableCellElement({
     colSpan,
     rowIndex,
   });
+  const cellPath = useEditorSelector((ed) => ed.api.findPath(element), [element]);
   // Reactively read this column's alignment off the parent table node so cells
   // restyle when alignment changes.
   const align = useEditorSelector((ed) => {
@@ -117,7 +135,7 @@ export function TableCellElement({
       style={{ maxWidth: width || 320, minWidth: width || 96 }}
     >
       <div className="px-3 py-1.5">{props.children}</div>
-      {isHeader ? <ColumnMenu colIndex={colIndex} editor={editor} element={element} /> : null}
+      {isHeader ? <ColumnMenu cellPath={cellPath} colIndex={colIndex} editor={editor} element={element} /> : null}
       {readOnly ? null : (
         // Cell z-band: content/resize handles z-10–z-20, column-menu trigger z-30,
         // portalled menus z-50. The wrapper is pointer-events-none so only the thin
@@ -172,19 +190,8 @@ function setColumnAlign(
   editor.tf.setNodes<TTableElementWithAlign>({ align: next }, { at: tablePath });
 }
 
-/** Read the table node's current `align` array, or undefined if unset. */
-function columnAlignArray(
-  editor: ReturnType<typeof useEditorRef>,
-  tablePath: Path
-): TableAlign[] | undefined {
-  const tableEntry = editor.api.node<TTableElementWithAlign>(tablePath);
-  return tableEntry ? tableEntry[0].align : undefined;
-}
-
-// The library's insert column transform rebuilds the table node and DROPS our
-// `align` array entirely. So snapshot `align` BEFORE the transform, then splice a
-// new column's slot in and write it back. No-op when no explicit alignment was
-// set (prior align undefined).
+// Column insertion adds a null alignment slot at the inserted index. No-op when
+// no explicit alignment was set (prior align undefined).
 function shiftColumnAlign(
   editor: ReturnType<typeof useEditorRef>,
   tablePath: Path,
@@ -195,6 +202,59 @@ function shiftColumnAlign(
   const next = [...prior];
   next.splice(at, 0, null);
   editor.tf.setNodes<TTableElementWithAlign>({ align: next }, { at: tablePath });
+}
+
+// Insert a column without relying on editor selection. Dropdown menus move focus
+// out of the cell, so a direct row-wise transform is more predictable here.
+function insertColumnAt(
+  editor: ReturnType<typeof useEditorRef>,
+  element: TTableCellElement,
+  colIndex: number,
+  before: boolean,
+  cellPath?: Path | null
+): void {
+  const path = resolveCellPath(editor, element, colIndex, cellPath);
+  if (!path || path.length < 3) return;
+  const tablePath = path.slice(0, -2);
+  const tableEntry = editor.api.node<TTableElementWithAlign>(tablePath);
+  if (!tableEntry) return;
+  const insertAt = before ? colIndex : colIndex + 1;
+  const prior = tableEntry[0].align;
+  const headerType = editor.getType(KEYS.th);
+  const bodyType = editor.getType(KEYS.td);
+  editor.tf.withoutNormalizing(() => {
+    for (let r = 0; r < tableEntry[0].children.length; r += 1) {
+      editor.tf.insertNodes(emptyTableCell(r === 0 ? headerType : bodyType), {
+        at: [...tablePath, r, insertAt],
+      });
+    }
+    shiftColumnAlign(editor, tablePath, prior, insertAt);
+  });
+}
+
+function resolveCellPath(
+  editor: ReturnType<typeof useEditorRef>,
+  element: TTableCellElement,
+  colIndex: number,
+  cellPath?: Path | null
+): Path | null {
+  for (const path of [cellPath, editor.api.findPath(element)]) {
+    if (!path || path.length < 3) continue;
+    const entry = editor.api.node<TTableCellElement>(path);
+    if (entry && (entry[0].type === editor.getType(KEYS.th) || entry[0].type === editor.getType(KEYS.td))) {
+      return path;
+    }
+  }
+
+  const tables = editor.api.nodes<TTableElementWithAlign>({
+    at: [],
+    match: { type: editor.getType(KEYS.table) },
+  });
+  for (const [, tablePath] of tables) {
+    const header = editor.api.node<TTableRowElement>([...tablePath, 0]);
+    if (header && header[0].children.length > colIndex) return [...tablePath, 0, colIndex];
+  }
+  return null;
 }
 
 // Delete the column at colIndex by removing each row's cell at that index
@@ -263,15 +323,16 @@ function deleteRowAt(
 }
 
 function ColumnMenu({
+  cellPath,
   colIndex,
   editor,
   element,
 }: {
+  cellPath?: Path | null;
   colIndex: number;
   editor: ReturnType<typeof useEditorRef>;
   element: TTableCellElement;
 }) {
-  const { tf } = useEditorPlugin(TablePlugin);
   const readOnly = useReadOnly();
   if (readOnly) return null;
   return (
@@ -306,27 +367,13 @@ function ColumnMenu({
           <div className="my-1 h-px bg-line" />
           <DropdownMenu.Item
             className={menuItem}
-            onSelect={() => {
-              const path = editor.api.findPath(element);
-              if (!path || path.length < 3) return;
-              const tablePath = path.slice(0, -2);
-              const prior = columnAlignArray(editor, tablePath);
-              tf.insert.tableColumn({ before: true, fromCell: path });
-              shiftColumnAlign(editor, tablePath, prior, colIndex);
-            }}
+            onSelect={() => insertColumnAt(editor, element, colIndex, true, cellPath)}
           >
             <Plus className="shrink-0 text-muted" size={15} /> Insert column left
           </DropdownMenu.Item>
           <DropdownMenu.Item
             className={menuItem}
-            onSelect={() => {
-              const path = editor.api.findPath(element);
-              if (!path || path.length < 3) return;
-              const tablePath = path.slice(0, -2);
-              const prior = columnAlignArray(editor, tablePath);
-              tf.insert.tableColumn({ fromCell: path });
-              shiftColumnAlign(editor, tablePath, prior, colIndex + 1);
-            }}
+            onSelect={() => insertColumnAt(editor, element, colIndex, false, cellPath)}
           >
             <Plus className="shrink-0 text-muted" size={15} /> Insert column right
           </DropdownMenu.Item>

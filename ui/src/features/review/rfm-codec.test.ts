@@ -54,4 +54,41 @@ describe('rfm-codec round-trip', () => {
     // minimal delimiter form).
     expect((markdownToReview(out).value[0] as { align?: unknown }).align).toEqual(['left', 'right']);
   });
+
+  it('repairs malformed table values through the review save path', () => {
+    const value = [
+      {
+        type: 'table',
+        align: ['left', 'center', 'right'],
+        children: [
+          {
+            type: 'tr',
+            children: [
+              { type: 'td', children: [{ type: 'p', children: [{ text: 'A' }] }] },
+              { type: 'th', children: [{ type: 'p', children: [{ text: 'B' }] }] },
+            ],
+          },
+          {
+            type: 'tr',
+            children: [
+              { type: 'td', children: [{ type: 'p', children: [{ text: '1' }] }] },
+              { type: 'td', rowSpan: 2, children: [{ type: 'p', children: [{ text: '2' }] }] },
+              { type: 'td', children: [{ type: 'p', children: [{ text: 'keep' }] }] },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const out = reviewToMarkdown(value as never, { comments: {}, suggestions: {} });
+    const reparsed = markdownToReview(out).value;
+
+    expect(out).toContain('keep');
+    expect((reparsed[0] as { align?: unknown }).align).toEqual(['left', 'center', 'right']);
+    expect(
+      ((reparsed[0] as { children: Array<{ children: unknown[] }> }).children).map(
+        (row) => row.children.length
+      )
+    ).toEqual([3, 3]);
+  });
 });
