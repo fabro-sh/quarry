@@ -2453,12 +2453,14 @@
       "AgentBlockRef": {
         "type": "object",
         "required": [
-          "ordinal",
-          "contentHash"
+          "ordinal"
         ],
         "properties": {
           "contentHash": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "ordinal": {
             "type": "integer",

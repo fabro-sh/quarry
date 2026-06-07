@@ -1401,8 +1401,12 @@ fn parse_agent_bool_query(value: Option<&str>, name: &str) -> Result<bool, ApiEr
 #[serde(deny_unknown_fields)]
 pub struct AgentBlockRef {
     pub ordinal: usize,
-    #[serde(rename = "contentHash")]
-    pub content_hash: String,
+    #[serde(
+        rename = "contentHash",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub content_hash: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
@@ -3168,7 +3172,7 @@ fn snapshot_blocks(markdown: &str) -> Vec<AgentSnapshotBlock> {
         .map(|(ordinal, markdown)| AgentSnapshotBlock {
             block_ref: AgentBlockRef {
                 ordinal,
-                content_hash: block_hash(&markdown),
+                content_hash: Some(block_hash(&markdown)),
             },
             markdown,
         })
@@ -3513,7 +3517,7 @@ fn apply_agent_edit(
         let block_ref = operation.block_ref.as_ref().ok_or_else(|| {
             QuarryError::InvalidPath(format!("{} operation missing ref", operation.op))
         })?;
-        validate_block_ref(block_ref, &request_base_version_id, &original_blocks)?;
+        validate_block_ref(block_ref, &original_blocks)?;
         if !targeted_ordinals.insert(block_ref.ordinal) {
             return Err(QuarryError::InvalidPath(format!(
                 "multiple operations target block ordinal {}; use one insert operation with blocks when inserting multiple blocks at the same ref",
@@ -3855,7 +3859,7 @@ fn apply_agent_ops_batch(
                 let block_ref = operation.block_ref.as_ref().ok_or_else(|| {
                     QuarryError::InvalidPath("comment.add operation missing ref".to_string())
                 })?;
-                validate_block_ref(block_ref, &request_base_version_id, &original_blocks)?;
+                validate_block_ref(block_ref, &original_blocks)?;
                 let body_text =
                     required_ops_text(operation.body.as_deref(), "comment.add missing body")?;
                 let block = original_blocks
@@ -3988,7 +3992,7 @@ fn apply_agent_ops_batch(
                 let block_ref = operation.block_ref.as_ref().ok_or_else(|| {
                     QuarryError::InvalidPath("suggestion.add operation missing ref".to_string())
                 })?;
-                validate_block_ref(block_ref, &request_base_version_id, &original_blocks)?;
+                validate_block_ref(block_ref, &original_blocks)?;
                 let block = original_blocks
                     .get(block_ref.ordinal)
                     .ok_or_else(stale_base_error)?;
@@ -4584,14 +4588,15 @@ fn assemble_review_document(body: &str, meta: &ReviewMeta) -> Result<String, Api
 
 fn validate_block_ref(
     block_ref: &AgentBlockRef,
-    _request_base_version_id: &str,
     original_blocks: &[String],
 ) -> Result<(), ApiError> {
     let Some(block) = original_blocks.get(block_ref.ordinal) else {
         return Err(stale_base_error());
     };
-    if block_hash(block) != block_ref.content_hash {
-        return Err(stale_base_error());
+    if let Some(expected) = &block_ref.content_hash {
+        if &block_hash(block) != expected {
+            return Err(stale_base_error());
+        }
     }
     Ok(())
 }

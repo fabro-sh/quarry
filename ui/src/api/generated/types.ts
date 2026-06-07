@@ -155,7 +155,7 @@ export interface GraphResponse {
 
 export interface AgentBlockRef {
   ordinal: number;
-  contentHash: string;
+  contentHash?: string | null;
 }
 
 export interface AgentSnapshotBlock {

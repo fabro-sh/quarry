@@ -89,8 +89,10 @@ Statuses: `reading`, `thinking`, `acting`, `waiting`, `completed`, `error`.
 ## Snapshot And Block Refs
 
 Quarry writes are block-scoped. Read `/snapshot`, copy the top-level
-`baseToken`, and copy the exact `ref` object for the target block. Never invent
-or reuse old refs.
+`baseToken`, and target blocks by their `ref.ordinal`. `contentHash` is
+optional in write requests: omit it when writing immediately after reading the
+same `/snapshot`, and include it when you refresh only the token via `HEAD` but
+reuse older refs and want shifted or edited blocks to be caught.
 
 ```bash
 curl -sS "$DOC/snapshot"
@@ -114,7 +116,10 @@ Important response fields:
 ```
 
 Choose the block whose `markdown` contains the text you want to edit or review.
-If the target spans multiple blocks, use multiple operations.
+If the target spans multiple blocks, use multiple operations. On `/ops`, include
+`quote` when anchoring to specific text within the chosen block; `quote`
+complements, but does not replace, the optional shifted-block guard from
+`contentHash`.
 
 `baseToken` is opaque. Copy the raw value from `/snapshot` verbatim into
 requests. Write endpoints also accept ETag-shaped values copied from HTTP
@@ -129,8 +134,8 @@ curl -sS -I "$DOC" | tr -d '\r' | sed -n 's/^[Ee][Tt][Aa][Gg]: //p'
 
 The `ETag` value is also accepted as a write `baseToken`, while `/snapshot`
 returns the easier raw form. Re-read the full `/snapshot` when you also need
-fresh block `ref` values — for example after editing the same block you are
-about to write to again.
+fresh ordinals or want fresh `contentHash` guards — for example after editing
+the same block you are about to write to again.
 
 ## Direct Edits
 
@@ -150,8 +155,7 @@ curl -sS -X POST "$DOC/edit" \
       {
         "op": "replace_block",
         "ref": {
-          "ordinal": 0,
-          "contentHash": "abc123"
+          "ordinal": 0
         },
         "block": { "markdown": "# Revised title\n\n" }
       }
@@ -172,8 +176,7 @@ curl -sS -X POST "$DOC/edit" \
       {
         "op": "insert_after",
         "ref": {
-          "ordinal": 0,
-          "contentHash": "abc123"
+          "ordinal": 0
         },
         "blocks": [
           { "markdown": "First inserted paragraph\n" },
@@ -247,7 +250,7 @@ refs are refreshed by ordinal after earlier wrapper phases.
     { "op": "suggestion.accept", "id": "s1" },
     {
       "op": "edit.replace_block",
-      "ref": { "ordinal": 4, "contentHash": "abc123" },
+      "ref": { "ordinal": 4 },
       "block": { "markdown": "Updated block markdown\n\n" }
     },
     { "op": "comment.resolve", "id": "c1" }
@@ -275,8 +278,7 @@ curl -sS -X POST "$DOC/ops" \
       {
         "op": "comment.add",
         "ref": {
-          "ordinal": 0,
-          "contentHash": "abc123"
+          "ordinal": 0
         },
         "quote": "Title",
         "body": "Consider making this title more specific."
@@ -300,8 +302,7 @@ curl -sS -X POST "$DOC/ops" \
         "op": "suggestion.add",
         "kind": "replace",
         "ref": {
-          "ordinal": 0,
-          "contentHash": "abc123"
+          "ordinal": 0
         },
         "quote": "Title",
         "content": "Project Plan"
@@ -377,18 +378,19 @@ curl -sS -X POST "$DOC/ops" \
   -d "$(jq -n --arg bt "$BT" \
     '{baseToken:$bt, by:"Codex", operations:[
       {op:"comment.add",
-       ref:{ordinal:0, contentHash:"abc123"},
+       ref:{ordinal:0},
        quote:"Title", body:"Make this more specific."},
       {op:"suggestion.add", kind:"replace",
-       ref:{ordinal:3, contentHash:"def456"},
+       ref:{ordinal:3},
        quote:"16 GB is workable",
        content:"16 GB is a reasonable starting point"}
     ]}')"
 ```
 
-Each `ref.contentHash` must match the current `/snapshot` for that block. Reuse
-cached hashes for blocks you have not touched; refetch a hash only for a block
-you already wrote to and are annotating again.
+When you include `ref.contentHash`, it must match the current `/snapshot` for
+that block. Omit it for the normal read-snapshot-then-write flow. Include a
+cached hash only when you intentionally reuse older refs after refreshing just
+the token and want the server to reject shifted or edited blocks.
 
 ## Events
 
@@ -414,8 +416,8 @@ curl -sS -X POST "$ORIGIN/v1/libraries/$LIBRARY_ENCODED/events/ack" \
 
 | Error | Action |
 |---|---|
-| `STALE_BASE` | The document advanced. Refresh `baseToken` (`HEAD $DOC`, or `/snapshot` if you also need fresh refs), rebuild, retry once |
-| Missing or invalid `ref` | Use the exact ref from the current snapshot |
+| `STALE_BASE` | The document advanced. Refresh `baseToken` (`HEAD $DOC`, or `/snapshot` if you also need fresh ordinals or hash guards), rebuild, retry once |
+| Missing or invalid `ref` | Use an ordinal from the current snapshot; include `contentHash` only when you want the optional hash guard |
 | `ANCHOR_NOT_FOUND` | The `quote` is not a substring of the block. Copy it verbatim from `/snapshot` |
 | `AMBIGUOUS_ANCHOR` | The `quote` occurs more than once in the block. Extend it with adjacent text until unique |
 | Unsupported operation | Check `/.well-known/agent.json` for supported operations |
@@ -431,7 +433,7 @@ Collect raw evidence before summarizing:
 
 - request URL, method, status, and response body
 - library, document path, and agent id
-- `baseToken` and block refs used
+- `baseToken`, ordinals, and any `contentHash` guards used
 - event id, `nextAfter`, and `origin_id` if relevant
 - whether a fresh `/snapshot` and one safe retry changed the outcome
 - any mismatch between REST responses and the open browser document

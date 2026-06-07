@@ -92,14 +92,18 @@ document version:
 }
 ```
 
-Use the latest top-level `baseToken` and the exact `ref` from the current
-snapshot for `/edit` and `/ops`. `/snapshot` returns the easiest JSON form: the
-raw version id. Write endpoints also accept ETag-shaped values copied from
-HTTP `ETag` headers, such as `"version_123"` or `W/"version_123"`.
+Use the latest top-level `baseToken` and the target block's `ref.ordinal` for
+`/edit` and `/ops`. Snapshot responses always include `ref.contentHash`, but it
+is optional in write requests: omit it when writing immediately after reading
+the same `/snapshot`, and include it when you refresh only the token via `HEAD`
+but reuse older refs and want shifted or edited blocks to be caught. `/snapshot`
+returns the easiest JSON form: the raw version id. Write endpoints also accept
+ETag-shaped values copied from HTTP `ETag` headers, such as `"version_123"` or
+`W/"version_123"`.
 
-If you only need to refresh the token after a write and do not need fresh block
-refs, you can read the `ETag` header with `HEAD $DOC`. Re-read `/snapshot` when
-you need current block refs.
+If you only need to refresh the token after a write and do not need fresh
+ordinals or hashes, you can read the `ETag` header with `HEAD $DOC`. Re-read
+`/snapshot` when you need current block refs.
 
 Fallback full document read:
 
@@ -132,17 +136,21 @@ planned changes without committing them.
 
 ## How Block Refs Work
 
-A block `ref` is a concurrency guard. It includes the block position and content
-hash for the current top-level `baseToken`. If the document changes, old refs
-may become stale.
+A block `ref` targets a top-level Markdown block. Its `ordinal` is the block
+position for the current top-level `baseToken`; its optional `contentHash` is an
+extra guard you can send when reusing older refs after a token-only refresh. If
+the document changes, old refs may become stale.
 
 When choosing a target:
 
 - Pick the block whose `markdown` contains the text you want to edit or review.
-- Copy the whole `ref` object from the current snapshot.
+- Use the block's `ordinal`; include `contentHash` only when you want the
+  optional shifted-block guard.
 - If the target spans multiple blocks, use multiple operations.
 - If a write reports `STALE_BASE`, discard old refs, fetch a fresh snapshot, and
   rebuild the operation from the new refs.
+- On `/ops`, include `quote` when anchoring to specific text within the chosen
+  block; `quote` complements, but does not replace, the optional hash guard.
 
 ## Direct Edits
 
@@ -162,8 +170,7 @@ curl -sS -X POST "$DOC/edit" \
       {
         "op": "replace_block",
         "ref": {
-          "ordinal": 0,
-          "contentHash": "abc123"
+          "ordinal": 0
         },
         "block": { "markdown": "# Revised title\n\n" }
       }
@@ -184,8 +191,7 @@ curl -sS -X POST "$DOC/edit" \
       {
         "op": "insert_after",
         "ref": {
-          "ordinal": 0,
-          "contentHash": "abc123"
+          "ordinal": 0
         },
         "blocks": [
           { "markdown": "First inserted paragraph\n" },
@@ -259,7 +265,7 @@ refs are refreshed by ordinal after earlier wrapper phases.
     { "op": "suggestion.accept", "id": "s1" },
     {
       "op": "edit.replace_block",
-      "ref": { "ordinal": 4, "contentHash": "abc123" },
+      "ref": { "ordinal": 4 },
       "block": { "markdown": "Updated block markdown\n\n" }
     },
     { "op": "comment.resolve", "id": "c1" }
@@ -287,8 +293,7 @@ curl -sS -X POST "$DOC/ops" \
       {
         "op": "comment.add",
         "ref": {
-          "ordinal": 0,
-          "contentHash": "abc123"
+          "ordinal": 0
         },
         "quote": "Title",
         "body": "Consider making this title more specific."
@@ -312,8 +317,7 @@ curl -sS -X POST "$DOC/ops" \
         "op": "suggestion.add",
         "kind": "replace",
         "ref": {
-          "ordinal": 0,
-          "contentHash": "abc123"
+          "ordinal": 0
         },
         "quote": "Title",
         "content": "Project Plan"
@@ -445,10 +449,11 @@ curl -sS -X POST "$ORIGIN/v1/libraries/$LIBRARY_ENCODED/events/ack" \
 ## Errors And Retry Rules
 
 - `STALE_BASE`: the document changed since your snapshot. Fetch `/snapshot`
-  again, rebuild the request with the new `baseToken` and block refs, and retry
-  once.
-- Missing or invalid `ref`: use the exact block ref from the current snapshot.
-  Do not invent refs or reuse refs from a previous version.
+  again, rebuild the request with the new `baseToken` and ordinals, and retry
+  once. If you are intentionally reusing older refs after a token-only refresh,
+  include `contentHash` as the optional hash guard.
+- Missing or invalid `ref`: use an ordinal from the current snapshot; include
+  `contentHash` only when you want the optional hash guard.
 - `ANCHOR_NOT_FOUND`: the `quote` is not a substring of the block. Copy it
   verbatim from `/snapshot`.
 - `AMBIGUOUS_ANCHOR`: the `quote` occurs more than once in the block. Extend it

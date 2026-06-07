@@ -139,6 +139,30 @@ fn assert_path_parameter_enum_contains(
     assert_schema_enum_contains(openapi, &parameter["schema"], expected);
 }
 
+fn assert_schema_type_contains(schema: &Value, expected: &str) {
+    if let Some(schema_type) = schema.get("type").and_then(Value::as_str) {
+        assert_eq!(schema_type, expected);
+        return;
+    }
+    if let Some(types) = schema.get("type").and_then(Value::as_array) {
+        assert!(
+            types.iter().any(|schema_type| schema_type == expected),
+            "schema type {types:?} should include {expected}"
+        );
+        return;
+    }
+    if let Some(one_of) = schema.get("oneOf").and_then(Value::as_array) {
+        assert!(
+            one_of
+                .iter()
+                .any(|schema| schema.get("type").and_then(Value::as_str) == Some(expected)),
+            "schema oneOf {one_of:?} should include type {expected}"
+        );
+        return;
+    }
+    panic!("schema {schema:?} should expose a type");
+}
+
 fn ops_request(base_token: impl serde::Serialize, operation: Value) -> Value {
     serde_json::json!({
         "baseToken": base_token,
@@ -852,6 +876,144 @@ async fn agent_edit_applies_block_ops_with_dry_run_stale_base_and_idempotency() 
         .oneshot(json_request(
             Method::POST,
             "/v1/libraries/agentedit/documents/notes/one.md/edit",
+            edit,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    let body: Value = response_json(response).await;
+    assert!(body["error"].as_str().unwrap().contains("STALE_BASE"));
+}
+
+#[tokio::test]
+async fn agent_edit_accepts_block_refs_without_content_hash() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agenteditordinal").await.unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "notes/one.md",
+            b"One\n\nTwo\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agenteditordinal/documents/notes/one.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let snapshot: Value = response_json(response).await;
+    let edit = serde_json::json!({
+        "baseToken": snapshot["baseToken"].as_str().unwrap(),
+        "operations": [{
+            "op": "replace_block",
+            "ref": { "ordinal": 0 },
+            "block": { "markdown": "Changed\n\n" }
+        }]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agenteditordinal/documents/notes/one.md/edit",
+            edit,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agenteditordinal/documents/notes/one.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+        "Changed\n\nTwo\n"
+    );
+}
+
+#[tokio::test]
+async fn agent_edit_rejects_wrong_content_hash_when_present() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agenteditwronghash").await.unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "notes/one.md",
+            b"One\n\nTwo\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agenteditwronghash/documents/notes/one.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let snapshot: Value = response_json(response).await;
+    let edit = serde_json::json!({
+        "baseToken": snapshot["baseToken"].as_str().unwrap(),
+        "operations": [{
+            "op": "replace_block",
+            "ref": {
+                "ordinal": 0,
+                "contentHash": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "block": { "markdown": "Changed\n\n" }
+        }]
+    });
+
+    let response = app
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agenteditwronghash/documents/notes/one.md/edit",
             edit,
         ))
         .await
@@ -2164,6 +2326,99 @@ async fn agent_ops_add_comments_and_suggestions_with_review_endmatter() {
     assert!(markdown.contains("suggestions:"));
     assert!(markdown.contains("s1:"));
     assert!(etag.starts_with('"'));
+}
+
+#[tokio::test]
+async fn agent_ops_accepts_ordinal_only_and_null_content_hash_refs() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentreviewordinal").await.unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            b"One target here.\n\nSecond paragraph.\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreviewordinal/documents/notes/review.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let snapshot: Value = response_json(response).await;
+    let batch = serde_json::json!({
+        "baseToken": snapshot["baseToken"].as_str().unwrap(),
+        "by": "ai:codex",
+        "operations": [
+            {
+                "op": "comment.add",
+                "id": "c1",
+                "ref": { "ordinal": 0 },
+                "quote": "target",
+                "body": "Needs support."
+            },
+            {
+                "op": "suggestion.add",
+                "id": "s1",
+                "kind": "replace",
+                "ref": { "ordinal": 1, "contentHash": null },
+                "quote": "Second",
+                "content": "Better"
+            }
+        ]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentreviewordinal/documents/notes/review.md/ops",
+            batch,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreviewordinal/documents/notes/review.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let markdown = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(markdown.contains("One {==target==}{>>Needs support.<<}{#c1} here."));
+    assert!(markdown.contains("{~~Second~>Better~~}{#s1} paragraph."));
 }
 
 #[tokio::test]
@@ -5594,6 +5849,19 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
             .get("baseToken")
             .is_none()
     );
+    let block_ref_required = openapi["components"]["schemas"]["AgentBlockRef"]["required"]
+        .as_array()
+        .expect("AgentBlockRef should expose required fields");
+    assert!(block_ref_required.iter().any(|value| value == "ordinal"));
+    assert!(
+        !block_ref_required
+            .iter()
+            .any(|value| value == "contentHash")
+    );
+    let content_hash_schema =
+        &openapi["components"]["schemas"]["AgentBlockRef"]["properties"]["contentHash"];
+    assert_schema_type_contains(content_hash_schema, "string");
+    assert_schema_type_contains(content_hash_schema, "null");
     assert!(
         openapi["components"]["schemas"]["AgentOpsRequest"]["properties"]["operations"].is_object()
     );
