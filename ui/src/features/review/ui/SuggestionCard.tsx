@@ -3,10 +3,8 @@ import { useEffect, useRef } from 'react';
 import type { TResolvedSuggestion } from '@platejs/suggestion';
 
 import { cn } from '../../../lib/utils';
-import { AgentAvatar } from '../../agents/AgentAvatar';
-import { agentKind } from '../../agents/agents';
-import { firstWord, formatRelativeTime, initials } from '../format';
 import { useReviewStore } from '../review-store';
+import { ReviewAuthorHeader } from './ReviewAuthorHeader';
 
 interface SuggestionCardProps {
   suggestion: TResolvedSuggestion;
@@ -96,17 +94,7 @@ export function SuggestionCard({ suggestion, onAccept, onReject }: SuggestionCar
       ref={ref}
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2.5">
-          <AgentAvatar
-            className="bg-surface text-xs font-medium text-muted ring-1 ring-inset ring-line"
-            fallback={initials(suggestion.userId)}
-            kind={agentKind(suggestion.userId)}
-          />
-          <div className="flex min-w-0 flex-col">
-            <span className="truncate text-sm font-medium leading-tight text-ink" title={suggestion.userId}>{firstWord(suggestion.userId)}</span>
-            <span className="text-[11px] leading-tight text-faint">{formatRelativeTime(suggestion.createdAt.toISOString())}</span>
-          </div>
-        </div>
+        <ReviewAuthorHeader by={suggestion.userId} at={suggestion.createdAt.toISOString()} />
         <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
           <button
             aria-label="Accept suggestion"

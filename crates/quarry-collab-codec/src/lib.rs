@@ -7,9 +7,10 @@ pub mod yjs_builder;
 
 pub use markdown::{block_markdown_to_slate, block_markdown_to_slate_raw};
 pub use review::{
-    has_review_endmatter, hydrate_inline_comment_bodies, review_block_to_slate,
-    review_blocks_to_slate, review_markdown_to_slate, review_meta_with_inline_comment_bodies,
-    split_review_endmatter, ReviewMeta, ReviewMetaEntry, ReviewMetaPatch,
+    has_review_endmatter, hydrate_inline_comment_bodies, inline_comment_body,
+    review_block_to_slate, review_blocks_to_slate, review_markdown_to_slate,
+    review_meta_with_inline_comment_bodies, split_review_endmatter, ReviewMeta, ReviewMetaEntry,
+    ReviewMetaPatch,
 };
 pub use slate::{Attrs, Node};
 pub use trailing::{is_empty_paragraph, strip_trailing_empty_paragraphs};

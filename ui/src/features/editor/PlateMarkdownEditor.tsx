@@ -408,7 +408,6 @@ export function PlateMarkdownEditor({
   const lastContentRef = useRef(content);
   const lastSerializedRef = useRef(serialize(initialValueRef.current));
   const pendingInjectedVersionRef = useRef<CollabInjectedVersion | null>(null);
-  const adoptedInjectedVersionIdRef = useRef<string | null>(null);
   const ackedInjectedVersionIdsRef = useRef<Set<string>>(new Set());
   const injectionFallbackTimerRef = useRef<number | null>(null);
   const reviewResolutionPublishTimerRef = useRef<number | null>(null);
@@ -477,7 +476,6 @@ export function PlateMarkdownEditor({
     remoteChangeSinceCleanRef.current = false;
     pendingInjectedVersionRef.current = null;
     const loadedVersionId = versionIdFromEtag(collab.loadedEtag);
-    adoptedInjectedVersionIdRef.current = loadedVersionId;
     ackedInjectedVersionIdsRef.current = new Set(loadedVersionId ? [loadedVersionId] : []);
     storeHydrate(meta);
 
@@ -527,16 +525,12 @@ export function PlateMarkdownEditor({
     hasLocalEditsSinceCleanRef.current = false;
     remoteChangeSinceCleanRef.current = false;
     pendingInjectedVersionRef.current = null;
-    adoptedInjectedVersionIdRef.current = null;
     ackedInjectedVersionIdsRef.current = new Set();
     storeHydrate(meta);
   }, [collabEnabled, content, editor, storeHydrate]);
 
   const isInjectedVersionAlreadyAdopted = useCallback((versionId: string) => {
-    return (
-      adoptedInjectedVersionIdRef.current === versionId ||
-      ackedInjectedVersionIdsRef.current.has(versionId)
-    );
+    return ackedInjectedVersionIdsRef.current.has(versionId);
   }, []);
 
   const consumeInjectionEnvelope = useCallback(
@@ -554,7 +548,6 @@ export function PlateMarkdownEditor({
         hadLocalEdits: hasLocalEditsSinceCleanRef.current,
       });
       pendingInjectedVersionRef.current = null;
-      adoptedInjectedVersionIdRef.current = injectedVersion.versionId;
       ackedInjectedVersionIdsRef.current.add(injectedVersion.versionId);
       const hadLocalEdits = hasLocalEditsSinceCleanRef.current;
       lastContentRef.current = nextMarkdown;

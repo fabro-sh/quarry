@@ -1,5 +1,6 @@
 import * as Y from 'yjs';
 
+import { isRecord } from '../../lib/utils';
 import {
   isEmptyReviewMeta,
   type ReviewMeta,
@@ -201,8 +202,4 @@ function stableEntry(entry: ReviewMetaEntry): ReviewMetaEntry {
   if (entry.status === 'resolved') stable.status = 'resolved';
   if (entry.resolved !== undefined) stable.resolved = entry.resolved;
   return stable;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

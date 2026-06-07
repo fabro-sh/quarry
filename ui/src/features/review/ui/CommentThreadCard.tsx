@@ -5,44 +5,14 @@ import type { PlateEditor } from 'platejs/react';
 import { useEffect, useRef, useState } from 'react';
 
 import { cn } from '../../../lib/utils';
-import { AgentAvatar } from '../../agents/AgentAvatar';
-import { agentKind } from '../../agents/agents';
 import { currentAuthor } from '../identity';
-import { firstWord, formatRelativeTime, initials } from '../format';
 import { removeCommentMark } from '../remove-comment';
-import type { ReviewMeta, ReviewMetaEntry } from '../rfm-types';
 import { addReply, deleteComment, editComment, resolveComment, useReviewStore, type ReviewThread } from '../review-store';
 import { applyReviewMutation } from '../review-doc';
+import { ReviewAuthorHeader } from './ReviewAuthorHeader';
 
 const menuItem =
   'flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-body outline-none hover:bg-well data-highlighted:bg-well';
-
-function applyMeta(reducer: (meta: ReviewMeta) => ReviewMeta) {
-  applyReviewMutation(reducer);
-}
-
-function Avatar({ by }: { by: string }) {
-  return (
-    <AgentAvatar
-      className="bg-surface text-xs font-medium text-muted ring-1 ring-inset ring-line"
-      fallback={initials(by)}
-      kind={agentKind(by)}
-    />
-  );
-}
-
-function CommentHeader({ entry, badge }: { entry: ReviewMetaEntry; badge?: boolean }) {
-  return (
-    <div className="flex items-center gap-2.5">
-      <Avatar by={entry.by} />
-      <div className="flex min-w-0 flex-col">
-        <span className="truncate text-sm font-medium leading-tight text-ink" title={entry.by}>{firstWord(entry.by)}</span>
-        <span className="text-[11px] leading-tight text-faint">{formatRelativeTime(entry.at)}</span>
-      </div>
-      {badge ? <span className="ml-1 text-[11px] font-medium text-muted">Resolved</span> : null}
-    </div>
-  );
-}
 
 export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; editor: PlateEditor }) {
   const activeId = useReviewStore((state) => state.activeId);
@@ -68,7 +38,7 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
     const body = draft.trim();
     if (!body) return;
     if (rootHasBody) {
-      applyMeta((meta) =>
+      applyReviewMutation((meta) =>
         addReply(meta, nanoid(), {
           parentId: thread.id,
           body,
@@ -77,18 +47,18 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
         })
       );
     } else {
-      applyMeta((meta) => editComment(meta, thread.id, body));
+      applyReviewMutation((meta) => editComment(meta, thread.id, body));
     }
     setDraft('');
   }
 
   function resolve() {
-    applyMeta((meta) => resolveComment(meta, thread.id));
+    applyReviewMutation((meta) => resolveComment(meta, thread.id));
   }
 
   function discard() {
     removeCommentMark(editor, thread.id);
-    applyMeta((meta) => deleteComment(meta, thread.id));
+    applyReviewMutation((meta) => deleteComment(meta, thread.id));
   }
 
   return (
@@ -107,7 +77,7 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
       ref={ref}
     >
       <div className="flex items-start justify-between gap-2">
-        <CommentHeader entry={thread.entry} badge={resolved} />
+        <ReviewAuthorHeader by={thread.entry.by} at={thread.entry.at} resolved={resolved} />
         <div
           className={cn(
             'flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100',
@@ -162,7 +132,7 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
         <div className="mt-3 flex flex-col gap-3 border-l border-line pl-3">
           {thread.replies.map((reply) => (
             <div key={reply.id}>
-              <CommentHeader entry={reply.entry} />
+              <ReviewAuthorHeader by={reply.entry.by} at={reply.entry.at} />
               <p className="mt-1 text-sm whitespace-pre-wrap text-body">{reply.entry.body ?? ''}</p>
             </div>
           ))}

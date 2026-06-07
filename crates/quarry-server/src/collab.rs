@@ -536,7 +536,7 @@ async fn clean_seed_update_from_document_seed(
     seed: CollabDocumentSeed,
 ) -> Option<CleanSeedUpdate> {
     let store = store?;
-    if !is_markdown_content_type(&seed.content_type) {
+    if !crate::is_markdown_content_type(&seed.content_type) {
         tracing::debug!(
             event = "collab.recovery.loaded",
             %document_id,
@@ -645,19 +645,6 @@ async fn clean_seed_update_from_document_seed(
         base_version_id: seed.head_version_id,
         update_v1,
     })
-}
-
-fn is_markdown_content_type(content_type: &str) -> bool {
-    matches!(
-        content_type
-            .split(';')
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
-        "text/markdown" | "text/x-markdown" | "application/markdown" | "application/x-markdown"
-    )
 }
 
 #[derive(Clone, Debug)]

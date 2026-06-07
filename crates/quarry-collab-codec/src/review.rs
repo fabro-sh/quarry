@@ -229,7 +229,7 @@ fn is_review_meta_value(value: &serde_yaml::Value) -> bool {
         || mapping.contains_key(serde_yaml::Value::String("suggestions".to_string()))
 }
 
-fn inline_comment_body() -> &'static Regex {
+pub fn inline_comment_body() -> &'static Regex {
     static INLINE_COMMENT_BODY: OnceLock<Regex> = OnceLock::new();
     INLINE_COMMENT_BODY.get_or_init(|| {
         Regex::new(r"\{==(?s:(.*?))==\}\{>>(?s:(.*?))<<\}\{#([A-Za-z0-9_-]+)\}")

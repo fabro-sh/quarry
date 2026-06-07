@@ -1,3 +1,4 @@
+import { isRecord } from '../../lib/utils';
 import { collabDebug } from './collab-debug';
 
 export interface DocumentEventPayload {
@@ -99,10 +100,6 @@ export function parseInjectionEnvelope(raw: unknown): InjectionEnvelope | null {
   }
 
   return { etag, versionId };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function invalidEnvelope(reason: string): null {

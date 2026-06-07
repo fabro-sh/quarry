@@ -1,12 +1,9 @@
 import { useState } from 'react';
 
 import { cn } from '../../../lib/utils';
-import { AgentAvatar } from '../../agents/AgentAvatar';
-import { agentKind } from '../../agents/agents';
-import { firstWord, formatRelativeTime, initials } from '../format';
-import type { ReviewMetaEntry } from '../rfm-types';
 import { buildThreads, reopenComment, useReviewStore, type ReviewThread } from '../review-store';
 import { applyReviewMutation } from '../review-doc';
+import { ReviewAuthorHeader } from './ReviewAuthorHeader';
 
 // The Comments tab in the right pane is the document's complete comment record:
 // unlike the rail (which only lists open threads), it shows resolved threads too
@@ -39,23 +36,6 @@ function emptyLabel(filter: StatusFilter): string {
   return 'No comments';
 }
 
-function Header({ entry, resolved }: { entry: ReviewMetaEntry; resolved?: boolean }) {
-  return (
-    <div className="flex items-center gap-2.5">
-      <AgentAvatar
-        className="bg-surface text-xs font-medium text-muted ring-1 ring-inset ring-line"
-        fallback={initials(entry.by)}
-        kind={agentKind(entry.by)}
-      />
-      <div className="flex min-w-0 flex-col">
-        <span className="truncate text-sm font-medium leading-tight text-ink" title={entry.by}>{firstWord(entry.by)}</span>
-        <span className="text-[11px] leading-tight text-faint">{formatRelativeTime(entry.at)}</span>
-      </div>
-      {resolved ? <span className="ml-1 text-[11px] font-medium text-muted">Resolved</span> : null}
-    </div>
-  );
-}
-
 function CommentItem({ thread }: { thread: ReviewThread }) {
   const resolved = isResolved(thread);
 
@@ -72,7 +52,7 @@ function CommentItem({ thread }: { thread: ReviewThread }) {
       onMouseLeave={() => useReviewStore.getState().setHoverId(null)}
     >
       <div className="flex items-start justify-between gap-2">
-        <Header entry={thread.entry} resolved={resolved} />
+        <ReviewAuthorHeader by={thread.entry.by} at={thread.entry.at} resolved={resolved} />
         {resolved ? (
           <button
             className="shrink-0 rounded px-2 py-1 text-xs font-medium text-muted opacity-0 transition-opacity hover:bg-well hover:text-body group-hover:opacity-100 focus-visible:opacity-100"
@@ -91,7 +71,7 @@ function CommentItem({ thread }: { thread: ReviewThread }) {
         <div className="mt-3 flex flex-col gap-3 border-l border-line pl-3">
           {thread.replies.map((reply) => (
             <div key={reply.id}>
-              <Header entry={reply.entry} />
+              <ReviewAuthorHeader by={reply.entry.by} at={reply.entry.at} />
               <p className="mt-1 text-sm whitespace-pre-wrap text-body">{reply.entry.body ?? ''}</p>
             </div>
           ))}

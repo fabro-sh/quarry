@@ -18,8 +18,9 @@ use pulldown_cmark::{
     Event as MarkdownEvent, Options as MarkdownOptions, Parser as MarkdownParser, Tag,
 };
 use quarry_collab_codec::{
-    build_nodes, review_block_to_slate, review_blocks_to_slate, review_markdown_to_slate,
-    split_review_endmatter, ReviewMeta, ReviewMetaEntry, ReviewMetaPatch, Unsupported,
+    build_nodes, inline_comment_body, review_block_to_slate, review_blocks_to_slate,
+    review_markdown_to_slate, review_meta_with_inline_comment_bodies, split_review_endmatter,
+    ReviewMeta, ReviewMetaEntry, ReviewMetaPatch, Unsupported,
 };
 use quarry_core::{
     now_timestamp, CollabInviteToken, ConflictRecord, DocumentLink, DocumentListEntry,
@@ -33,14 +34,13 @@ use quarry_git::{
     GitExportResult, GitImportResult, GitSyncResult,
 };
 use quarry_storage::{QuarryStore, StoreEvent, StoreEventKind};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::future::{Future, IntoFuture};
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use utoipa::{OpenApi, ToSchema};
@@ -2946,12 +2946,6 @@ fn agent_ops_injection_batch(
     InjectionBatch::new(ops).ok_or_else(|| Unsupported::new("empty injection batch"))
 }
 
-fn review_meta_with_inline_comment_bodies(markdown: &str) -> (String, ReviewMeta) {
-    let (body, mut meta) = split_review_endmatter(markdown);
-    hydrate_inline_comment_bodies(&body, &mut meta);
-    (body, meta)
-}
-
 struct AppliedAgentOps {
     markdown: String,
     results: Vec<AgentOpsResultItem>,
@@ -3469,28 +3463,6 @@ fn review_removals_patch_from_agent_edit(
 
 fn body_has_review_marker(body: &str, id: &str) -> bool {
     body.contains(&format!("{{#{id}}}"))
-}
-
-fn hydrate_inline_comment_bodies(body: &str, meta: &mut ReviewMeta) {
-    for captures in inline_comment_body().captures_iter(body) {
-        let Some(comment_body) = captures.get(2) else {
-            continue;
-        };
-        let Some(id) = captures.get(3) else {
-            continue;
-        };
-        if let Some(entry) = meta.comments.get_mut(id.as_str()) {
-            entry.body = Some(comment_body.as_str().to_string());
-        }
-    }
-}
-
-fn inline_comment_body() -> &'static Regex {
-    static INLINE_COMMENT_BODY: OnceLock<Regex> = OnceLock::new();
-    INLINE_COMMENT_BODY.get_or_init(|| {
-        Regex::new(r"\{==(?s:(.*?))==\}\{>>(?s:(.*?))<<\}\{#([A-Za-z0-9_-]+)\}")
-            .expect("inline comment body regex is valid")
-    })
 }
 
 fn required_operation_block(operation: &AgentBlockOperation) -> Result<&str, ApiError> {

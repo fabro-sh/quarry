@@ -116,7 +116,7 @@ struct StagedChange {
     new_path: Option<String>,
 }
 
-fn log_store_event_emitted(event: &StoreEvent) {
+fn log_store_event(event: &StoreEvent) {
     tracing::debug!(
         event = "storage.event.emitted",
         store_event = %store_event_name(&event.kind),
@@ -133,25 +133,6 @@ fn log_store_event_emitted(event: &StoreEvent) {
         conflicts = event.conflicts.unwrap_or(0),
         origin_id = event.origin_id.as_deref().unwrap_or(""),
         "store event emitted"
-    );
-}
-
-fn log_store_event_domain(event: &StoreEvent) {
-    tracing::debug!(
-        event = %store_event_name(&event.kind),
-        library_id = %event.library_id,
-        path = event.path.as_deref().unwrap_or(""),
-        new_path = event.new_path.as_deref().unwrap_or(""),
-        tx_id = event.tx_id.as_deref().unwrap_or(""),
-        doc_id = event.doc_id.as_deref().unwrap_or(""),
-        version_id = event.version_id.as_deref().unwrap_or(""),
-        source = event.source.as_ref().map(DocumentSource::as_str).unwrap_or(""),
-        conflict_id = event.conflict_id.as_deref().unwrap_or(""),
-        peer_id = event.peer_id.as_deref().unwrap_or(""),
-        applied = event.applied.unwrap_or(0),
-        conflicts = event.conflicts.unwrap_or(0),
-        origin_id = event.origin_id.as_deref().unwrap_or(""),
-        "store domain event"
     );
 }
 
@@ -240,8 +221,7 @@ impl QuarryStore {
     }
 
     fn emit_event(&self, event: StoreEvent) {
-        log_store_event_emitted(&event);
-        log_store_event_domain(&event);
+        log_store_event(&event);
         let _ = self.event_tx.send(event);
     }
 

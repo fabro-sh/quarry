@@ -677,22 +677,6 @@ impl FuseProjection {
     }
 }
 
-pub async fn mount_library(
-    store: QuarryStore,
-    library: &str,
-    mountpoint: &Path,
-    read_only: bool,
-) -> Result<()> {
-    mount_library_with_shutdown(
-        store,
-        library,
-        mountpoint,
-        read_only,
-        mount_shutdown_signal(),
-    )
-    .await
-}
-
 pub async fn mount_library_with_shutdown<F>(
     store: QuarryStore,
     library: &str,
@@ -715,53 +699,6 @@ where
             "Quarry phase-one FUSE mounts are Linux-only".to_string(),
         ))
     }
-}
-
-async fn mount_shutdown_signal() {
-    let ctrl_c = async {
-        if let Err(error) = tokio::signal::ctrl_c().await {
-            tracing::warn!(
-                event = "shutdown.signal.listen_failed",
-                signal = "ctrl_c",
-                %error,
-                "failed to listen for Ctrl-C"
-            );
-        }
-    };
-
-    #[cfg(unix)]
-    {
-        let sigterm = async {
-            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                Ok(mut signal) => {
-                    signal.recv().await;
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        event = "shutdown.signal.listen_failed",
-                        signal = "sigterm",
-                        %error,
-                        "failed to listen for SIGTERM"
-                    );
-                    std::future::pending::<()>().await;
-                }
-            }
-        };
-        tokio::select! {
-            _ = ctrl_c => {},
-            _ = sigterm => {},
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        ctrl_c.await;
-    }
-
-    tracing::info!(
-        event = "shutdown.signal.received",
-        "shutdown signal received"
-    );
 }
 
 fn watch_store_events(
