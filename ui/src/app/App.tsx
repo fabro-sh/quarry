@@ -367,6 +367,45 @@ function Workspace() {
     return { originId: collabSessionIdRef.current };
   }
 
+  const clearDeletedDocumentCaches = useCallback(
+    (library: string, path: string) =>
+      Promise.all([
+        mutate(['/v1/document', library, path], undefined, { revalidate: false }),
+        mutate(['/v1/versions', library, path], [], { revalidate: false }),
+        mutate(['/v1/outgoing', library, path], { path, links: [] }, { revalidate: false }),
+        mutate(['/v1/backlinks', library, path], { path, links: [] }, { revalidate: false }),
+      ]),
+    [mutate]
+  );
+
+  const seedCreatedDocumentCaches = useCallback(
+    (
+      library: string,
+      path: string,
+      createdContent: string,
+      createdContentType: string,
+      created: Awaited<ReturnType<typeof createDocument>>
+    ) => {
+      const createdEtag = created.etag || `"${created.outcome.version.id}"`;
+      const documentId = created.outcome.document?.id ?? '';
+      return Promise.all([
+        mutate(
+          ['/v1/document', library, path],
+          {
+            content: createdContent,
+            contentType: createdContentType,
+            documentId,
+            etag: createdEtag,
+            path,
+          },
+          { revalidate: false }
+        ),
+        mutate(['/v1/versions', library, path], [created.outcome.version], { revalidate: false }),
+      ]).then(() => ({ documentId, etag: createdEtag }));
+    },
+    [mutate]
+  );
+
   const recordCollabFlushAck = useCallback((ack: CollabFlushAck) => {
     const session = liveCollabSessionRef.current;
     if (!session) return;
@@ -517,6 +556,10 @@ function Workspace() {
       void mutate(['/v1/backlinks', activeLibrary, path]);
     }
 
+    function clearDeletedDocumentState(path: string) {
+      void clearDeletedDocumentCaches(activeLibrary, path);
+    }
+
     function invalidateCurrentBacklinks() {
       const currentPath = selectedPathRef.current;
       if (currentPath) void mutate(['/v1/backlinks', activeLibrary, currentPath]);
@@ -625,8 +668,10 @@ function Workspace() {
         return;
       }
 
-      if (payload.type === 'doc.deleted' && payload.path === currentPath) {
-        setSelectedPath('');
+      if (payload.type === 'doc.deleted' && payload.path) {
+        clearDeletedDocumentState(payload.path);
+        if (payload.path === currentPath) setSelectedPath('');
+        else invalidateCurrentBacklinks();
         return;
       }
       if (payload.type === 'doc.moved' && payload.from === currentPath && payload.to) {
@@ -690,7 +735,7 @@ function Workspace() {
       source.close();
       stopPollingFallback();
     };
-  }, [activeLibrary, mutate]);
+  }, [activeLibrary, clearDeletedDocumentCaches, mutate]);
 
   const { data: documents = [] } = useSWR(
     activeLibrary ? ['/v1/documents', activeLibrary] : null,
@@ -1116,7 +1161,16 @@ function Workspace() {
     if (!activeLibrary) return;
     const path = window.prompt('New document path', defaultPath);
     if (!path) return;
-    await createDocument(activeLibrary, path, '# Untitled\n', 'text/markdown', browserMutationOptions());
+    const initialContent = '# Untitled\n';
+    const initialContentType = 'text/markdown';
+    const created = await createDocument(
+      activeLibrary,
+      path,
+      initialContent,
+      initialContentType,
+      browserMutationOptions()
+    );
+    await seedCreatedDocumentCaches(activeLibrary, path, initialContent, initialContentType, created);
     await mutate(['/v1/documents', activeLibrary]);
     setSelectedPath(path);
   }
@@ -1128,7 +1182,16 @@ function Workspace() {
     if (!path) return;
     // Flush the pending draft before creating + switching (see openDocument).
     if (saveStateRef.current === 'drafted' && canCurrentBrowserFlush()) void save();
-    await createDocument(activeLibrary, path, '# Untitled\n', 'text/markdown', browserMutationOptions());
+    const initialContent = '# Untitled\n';
+    const initialContentType = 'text/markdown';
+    const created = await createDocument(
+      activeLibrary,
+      path,
+      initialContent,
+      initialContentType,
+      browserMutationOptions()
+    );
+    await seedCreatedDocumentCaches(activeLibrary, path, initialContent, initialContentType, created);
     await Promise.all([
       mutate(['/v1/documents', activeLibrary]),
       selectedPath ? mutate(['/v1/outgoing', activeLibrary, selectedPath]) : Promise.resolve(),
@@ -1173,8 +1236,10 @@ function Workspace() {
 
   async function deleteCurrent() {
     if (!activeLibrary || !selectedPath) return;
-    if (!window.confirm(`Delete ${selectedPath}?`)) return;
-    await deleteDocument(activeLibrary, selectedPath, browserMutationOptions());
+    const deletingPath = selectedPath;
+    if (!window.confirm(`Delete ${deletingPath}?`)) return;
+    await deleteDocument(activeLibrary, deletingPath, browserMutationOptions());
+    await clearDeletedDocumentCaches(activeLibrary, deletingPath);
     await mutate(['/v1/documents', activeLibrary]);
     setSelectedPath('');
   }
@@ -1271,6 +1336,7 @@ function Workspace() {
     if (!activeLibrary) return;
     if (!window.confirm(`Delete ${path}?`)) return;
     await deleteDocument(activeLibrary, path, browserMutationOptions());
+    await clearDeletedDocumentCaches(activeLibrary, path);
     await mutate(['/v1/documents', activeLibrary]);
     if (selectedPath === path) setSelectedPath('');
   }
@@ -1531,10 +1597,9 @@ function Workspace() {
     setCollabExternalChange(null);
     setCollabRebaseKey((key) => key + 1);
     transitionSaveState('saved');
+    await seedCreatedDocumentCaches(library, path, localContent, localContentType, resurrected);
     await Promise.all([
-      mutate(['/v1/document', library, path]),
       mutate(['/v1/documents', library]),
-      mutate(['/v1/versions', library, path]),
       mutate(['/v1/outgoing', library, path]),
       mutate(['/v1/backlinks', library, path]),
     ]);

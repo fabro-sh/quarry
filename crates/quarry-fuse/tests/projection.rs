@@ -108,6 +108,29 @@ async fn projection_coalesces_writes_and_auto_commits_on_release() {
 }
 
 #[tokio::test]
+async fn projection_unlink_then_create_same_path_allocates_new_file_inode() {
+    let store = test_store().await;
+    let library = store.create_library("notes").await.unwrap();
+    let projection = FuseProjection::open(store.clone(), &library.slug, false)
+        .await
+        .unwrap();
+
+    projection.mkdir("drafts").await.unwrap();
+    let first_handle = projection.create_file("drafts/reused.md").await.unwrap();
+    projection.release_handle(first_handle).await.unwrap();
+    let first_inode = projection.attr("drafts/reused.md").await.unwrap().inode;
+
+    projection.unlink("drafts/reused.md").await.unwrap();
+    assert!(projection.attr("drafts/reused.md").await.is_err());
+
+    let second_handle = projection.create_file("drafts/reused.md").await.unwrap();
+    projection.release_handle(second_handle).await.unwrap();
+    let second_inode = projection.attr("drafts/reused.md").await.unwrap().inode;
+
+    assert_ne!(first_inode, second_inode);
+}
+
+#[tokio::test]
 async fn projection_truncate_open_replaces_existing_content_on_release() {
     let store = test_store().await;
     let library = store.create_library("notes").await.unwrap();

@@ -321,6 +321,205 @@ async fn concurrent_auto_commit_writes_publish_without_lost_documents() {
 }
 
 #[tokio::test]
+async fn put_after_delete_same_path_creates_new_document_identity_and_history() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("recreate").await.unwrap();
+
+    let first = store
+        .put_document(
+            &library.slug,
+            "notes/daily.md",
+            b"old".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    store
+        .delete_document(&library.slug, "notes/daily.md", DocumentSource::Rest)
+        .await
+        .unwrap();
+    let second = store
+        .put_document(
+            &library.slug,
+            "notes/daily.md",
+            b"new".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    assert_ne!(first.document.id, second.document.id);
+    assert_eq!(
+        store
+            .get_document(&library.slug, "notes/daily.md")
+            .await
+            .unwrap()
+            .content,
+        b"new"
+    );
+    let history = store
+        .version_history(&library.slug, "notes/daily.md")
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].id, second.version.id);
+    assert!(store
+        .document_version(&library.slug, "notes/daily.md", &first.version.id)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn explicit_transaction_recreate_same_path_uses_new_document_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("txrecreate").await.unwrap();
+
+    let first = store
+        .put_document(
+            &library.slug,
+            "notes/daily.md",
+            b"old".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    store
+        .delete_document(&library.slug, "notes/daily.md", DocumentSource::Rest)
+        .await
+        .unwrap();
+
+    let tx = store
+        .begin_transaction(
+            &library.slug,
+            DocumentSource::Rest,
+            Some("agent".to_string()),
+            Some("recreate".to_string()),
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+    let staged = store
+        .stage_put(
+            &tx.id,
+            "notes/daily.md",
+            b"new".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+        )
+        .await
+        .unwrap();
+
+    assert_ne!(staged.document_id, first.document.id);
+    store.commit_transaction(&tx.id).await.unwrap();
+    let recreated = store
+        .get_document(&library.slug, "notes/daily.md")
+        .await
+        .unwrap();
+    assert_eq!(recreated.id, staged.document_id);
+    assert_eq!(recreated.content, b"new");
+    assert_eq!(
+        store
+            .version_history(&library.slug, "notes/daily.md")
+            .await
+            .unwrap()
+            .iter()
+            .map(|version| version.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![staged.id.as_str()]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_staged_creates_same_path_publish_by_staged_document_id() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("stagedcreates").await.unwrap();
+
+    let tx1 = store
+        .begin_transaction(
+            &library.slug,
+            DocumentSource::Rest,
+            Some("agent-a".to_string()),
+            Some("create a".to_string()),
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+    let tx2 = store
+        .begin_transaction(
+            &library.slug,
+            DocumentSource::Rest,
+            Some("agent-b".to_string()),
+            Some("create b".to_string()),
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+    let staged1 = store
+        .stage_put(
+            &tx1.id,
+            "notes/race.md",
+            b"one".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+        )
+        .await
+        .unwrap();
+    let staged2 = store
+        .stage_put(
+            &tx2.id,
+            "notes/race.md",
+            b"two".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+        )
+        .await
+        .unwrap();
+
+    assert_ne!(staged1.document_id, staged2.document_id);
+    store.commit_transaction(&tx2.id).await.unwrap();
+    let visible = store
+        .get_document(&library.slug, "notes/race.md")
+        .await
+        .unwrap();
+    assert_eq!(visible.id, staged2.document_id);
+    assert_eq!(visible.version.id, staged2.id);
+    assert_eq!(visible.content, b"two");
+
+    let error = store.commit_transaction(&tx1.id).await.unwrap_err();
+    assert!(error.to_string().contains("precondition failed"));
+}
+
+#[tokio::test]
 async fn link_index_updates_from_markdown_writes_and_ignores_binary_content() {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {
@@ -1563,6 +1762,11 @@ async fn move_document_can_reuse_deleted_target_path() {
         .inode_for_path(&library.slug, "drafts/source.md")
         .await
         .unwrap();
+    let source_document_id = store
+        .get_document(&library.slug, "drafts/source.md")
+        .await
+        .unwrap()
+        .id;
 
     store
         .delete_document(&library.slug, "drafts/target.md", DocumentSource::Rest)
@@ -1583,6 +1787,7 @@ async fn move_document_can_reuse_deleted_target_path() {
         .await
         .unwrap();
     assert_eq!(document.content, b"source\n");
+    assert_eq!(document.id, source_document_id);
     assert_eq!(
         store
             .inode_for_path(&library.slug, "drafts/target.md")
@@ -1635,6 +1840,11 @@ async fn committed_transaction_move_can_reuse_deleted_target_path() {
         .inode_for_path(&library.slug, "drafts/source.md")
         .await
         .unwrap();
+    let source_document_id = store
+        .get_document(&library.slug, "drafts/source.md")
+        .await
+        .unwrap()
+        .id;
     store
         .delete_document(&library.slug, "drafts/target.md", DocumentSource::Rest)
         .await
@@ -1661,6 +1871,7 @@ async fn committed_transaction_move_can_reuse_deleted_target_path() {
         .await
         .unwrap();
     assert_eq!(document.content, b"source\n");
+    assert_eq!(document.id, source_document_id);
     assert_eq!(
         store
             .inode_for_path(&library.slug, "drafts/target.md")
@@ -1672,6 +1883,83 @@ async fn committed_transaction_move_can_reuse_deleted_target_path() {
         .get_document(&library.slug, "drafts/source.md")
         .await
         .is_err());
+}
+
+#[tokio::test]
+async fn opening_old_schema_migrates_documents_to_active_path_uniqueness() {
+    let root = tempfile::tempdir().unwrap();
+    let db_path = root.path().join("quarry.db");
+    {
+        let db = turso::Builder::new_local(db_path.to_str().unwrap())
+            .build()
+            .await
+            .unwrap();
+        let conn = db.connect().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE documents(
+              id TEXT PRIMARY KEY,
+              library_id TEXT NOT NULL,
+              path TEXT NOT NULL,
+              head_version_id TEXT,
+              deleted_at TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              UNIQUE(library_id, path)
+            );
+            "#,
+        )
+        .await
+        .unwrap();
+    }
+
+    let store = QuarryStore::open(StoreConfig {
+        db_path: db_path.clone(),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("migrated").await.unwrap();
+    let first = store
+        .put_document(
+            &library.slug,
+            "same.md",
+            b"old".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    store
+        .delete_document(&library.slug, "same.md", DocumentSource::Rest)
+        .await
+        .unwrap();
+    let second = store
+        .put_document(
+            &library.slug,
+            "same.md",
+            b"new".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    assert_ne!(first.document.id, second.document.id);
+    drop(store);
+
+    let db = turso::Builder::new_local(db_path.to_str().unwrap())
+        .build()
+        .await
+        .unwrap();
+    let conn = db.connect().unwrap();
+    let document_indexes = index_names(&conn, "documents").await;
+    assert!(document_indexes.contains("idx_documents_active_library_path"));
 }
 
 #[tokio::test]
@@ -1695,6 +1983,7 @@ async fn schema_indexes_metadata_hot_fields() {
     let document_indexes = index_names(&conn, "documents").await;
     let version_indexes = index_names(&conn, "document_versions").await;
 
+    assert!(document_indexes.contains("idx_documents_active_library_path"));
     assert!(document_indexes.contains("idx_documents_created_at"));
     assert!(document_indexes.contains("idx_documents_updated_at"));
     assert!(version_indexes.contains("idx_versions_content_type"));

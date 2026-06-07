@@ -1717,6 +1717,7 @@ impl QuarryStore {
             )
             .await
             .map_err(map_turso_error)?;
+            delete_path_inode_conn(&conn, &library.id, &path).await?;
             self.reindex_links_conn(&conn, &library.id).await?;
             commit_transaction_record_conn(&conn, &tx.id).await?;
             let tx = self.transaction_conn(&conn, &tx.id).await?;
@@ -1781,65 +1782,6 @@ impl QuarryStore {
                 .is_some()
             {
                 return Err(QuarryError::Conflict(format!("{to_path} already exists")));
-            }
-            if let Some((to_doc_id, old_to_version_id)) = self
-                .document_any_identity_conn(&conn, &library.id, &to_path)
-                .await?
-            {
-                let from_document = self.document_conn(&conn, &library.id, &from_path).await?;
-                let content_type = from_document.version.content_type.clone();
-                let from_version_id = from_document.version.id.clone();
-                let tx = insert_transaction_conn(
-                    &conn,
-                    &library.id,
-                    source,
-                    None,
-                    None,
-                    serde_json::json!({ "mode": "auto_commit", "move_to_deleted_target": true }),
-                )
-                .await?;
-                let version = self
-                    .insert_version_conn(
-                        &conn,
-                        &to_doc_id,
-                        &tx.id,
-                        from_document.content,
-                        from_document.metadata,
-                        &content_type,
-                    )
-                    .await?;
-                insert_change_conn(
-                    &conn,
-                    &tx.id,
-                    &to_path,
-                    ChangeType::Put,
-                    old_to_version_id.as_deref(),
-                    Some(&version.id),
-                    None,
-                )
-                .await?;
-                publish_put_conn(&conn, &to_doc_id, &version.id).await?;
-                conn.execute(
-                    "UPDATE documents SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
-                    params![now_timestamp(), doc_id.clone()],
-                )
-                .await
-                .map_err(map_turso_error)?;
-                insert_change_conn(
-                    &conn,
-                    &tx.id,
-                    &from_path,
-                    ChangeType::Delete,
-                    Some(&from_version_id),
-                    None,
-                    None,
-                )
-                .await?;
-                move_path_inode_conn(&conn, &library.id, &from_path, &to_path).await?;
-                self.reindex_links_conn(&conn, &library.id).await?;
-                commit_transaction_record_conn(&conn, &tx.id).await?;
-                let tx = self.transaction_conn(&conn, &tx.id).await?;
-                return Ok((tx, to_doc_id));
             }
             let tx = insert_transaction_conn(
                 &conn,
@@ -1928,30 +1870,19 @@ impl QuarryStore {
                 serde_json::json!({ "mode": "auto_commit", "replace": true }),
             )
             .await?;
-            let version = self
-                .insert_version_conn(
-                    &conn,
-                    &to_doc_id,
-                    &tx.id,
-                    from_document.content,
-                    from_document.metadata,
-                    &from_document.version.content_type,
-                )
-                .await?;
             insert_change_conn(
                 &conn,
                 &tx.id,
                 &to_path,
-                ChangeType::Put,
+                ChangeType::Delete,
                 old_to_version_id.as_deref(),
-                Some(&version.id),
+                None,
                 None,
             )
             .await?;
-            publish_put_conn(&conn, &to_doc_id, &version.id).await?;
             conn.execute(
                 "UPDATE documents SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
-                params![now_timestamp(), from_document.id],
+                params![now_timestamp(), to_doc_id],
             )
             .await
             .map_err(map_turso_error)?;
@@ -1959,17 +1890,23 @@ impl QuarryStore {
                 &conn,
                 &tx.id,
                 &from_path,
-                ChangeType::Delete,
+                ChangeType::Move,
                 Some(&from_document.version.id),
-                None,
-                None,
+                Some(&from_document.version.id),
+                Some(&to_path),
             )
             .await?;
+            conn.execute(
+                "UPDATE documents SET path = ?1, updated_at = ?2 WHERE id = ?3",
+                params![to_path.clone(), now_timestamp(), from_document.id.clone()],
+            )
+            .await
+            .map_err(map_turso_error)?;
             move_path_inode_conn(&conn, &library.id, &from_path, &to_path).await?;
             self.reindex_links_conn(&conn, &library.id).await?;
             commit_transaction_record_conn(&conn, &tx.id).await?;
             let tx = self.transaction_conn(&conn, &tx.id).await?;
-            Ok((tx, to_doc_id))
+            Ok((tx, from_document.id))
         }
         .await;
         let (tx, doc_id) = finish_tx(&conn, result).await?;
@@ -2295,10 +2232,7 @@ impl QuarryStore {
                         let version_id = change.new_version_id.ok_or_else(|| {
                             QuarryError::Storage("put change missing new version".to_string())
                         })?;
-                        let doc_id = self
-                            .document_id_conn(&conn, &tx.library_id, &change.path)
-                            .await?
-                            .ok_or_else(|| QuarryError::NotFound(change.path.clone()))?;
+                        let doc_id = self.document_id_for_version_conn(&conn, &version_id).await?;
                         publish_put_conn(&conn, &doc_id, &version_id).await?;
                         ensure_path_inodes_conn(&conn, &tx.library_id, &change.path).await?;
                         events.push(StoreEvent {
@@ -2328,6 +2262,7 @@ impl QuarryStore {
                             )
                             .await
                             .map_err(map_turso_error)?;
+                            delete_path_inode_conn(&conn, &tx.library_id, &change.path).await?;
                         }
                         events.push(StoreEvent {
                             kind: StoreEventKind::DocumentDelete,
@@ -2354,60 +2289,6 @@ impl QuarryStore {
                             .document_identity_conn(&conn, &tx.library_id, &change.path)
                             .await?
                             .ok_or_else(|| QuarryError::NotFound(change.path.clone()))?;
-                        if let Some((to_doc_id, old_to_version_id)) = self
-                            .document_any_identity_conn(&conn, &tx.library_id, &new_path)
-                            .await?
-                        {
-                            let from_document =
-                                self.document_conn(&conn, &tx.library_id, &change.path).await?;
-                            let content_type = from_document.version.content_type.clone();
-                            let version = self
-                                .insert_version_conn(
-                                    &conn,
-                                    &to_doc_id,
-                                    &tx.id,
-                                    from_document.content,
-                                    from_document.metadata,
-                                    &content_type,
-                                )
-                                .await?;
-                            insert_change_conn(
-                                &conn,
-                                &tx.id,
-                                &new_path,
-                                ChangeType::Put,
-                                old_to_version_id.as_deref(),
-                                Some(&version.id),
-                                None,
-                            )
-                            .await?;
-                            publish_put_conn(&conn, &to_doc_id, &version.id).await?;
-                            conn.execute(
-                                "UPDATE documents SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
-                                params![now_timestamp(), doc_id],
-                            )
-                            .await
-                            .map_err(map_turso_error)?;
-                            move_path_inode_conn(&conn, &tx.library_id, &change.path, &new_path)
-                                .await?;
-                            events.push(StoreEvent {
-                                kind: StoreEventKind::DocumentMove,
-                                library_id: tx.library_id.clone(),
-                                path: Some(change.path.clone()),
-                                new_path: Some(new_path.clone()),
-                                source: Some(tx.source.clone()),
-                                tx_id: Some(tx.id.clone()),
-                                doc_id: None,
-                                version_id: None,
-                                conflict_id: None,
-                                peer_id: None,
-                                applied: None,
-                                conflicts: None,
-                                origin_id: None,
-                            });
-                            events.push(links_indexed_event(tx.library_id.clone(), new_path));
-                            continue;
-                        }
                         conn.execute(
                             "UPDATE documents SET path = ?1, updated_at = ?2 WHERE id = ?3",
                             params![new_path.clone(), now_timestamp(), doc_id],
@@ -2785,6 +2666,8 @@ impl QuarryStore {
     async fn migrate(&self) -> Result<()> {
         let conn = self.conn()?;
         conn.execute_batch(SCHEMA).await.map_err(map_turso_error)?;
+        migrate_documents_active_path_uniqueness(&conn).await?;
+        ensure_document_indexes_conn(&conn).await?;
         ensure_links_resolution_status_column(&conn).await?;
         Ok(())
     }
@@ -2991,7 +2874,9 @@ impl QuarryStore {
     ) -> Result<Option<String>> {
         let mut rows = conn
             .query(
-                "SELECT id FROM documents WHERE library_id = ?1 AND path = ?2 LIMIT 1",
+                "SELECT id FROM documents
+                 WHERE library_id = ?1 AND path = ?2 AND deleted_at IS NULL AND head_version_id IS NOT NULL
+                 LIMIT 1",
                 params![library_id.to_string(), path.to_string()],
             )
             .await
@@ -3014,28 +2899,6 @@ impl QuarryStore {
             .query(
                 "SELECT id, head_version_id FROM documents
                  WHERE library_id = ?1 AND path = ?2 AND deleted_at IS NULL AND head_version_id IS NOT NULL
-                 LIMIT 1",
-                params![library_id.to_string(), path.to_string()],
-            )
-            .await
-            .map_err(map_turso_error)?;
-        if let Some(row) = rows.next().await.map_err(map_turso_error)? {
-            Ok(Some((text(&row, 0)?, opt_text(&row, 1)?)))
-        } else {
-            Ok(None)
-        }
-    }
-
-    async fn document_any_identity_conn(
-        &self,
-        conn: &Connection,
-        library_id: &str,
-        path: &str,
-    ) -> Result<Option<(String, Option<String>)>> {
-        let mut rows = conn
-            .query(
-                "SELECT id, head_version_id FROM documents
-                 WHERE library_id = ?1 AND path = ?2
                  LIMIT 1",
                 params![library_id.to_string(), path.to_string()],
             )
@@ -3520,6 +3383,26 @@ impl QuarryStore {
         Ok((version, content))
     }
 
+    async fn document_id_for_version_conn(
+        &self,
+        conn: &Connection,
+        version_id: &str,
+    ) -> Result<String> {
+        let mut rows = conn
+            .query(
+                "SELECT document_id FROM document_versions WHERE id = ?1 LIMIT 1",
+                params![version_id.to_string()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        rows.next()
+            .await
+            .map_err(map_turso_error)?
+            .map(|row| text(&row, 0))
+            .transpose()?
+            .ok_or_else(|| QuarryError::NotFound(format!("version {version_id}")))
+    }
+
     async fn transaction_conn(&self, conn: &Connection, tx_id: &str) -> Result<TransactionRecord> {
         let mut rows = conn
             .query(
@@ -3576,8 +3459,7 @@ CREATE TABLE IF NOT EXISTS documents(
   head_version_id TEXT,
   deleted_at TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(library_id, path)
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS document_versions(
@@ -3664,6 +3546,11 @@ CREATE TABLE IF NOT EXISTS inodes(
   UNIQUE(library_id, path)
 );
 
+CREATE TABLE IF NOT EXISTS inode_counters(
+  library_id TEXT PRIMARY KEY,
+  next_inode INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS links(
   library_id TEXT NOT NULL,
   src_doc_id TEXT NOT NULL,
@@ -3704,6 +3591,9 @@ CREATE TABLE IF NOT EXISTS aliases(
   PRIMARY KEY(library_id, alias, doc_id)
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_active_library_path
+  ON documents(library_id, path)
+  WHERE deleted_at IS NULL AND head_version_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_documents_library_path ON documents(library_id, path);
 CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at);
 CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents(updated_at);
@@ -4359,7 +4249,9 @@ async fn ensure_document_conn(
 ) -> Result<(String, Option<String>)> {
     let mut rows = conn
         .query(
-            "SELECT id, head_version_id FROM documents WHERE library_id = ?1 AND path = ?2 LIMIT 1",
+            "SELECT id, head_version_id FROM documents
+             WHERE library_id = ?1 AND path = ?2 AND deleted_at IS NULL AND head_version_id IS NOT NULL
+             LIMIT 1",
             params![library_id.to_string(), path.to_string()],
         )
         .await
@@ -4419,23 +4311,44 @@ async fn ensure_inode_conn(conn: &Connection, library_id: &str, path: &str) -> R
     if let Some(row) = rows.next().await.map_err(map_turso_error)? {
         return int(&row, 0);
     }
-    let mut max_rows = conn
+    let inode = allocate_inode_conn(conn, library_id).await?;
+    conn.execute(
+        "INSERT INTO inodes (library_id, inode, path) VALUES (?1, ?2, ?3)",
+        params![library_id.to_string(), inode, path.to_string()],
+    )
+    .await
+    .map_err(map_turso_error)?;
+    Ok(inode)
+}
+
+async fn allocate_inode_conn(conn: &Connection, library_id: &str) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO inode_counters (library_id, next_inode)
+         VALUES (?1, (SELECT COALESCE(MAX(inode), 0) + 1 FROM inodes WHERE library_id = ?1))
+         ON CONFLICT(library_id) DO NOTHING",
+        params![library_id.to_string()],
+    )
+    .await
+    .map_err(map_turso_error)?;
+    let mut rows = conn
         .query(
-            "SELECT COALESCE(MAX(inode), 0) + 1 FROM inodes WHERE library_id = ?1",
+            "SELECT next_inode FROM inode_counters WHERE library_id = ?1 LIMIT 1",
             params![library_id.to_string()],
         )
         .await
         .map_err(map_turso_error)?;
-    let inode = max_rows
+    let inode = rows
         .next()
         .await
         .map_err(map_turso_error)?
         .map(|row| int(&row, 0))
         .transpose()?
-        .unwrap_or(1);
+        .ok_or_else(|| {
+            QuarryError::Storage(format!("inode counter missing for library {library_id}"))
+        })?;
     conn.execute(
-        "INSERT INTO inodes (library_id, inode, path) VALUES (?1, ?2, ?3)",
-        params![library_id.to_string(), inode, path.to_string()],
+        "UPDATE inode_counters SET next_inode = next_inode + 1 WHERE library_id = ?1",
+        params![library_id.to_string()],
     )
     .await
     .map_err(map_turso_error)?;
@@ -4472,6 +4385,16 @@ async fn ensure_parent_inodes_conn(conn: &Connection, library_id: &str, path: &s
         .await
         .map_err(map_turso_error)?;
     }
+    Ok(())
+}
+
+async fn delete_path_inode_conn(conn: &Connection, library_id: &str, path: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM inodes WHERE library_id = ?1 AND path = ?2",
+        params![library_id.to_string(), path.to_string()],
+    )
+    .await
+    .map_err(map_turso_error)?;
     Ok(())
 }
 
@@ -4815,6 +4738,93 @@ async fn ensure_links_resolution_status_column(conn: &Connection) -> Result<()> 
     .await
     .map_err(map_turso_error)?;
     Ok(())
+}
+
+async fn migrate_documents_active_path_uniqueness(conn: &Connection) -> Result<()> {
+    if !documents_has_legacy_path_unique_conn(conn).await? {
+        return Ok(());
+    }
+
+    begin_immediate(conn).await?;
+    let result = async {
+        conn.execute_batch(
+            r#"
+            DROP TABLE IF EXISTS documents_legacy_unique;
+            ALTER TABLE documents RENAME TO documents_legacy_unique;
+            CREATE TABLE documents(
+              id TEXT PRIMARY KEY,
+              library_id TEXT NOT NULL,
+              path TEXT NOT NULL,
+              head_version_id TEXT,
+              deleted_at TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            INSERT INTO documents
+              (id, library_id, path, head_version_id, deleted_at, created_at, updated_at)
+            SELECT id, library_id, path, head_version_id, deleted_at, created_at, updated_at
+            FROM documents_legacy_unique;
+            DROP TABLE documents_legacy_unique;
+            "#,
+        )
+        .await
+        .map_err(map_turso_error)?;
+        Ok(())
+    }
+    .await;
+    finish_tx(conn, result).await
+}
+
+async fn documents_has_legacy_path_unique_conn(conn: &Connection) -> Result<bool> {
+    let mut rows = conn
+        .query("PRAGMA index_list('documents')", ())
+        .await
+        .map_err(map_turso_error)?;
+    while let Some(row) = rows.next().await.map_err(map_turso_error)? {
+        let name = text(&row, 1)?;
+        if name == "idx_documents_active_library_path" || int(&row, 2)? == 0 {
+            continue;
+        }
+        if index_columns_conn(conn, &name).await? == ["library_id", "path"] {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+async fn index_columns_conn(conn: &Connection, index_name: &str) -> Result<Vec<String>> {
+    let mut rows = conn
+        .query(
+            format!("PRAGMA index_info({})", quote_sql_string(index_name)),
+            (),
+        )
+        .await
+        .map_err(map_turso_error)?;
+    let mut columns = Vec::new();
+    while let Some(row) = rows.next().await.map_err(map_turso_error)? {
+        columns.push(text(&row, 2)?);
+    }
+    Ok(columns)
+}
+
+async fn ensure_document_indexes_conn(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_active_library_path
+          ON documents(library_id, path)
+          WHERE deleted_at IS NULL AND head_version_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_documents_library_path ON documents(library_id, path);
+        CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at);
+        CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents(updated_at);
+        "#,
+    )
+    .await
+    .map_err(map_turso_error)?;
+    Ok(())
+}
+
+fn quote_sql_string(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 fn normalize_prefix(prefix: &str) -> Result<String> {

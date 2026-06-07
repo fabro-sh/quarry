@@ -135,7 +135,9 @@ describe('Quarry Browser workspace', () => {
     expect(copied).toContain('http://127.0.0.1/lib/agent-lib/documents/folder/live.md?token=invite-agent');
     expect(copied).toContain('POST http://127.0.0.1/v1/libraries/agent-lib/documents/folder/live.md/presence');
     expect(copied).toContain('Connected in Quarry and ready.');
-    expect(await within(dialog).findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+    expect(
+      await within(dialog).findByRole('button', { name: 'Waiting for your agent…' })
+    ).toBeDisabled();
   });
 
   it('renders agent presence in the document toolbar', async () => {
@@ -1035,6 +1037,88 @@ describe('Quarry Browser workspace', () => {
     await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Git synced'));
   });
 
+  it('seeds recreated same-path documents instead of showing the deleted document cache', async () => {
+    let documentExists = true;
+    let recreated = false;
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const prompt = vi.spyOn(window, 'prompt').mockReturnValue('daily.md');
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/v1/libraries') {
+        return json([{ id: 'lib-cache', slug: 'cache-lib', created_at: 'now', settings: {} }]);
+      }
+      if (url === '/v1/libraries/cache-lib/documents') {
+        return json(
+          documentExists
+            ? [
+                {
+                  id: recreated ? 'doc-new' : 'doc-old',
+                  path: 'daily.md',
+                  head_version_id: recreated ? 'v-new' : 'v-old',
+                  content_type: 'text/markdown',
+                  byte_size: recreated ? 11 : 16,
+                  metadata: { title: 'Daily' },
+                  updated_at: 'now',
+                },
+              ]
+            : []
+        );
+      }
+      if (url === '/v1/libraries/cache-lib/documents/daily.md' && init?.method === 'DELETE') {
+        documentExists = false;
+        return json({ id: 'tx-delete' });
+      }
+      if (url === '/v1/libraries/cache-lib/documents/daily.md' && init?.method === 'PUT') {
+        documentExists = true;
+        recreated = true;
+        return json(writeOutcome('', 'v-new', 'daily.md'), { ETag: '"v-new"' });
+      }
+      if (url === '/v1/libraries/cache-lib/documents/daily.md') {
+        if (recreated) return new Promise<Response>(() => {});
+        return new Response('Old cached body\n', {
+          headers: {
+            ETag: '"v-old"',
+            'content-type': 'text/markdown',
+          },
+        });
+      }
+      if (url === '/v1/libraries/cache-lib/documents/daily.md/presence') {
+        return json({ presence: [] });
+      }
+      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) {
+        return json({ path: 'daily.md', links: [] });
+      }
+      if (url.startsWith('/v1/libraries/cache-lib/graph')) {
+        return json({ nodes: [], edges: [], truncated: false });
+      }
+      if (url.endsWith('/versions')) return json(recreated ? [version('v-new')] : [version('v-old')]);
+      if (url === '/v1/libraries/cache-lib/conflicts') return json([]);
+      if (url === '/v1/libraries/cache-lib/git/peers') return json([]);
+      if (url.startsWith('/v1/libraries/cache-lib/search')) return json({ results: [], cursor: null });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    vi.stubGlobal('EventSource', MockEventSource);
+    MockEventSource.instances = [];
+    window.history.pushState({}, '', '/lib/cache-lib/documents/daily.md');
+
+    renderApp();
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/v1/libraries/cache-lib/documents/daily.md'));
+    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Old cached body'));
+
+    await userEvent.keyboard('{Control>}k{/Control}');
+    await userEvent.click(await screen.findByText('Delete current document'));
+    await waitFor(() => expect(screen.queryByLabelText('Plate markdown editor')).not.toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Create document' }));
+    const editor = await screen.findByLabelText('Plate markdown editor');
+    expect(editor).toHaveTextContent('Untitled');
+    expect(editor).not.toHaveTextContent('Old cached body');
+    expect(confirm).toHaveBeenCalledWith('Delete daily.md?');
+    expect(prompt).toHaveBeenCalledWith('New document path', 'untitled.md');
+  });
+
   it('accepts a newer remote version when the local draft already has the same content', async () => {
     let content = '# Base\n';
     let etag = '"v1"';
@@ -1803,6 +1887,44 @@ function version(id: string) {
     content_type: 'text/markdown',
     byte_size: 12,
     created_at: `2026-05-28T12:00:0${id.slice(1)}Z`,
+  };
+}
+
+function writeOutcome(documentId: string, versionId: string, path: string) {
+  const versionRecord = {
+    id: versionId,
+    document_id: documentId,
+    tx_id: `tx-${versionId}`,
+    content_hash: null,
+    inline_content: null,
+    metadata: { content_type: 'text/markdown' },
+    content_type: 'text/markdown',
+    byte_size: 11,
+    created_at: '2026-05-28T12:00:00Z',
+  };
+  return {
+    document: {
+      id: documentId,
+      library_id: 'lib-cache',
+      path,
+      metadata: { content_type: 'text/markdown' },
+      version: versionRecord,
+      content: '# Untitled\n',
+      created_at: '2026-05-28T12:00:00Z',
+      updated_at: '2026-05-28T12:00:00Z',
+    },
+    version: versionRecord,
+    transaction: {
+      id: `tx-${versionId}`,
+      library_id: 'lib-cache',
+      state: 'committed',
+      actor: null,
+      source: 'rest',
+      message: null,
+      provenance: {},
+      created_at: '2026-05-28T12:00:00Z',
+      committed_at: '2026-05-28T12:00:00Z',
+    },
   };
 }
 

@@ -2255,6 +2255,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dirty_deleted_room_does_not_seed_recreated_same_path_document() {
+        let (_root, store, old_document_id, original_version_id) =
+            store_with_markdown_document("collabrecreate", "Original\n").await;
+        let hub = CollabHub::new(store.clone());
+        let old_room = hub.room(&old_document_id).await;
+        let _ =
+            wait_for_recovery_state_matching(&store, &old_document_id, |state| !state.dirty).await;
+        replace_room_markdown(&old_room, "Dirty old room\n").await;
+        let dirty = wait_for_recovery_state(&store, &old_document_id).await;
+        assert_eq!(
+            dirty.base_version_id.as_deref(),
+            Some(original_version_id.as_str())
+        );
+
+        store
+            .delete_document("collabrecreate", "live.md", DocumentSource::Rest)
+            .await
+            .unwrap();
+        let recreated = store
+            .put_document(
+                "collabrecreate",
+                "live.md",
+                b"Fresh document\n".to_vec(),
+                serde_json::json!({"content_type":"text/markdown"}),
+                "text/markdown",
+                DocumentSource::Rest,
+                WritePrecondition::None,
+            )
+            .await
+            .unwrap();
+        assert_ne!(recreated.document.id, old_document_id);
+
+        let new_room = hub.room(&recreated.document.id).await;
+        let new_state =
+            wait_for_recovery_state_matching(&store, &recreated.document.id, |state| !state.dirty)
+                .await;
+        assert_eq!(
+            new_state.base_version_id.as_deref(),
+            Some(recreated.version.id.as_str())
+        );
+        assert_eq!(
+            room_slate_children(&new_room).await,
+            block_markdown_to_slate("Fresh document\n").unwrap()
+        );
+        assert_eq!(
+            room_slate_children(&old_room).await,
+            block_markdown_to_slate("Dirty old room\n").unwrap()
+        );
+    }
+
+    #[tokio::test]
     async fn signals_recovery_persistence_failures_to_peers() {
         let root = tempfile::tempdir().unwrap();
         let store = QuarryStore::open(StoreConfig {
