@@ -233,7 +233,28 @@ Use `/ops` for review feedback. Supported operations are `comment.add`,
 
 `/ops` accepts a batch of one or more operations. All operations share one
 top-level `baseToken` and `by` author, resolve refs against the original
-snapshot, and commit atomically.
+snapshot, and commit atomically. A single batch may freely mix `comment.add`
+and `suggestion.add`: annotations never shift block ordinals, so a whole review
+anchors to one snapshot — send it as one batch instead of refreshing the token
+between annotations. Since the batch is all-or-nothing, dry-run it first
+(`?dryRun=1`) to catch a bad `quote`, then POST the same body to commit.
+
+A full review as one batch:
+
+```json
+{
+  "baseToken": "version_123",
+  "by": "Codex",
+  "operations": [
+    { "op": "comment.add", "ref": { "ordinal": 4 }, "quote": "NVIDIA cards",
+      "body": "Mention the open kernel module here." },
+    { "op": "suggestion.add", "kind": "replace", "ref": { "ordinal": 11 },
+      "quote": "A2 and B2", "content": "the slots your board's manual lists" },
+    { "op": "comment.add", "ref": { "ordinal": 18 }, "quote": "memory test",
+      "body": "Name a tool, e.g. memtest86+." }
+  ]
+}
+```
 
 Read existing review work without parsing CriticMarkup:
 

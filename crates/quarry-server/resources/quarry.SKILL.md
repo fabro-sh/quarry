@@ -216,9 +216,11 @@ Supported `/ops` operations: `comment.add`, `comment.reply`,
 
 `/ops` takes a batch of one or more operations. All operations share one
 top-level `baseToken` and `by` author, resolve refs against the original
-snapshot, and commit atomically. Put several comments or suggestions in one
-`operations` array instead of refreshing the token between annotations. Use an
-`Idempotency-Key` header when committing a non-dry-run batch.
+snapshot, and commit atomically. One batch may mix `comment.add` and
+`suggestion.add`; annotations never shift block ordinals, so a whole review
+anchors to one snapshot — send it as one batch instead of refreshing the token
+between annotations. Dry-run it first (`?dryRun=1`) to catch a bad `quote`, then
+use an `Idempotency-Key` header when committing the same body.
 
 Read existing review work without parsing CriticMarkup:
 
