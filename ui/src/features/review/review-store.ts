@@ -76,6 +76,13 @@ export function deleteComment(meta: ReviewMeta, id: string): ReviewMeta {
   return next;
 }
 
+export function removeSuggestion(meta: ReviewMeta, id: string): ReviewMeta {
+  if (!meta.suggestions[id]) return meta;
+  const next = cloneMeta(meta);
+  delete next.suggestions[id];
+  return next;
+}
+
 export interface ReviewThread {
   id: string;
   entry: ReviewMetaEntry;

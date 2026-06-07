@@ -6,6 +6,7 @@ import { agentKind } from '../../agents/agents';
 import { firstWord, formatRelativeTime, initials } from '../format';
 import type { ReviewMetaEntry } from '../rfm-types';
 import { buildThreads, reopenComment, useReviewStore, type ReviewThread } from '../review-store';
+import { applyReviewMutation } from '../review-doc';
 
 // The Comments tab in the right pane is the document's complete comment record:
 // unlike the rail (which only lists open threads), it shows resolved threads too
@@ -59,8 +60,7 @@ function CommentItem({ thread }: { thread: ReviewThread }) {
   const resolved = isResolved(thread);
 
   function reopen() {
-    const store = useReviewStore.getState();
-    store.setMeta(reopenComment(store.getMeta(), thread.id));
+    applyReviewMutation((meta) => reopenComment(meta, thread.id));
   }
 
   return (

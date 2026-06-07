@@ -2,13 +2,17 @@ use axum::body::Bytes;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
-#[cfg(test)]
-use quarry_collab_codec::block_markdown_to_slate;
 use quarry_collab_codec::{
-    apply_built, build_nodes, encode_update_v1_from_built, review_blocks_to_slate,
-    review_markdown_to_slate, strip_trailing_empty_paragraphs, xmltext_to_slate, BuiltNode, Node,
+    apply_built, apply_review_patch_to_map, build_nodes, encode_update_v1_from_built_with_review,
+    review_block_to_slate, review_blocks_to_slate, review_meta_with_inline_comment_bodies,
+    strip_trailing_empty_paragraphs, xmltext_to_slate, BuiltNode, Node, ReviewMetaPatch,
+};
+#[cfg(test)]
+use quarry_collab_codec::{
+    block_markdown_to_slate, encode_update_v1_from_built, review_markdown_to_slate, ReviewMetaEntry,
 };
 use quarry_storage::{CollabDocumentSeed, QuarryStore};
+#[cfg(test)]
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -29,7 +33,7 @@ use yrs::sync::{Awareness, DefaultProtocol, Error, Message, Protocol, SyncMessag
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 #[cfg(test)]
-use yrs::{Any, GetString};
+use yrs::{Any, GetString, Out};
 use yrs::{
     Doc, Map, OffsetKind, Options, ReadTxn, StateVector, Text, Transact, Update, WriteTxn,
     XmlTextRef,
@@ -37,6 +41,7 @@ use yrs::{
 
 pub(crate) const SHARED_ROOT: &str = "content";
 pub(crate) const INJECTION_ROOT: &str = "__quarry_injection";
+pub(crate) const REVIEW_ROOT: &str = "review";
 const RECOVERY_PERSIST_DEBOUNCE: Duration = Duration::from_millis(50);
 const INJECTION_ORIGIN: &str = "quarry:agent-injection";
 const SERVER_SEED_ORIGIN: &str = "quarry:server-seed";
@@ -284,6 +289,17 @@ impl CollabRoom {
                 _ => None,
             })
             .collect()
+    }
+
+    #[cfg(test)]
+    async fn review_entry(&self, section: &str, id: &str) -> Option<JsonValue> {
+        let awareness = self.broadcast.awareness().read().await;
+        let txn = awareness.doc().transact();
+        let review = txn.get_map(REVIEW_ROOT)?;
+        let Out::YMap(section) = review.get(&txn, section)? else {
+            return None;
+        };
+        section.get_as(&txn, id).ok()
     }
 
     pub(crate) async fn begin_live_mutation(
@@ -549,7 +565,8 @@ async fn clean_seed_update_from_document_seed(
             return None;
         }
     };
-    let slate = match review_markdown_to_slate(markdown) {
+    let (body, review_meta) = review_meta_with_inline_comment_bodies(markdown);
+    let slate = match review_block_to_slate(&body, &review_meta) {
         Ok(slate) => slate,
         Err(error) => {
             tracing::debug!(
@@ -581,7 +598,8 @@ async fn clean_seed_update_from_document_seed(
             return None;
         }
     };
-    let update_v1 = encode_update_v1_from_built(&built, SHARED_ROOT);
+    let update_v1 =
+        encode_update_v1_from_built_with_review(&built, SHARED_ROOT, REVIEW_ROOT, &review_meta);
     tracing::debug!(
         event = "collab.recovery.persist.started",
         %document_id,
@@ -645,18 +663,18 @@ fn is_markdown_content_type(content_type: &str) -> bool {
 #[derive(Clone, Debug)]
 pub(crate) struct LiveMutation {
     pub(crate) batch: Option<InjectionBatch>,
-    pub(crate) review: Option<JsonValue>,
+    pub(crate) review: Option<ReviewMetaPatch>,
 }
 
 impl LiveMutation {
-    pub(crate) fn content(batch: InjectionBatch, review: Option<JsonValue>) -> Self {
+    pub(crate) fn content(batch: InjectionBatch, review: Option<ReviewMetaPatch>) -> Self {
         Self {
             batch: Some(batch),
             review,
         }
     }
 
-    pub(crate) fn metadata(review: JsonValue) -> Self {
+    pub(crate) fn metadata(review: ReviewMetaPatch) -> Self {
         Self {
             batch: None,
             review: Some(review),
@@ -736,18 +754,14 @@ impl InjectionGuard {
             if let Some(batch) = &self.mutation.batch {
                 apply_injection_ops(&mut txn, &root, &batch.ops);
             }
+            if let Some(review) = &self.mutation.review {
+                let review_map = txn.get_or_insert_map(REVIEW_ROOT);
+                apply_review_patch_to_map(&mut txn, &review_map, review);
+            }
             let envelope = txn.get_or_insert_map(INJECTION_ROOT);
             envelope.insert(&mut txn, "version_id", new_version_id.clone());
             envelope.insert(&mut txn, "etag", format!("\"{new_version_id}\""));
-            if let Some(review) = &self.mutation.review {
-                if let Ok(review_json) = serde_json::to_string(review) {
-                    envelope.insert(&mut txn, "review", review_json);
-                } else {
-                    let _ = envelope.remove(&mut txn, "review");
-                }
-            } else {
-                let _ = envelope.remove(&mut txn, "review");
-            }
+            let _ = envelope.remove(&mut txn, "review");
         }
 
         let Some(store) = self.store.clone() else {
@@ -904,6 +918,9 @@ fn clear_shared_content(txn: &mut yrs::TransactionMut<'_>) {
         for key in keys {
             let _ = envelope.remove(txn, key.as_str());
         }
+    }
+    if let Some(review) = txn.get_map(REVIEW_ROOT) {
+        review.clear(txn);
     }
 }
 
@@ -1798,15 +1815,20 @@ mod tests {
             .begin_live_mutation(
                 LiveMutation::content(
                     batch,
-                    Some(serde_json::json!({
-                        "comments": {
-                            "c1": {
-                                "by": "ai:codex",
-                                "at": "2026-06-05T02:41:00.480Z",
-                                "body": "note"
-                            }
-                        }
-                    })),
+                    Some(ReviewMetaPatch {
+                        comments: std::collections::BTreeMap::from([(
+                            "c1".to_string(),
+                            ReviewMetaEntry {
+                                by: "ai:codex".to_string(),
+                                at: "2026-06-05T02:41:00.480Z".to_string(),
+                                body: Some("note".to_string()),
+                                re: None,
+                                status: None,
+                                resolved: None,
+                            },
+                        )]),
+                        ..Default::default()
+                    }),
                 ),
                 &original_blocks,
                 "v1".to_string(),
@@ -1825,11 +1847,9 @@ mod tests {
         let envelope = room.injection_envelope().await;
         assert_eq!(envelope.get("version_id").map(String::as_str), Some("v2"));
         assert_eq!(envelope.get("etag").map(String::as_str), Some("\"v2\""));
+        assert!(!envelope.contains_key("review"));
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(
-                envelope.get("review").expect("review envelope")
-            )
-            .unwrap()["comments"]["c1"]["body"],
+            room.review_entry("comments", "c1").await.unwrap()["body"],
             "note"
         );
     }
@@ -1944,11 +1964,16 @@ mod tests {
 
     #[tokio::test]
     async fn initial_client_sync_does_not_mark_seeded_recovery_dirty() {
+        let markdown = "See {==this==}{>>Check it<<}{#c1}.\n\n---\ncomments:\n  c1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user\n";
         let (_root, store, document_id, head_version_id) =
-            store_with_markdown_document("collabsync", "# Untitled\n").await;
+            store_with_markdown_document("collabsync", markdown).await;
         let hub = CollabHub::new(store.clone());
         let room = hub.room(&document_id).await;
         let _ = wait_for_recovery_state_matching(&store, &document_id, |state| !state.dirty).await;
+        assert_eq!(
+            room.review_entry("comments", "c1").await.unwrap()["body"],
+            "Check it"
+        );
         let (server_sink, mut client_stream) = test_channel(8);
         let (mut client_sink, server_stream) = test_channel(8);
         let subscription = room.broadcast.subscribe(

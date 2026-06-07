@@ -1,3 +1,4 @@
+use crate::review::{ReviewMeta, ReviewMetaEntry, ReviewMetaPatch};
 use crate::slate::{Attrs as SlateAttrs, Node};
 use crate::Unsupported;
 use serde_json::{Number, Value};
@@ -6,8 +7,8 @@ use std::sync::Arc;
 use yrs::types::text::YChange;
 use yrs::types::Attrs;
 use yrs::{
-    Any, Doc, OffsetKind, Options, Out, ReadTxn, Text, Transact, WriteTxn, Xml, XmlTextPrelim,
-    XmlTextRef,
+    Any, Doc, Map, MapRef, OffsetKind, Options, Out, ReadTxn, Text, Transact, WriteTxn, Xml,
+    XmlTextPrelim, XmlTextRef,
 };
 
 pub type BuiltNode = Node;
@@ -46,6 +47,60 @@ pub fn encode_update_v1_from_built(nodes: &[BuiltNode], root_name: &str) -> Vec<
     let txn = doc.transact();
     let _ = root;
     txn.encode_state_as_update_v1(&yrs::StateVector::default())
+}
+
+pub fn encode_update_v1_from_built_with_review(
+    nodes: &[BuiltNode],
+    root_name: &str,
+    review_root_name: &str,
+    meta: &ReviewMeta,
+) -> Vec<u8> {
+    let doc = Doc::with_options(Options {
+        offset_kind: OffsetKind::Utf16,
+        ..Default::default()
+    });
+    {
+        let mut txn = doc.transact_mut();
+        let text = txn.get_or_insert_text(root_name);
+        let root: &XmlTextRef = text.as_ref();
+        apply_built(&mut txn, root, 0, nodes);
+        let review = txn.get_or_insert_map(review_root_name);
+        write_review_meta_to_map(&mut txn, &review, meta);
+    }
+    let txn = doc.transact();
+    txn.encode_state_as_update_v1(&yrs::StateVector::default())
+}
+
+pub fn write_review_meta_to_map(
+    txn: &mut yrs::TransactionMut<'_>,
+    root: &MapRef,
+    meta: &ReviewMeta,
+) {
+    let comments = ensure_review_section(txn, root, "comments");
+    comments.clear(txn);
+    write_review_entries(txn, &comments, &meta.comments);
+
+    let suggestions = ensure_review_section(txn, root, "suggestions");
+    suggestions.clear(txn);
+    write_review_entries(txn, &suggestions, &meta.suggestions);
+}
+
+pub fn apply_review_patch_to_map(
+    txn: &mut yrs::TransactionMut<'_>,
+    root: &MapRef,
+    patch: &ReviewMetaPatch,
+) {
+    let comments = ensure_review_section(txn, root, "comments");
+    write_review_entries(txn, &comments, &patch.comments);
+    for id in &patch.remove_comments {
+        let _ = comments.remove(txn, id);
+    }
+
+    let suggestions = ensure_review_section(txn, root, "suggestions");
+    write_review_entries(txn, &suggestions, &patch.suggestions);
+    for id in &patch.remove_suggestions {
+        let _ = suggestions.remove(txn, id);
+    }
 }
 
 pub fn xmltext_to_slate<T: ReadTxn>(txn: &T, root: &XmlTextRef) -> Result<Node, Unsupported> {
@@ -148,6 +203,24 @@ fn value_to_any(value: &Value) -> Any {
                 .collect::<HashMap<_, _>>(),
         ),
     }
+}
+
+fn ensure_review_section(txn: &mut yrs::TransactionMut<'_>, root: &MapRef, key: &str) -> MapRef {
+    root.get_or_init(txn, key)
+}
+
+fn write_review_entries(
+    txn: &mut yrs::TransactionMut<'_>,
+    section: &MapRef,
+    entries: &std::collections::BTreeMap<String, ReviewMetaEntry>,
+) {
+    for (id, entry) in entries {
+        section.insert(txn, id.as_str(), review_entry_to_any(entry));
+    }
+}
+
+fn review_entry_to_any(entry: &ReviewMetaEntry) -> Any {
+    value_to_any(&serde_json::to_value(entry).expect("review metadata entry serializes"))
 }
 
 fn number_to_any(value: &Number) -> Any {

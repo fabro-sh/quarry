@@ -1,4 +1,3 @@
-import type { ReviewMetaPatch } from '../review/rfm-types';
 import { collabDebug } from './collab-debug';
 
 export interface DocumentEventPayload {
@@ -88,7 +87,6 @@ export function isAdoptedFlushVersion(
 
 export interface InjectionEnvelope {
   etag: string;
-  review?: ReviewMetaPatch | null;
   versionId: string;
 }
 
@@ -100,17 +98,7 @@ export function parseInjectionEnvelope(raw: unknown): InjectionEnvelope | null {
     return invalidEnvelope('missing_version_or_etag');
   }
 
-  if (raw.review === undefined || raw.review === null) {
-    return { etag, versionId };
-  }
-  if (typeof raw.review !== 'string') return invalidEnvelope('review_not_string');
-  try {
-    const review = JSON.parse(raw.review) as unknown;
-    if (!isRecord(review)) return invalidEnvelope('review_not_object');
-    return { etag, review: review as ReviewMetaPatch, versionId };
-  } catch {
-    return invalidEnvelope('review_invalid_json');
-  }
+  return { etag, versionId };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

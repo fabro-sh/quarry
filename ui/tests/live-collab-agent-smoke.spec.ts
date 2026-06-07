@@ -66,30 +66,36 @@ test('humans and an agent collaborate on one live document without conflicts', a
     await expectNoConflictUi(userA.page);
     await expectNoConflictUi(userB.page);
 
-    await setCaretAfterText(userA.page, 'Human direct block target.');
-    await userA.page.keyboard.type(' from User A');
+    const directWriter = await flusherUser(userA, userB);
+    const directReader = directWriter === userA ? userB : userA;
+    await setCaretAfterText(directWriter.page, 'Human direct block target.');
+    await directWriter.page.keyboard.type(' from User A');
 
-    await expect(editorB).toContainText('Human direct block target. from User A');
-    await expectSaved(userA.page);
-    await expectSaved(userB.page);
+    await expect(directReader.page.getByLabel('Plate markdown editor')).toContainText(
+      'Human direct block target. from User A'
+    );
+    await expectSaved(directWriter.page);
     await waitForPersistedMarkdown(request, library, 'from User A');
     await expectNoConflictUi(userA.page);
     await expectNoConflictUi(userB.page);
 
-    const modeB = userB.page.getByRole('button', { name: 'Document mode' });
-    await modeB.click();
-    await userB.page.getByRole('menuitem', { name: 'Suggesting' }).click();
-    await expect(modeB).toContainText('Suggesting');
+    const suggestingWriter = await flusherUser(userA, userB);
+    const suggestingReader = suggestingWriter === userA ? userB : userA;
+    const mode = suggestingWriter.page.getByRole('button', { name: 'Document mode' });
+    await mode.click();
+    await suggestingWriter.page.getByRole('menuitem', { name: 'Suggesting' }).click();
+    await expect(mode).toContainText('Suggesting');
 
-    await setCaretAfterText(userB.page, 'Human suggesting block target.');
-    await userB.page.keyboard.type('User B suggestion');
+    await setCaretAfterText(suggestingWriter.page, 'Human suggesting block target.');
+    await suggestingWriter.page.keyboard.type('User B suggestion');
 
-    await expect(editorA).toContainText('User B suggestion');
+    await expect(suggestingReader.page.getByLabel('Plate markdown editor')).toContainText(
+      'User B suggestion'
+    );
     await expect(
-      userA.page.getByTestId('suggestion-card').filter({ hasText: 'User B suggestion' })
+      suggestingReader.page.getByTestId('suggestion-card').filter({ hasText: 'User B suggestion' })
     ).toBeVisible();
-    await expectSaved(userA.page);
-    await expectSaved(userB.page);
+    await expectSaved(suggestingWriter.page);
     await waitForPersistedMarkdown(request, library, 'User B suggestion');
     await expectNoConflictUi(userA.page);
     await expectNoConflictUi(userB.page);
@@ -155,9 +161,41 @@ test('humans and an agent collaborate on one live document without conflicts', a
     ).toBeVisible();
     await expect(editorA.locator('[data-comment-id="agent-comment-smoke"]')).toBeVisible();
     await expect(editorB.locator('[data-comment-id="agent-comment-smoke"]')).toBeVisible();
-    await expectSaved(userA.page);
-    await expectSaved(userB.page);
     await waitForStableSnapshot(request, library);
+    await expectNoConflictUi(userA.page);
+    await expectNoConflictUi(userB.page);
+
+    const resolver = await nonFlusherUser(userA, userB);
+    const resolvedComment = resolver.page
+      .getByTestId('comment-card')
+      .filter({ hasText: 'Agent comment landed.' });
+    await resolvedComment.hover();
+    await resolvedComment.getByTestId('resolve-comment').click();
+
+    await expect(
+      userA.page.getByTestId('comment-card').filter({ hasText: 'Agent comment landed.' })
+    ).toHaveCount(0);
+    await expect(
+      userB.page.getByTestId('comment-card').filter({ hasText: 'Agent comment landed.' })
+    ).toHaveCount(0);
+    await waitForPersistedMarkdown(request, library, 'status: resolved', 60_000);
+    await userA.context.close();
+    await userB.context.close();
+    userA = await openHumanDocument(browser, library, 'Avery');
+    userB = await openHumanDocument(browser, library, 'Blair');
+    editorA = userA.page.getByLabel('Plate markdown editor');
+    editorB = userB.page.getByLabel('Plate markdown editor');
+    await expect(editorA.locator('[data-comment-id="agent-comment-smoke"]')).toBeVisible();
+    await expect(editorB.locator('[data-comment-id="agent-comment-smoke"]')).toBeVisible();
+    await expect(
+      userA.page.getByTestId('comment-card').filter({ hasText: 'Agent comment landed.' })
+    ).toHaveCount(0);
+    await expect(
+      userB.page.getByTestId('comment-card').filter({ hasText: 'Agent comment landed.' })
+    ).toHaveCount(0);
+    await expect
+      .poll(async () => readPersistedMarkdown(request, library), { timeout: 60_000 })
+      .toContain('status: resolved');
     await expectNoConflictUi(userA.page);
     await expectNoConflictUi(userB.page);
 
@@ -210,8 +248,6 @@ test('humans and an agent collaborate on one live document without conflicts', a
     await expect(agentSuggestionB).toHaveCount(0);
     await expect(editorA).toContainText('Review agent suggestion replacement here.');
     await expect(editorB).toContainText('Review agent suggestion replacement here.');
-    await expectSaved(userA.page);
-    await expectSaved(userB.page);
     await waitForPersistedMarkdown(
       request,
       library,
@@ -361,6 +397,47 @@ async function expectNoConflictUi(page: Page) {
   await expect(page.getByText('External version available')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Local draft' })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Latest remote' })).toHaveCount(0);
+}
+
+async function nonFlusherUser(
+  userA: { page: Page },
+  userB: { page: Page }
+): Promise<{ page: Page }> {
+  await expect
+    .poll(
+      async () => {
+        const states = await Promise.all([isFlusher(userA.page), isFlusher(userB.page)]);
+        return states.filter(Boolean).length;
+      },
+      { timeout: 20_000 }
+    )
+    .toBe(1);
+
+  return (await isFlusher(userA.page)) ? userB : userA;
+}
+
+async function flusherUser(
+  userA: { page: Page },
+  userB: { page: Page }
+): Promise<{ page: Page }> {
+  await expect
+    .poll(
+      async () => {
+        const states = await Promise.all([isFlusher(userA.page), isFlusher(userB.page)]);
+        return states.filter(Boolean).length;
+      },
+      { timeout: 20_000 }
+    )
+    .toBe(1);
+
+  return (await isFlusher(userA.page)) ? userA : userB;
+}
+
+async function isFlusher(page: Page) {
+  return (
+    (await page.locator('[data-collab-flusher]').first().getAttribute('data-collab-flusher')) ===
+    'true'
+  );
 }
 
 async function setCaretAfterText(page: Page, text: string) {

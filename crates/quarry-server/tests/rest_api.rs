@@ -14,10 +14,11 @@ use tower::ServiceExt;
 use yrs::sync::{Message as YMessage, SyncMessage};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
-use yrs::{Any, Doc, Map, OffsetKind, Options, ReadTxn, Transact, Update, XmlTextRef};
+use yrs::{Any, Doc, Map, OffsetKind, Options, Out, ReadTxn, Transact, Update, XmlTextRef};
 
 const COLLAB_ROOT: &str = "content";
 const INJECTION_ROOT: &str = "__quarry_injection";
+const REVIEW_ROOT: &str = "review";
 
 #[tokio::test]
 async fn rest_api_attaches_and_preserves_request_ids() {
@@ -2568,9 +2569,15 @@ async fn agent_ops_batch_injects_multiple_changed_blocks_into_live_room() {
         .unwrap()
         .unwrap();
     let envelope = injection_envelope_from_update(&recovery.update_v1);
-    let review: Value = serde_json::from_str(envelope["review"].as_str().unwrap()).unwrap();
-    assert_eq!(review["comments"]["c1"]["body"], "Needs support.");
-    assert_eq!(review["suggestions"]["s1"]["by"], "ai:codex");
+    assert!(envelope.get("review").is_none());
+    assert_eq!(
+        review_entry_from_update(&recovery.update_v1, "comments", "c1").unwrap()["body"],
+        "Needs support."
+    );
+    assert_eq!(
+        review_entry_from_update(&recovery.update_v1, "suggestions", "s1").unwrap()["by"],
+        "ai:codex"
+    );
 
     wait_for_yjs_comment_mark(&mut socket, &client_doc, "c1").await;
     wait_for_yjs_suggestion_mark(&mut socket, &client_doc, "s1").await;
@@ -2674,12 +2681,22 @@ async fn agent_ops_batch_merges_metadata_live_patch_for_mixed_review_ops() {
         .unwrap()
         .unwrap();
     let envelope = injection_envelope_from_update(&recovery.update_v1);
-    let review: Value = serde_json::from_str(envelope["review"].as_str().unwrap()).unwrap();
-    assert_eq!(review["comments"]["r2"]["body"], "Following up.");
-    assert_eq!(review["comments"]["r2"]["re"], "c1");
-    assert_eq!(review["comments"]["c1"]["status"], "resolved");
-    assert_eq!(review["removeComments"], serde_json::json!(["r1"]));
-    assert_eq!(review["removeSuggestions"], serde_json::json!(["s1", "s2"]));
+    assert!(envelope.get("review").is_none());
+    assert_eq!(
+        review_entry_from_update(&recovery.update_v1, "comments", "r2").unwrap()["body"],
+        "Following up."
+    );
+    assert_eq!(
+        review_entry_from_update(&recovery.update_v1, "comments", "r2").unwrap()["re"],
+        "c1"
+    );
+    assert_eq!(
+        review_entry_from_update(&recovery.update_v1, "comments", "c1").unwrap()["status"],
+        "resolved"
+    );
+    assert!(review_entry_from_update(&recovery.update_v1, "comments", "r1").is_none());
+    assert!(review_entry_from_update(&recovery.update_v1, "suggestions", "s1").is_none());
+    assert!(review_entry_from_update(&recovery.update_v1, "suggestions", "s2").is_none());
 
     wait_for_yjs_sync_update(&mut socket, &client_doc).await;
     assert_eq!(
@@ -3139,9 +3156,15 @@ async fn agent_ops_comment_add_injects_into_live_collab_room() {
         envelope["etag"],
         format!("\"{}\"", event.version_id.as_deref().unwrap())
     );
-    let review: Value = serde_json::from_str(envelope["review"].as_str().unwrap()).unwrap();
-    assert_eq!(review["comments"]["c1"]["body"], "Needs support.");
-    assert_eq!(review["comments"]["c1"]["by"], "ai:codex");
+    assert!(envelope.get("review").is_none());
+    assert_eq!(
+        review_entry_from_update(&recovery.update_v1, "comments", "c1").unwrap()["body"],
+        "Needs support."
+    );
+    assert_eq!(
+        review_entry_from_update(&recovery.update_v1, "comments", "c1").unwrap()["by"],
+        "ai:codex"
+    );
 
     let response = app
         .clone()
@@ -3275,8 +3298,11 @@ async fn agent_ops_suggestion_add_kinds_inject_into_live_collab_room() {
             .unwrap();
         let envelope = injection_envelope_from_update(&recovery.update_v1);
         assert_eq!(envelope["version_id"], event.version_id.as_deref().unwrap());
-        let review: Value = serde_json::from_str(envelope["review"].as_str().unwrap()).unwrap();
-        assert_eq!(review["suggestions"][id]["by"], "ai:codex");
+        assert!(envelope.get("review").is_none());
+        assert_eq!(
+            review_entry_from_update(&recovery.update_v1, "suggestions", id).unwrap()["by"],
+            "ai:codex"
+        );
 
         wait_for_yjs_suggestion_mark(&mut socket, &client_doc, id).await;
         assert!(yjs_has_suggestion_mark(&client_doc, id));
@@ -3357,8 +3383,8 @@ async fn agent_ops_accept_reject_inject_and_remove_suggestion_metadata() {
         .unwrap()
         .unwrap();
     let envelope = injection_envelope_from_update(&recovery.update_v1);
-    let review: Value = serde_json::from_str(envelope["review"].as_str().unwrap()).unwrap();
-    assert_eq!(review["removeSuggestions"], serde_json::json!(["s1"]));
+    assert!(envelope.get("review").is_none());
+    assert!(review_entry_from_update(&recovery.update_v1, "suggestions", "s1").is_none());
     wait_for_yjs_sync_update(&mut socket, &client_doc).await;
     assert!(!yjs_has_suggestion_mark(&client_doc, "s1"));
     assert!(yjs_has_suggestion_mark(&client_doc, "s2"));
@@ -3389,8 +3415,8 @@ async fn agent_ops_accept_reject_inject_and_remove_suggestion_metadata() {
         .unwrap()
         .unwrap();
     let envelope = injection_envelope_from_update(&recovery.update_v1);
-    let review: Value = serde_json::from_str(envelope["review"].as_str().unwrap()).unwrap();
-    assert_eq!(review["removeSuggestions"], serde_json::json!(["s2"]));
+    assert!(envelope.get("review").is_none());
+    assert!(review_entry_from_update(&recovery.update_v1, "suggestions", "s2").is_none());
     wait_for_yjs_sync_update(&mut socket, &client_doc).await;
     assert_eq!(yjs_plain_text(&client_doc), "Keep added and drop bad.");
     assert!(!yjs_has_suggestion_mark(&client_doc, "s2"));
@@ -3486,8 +3512,11 @@ async fn agent_ops_comment_resolve_injects_metadata_only_live_patch() {
         .unwrap()
         .unwrap();
     let envelope = injection_envelope_from_update(&recovery.update_v1);
-    let review: Value = serde_json::from_str(envelope["review"].as_str().unwrap()).unwrap();
-    assert_eq!(review["comments"]["c1"]["status"], "resolved");
+    assert!(envelope.get("review").is_none());
+    assert_eq!(
+        review_entry_from_update(&recovery.update_v1, "comments", "c1").unwrap()["status"],
+        "resolved"
+    );
     wait_for_yjs_sync_update(&mut socket, &client_doc).await;
     assert_eq!(yjs_plain_text(&client_doc), "See this.");
 
@@ -3573,9 +3602,15 @@ async fn agent_ops_comment_reply_and_reply_delete_inject_metadata_only_live_patc
         .unwrap()
         .unwrap();
     let envelope = injection_envelope_from_update(&recovery.update_v1);
-    let review: Value = serde_json::from_str(envelope["review"].as_str().unwrap()).unwrap();
-    assert_eq!(review["comments"]["r1"]["body"], "Following up.");
-    assert_eq!(review["comments"]["r1"]["re"], "c1");
+    assert!(envelope.get("review").is_none());
+    assert_eq!(
+        review_entry_from_update(&recovery.update_v1, "comments", "r1").unwrap()["body"],
+        "Following up."
+    );
+    assert_eq!(
+        review_entry_from_update(&recovery.update_v1, "comments", "r1").unwrap()["re"],
+        "c1"
+    );
     wait_for_yjs_sync_update(&mut socket, &client_doc).await;
     assert_eq!(yjs_plain_text(&client_doc), "See this.");
 
@@ -3609,8 +3644,8 @@ async fn agent_ops_comment_reply_and_reply_delete_inject_metadata_only_live_patc
         .unwrap()
         .unwrap();
     let envelope = injection_envelope_from_update(&recovery.update_v1);
-    let review: Value = serde_json::from_str(envelope["review"].as_str().unwrap()).unwrap();
-    assert_eq!(review["removeComments"], serde_json::json!(["r1"]));
+    assert!(envelope.get("review").is_none());
+    assert!(review_entry_from_update(&recovery.update_v1, "comments", "r1").is_none());
     wait_for_yjs_sync_update(&mut socket, &client_doc).await;
     assert_eq!(yjs_plain_text(&client_doc), "See this.");
 
@@ -3686,8 +3721,9 @@ async fn agent_ops_comment_delete_root_injects_content_and_removes_replies() {
         .unwrap()
         .unwrap();
     let envelope = injection_envelope_from_update(&recovery.update_v1);
-    let review: Value = serde_json::from_str(envelope["review"].as_str().unwrap()).unwrap();
-    assert_eq!(review["removeComments"], serde_json::json!(["c1", "r1"]));
+    assert!(envelope.get("review").is_none());
+    assert!(review_entry_from_update(&recovery.update_v1, "comments", "c1").is_none());
+    assert!(review_entry_from_update(&recovery.update_v1, "comments", "r1").is_none());
     wait_for_yjs_sync_update(&mut socket, &client_doc).await;
     assert_eq!(yjs_plain_text(&client_doc), "See this.");
     assert!(!yjs_has_comment_mark(&client_doc, "c1"));
@@ -5945,6 +5981,27 @@ fn injection_envelope_from_update(update: &[u8]) -> Value {
         }
     }
     Value::Object(object)
+}
+
+fn review_entry_from_update(update: &[u8], section: &str, id: &str) -> Option<Value> {
+    let doc = Doc::with_options(Options {
+        offset_kind: OffsetKind::Utf16,
+        ..Default::default()
+    });
+    {
+        let mut txn = doc.transact_mut();
+        txn.apply_update(Update::decode_v1(update).unwrap())
+            .unwrap();
+    }
+    let txn = doc.transact();
+    let review = txn.get_map(REVIEW_ROOT)?;
+    let Out::YMap(section) = review.get(&txn, section)? else {
+        return None;
+    };
+    if !section.contains_key(&txn, id) {
+        return None;
+    }
+    section.get_as(&txn, id).ok()
 }
 
 async fn wait_for_yjs_comment_mark<S>(socket: &mut S, doc: &Doc, id: &str)

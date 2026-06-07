@@ -120,6 +120,7 @@ import {
   useMarkToolbarButton,
   useMarkToolbarButtonState,
   usePlateEditor,
+  usePluginOption,
   useReadOnly,
   useSelectionFragmentProp,
   type PlateEditor,
@@ -144,10 +145,11 @@ import { startCommentDraft } from '../review/comment-draft';
 import { currentAuthor } from '../review/identity';
 import { markdownToReview, reviewToMarkdown } from '../review/rfm-codec';
 import {
-  mergeReviewMetaPatch,
+  removeSuggestion,
   syncSuggestionsFromValue,
   useReviewStore,
 } from '../review/review-store';
+import { applyReviewMutation, bindReviewDoc } from '../review/review-doc';
 import type { ReviewMeta } from '../review/rfm-types';
 import {
   acceptSuggestionById,
@@ -381,6 +383,7 @@ export function PlateMarkdownEditor({
   const collabRebaseKey = collab?.rebaseKey ?? 0;
   const collabSessionId = collab?.sessionId ?? '';
   const collabToken = collab?.token;
+  const [isCollabFlusher, setIsCollabFlusher] = useState(false);
 
   // The review codec serializes both the value (inline CriticMarkup) and the
   // store's metadata (YAML endmatter). `syncSuggestionsFromValue` mirrors any
@@ -409,6 +412,7 @@ export function PlateMarkdownEditor({
   const ackedInjectedVersionIdsRef = useRef<Set<string>>(new Set());
   const injectionFallbackTimerRef = useRef<number | null>(null);
   const reviewResolutionPublishTimerRef = useRef<number | null>(null);
+  const sharedReviewPublishTimerRef = useRef<number | null>(null);
   const yjsChangeFallbackTimerRef = useRef<number | null>(null);
   const hasLocalEditsSinceCleanRef = useRef(false);
   const remoteChangeSinceCleanRef = useRef(false);
@@ -544,8 +548,7 @@ export function PlateMarkdownEditor({
         }
         return false;
       }
-      const patchedMeta = mergeReviewMetaPatch(storeGetMeta(), injectedVersion.review);
-      const nextMarkdown = serializeWithMeta(value, patchedMeta);
+      const nextMarkdown = serializeWithMeta(value, storeGetMeta());
       collabDebug('inject.inband', {
         versionId: injectedVersion.versionId,
         hadLocalEdits: hasLocalEditsSinceCleanRef.current,
@@ -572,8 +575,19 @@ export function PlateMarkdownEditor({
   );
 
   const publishSerializedMarkdown = useCallback(
-    (nextMarkdown: string, isLocalChange: boolean) => {
+    (
+      nextMarkdown: string,
+      isLocalChange: boolean,
+      options: { guardUnhydratedBlank?: boolean } = {}
+    ) => {
       if (nextMarkdown === lastSerializedRef.current) return false;
+      if (
+        options.guardUnhydratedBlank &&
+        shouldSkipUnhydratedCollabPublish(nextMarkdown, lastSerializedRef.current)
+      ) {
+        collabDebug('editor.skip_unhydrated_blank');
+        return false;
+      }
       if (isLocalChange) {
         hasLocalEditsSinceCleanRef.current = true;
       } else {
@@ -588,10 +602,31 @@ export function PlateMarkdownEditor({
   );
 
   const publishSerializedValue = useCallback(
-    (value: PlateValue, isLocalChange: boolean) => {
-      return publishSerializedMarkdown(serialize(value), isLocalChange);
+    (
+      value: PlateValue,
+      isLocalChange: boolean,
+      options: { guardUnhydratedBlank?: boolean } = {}
+    ) => {
+      return publishSerializedMarkdown(serialize(value), isLocalChange, options);
     },
     [publishSerializedMarkdown, serialize]
+  );
+
+  const handleSharedReviewMeta = useCallback(
+    (meta: ReviewMeta) => {
+      storeHydrate(meta);
+      if (!isCollabFlusher) return;
+      if (sharedReviewPublishTimerRef.current !== null) {
+        window.clearTimeout(sharedReviewPublishTimerRef.current);
+      }
+      sharedReviewPublishTimerRef.current = window.setTimeout(() => {
+        sharedReviewPublishTimerRef.current = null;
+        publishSerializedValue(editor.children as PlateValue, true, {
+          guardUnhydratedBlank: true,
+        });
+      }, 0);
+    },
+    [editor, isCollabFlusher, publishSerializedValue, storeHydrate]
   );
 
   const scheduleReviewResolutionPublish = useCallback((attempt = 0) => {
@@ -614,6 +649,7 @@ export function PlateMarkdownEditor({
         id,
         resolution
       );
+      applyReviewMutation((meta) => removeSuggestion(meta, id));
       setExternalValueRevision((revision) => revision + 1);
       if (resolvedMarkdown && publishSerializedMarkdown(resolvedMarkdown, true)) return;
       scheduleReviewResolutionPublish();
@@ -626,6 +662,10 @@ export function PlateMarkdownEditor({
       if (reviewResolutionPublishTimerRef.current !== null) {
         window.clearTimeout(reviewResolutionPublishTimerRef.current);
         reviewResolutionPublishTimerRef.current = null;
+      }
+      if (sharedReviewPublishTimerRef.current !== null) {
+        window.clearTimeout(sharedReviewPublishTimerRef.current);
+        sharedReviewPublishTimerRef.current = null;
       }
     };
   }, []);
@@ -697,7 +737,9 @@ export function PlateMarkdownEditor({
         if (pendingInjectedVersionRef.current) return;
         const isLocalChange = !YjsEditor.isYjsEditor(editor) || YjsEditor.isLocal(editor);
         setExternalValueRevision((revision) => revision + 1);
-        publishSerializedValue(editor.children as PlateValue, isLocalChange);
+        publishSerializedValue(editor.children as PlateValue, isLocalChange, {
+          guardUnhydratedBlank: true,
+        });
       }, 0);
     };
 
@@ -726,9 +768,11 @@ export function PlateMarkdownEditor({
   // exactly one editor at a time (this subscription assumes a single editor).
   useEffect(() => {
     return useReviewStore.subscribe(() => {
-      publishSerializedValue(editor.children as PlateValue, true);
+      publishSerializedValue(editor.children as PlateValue, true, {
+        guardUnhydratedBlank: collabEnabled,
+      });
     });
-  }, [editor, publishSerializedValue]);
+  }, [collabEnabled, editor, publishSerializedValue]);
 
   // Viewing is the only read-only mode; autosave never freezes the surface.
   const readOnly = mode === 'viewing';
@@ -748,6 +792,11 @@ export function PlateMarkdownEditor({
             !collabEnabled ||
             !YjsEditor.isYjsEditor(editor) ||
             YjsEditor.isLocal(editor);
+          if (isLocalChange) {
+            applyReviewMutation((meta) =>
+              syncSuggestionsFromValue(meta, value as never)
+            );
+          }
           const nextMarkdown = serialize(value as PlateValue);
           if (!isLocalChange || pendingInjectedVersionRef.current) {
             collabDebug('editor.change', {
@@ -775,13 +824,28 @@ export function PlateMarkdownEditor({
         }}
       >
         <PlateValueRevisionBridge revision={externalValueRevision} />
-        {collabEnabled && collab ? <CollabAwarenessBridge collab={collab} /> : null}
+        {collabEnabled && collab ? (
+          <CollabAwarenessBridge
+            collab={collab}
+            onLocalFlusherChange={setIsCollabFlusher}
+          />
+        ) : null}
+        {collabEnabled ? (
+          <ReviewDocBridge
+            documentId={collabDocumentId}
+            isFlusher={isCollabFlusher}
+            onMeta={handleSharedReviewMeta}
+          />
+        ) : null}
         {readOnly ? null : (
           <FloatingFormatToolbar
             onSuggestionResolved={publishResolvedSuggestion}
           />
         )}
-        <PlateContainer className="relative flex h-full min-h-0">
+        <PlateContainer
+          className="relative flex h-full min-h-0"
+          data-collab-flusher={collabEnabled ? (isCollabFlusher ? 'true' : 'false') : undefined}
+        >
           <div
             className="relative min-w-0 flex-1 overflow-auto"
             onClick={(event) => {
@@ -823,9 +887,38 @@ function versionIdFromEtag(etag?: string | null): string | null {
 function injectionEnvelopeMapValue(map: Y.Map<unknown>): Record<string, unknown> | null {
   const version_id = map.get('version_id');
   const etag = map.get('etag');
-  const review = map.get('review');
-  if (version_id === undefined && etag === undefined && review === undefined) return null;
-  return { etag, review, version_id };
+  if (version_id === undefined && etag === undefined) return null;
+  return { etag, version_id };
+}
+
+export function shouldSkipUnhydratedCollabPublish(nextMarkdown: string, lastMarkdown: string) {
+  return nextMarkdown.trim() === '' && lastMarkdown.trim() !== '';
+}
+
+function ReviewDocBridge({
+  documentId,
+  isFlusher,
+  onMeta,
+}: {
+  documentId: string;
+  isFlusher: boolean;
+  onMeta: (meta: ReviewMeta) => void;
+}) {
+  const editor = useEditorRef();
+  const isSynced = Boolean(usePluginOption(YjsPlugin, '_isSynced'));
+
+  useEffect(() => {
+    const awareness = editor.getOption(YjsPlugin, 'awareness') as { doc?: Y.Doc } | undefined;
+    const doc = awareness?.doc;
+    if (!doc) return;
+    return bindReviewDoc(doc, {
+      isFlusher,
+      isSynced,
+      onMeta,
+    });
+  }, [documentId, editor, isFlusher, isSynced, onMeta]);
+
+  return null;
 }
 
 function PlateValueRevisionBridge({ revision }: { revision: number }) {
@@ -841,7 +934,13 @@ function PlateValueRevisionBridge({ revision }: { revision: number }) {
   return null;
 }
 
-function CollabAwarenessBridge({ collab }: { collab: CollabEditorConfig }) {
+function CollabAwarenessBridge({
+  collab,
+  onLocalFlusherChange,
+}: {
+  collab: CollabEditorConfig;
+  onLocalFlusherChange: (isFlusher: boolean) => void;
+}) {
   const editor = useEditorRef();
   const flushAckRef = useRef<CollabFlushAck | null>(collab.flushAck ?? null);
   const callbacksRef = useRef({
@@ -860,6 +959,7 @@ function CollabAwarenessBridge({ collab }: { collab: CollabEditorConfig }) {
     const awareness = editor.getOption(YjsPlugin, 'awareness');
     if (awareness) {
       const isFlusher = updateCollabAwareness(awareness, collab.sessionId, flushAckRef.current);
+      onLocalFlusherChange(isFlusher);
       callbacksRef.current.onFlusherChange?.(isFlusher);
     }
   }, [
@@ -869,6 +969,7 @@ function CollabAwarenessBridge({ collab }: { collab: CollabEditorConfig }) {
     collab.onRecoveryError,
     collab.sessionId,
     editor,
+    onLocalFlusherChange,
   ]);
 
   useEffect(() => {
@@ -879,6 +980,7 @@ function CollabAwarenessBridge({ collab }: { collab: CollabEditorConfig }) {
     const publish = () => {
       if (disposed) return;
       const isFlusher = updateCollabAwareness(awareness, collab.sessionId, flushAckRef.current);
+      onLocalFlusherChange(isFlusher);
       callbacksRef.current.onFlusherChange?.(isFlusher);
       for (const ack of collectFlushAcks(awareness)) {
         callbacksRef.current.onFlushAck?.(ack);
@@ -898,9 +1000,10 @@ function CollabAwarenessBridge({ collab }: { collab: CollabEditorConfig }) {
       disposed = true;
       awarenessEvents.off('change', publish);
       clearCollabAwareness(awareness);
+      onLocalFlusherChange(false);
       callbacksRef.current.onFlusherChange?.(false);
     };
-  }, [collab.documentId, collab.sessionId, editor]);
+  }, [collab.documentId, collab.sessionId, editor, onLocalFlusherChange]);
 
   return null;
 }

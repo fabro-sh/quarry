@@ -3,6 +3,8 @@ import { SuggestionPlugin } from '@platejs/suggestion/react';
 import type { PlateEditor } from 'platejs/react';
 import { resolveSuggestions } from './resolve-suggestions';
 import { serializeReviewMeta, splitEndmatter } from './endmatter';
+import { applyReviewMutation } from './review-doc';
+import { removeSuggestion } from './review-store';
 
 export type SuggestionResolution = 'accept' | 'reject';
 
@@ -14,6 +16,7 @@ export function acceptSuggestionById(editor: PlateEditor, id: string): void {
   const desc = resolveSuggestions(editor.children).find((s) => s.suggestionId === id);
   if (!desc) return;
   editor.getApi(SuggestionPlugin).suggestion.withoutSuggestions(() => acceptSuggestion(editor, desc));
+  applyReviewMutation((meta) => removeSuggestion(meta, id));
 }
 
 // Revert (reject) the suggestion with the given id: an insertion's text is
@@ -23,6 +26,7 @@ export function rejectSuggestionById(editor: PlateEditor, id: string): void {
   const desc = resolveSuggestions(editor.children).find((s) => s.suggestionId === id);
   if (!desc) return;
   editor.getApi(SuggestionPlugin).suggestion.withoutSuggestions(() => rejectSuggestion(editor, desc));
+  applyReviewMutation((meta) => removeSuggestion(meta, id));
 }
 
 export function resolveSuggestionInMarkdown(

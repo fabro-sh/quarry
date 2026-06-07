@@ -2,8 +2,9 @@ import { getCommentKey, getDraftCommentKey } from '@platejs/comment';
 import { CommentPlugin } from '@platejs/comment/react';
 import { nanoid } from 'nanoid';
 import type { PlateEditor } from 'platejs/react';
-import { addComment, useReviewStore } from './review-store';
+import { addComment } from './review-store';
 import { currentAuthor } from './identity';
+import { applyReviewMutation } from './review-doc';
 
 // A comment draft is a transient `comment_draft` mark on the selected text. The
 // RFM codec ignores `comment_draft`, so a draft never serializes to Markdown and
@@ -50,6 +51,7 @@ export function commitCommentDraft(editor: PlateEditor, body: string): void {
       editor.tf.unsetNodes([getDraftCommentKey()], { at: path });
     }
   });
-  const store = useReviewStore.getState();
-  store.setMeta(addComment(store.getMeta(), id, { by: currentAuthor(), at: new Date().toISOString(), body: text }));
+  applyReviewMutation((meta) =>
+    addComment(meta, id, { by: currentAuthor(), at: new Date().toISOString(), body: text })
+  );
 }

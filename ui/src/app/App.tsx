@@ -386,6 +386,7 @@ function Workspace() {
     };
     setEtag(ack.etag);
     setCollabFlushAck(ack);
+    setCollabExternalChange((current) => (current?.etag === ack.etag ? null : current));
     if (saveStateRef.current === 'drafted') transitionSaveState('saved');
     void mutate(
       ['/v1/document', library, path],

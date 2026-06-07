@@ -5,6 +5,7 @@ import {
   buildThreads,
   deleteComment,
   mergeReviewMetaPatch,
+  removeSuggestion,
   resolveComment,
   syncSuggestionsFromValue,
   useReviewStore,
@@ -118,6 +119,21 @@ describe('review-store reducers', () => {
       s2: { by: 'AI', at },
       s3: { by: 'ai:codex', at },
     });
+  });
+
+  it('removeSuggestion deletes one suggestion entry without touching the rest', () => {
+    const meta = removeSuggestion(
+      {
+        comments: {},
+        suggestions: {
+          s1: { by: 'AI', at },
+          s2: { by: 'user', at },
+        },
+      },
+      's1'
+    );
+
+    expect(meta.suggestions).toEqual({ s2: { by: 'user', at } });
   });
 });
 

@@ -5,7 +5,11 @@ import { YjsPlugin } from '@platejs/yjs/react';
 import { slateNodesToInsertDelta, yTextToSlateElement } from '@slate-yjs/core';
 import { ParagraphPlugin, createPlateEditor } from 'platejs/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { collabYjsInitOptions, PlateMarkdownEditor } from './PlateMarkdownEditor';
+import {
+  collabYjsInitOptions,
+  PlateMarkdownEditor,
+  shouldSkipUnhydratedCollabPublish,
+} from './PlateMarkdownEditor';
 import { reviewKit } from './review-kit';
 import { useReviewStore } from '../review/review-store';
 import { currentAuthor } from '../review/identity';
@@ -155,6 +159,12 @@ describe('PlateMarkdownEditor collaboration lifecycle', () => {
     expect(configure).toHaveBeenCalledTimes(initialConfigureCalls);
     unmount();
     vi.useRealTimers();
+  });
+
+  it('skips transient blank fallback snapshots while a collab value hydrates', () => {
+    expect(shouldSkipUnhydratedCollabPublish('\n', '# Guide\n')).toBe(true);
+    expect(shouldSkipUnhydratedCollabPublish('# Guide\n', '# Guide\n')).toBe(false);
+    expect(shouldSkipUnhydratedCollabPublish('\n', '\n')).toBe(false);
   });
 });
 

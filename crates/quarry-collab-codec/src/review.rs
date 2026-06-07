@@ -53,7 +53,7 @@ pub struct ReviewMeta {
     pub suggestions: BTreeMap<String, ReviewMetaEntry>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReviewMetaEntry {
     #[serde(default = "unknown_review_author")]
     pub by: String,
@@ -67,6 +67,35 @@ pub struct ReviewMetaEntry {
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReviewMetaPatch {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub comments: BTreeMap<String, ReviewMetaEntry>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub suggestions: BTreeMap<String, ReviewMetaEntry>,
+    #[serde(
+        default,
+        rename = "removeComments",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub remove_comments: Vec<String>,
+    #[serde(
+        default,
+        rename = "removeSuggestions",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub remove_suggestions: Vec<String>,
+}
+
+impl ReviewMetaPatch {
+    pub fn is_empty(&self) -> bool {
+        self.comments.is_empty()
+            && self.suggestions.is_empty()
+            && self.remove_comments.is_empty()
+            && self.remove_suggestions.is_empty()
+    }
 }
 
 fn unknown_review_author() -> String {
@@ -137,6 +166,26 @@ pub fn split_review_endmatter(markdown: &str) -> (String, ReviewMeta) {
     (markdown[..delimiter_start].trim_end().to_string(), meta)
 }
 
+pub fn review_meta_with_inline_comment_bodies(markdown: &str) -> (String, ReviewMeta) {
+    let (body, mut meta) = split_review_endmatter(markdown);
+    hydrate_inline_comment_bodies(&body, &mut meta);
+    (body, meta)
+}
+
+pub fn hydrate_inline_comment_bodies(body: &str, meta: &mut ReviewMeta) {
+    for captures in inline_comment_body().captures_iter(body) {
+        let Some(comment_body) = captures.get(2) else {
+            continue;
+        };
+        let Some(id) = captures.get(3) else {
+            continue;
+        };
+        if let Some(entry) = meta.comments.get_mut(id.as_str()) {
+            entry.body = Some(comment_body.as_str().to_string());
+        }
+    }
+}
+
 /// Whether the document ends with a review endmatter block.
 pub fn has_review_endmatter(markdown: &str) -> bool {
     let Some((_, delimiter_end)) = last_endmatter_delimiter(markdown) else {
@@ -180,6 +229,14 @@ fn is_review_meta_value(value: &serde_yaml::Value) -> bool {
         || mapping.contains_key(serde_yaml::Value::String("suggestions".to_string()))
 }
 
+fn inline_comment_body() -> &'static Regex {
+    static INLINE_COMMENT_BODY: OnceLock<Regex> = OnceLock::new();
+    INLINE_COMMENT_BODY.get_or_init(|| {
+        Regex::new(r"\{==(?s:(.*?))==\}\{>>(?s:(.*?))<<\}\{#([A-Za-z0-9_-]+)\}")
+            .expect("inline comment body regex is valid")
+    })
+}
+
 /// Rewrite `{~~old~>new~~}{#id}` into the id-paired delete+insert form
 /// `{--old--}{#id}{++new++}{#id}` outside code regions, before markdown parsing
 /// (so `~~` is never read as GFM strikethrough). Port of `expandSubstitutions`.
@@ -187,7 +244,9 @@ fn expand_substitutions(markdown: &str) -> Result<String, Unsupported> {
     let mut out = String::with_capacity(markdown.len());
     let mut last = 0;
     for region in code_region().find_iter(markdown) {
-        out.push_str(&expand_substitutions_segment(&markdown[last..region.start()])?);
+        out.push_str(&expand_substitutions_segment(
+            &markdown[last..region.start()],
+        )?);
         out.push_str(region.as_str());
         last = region.end();
     }
@@ -479,7 +538,10 @@ mod tests {
     #[test]
     fn rewrites_insert_suggestion_with_meta_user_and_timestamp() {
         assert_eq!(
-            review_with("Add {++word++}{#s1}.\n", &suggestion_meta("s1", "ai:codex", AT)),
+            review_with(
+                "Add {++word++}{#s1}.\n",
+                &suggestion_meta("s1", "ai:codex", AT)
+            ),
             json!([
                 {
                     "type": "p",
@@ -500,7 +562,10 @@ mod tests {
     #[test]
     fn rewrites_delete_suggestion_as_remove_mark() {
         assert_eq!(
-            review_with("Drop {--gone--}{#s2}!\n", &suggestion_meta("s2", "ai:claude", AT)),
+            review_with(
+                "Drop {--gone--}{#s2}!\n",
+                &suggestion_meta("s2", "ai:claude", AT)
+            ),
             json!([
                 {
                     "type": "p",
@@ -521,7 +586,10 @@ mod tests {
     #[test]
     fn expands_substitution_into_paired_remove_and_insert() {
         assert_eq!(
-            review_with("Use {~~old~>new~~}{#s3} please\n", &suggestion_meta("s3", "ai:claude", AT)),
+            review_with(
+                "Use {~~old~>new~~}{#s3} please\n",
+                &suggestion_meta("s3", "ai:claude", AT)
+            ),
             json!([
                 {
                     "type": "p",
@@ -547,7 +615,10 @@ mod tests {
     #[test]
     fn unparseable_timestamp_becomes_zero_created_at() {
         assert_eq!(
-            review_with("Add {++x++}{#s4}\n", &suggestion_meta("s4", "ai:codex", "not-a-date")),
+            review_with(
+                "Add {++x++}{#s4}\n",
+                &suggestion_meta("s4", "ai:codex", "not-a-date")
+            ),
             json!([
                 {
                     "type": "p",

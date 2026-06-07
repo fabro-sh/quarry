@@ -8,6 +8,8 @@ import {
   resolveSuggestionInMarkdown,
 } from './accept-reject';
 import { markdownToReview } from './rfm-codec';
+import { useReviewStore } from './review-store';
+import { emptyReviewMeta } from './rfm-types';
 
 // One paragraph: "keep " then an inserted "ins" (suggestion s1, type insert),
 // then "mid " then a removed "del" (suggestion s2, type remove), then a
@@ -64,6 +66,7 @@ function suggestionKeys(editor: PlateEditor): string[] {
 
 describe('accept/reject suggestions', () => {
   it('accept on an insert keeps the inserted text and drops the mark', () => {
+    useReviewStore.getState().hydrate({ comments: {}, suggestions: { s1: { by: 'AI', at: '2026-01-01T00:00:00.000Z' } } });
     const editor = buildEditor();
     expect(suggestionKeys(editor)).toContain('suggestion_s1');
 
@@ -71,6 +74,8 @@ describe('accept/reject suggestions', () => {
 
     expect(docText(editor)).toContain('ins');
     expect(suggestionKeys(editor)).not.toContain('suggestion_s1');
+    expect(useReviewStore.getState().getMeta().suggestions.s1).toBeUndefined();
+    useReviewStore.getState().hydrate(emptyReviewMeta());
   });
 
   it('reject on an insert removes the inserted text and drops the mark', () => {

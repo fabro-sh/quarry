@@ -168,39 +168,14 @@ describe('collaboration session event classification', () => {
 });
 
 describe('parseInjectionEnvelope', () => {
-  it('parses the required version identifiers and optional review JSON string', () => {
-    const review = {
-      comments: {
-        c1: {
-          by: 'ai:codex',
-          at: '2026-06-05T02:41:00.480Z',
-          body: 'Needs support.',
-        },
-      },
-    };
-
+  it('parses only the version identifiers and ignores legacy review payloads', () => {
     expect(
       parseInjectionEnvelope({
         etag: '"v3"',
-        review: JSON.stringify(review),
+        review: '{"not":"used"}',
         version_id: 'v3',
       })
-    ).toEqual({ etag: '"v3"', review, versionId: 'v3' });
-  });
-
-  it('preserves deletion-aware review metadata patches', () => {
-    const review = {
-      removeComments: ['c1'],
-      removeSuggestions: ['s1'],
-    };
-
-    expect(
-      parseInjectionEnvelope({
-        etag: '"v4"',
-        review: JSON.stringify(review),
-        version_id: 'v4',
-      })
-    ).toEqual({ etag: '"v4"', review, versionId: 'v4' });
+    ).toEqual({ etag: '"v3"', versionId: 'v3' });
   });
 
   it('accepts an envelope without review metadata', () => {
@@ -214,14 +189,6 @@ describe('parseInjectionEnvelope', () => {
     expect(parseInjectionEnvelope(null)).toBeNull();
     expect(parseInjectionEnvelope({ etag: '"v3"' })).toBeNull();
     expect(parseInjectionEnvelope({ etag: '"v3"', version_id: 3 })).toBeNull();
-    expect(parseInjectionEnvelope({ etag: '"v3"', version_id: 'v3', review: '{' })).toBeNull();
-    expect(
-      parseInjectionEnvelope({
-        etag: '"v3"',
-        review: JSON.stringify(['not', 'object']),
-        version_id: 'v3',
-      })
-    ).toBeNull();
   });
 });
 

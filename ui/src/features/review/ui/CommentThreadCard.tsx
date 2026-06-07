@@ -12,13 +12,13 @@ import { firstWord, formatRelativeTime, initials } from '../format';
 import { removeCommentMark } from '../remove-comment';
 import type { ReviewMeta, ReviewMetaEntry } from '../rfm-types';
 import { addReply, deleteComment, editComment, resolveComment, useReviewStore, type ReviewThread } from '../review-store';
+import { applyReviewMutation } from '../review-doc';
 
 const menuItem =
   'flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-body outline-none hover:bg-well data-highlighted:bg-well';
 
 function applyMeta(reducer: (meta: ReviewMeta) => ReviewMeta) {
-  const store = useReviewStore.getState();
-  store.setMeta(reducer(store.getMeta()));
+  applyReviewMutation(reducer);
 }
 
 function Avatar({ by }: { by: string }) {

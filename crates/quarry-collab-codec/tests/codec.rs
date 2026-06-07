@@ -1,12 +1,14 @@
 use quarry_collab_codec::{
-    apply_built, block_markdown_to_slate, build_nodes, strip_trailing_empty_paragraphs,
-    xmltext_to_slate, Node,
+    apply_built, apply_review_patch_to_map, block_markdown_to_slate, build_nodes,
+    encode_update_v1_from_built_with_review, strip_trailing_empty_paragraphs, xmltext_to_slate,
+    Node, ReviewMeta, ReviewMetaEntry, ReviewMetaPatch,
 };
 use serde_json::json;
+use std::collections::BTreeMap;
 use yrs::types::text::YChange;
 use yrs::{
-    updates::decoder::Decode, Any, Doc, OffsetKind, Options, Out, ReadTxn, Text, Transact, Update,
-    WriteTxn, Xml, XmlTextRef,
+    updates::decoder::Decode, Any, Doc, Map, OffsetKind, Options, Out, ReadTxn, Text, Transact,
+    Update, WriteTxn, Xml, XmlTextRef,
 };
 
 #[test]
@@ -195,4 +197,109 @@ fn reads_js_slate_yjs_room_update() {
             { "type": "p", "children": [{ "text": "Agent injection live round 2" }] }
         ])
     );
+}
+
+#[test]
+fn review_seed_update_contains_body_and_review_map() {
+    let nodes = block_markdown_to_slate("Hello\n").unwrap();
+    let built = build_nodes(&nodes).unwrap();
+    let mut meta = ReviewMeta::default();
+    meta.comments.insert(
+        "c1".to_string(),
+        ReviewMetaEntry {
+            by: "user".to_string(),
+            at: "2026-01-01T00:00:00.000Z".to_string(),
+            body: Some("note".to_string()),
+            re: None,
+            status: Some("resolved".to_string()),
+            resolved: None,
+        },
+    );
+
+    let update = encode_update_v1_from_built_with_review(&built, "content", "review", &meta);
+    let doc = Doc::with_options(Options {
+        offset_kind: OffsetKind::Utf16,
+        ..Default::default()
+    });
+    {
+        let mut txn = doc.transact_mut();
+        txn.apply_update(Update::decode_v1(&update).unwrap())
+            .unwrap();
+    }
+    let txn = doc.transact();
+    let review = txn.get_map("review").expect("review map exists");
+    let Out::YMap(comments) = review.get(&txn, "comments").expect("comments map exists") else {
+        panic!("comments must be a nested map");
+    };
+    let entry: ReviewMetaEntry = comments.get_as(&txn, "c1").unwrap();
+
+    assert_eq!(entry.by, "user");
+    assert_eq!(entry.body.as_deref(), Some("note"));
+    assert_eq!(entry.status.as_deref(), Some("resolved"));
+    assert_eq!(
+        xmltext_to_slate(&txn, txn.get_text("content").unwrap().as_ref()).unwrap(),
+        { Node::element("fragment", Default::default(), nodes) }
+    );
+}
+
+#[test]
+fn review_patch_map_merges_and_removes_without_touching_other_ids() {
+    let doc = Doc::with_options(Options {
+        offset_kind: OffsetKind::Utf16,
+        ..Default::default()
+    });
+    {
+        let mut txn = doc.transact_mut();
+        let review = txn.get_or_insert_map("review");
+        apply_review_patch_to_map(
+            &mut txn,
+            &review,
+            &ReviewMetaPatch {
+                comments: BTreeMap::from([
+                    ("c1".to_string(), review_entry("user")),
+                    ("c2".to_string(), review_entry("ai:codex")),
+                ]),
+                suggestions: BTreeMap::from([("s1".to_string(), review_entry("ai:codex"))]),
+                remove_comments: Vec::new(),
+                remove_suggestions: Vec::new(),
+            },
+        );
+        apply_review_patch_to_map(
+            &mut txn,
+            &review,
+            &ReviewMetaPatch {
+                comments: BTreeMap::from([("c3".to_string(), review_entry("reviewer"))]),
+                suggestions: BTreeMap::new(),
+                remove_comments: vec!["c1".to_string()],
+                remove_suggestions: vec!["s1".to_string()],
+            },
+        );
+    }
+    let txn = doc.transact();
+    let review = txn.get_map("review").expect("review map exists");
+    let Out::YMap(comments) = review.get(&txn, "comments").expect("comments map exists") else {
+        panic!("comments must be a nested map");
+    };
+    let Out::YMap(suggestions) = review
+        .get(&txn, "suggestions")
+        .expect("suggestions map exists")
+    else {
+        panic!("suggestions must be a nested map");
+    };
+
+    assert!(!comments.contains_key(&txn, "c1"));
+    assert!(comments.contains_key(&txn, "c2"));
+    assert!(comments.contains_key(&txn, "c3"));
+    assert!(!suggestions.contains_key(&txn, "s1"));
+}
+
+fn review_entry(by: &str) -> ReviewMetaEntry {
+    ReviewMetaEntry {
+        by: by.to_string(),
+        at: "2026-01-01T00:00:00.000Z".to_string(),
+        body: None,
+        re: None,
+        status: None,
+        resolved: None,
+    }
 }

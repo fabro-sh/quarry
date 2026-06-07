@@ -19,7 +19,7 @@ use pulldown_cmark::{
 };
 use quarry_collab_codec::{
     build_nodes, review_block_to_slate, review_blocks_to_slate, review_markdown_to_slate,
-    split_review_endmatter, ReviewMeta, ReviewMetaEntry, Unsupported,
+    split_review_endmatter, ReviewMeta, ReviewMetaEntry, ReviewMetaPatch, Unsupported,
 };
 use quarry_core::{
     now_timestamp, CollabInviteToken, ConflictRecord, DocumentLink, DocumentListEntry,
@@ -2405,7 +2405,7 @@ async fn agent_edit_document(
 
     let base_version_id = version_id_from_base_token(&request.base_token)?;
     let injected_origin_id = format!("agent-injected:{request_hash}");
-    let review_snapshot = review_meta_patch_from_markdown(&plan.markdown);
+    let review_patch = review_removals_patch_from_agent_edit(&markdown, &plan.markdown);
     // Track why an edit did or didn't reach the live room, so the response can
     // report it (observability for agents and tests) instead of silently
     // falling back to a plain write.
@@ -2421,7 +2421,7 @@ async fn agent_edit_document(
                 );
                 match room
                     .begin_live_mutation(
-                        LiveMutation::content(batch, review_snapshot.clone()),
+                        LiveMutation::content(batch, review_patch.clone()),
                         &plan.original_blocks,
                         base_version_id.clone(),
                     )
@@ -2866,7 +2866,7 @@ fn built_nodes_for_blocks(
 struct AgentOpsLiveMutationPlan {
     batch: Option<InjectionBatch>,
     original_blocks: Vec<String>,
-    review: Option<JsonValue>,
+    review: Option<ReviewMetaPatch>,
 }
 
 fn agent_ops_live_mutation_plan(
@@ -2956,7 +2956,7 @@ struct AppliedAgentOps {
     markdown: String,
     results: Vec<AgentOpsResultItem>,
     changed_ordinals: Vec<usize>,
-    review_patch: Option<JsonValue>,
+    review_patch: Option<ReviewMetaPatch>,
 }
 
 #[derive(Clone, Debug)]
@@ -3403,11 +3403,10 @@ fn build_agent_ops_review_meta_patch(
     suggestion_ids: &[String],
     remove_comment_ids: &[String],
     remove_suggestion_ids: &[String],
-) -> Result<Option<JsonValue>, ApiError> {
+) -> Result<Option<ReviewMetaPatch>, ApiError> {
     let (_, meta) = review_meta_with_inline_comment_bodies(markdown);
-    let mut patch = serde_json::Map::new();
+    let mut patch = ReviewMetaPatch::default();
 
-    let mut comments = serde_json::Map::new();
     let mut seen = HashSet::new();
     for id in comment_ids {
         if !seen.insert(id.as_str()) {
@@ -3416,18 +3415,9 @@ fn build_agent_ops_review_meta_patch(
         let Some(entry) = meta.comments.get(id) else {
             continue;
         };
-        comments.insert(
-            id.clone(),
-            serde_json::to_value(entry).map_err(|error| {
-                QuarryError::InvalidPath(format!("review metadata serialization failed: {error}"))
-            })?,
-        );
-    }
-    if !comments.is_empty() {
-        patch.insert("comments".to_string(), JsonValue::Object(comments));
+        patch.comments.insert(id.clone(), entry.clone());
     }
 
-    let mut suggestions = serde_json::Map::new();
     let mut seen = HashSet::new();
     for id in suggestion_ids {
         if !seen.insert(id.as_str()) {
@@ -3436,58 +3426,49 @@ fn build_agent_ops_review_meta_patch(
         let Some(entry) = meta.suggestions.get(id) else {
             continue;
         };
-        suggestions.insert(
-            id.clone(),
-            serde_json::to_value(entry).map_err(|error| {
-                QuarryError::InvalidPath(format!("review metadata serialization failed: {error}"))
-            })?,
-        );
-    }
-    if !suggestions.is_empty() {
-        patch.insert("suggestions".to_string(), JsonValue::Object(suggestions));
+        patch.suggestions.insert(id.clone(), entry.clone());
     }
 
-    if !remove_comment_ids.is_empty() {
-        patch.insert(
-            "removeComments".to_string(),
-            JsonValue::Array(
-                remove_comment_ids
-                    .iter()
-                    .cloned()
-                    .map(JsonValue::String)
-                    .collect(),
-            ),
-        );
-    }
-    if !remove_suggestion_ids.is_empty() {
-        patch.insert(
-            "removeSuggestions".to_string(),
-            JsonValue::Array(
-                remove_suggestion_ids
-                    .iter()
-                    .cloned()
-                    .map(JsonValue::String)
-                    .collect(),
-            ),
-        );
-    }
+    patch.remove_comments = remove_comment_ids.to_vec();
+    patch.remove_suggestions = remove_suggestion_ids.to_vec();
 
-    if patch.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(JsonValue::Object(patch)))
-    }
+    Ok((!patch.is_empty()).then_some(patch))
 }
 
-fn review_meta_patch_from_markdown(markdown: &str) -> Option<JsonValue> {
-    let (body, mut meta) = split_review_endmatter(markdown);
-    hydrate_inline_comment_bodies(&body, &mut meta);
-    let value = serde_json::to_value(meta).ok()?;
-    if value.as_object().is_some_and(|object| object.is_empty()) {
-        None
-    } else {
-        Some(value)
+fn review_removals_patch_from_agent_edit(
+    original_markdown: &str,
+    edited_markdown: &str,
+) -> Option<ReviewMetaPatch> {
+    let (original_body, original_meta) = review_meta_with_inline_comment_bodies(original_markdown);
+    let (edited_body, _) = review_meta_with_inline_comment_bodies(edited_markdown);
+    let mut patch = ReviewMetaPatch::default();
+
+    for (id, entry) in &original_meta.comments {
+        if entry.re.is_some() || !body_has_review_marker(&original_body, id) {
+            continue;
+        }
+        if body_has_review_marker(&edited_body, id) {
+            continue;
+        }
+        patch.remove_comments.push(id.clone());
+        for (reply_id, reply) in &original_meta.comments {
+            if reply.re.as_deref() == Some(id.as_str()) {
+                patch.remove_comments.push(reply_id.clone());
+            }
+        }
     }
+
+    for id in original_meta.suggestions.keys() {
+        if body_has_review_marker(&original_body, id) && !body_has_review_marker(&edited_body, id) {
+            patch.remove_suggestions.push(id.clone());
+        }
+    }
+
+    (!patch.is_empty()).then_some(patch)
+}
+
+fn body_has_review_marker(body: &str, id: &str) -> bool {
+    body.contains(&format!("{{#{id}}}"))
 }
 
 fn hydrate_inline_comment_bodies(body: &str, meta: &mut ReviewMeta) {
@@ -4598,13 +4579,14 @@ mod tests {
     }
 
     #[test]
-    fn review_meta_patch_from_markdown_includes_inline_comment_bodies() {
-        let markdown = "Quote {==highlight==}{>>Needs support.<<}{#c1} tail\n\n---\ncomments:\n  c1:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n";
+    fn review_removals_patch_from_agent_edit_removes_dropped_root_and_replies() {
+        let original = "Quote {==highlight==}{>>Needs support.<<}{#c1} tail\n\n---\ncomments:\n  c1:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n  r1:\n    by: user\n    at: 2026-06-05T03:00:00.000Z\n    body: Reply.\n    re: c1\n";
+        let edited = "Quote highlight tail\n\n---\ncomments:\n  c1:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n  r1:\n    by: user\n    at: 2026-06-05T03:00:00.000Z\n    body: Reply.\n    re: c1\n";
 
-        let patch = review_meta_patch_from_markdown(markdown).unwrap();
+        let patch = review_removals_patch_from_agent_edit(original, edited).unwrap();
 
-        assert_eq!(patch["comments"]["c1"]["by"], "ai:codex");
-        assert_eq!(patch["comments"]["c1"]["body"], "Needs support.");
+        assert_eq!(patch.remove_comments, vec!["c1", "r1"]);
+        assert!(patch.comments.is_empty());
     }
 
     #[test]
