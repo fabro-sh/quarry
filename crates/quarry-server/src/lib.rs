@@ -4196,7 +4196,7 @@ fn truncate_anchor_text(text: &str) -> String {
     let trimmed = text.trim();
     let kept: String = trimmed.chars().take(MAX).collect();
     if trimmed.chars().count() > MAX {
-        format!("{kept}…")
+        format!("{kept}...")
     } else {
         kept
     }

@@ -222,6 +222,13 @@ anchors to one snapshot — send it as one batch instead of refreshing the token
 between annotations. Dry-run it first (`?dryRun=1`) to catch a bad `quote`, then
 use an `Idempotency-Key` header when committing the same body.
 
+Operations in the same batch generally must target disjoint original spans
+within each block. One narrow exception is supported: if `comment.add` omits
+`quote` and overlaps another same-block annotation, Quarry stores that comment as
+a comment-only block marker at the end of the block text so the batch can commit.
+Quoted comments overlapping suggestions, partial overlaps, and nested review
+markup still conflict.
+
 Read existing review work without parsing CriticMarkup:
 
 ```bash
