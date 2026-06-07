@@ -242,6 +242,37 @@ are omitted; add `includeResolved=1` to include them. Suggestions include
 `quote`, `content`, and `preview: { "before": "...", "after": "..." }` so you
 can decide whether to accept or reject without parsing CriticMarkup.
 
+### Processing Review Feedback
+
+To clear a document's review queue, read `GET $DOC/review`, then prefer
+`POST $DOC/review` for a convenience workflow that can process suggestion
+decisions, direct block edits, and comment resolutions in one agent request. It
+is a wrapper over the existing `/ops` and `/edit` behavior, not a new
+transaction model; internally, edit operations use the `edit.` prefix and block
+refs are refreshed by ordinal after earlier wrapper phases.
+
+```json
+{
+  "baseToken": "version_123",
+  "by": "Codex",
+  "operations": [
+    { "op": "suggestion.accept", "id": "s1" },
+    {
+      "op": "edit.replace_block",
+      "ref": { "ordinal": 4, "contentHash": "abc123" },
+      "block": { "markdown": "Updated block markdown\n\n" }
+    },
+    { "op": "comment.resolve", "id": "c1" }
+  ]
+}
+```
+
+When the wrapper is not a fit, use the lower-level route sequence: accept or
+reject open suggestions in a single `/ops` batch when possible, apply
+comment-requested content changes with `/edit`, resolve the handled comments
+with `/ops`, then verify that `GET $DOC/review` returns `comments: []` and
+`suggestions: []`.
+
 Add a comment:
 
 ```sh

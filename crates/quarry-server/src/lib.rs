@@ -606,6 +606,7 @@ async fn browser_asset(uri: Uri) -> Response {
         document_share_openapi,
         document_share_create_openapi,
         document_share_revoke_openapi,
+        document_review_process_openapi,
         agent_presence_list_openapi,
         agent_presence_openapi,
         agent_events_pending,
@@ -658,6 +659,10 @@ async fn browser_asset(uri: Uri) -> Response {
         AgentReviewReply,
         AgentReviewSuggestion,
         AgentSuggestionPreview,
+        AgentReviewProcessRequest,
+        AgentReviewProcessOperation,
+        AgentReviewProcessResponse,
+        AgentReviewProcessResultItem,
         AgentEditRequest,
         AgentEditResponse,
         AgentBlockOperation,
@@ -738,6 +743,7 @@ struct AgentDiscoveryRouteHints {
     presence: String,
     snapshot: String,
     review: String,
+    review_process: String,
     events_stream: String,
     events_pending: String,
     edit: String,
@@ -792,6 +798,14 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
         "review",
         discovery_endpoint(
             "GET",
+            "/v1/libraries/{library}/documents/{path}/review",
+            &api_base,
+        ),
+    );
+    endpoints.insert(
+        "review_process",
+        discovery_endpoint(
+            "POST",
             "/v1/libraries/{library}/documents/{path}/review",
             &api_base,
         ),
@@ -868,6 +882,7 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
                 "presence",
                 "snapshot",
                 "review",
+                "review_process",
                 "events",
                 "block_edit",
                 "bulk_block_insert",
@@ -916,6 +931,9 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
                 presence: format!("{api_base}/libraries/{{library}}/documents/{{path}}/presence"),
                 snapshot: format!("{api_base}/libraries/{{library}}/documents/{{path}}/snapshot"),
                 review: format!("{api_base}/libraries/{{library}}/documents/{{path}}/review"),
+                review_process: format!(
+                    "{api_base}/libraries/{{library}}/documents/{{path}}/review"
+                ),
                 events_stream: format!(
                     "{api_base}/libraries/{{library}}/documents/{{path}}/events/stream"
                 ),
@@ -1454,6 +1472,66 @@ pub struct AgentReviewSuggestion {
 pub struct AgentSuggestionPreview {
     pub before: String,
     pub after: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentReviewProcessOperation {
+    pub op: String,
+    #[serde(default, rename = "ref")]
+    pub block_ref: Option<AgentBlockRef>,
+    #[serde(default)]
+    pub block: Option<AgentEditBlock>,
+    #[serde(default)]
+    pub blocks: Option<Vec<AgentEditBlock>>,
+    #[serde(default)]
+    pub markdown: Option<String>,
+    #[serde(default)]
+    pub quote: Option<String>,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default, rename = "parentId")]
+    pub parent_id: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default, alias = "suggestionType")]
+    #[schema(value_type = Option<AgentSuggestionKind>)]
+    pub kind: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentReviewProcessRequest {
+    #[serde(rename = "baseToken")]
+    pub base_token: String,
+    #[serde(default)]
+    pub by: Option<String>,
+    pub operations: Vec<AgentReviewProcessOperation>,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AgentReviewProcessResultItem {
+    pub op: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AgentReviewProcessResponse {
+    #[serde(rename = "dryRun")]
+    pub dry_run: bool,
+    #[serde(rename = "nextBaseToken", skip_serializing_if = "Option::is_none")]
+    pub next_base_token: Option<String>,
+    pub results: Vec<AgentReviewProcessResultItem>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub outcomes: Vec<WriteOutcome>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub markdown: Option<String>,
+    pub review: AgentReviewResponse,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub injection: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
@@ -2084,6 +2162,17 @@ async fn post_document_action(
         return json_response(StatusCode::CREATED, &token);
     }
 
+    if let Some(path) = path.strip_suffix("/review") {
+        let request: AgentReviewProcessRequest =
+            serde_json::from_value(request).map_err(|error| {
+                QuarryError::InvalidPath(format!("invalid review process request: {error}"))
+            })?;
+        let response =
+            agent_review_process_document(&state, &headers, &query, &library, path, request)
+                .await?;
+        return agent_review_process_response(response);
+    }
+
     if let Some((_, token_id)) = collab_invite_revoke_path(&path) {
         let token = state.store.revoke_collab_invite_token(token_id).await?;
         return json_response(StatusCode::OK, &token);
@@ -2155,6 +2244,16 @@ async fn agent_presence_openapi() {}
 #[allow(dead_code)]
 async fn document_ops_openapi() {}
 
+#[utoipa::path(
+    post,
+    path = "/v1/libraries/{library}/documents/{path}/review",
+    params(("library" = String, Path), ("path" = String, Path), ("dryRun" = Option<DryRunValue>, Query)),
+    request_body = AgentReviewProcessRequest,
+    responses((status = 200, body = AgentReviewProcessResponse), (status = 409, body = ErrorResponse), (status = 412, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn document_review_process_openapi() {}
+
 #[derive(Clone)]
 struct AgentEditResult {
     response: AgentEditResponse,
@@ -2195,6 +2294,11 @@ struct AgentOpsResult {
     version_id: Option<String>,
 }
 
+struct AgentReviewProcessResult {
+    response: AgentReviewProcessResponse,
+    version_id: Option<String>,
+}
+
 // `ReviewMeta` / `ReviewMetaEntry` and the endmatter readers now live in
 // `quarry_collab_codec::review` (single-sourced with the slate conversion that
 // needs them); imported at the top of this module.
@@ -2220,6 +2324,333 @@ async fn agent_presence_document(
             request.by.filter(|by| !by.trim().is_empty()),
         )
         .await)
+}
+
+async fn agent_review_process_document(
+    state: &AppState,
+    headers: &HeaderMap,
+    query: &DocumentActionQuery,
+    library: &str,
+    path: &str,
+    request: AgentReviewProcessRequest,
+) -> Result<AgentReviewProcessResult, ApiError> {
+    if request.operations.is_empty() {
+        return Err(QuarryError::InvalidPath(
+            "review process request must include at least one operation".to_string(),
+        )
+        .into());
+    }
+    let dry_run = query.dry_run()?;
+    let base_token = version_id_from_base_token(&request.base_token)?;
+    let phases = agent_review_process_phases(&request.operations)?;
+    if dry_run {
+        return agent_review_process_dry_run(state, headers, library, path, request, phases).await;
+    }
+
+    let mut phase_headers = headers.clone();
+    phase_headers.remove("idempotency-key");
+    let mut current_base_token = base_token;
+    let mut results = Vec::new();
+    let mut outcomes = Vec::new();
+    let mut injection = Vec::new();
+
+    for (phase_index, phase) in phases.into_iter().enumerate() {
+        match phase {
+            AgentReviewProcessPhase::Edit(mut operations) => {
+                if phase_index > 0 {
+                    let markdown = current_document_markdown(state, library, path).await?;
+                    rebase_edit_operation_refs(&mut operations, &markdown)?;
+                }
+                results.extend(review_process_edit_results(&operations));
+                let phase_request = AgentEditRequest {
+                    base_token: current_base_token.clone(),
+                    operations,
+                };
+                let result =
+                    agent_edit_document(state, &phase_headers, query, library, path, phase_request)
+                        .await?;
+                if let Some(status) = result.response.injection.clone() {
+                    injection.push(status);
+                }
+                if let Some(outcome) = result.response.outcome.clone() {
+                    outcomes.push(outcome);
+                }
+                current_base_token = result.version_id.ok_or_else(|| {
+                    QuarryError::InvalidPath(
+                        "review process edit phase did not produce a version".to_string(),
+                    )
+                })?;
+            }
+            AgentReviewProcessPhase::Ops(mut operations) => {
+                if phase_index > 0 {
+                    let markdown = current_document_markdown(state, library, path).await?;
+                    rebase_ops_operation_refs(&mut operations, &markdown)?;
+                }
+                let phase_request = AgentOpsRequest {
+                    base_token: current_base_token.clone(),
+                    by: request.by.clone(),
+                    operations,
+                };
+                let result =
+                    agent_ops_document(state, &phase_headers, query, library, path, phase_request)
+                        .await?;
+                results.extend(
+                    result
+                        .response
+                        .results
+                        .iter()
+                        .cloned()
+                        .map(review_process_ops_result),
+                );
+                if let Some(status) = result.response.injection.clone() {
+                    injection.push(status);
+                }
+                if let Some(outcome) = result.response.outcome.clone() {
+                    outcomes.push(outcome);
+                }
+                current_base_token = result.version_id.ok_or_else(|| {
+                    QuarryError::InvalidPath(
+                        "review process ops phase did not produce a version".to_string(),
+                    )
+                })?;
+            }
+        }
+    }
+
+    let review = agent_document_review(&state.store, library, path, false).await?;
+    Ok(AgentReviewProcessResult {
+        version_id: Some(current_base_token.clone()),
+        response: AgentReviewProcessResponse {
+            dry_run: false,
+            next_base_token: Some(current_base_token),
+            results,
+            outcomes,
+            markdown: None,
+            review,
+            injection,
+        },
+    })
+}
+
+async fn agent_review_process_dry_run(
+    state: &AppState,
+    headers: &HeaderMap,
+    library: &str,
+    path: &str,
+    request: AgentReviewProcessRequest,
+    phases: Vec<AgentReviewProcessPhase>,
+) -> Result<AgentReviewProcessResult, ApiError> {
+    let document = state.store.get_document(library, path).await?;
+    let mut markdown = document_markdown(&document)?;
+    let base_token = version_id_from_base_token(&request.base_token)?;
+    if base_token != document.version.id {
+        return Err(stale_base_error());
+    }
+    let author = request
+        .by
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| optional_header(headers, "x-agent-id").ok().flatten())
+        .unwrap_or_else(|| "unknown".to_string());
+    let mut results = Vec::new();
+
+    for (phase_index, phase) in phases.into_iter().enumerate() {
+        match phase {
+            AgentReviewProcessPhase::Edit(mut operations) => {
+                if phase_index > 0 {
+                    rebase_edit_operation_refs(&mut operations, &markdown)?;
+                }
+                results.extend(review_process_edit_results(&operations));
+                let phase_request = AgentEditRequest {
+                    base_token: base_token.clone(),
+                    operations,
+                };
+                let plan = apply_agent_edit(&markdown, &base_token, &phase_request)?;
+                markdown = plan.markdown;
+            }
+            AgentReviewProcessPhase::Ops(mut operations) => {
+                if phase_index > 0 {
+                    rebase_ops_operation_refs(&mut operations, &markdown)?;
+                }
+                let phase_request = AgentOpsRequest {
+                    base_token: base_token.clone(),
+                    by: request.by.clone(),
+                    operations,
+                };
+                let applied =
+                    apply_agent_ops_batch(&markdown, &base_token, &phase_request, &author)?;
+                results.extend(applied.results.into_iter().map(review_process_ops_result));
+                markdown = applied.markdown;
+            }
+        }
+    }
+
+    let review =
+        agent_review_response_from_markdown(document.id, base_token.clone(), &markdown, false);
+    Ok(AgentReviewProcessResult {
+        version_id: None,
+        response: AgentReviewProcessResponse {
+            dry_run: true,
+            next_base_token: None,
+            results,
+            outcomes: Vec::new(),
+            markdown: Some(markdown),
+            review,
+            injection: Vec::new(),
+        },
+    })
+}
+
+fn agent_review_process_response(result: AgentReviewProcessResult) -> Result<Response, ApiError> {
+    if let Some(version_id) = result.version_id {
+        json_with_etag(StatusCode::OK, &result.response, &version_id)
+    } else {
+        json_response(StatusCode::OK, &result.response)
+    }
+}
+
+#[derive(Clone, Debug)]
+enum AgentReviewProcessPhase {
+    Edit(Vec<AgentBlockOperation>),
+    Ops(Vec<AgentOpsOperationRequest>),
+}
+
+fn agent_review_process_phases(
+    operations: &[AgentReviewProcessOperation],
+) -> Result<Vec<AgentReviewProcessPhase>, ApiError> {
+    let mut phases = Vec::new();
+    for operation in operations {
+        if is_review_process_edit_operation(&operation.op) {
+            let edit_operation = review_process_edit_operation(operation)?;
+            match phases.last_mut() {
+                Some(AgentReviewProcessPhase::Edit(operations)) => {
+                    operations.push(edit_operation);
+                }
+                _ => phases.push(AgentReviewProcessPhase::Edit(vec![edit_operation])),
+            }
+        } else {
+            let ops_operation = review_process_ops_operation(operation);
+            match phases.last_mut() {
+                Some(AgentReviewProcessPhase::Ops(operations)) => {
+                    operations.push(ops_operation);
+                }
+                _ => phases.push(AgentReviewProcessPhase::Ops(vec![ops_operation])),
+            }
+        }
+    }
+    Ok(phases)
+}
+
+fn is_review_process_edit_operation(op: &str) -> bool {
+    matches!(
+        normalized_review_process_edit_op(op).as_deref(),
+        Some("replace_block")
+            | Some("insert_before")
+            | Some("insert_after")
+            | Some("delete_block")
+            | Some("replace_document")
+    )
+}
+
+fn normalized_review_process_edit_op(op: &str) -> Option<String> {
+    let op = op.strip_prefix("edit.").unwrap_or(op);
+    Some(op.trim().to_string()).filter(|value| !value.is_empty())
+}
+
+fn review_process_edit_operation(
+    operation: &AgentReviewProcessOperation,
+) -> Result<AgentBlockOperation, ApiError> {
+    let op = normalized_review_process_edit_op(&operation.op)
+        .ok_or_else(|| QuarryError::InvalidPath("edit operation missing op".to_string()))?;
+    Ok(AgentBlockOperation {
+        op,
+        block_ref: operation.block_ref.clone(),
+        block: operation.block.clone(),
+        blocks: operation.blocks.clone(),
+        markdown: operation.markdown.clone(),
+    })
+}
+
+fn review_process_ops_operation(
+    operation: &AgentReviewProcessOperation,
+) -> AgentOpsOperationRequest {
+    AgentOpsOperationRequest {
+        op: operation.op.clone(),
+        block_ref: operation.block_ref.clone(),
+        quote: operation.quote.clone(),
+        body: operation.body.clone(),
+        parent_id: operation.parent_id.clone(),
+        content: operation.content.clone(),
+        id: operation.id.clone(),
+        kind: operation.kind.clone(),
+    }
+}
+
+fn review_process_edit_results(
+    operations: &[AgentBlockOperation],
+) -> Vec<AgentReviewProcessResultItem> {
+    operations
+        .iter()
+        .map(|operation| AgentReviewProcessResultItem {
+            op: format!("edit.{}", operation.op),
+            id: None,
+        })
+        .collect()
+}
+
+fn review_process_ops_result(result: AgentOpsResultItem) -> AgentReviewProcessResultItem {
+    AgentReviewProcessResultItem {
+        op: result.op,
+        id: result.id,
+    }
+}
+
+async fn current_document_markdown(
+    state: &AppState,
+    library: &str,
+    path: &str,
+) -> Result<String, ApiError> {
+    let document = state.store.get_document(library, path).await?;
+    document_markdown(&document)
+}
+
+fn rebase_edit_operation_refs(
+    operations: &mut [AgentBlockOperation],
+    markdown: &str,
+) -> Result<(), ApiError> {
+    let blocks = snapshot_blocks(markdown);
+    for operation in operations {
+        if let Some(block_ref) = operation.block_ref.as_mut() {
+            *block_ref = refreshed_block_ref(block_ref.ordinal, &blocks)?;
+        }
+    }
+    Ok(())
+}
+
+fn rebase_ops_operation_refs(
+    operations: &mut [AgentOpsOperationRequest],
+    markdown: &str,
+) -> Result<(), ApiError> {
+    let blocks = snapshot_blocks(markdown);
+    for operation in operations {
+        if let Some(block_ref) = operation.block_ref.as_mut() {
+            *block_ref = refreshed_block_ref(block_ref.ordinal, &blocks)?;
+        }
+    }
+    Ok(())
+}
+
+fn refreshed_block_ref(
+    ordinal: usize,
+    blocks: &[AgentSnapshotBlock],
+) -> Result<AgentBlockRef, ApiError> {
+    blocks
+        .iter()
+        .find(|block| block.block_ref.ordinal == ordinal)
+        .map(|block| block.block_ref.clone())
+        .ok_or_else(stale_base_error)
 }
 
 async fn agent_ops_document(
@@ -2466,17 +2897,30 @@ async fn agent_document_review(
 ) -> Result<AgentReviewResponse, ApiError> {
     let document = store.get_document(library, path).await?;
     let markdown = document_markdown(&document)?;
-    let base_token = document.version.id;
+    Ok(agent_review_response_from_markdown(
+        document.id,
+        document.version.id,
+        &markdown,
+        include_resolved,
+    ))
+}
+
+fn agent_review_response_from_markdown(
+    document_id: String,
+    base_token: String,
+    markdown: &str,
+    include_resolved: bool,
+) -> AgentReviewResponse {
     let blocks = snapshot_blocks(&markdown);
     let (_, meta) = review_meta_with_inline_comment_bodies(&markdown);
     let comments = agent_review_comments(&blocks, &meta, include_resolved);
     let suggestions = agent_review_suggestions(&blocks, &meta);
-    Ok(AgentReviewResponse {
-        document_id: document.id,
+    AgentReviewResponse {
+        document_id,
         base_token,
         comments,
         suggestions,
-    })
+    }
 }
 
 async fn agent_edit_document(

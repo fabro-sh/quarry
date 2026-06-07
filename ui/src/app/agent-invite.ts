@@ -78,7 +78,8 @@ Document path: ${path}
 
 5. Do not edit until the user gives further instructions.
    For direct block edits, POST ${documentApi}/edit using the latest baseToken and block refs.
-   For review feedback, POST ${documentApi}/ops with a top-level baseToken, optional by, and an operations array containing comment.add, comment.reply, comment.delete, suggestion.add, suggestion.accept, or suggestion.reject.
+   For review annotations, POST ${documentApi}/ops with a top-level baseToken, optional by, and an operations array containing comment.add, comment.reply, comment.delete, suggestion.add, suggestion.accept, or suggestion.reject.
+   To process existing feedback in one convenience workflow, POST ${documentApi}/review with suggestion decisions, edit.* block operations, and comment resolutions.
    If an edit is stale, refresh the snapshot and retry from the new baseToken.
 
 6. If you need setup details for deeper interaction, fetch:

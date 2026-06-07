@@ -58,8 +58,12 @@ describe('agent invite helpers', () => {
     expect(prompt).toContain(
       'POST http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md/ops'
     );
+    expect(prompt).toContain(
+      'POST http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md/review'
+    );
     expect(prompt).toContain('top-level baseToken, optional by, and an operations array');
     expect(prompt).toContain('suggestion.accept, or suggestion.reject');
+    expect(prompt).toContain('edit.* block operations');
     expect(prompt).toContain('Skill: http://127.0.0.1:5173/quarry.SKILL.md');
     expect(prompt).toContain('Docs: http://127.0.0.1:5173/agent-docs');
     expect(prompt).toContain('Discovery: http://127.0.0.1:5173/.well-known/agent.json');

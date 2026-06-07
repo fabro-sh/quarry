@@ -371,6 +371,10 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}"]["head"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/snapshot"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"].is_object());
+    assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"]["get"].is_object());
+    assert!(
+        openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"]["post"].is_object()
+    );
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/share"].is_object());
     assert!(
         openapi["paths"]["/v1/libraries/{library}/documents/{path}/share/{token}/revoke"]
@@ -3069,6 +3073,115 @@ async fn agent_ops_accept_reject_and_resolve_review_marks() {
 }
 
 #[tokio::test]
+async fn agent_review_post_processes_mixed_review_and_edit_operations() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentreviewpost").await.unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            b"Keep {++good++}{#s1}. {==Needs text==}{>>Expand this.<<}{#c1}\n\n---\ncomments:\n  c1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user\nsuggestions:\n  s1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: AI\n"
+                .to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let snapshot = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreviewpost/documents/notes/review.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(snapshot.status(), StatusCode::OK);
+    let snapshot: Value = response_json(snapshot).await;
+    let base_token = snapshot["baseToken"].as_str().unwrap();
+    let first_ref = snapshot["blocks"][0]["ref"].clone();
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentreviewpost/documents/notes/review.md/review",
+            serde_json::json!({
+                "baseToken": base_token,
+                "by": "Codex",
+                "operations": [
+                    { "op": "suggestion.accept", "id": "s1" },
+                    {
+                        "op": "edit.replace_block",
+                        "ref": first_ref,
+                        "block": { "markdown": "Keep good. Expanded text.\n" }
+                    },
+                    { "op": "comment.resolve", "id": "c1" }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["dryRun"], false);
+    assert_eq!(body["results"].as_array().unwrap().len(), 3);
+    assert_eq!(body["review"]["comments"], serde_json::json!([]));
+    assert_eq!(body["review"]["suggestions"], serde_json::json!([]));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreviewpost/documents/notes/review.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let markdown = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(markdown.contains("Keep good. Expanded text."));
+    assert!(!markdown.contains("{++good++}{#s1}"));
+    assert!(!markdown.contains("{==Needs text==}"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreviewpost/documents/notes/review.md/review")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let review: Value = response_json(response).await;
+    assert_eq!(review["comments"], serde_json::json!([]));
+    assert_eq!(review["suggestions"], serde_json::json!([]));
+}
+
+#[tokio::test]
 async fn agent_ops_reply_and_delete_comments_without_live_room() {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {
@@ -4460,6 +4573,11 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
     assert!(docs.contains("comment.reply"));
     assert!(docs.contains("comment.delete"));
     assert!(docs.contains("GET $DOC/review"));
+    assert!(docs.contains("POST $DOC/review"));
+    assert!(docs.contains("Processing Review Feedback"));
+    assert!(docs.contains("edit.replace_block"));
+    assert!(docs.contains("comments: []"));
+    assert!(docs.contains("suggestions: []"));
     assert!(docs.contains("\"blocks\""));
     assert!(docs.contains("replace_document"));
     assert!(docs.contains("repeated `insert_after`"));
@@ -4484,6 +4602,14 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
     assert_eq!(body["docs_url"], "http://127.0.0.1:7831/agent-docs");
     assert_eq!(body["skill_url"], "http://127.0.0.1:7831/quarry.SKILL.md");
     assert_eq!(body["openapi_url"], "http://127.0.0.1:7831/v1/openapi.json");
+    assert_eq!(
+        body["endpoints"]["review_process"]["method"],
+        serde_json::json!("POST")
+    );
+    assert_eq!(
+        body["route_hints"]["review_process"],
+        serde_json::json!("http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/review")
+    );
     assert!(body["capabilities"]
         .as_array()
         .unwrap()
@@ -5439,6 +5565,9 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/backlinks"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/versions"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"].is_object());
+    assert!(
+        openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"]["post"].is_object()
+    );
     assert!(openapi["paths"]["/v1/events"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/events/stream"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/events/pending"].is_object());
@@ -5494,6 +5623,18 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
     );
     assert!(
         openapi["components"]["schemas"]["AgentOpsResponse"]["properties"]["results"].is_object()
+    );
+    assert!(
+        openapi["components"]["schemas"]["AgentReviewProcessRequest"]["properties"]["operations"]
+            .is_object()
+    );
+    assert!(
+        openapi["components"]["schemas"]["AgentReviewProcessOperation"]["properties"]["block"]
+            .is_object()
+    );
+    assert!(
+        openapi["components"]["schemas"]["AgentReviewProcessResponse"]["properties"]["review"]
+            .is_object()
     );
     assert!(
         openapi["components"]["schemas"]["AgentReviewResponse"]["properties"]["suggestions"]

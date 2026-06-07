@@ -998,6 +998,78 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [],
+        "operationId": "document_review_process_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "dryRun",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DryRunValue"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentReviewProcessRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentReviewProcessResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/libraries/{library}/documents/{path}/share": {
@@ -2883,6 +2955,181 @@
             }
           },
           "status": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentReviewProcessOperation": {
+        "type": "object",
+        "required": [
+          "op"
+        ],
+        "properties": {
+          "block": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AgentEditBlock"
+              }
+            ]
+          },
+          "blocks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/AgentEditBlock"
+            }
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AgentSuggestionKind"
+              }
+            ]
+          },
+          "markdown": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "op": {
+            "type": "string"
+          },
+          "parentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AgentBlockRef"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "AgentReviewProcessRequest": {
+        "type": "object",
+        "required": [
+          "baseToken",
+          "operations"
+        ],
+        "properties": {
+          "baseToken": {
+            "type": "string"
+          },
+          "by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentReviewProcessOperation"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "AgentReviewProcessResponse": {
+        "type": "object",
+        "required": [
+          "dryRun",
+          "results",
+          "review"
+        ],
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "injection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "markdown": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nextBaseToken": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcomes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WriteOutcome"
+            }
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentReviewProcessResultItem"
+            }
+          },
+          "review": {
+            "$ref": "#/components/schemas/AgentReviewResponse"
+          }
+        }
+      },
+      "AgentReviewProcessResultItem": {
+        "type": "object",
+        "required": [
+          "op"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "op": {
             "type": "string"
           }
         }
