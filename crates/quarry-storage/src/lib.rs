@@ -86,7 +86,7 @@ pub struct StoreEvent {
     pub peer_id: Option<String>,
     pub applied: Option<usize>,
     pub conflicts: Option<usize>,
-    pub collab_session_id: Option<String>,
+    pub origin_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -131,7 +131,7 @@ fn log_store_event_emitted(event: &StoreEvent) {
         peer_id = event.peer_id.as_deref().unwrap_or(""),
         applied = event.applied.unwrap_or(0),
         conflicts = event.conflicts.unwrap_or(0),
-        collab_session_id = event.collab_session_id.as_deref().unwrap_or(""),
+        origin_id = event.origin_id.as_deref().unwrap_or(""),
         "store event emitted"
     );
 }
@@ -150,7 +150,7 @@ fn log_store_event_domain(event: &StoreEvent) {
         peer_id = event.peer_id.as_deref().unwrap_or(""),
         applied = event.applied.unwrap_or(0),
         conflicts = event.conflicts.unwrap_or(0),
-        collab_session_id = event.collab_session_id.as_deref().unwrap_or(""),
+        origin_id = event.origin_id.as_deref().unwrap_or(""),
         "store domain event"
     );
 }
@@ -411,7 +411,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
-            collab_session_id: None,
+            origin_id: None,
         });
         Ok(metadata)
     }
@@ -478,7 +478,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
-            collab_session_id: None,
+            origin_id: None,
         });
         Ok(metadata)
     }
@@ -594,7 +594,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
-            collab_session_id: None,
+            origin_id: None,
         });
         Ok(())
     }
@@ -636,7 +636,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
-            collab_session_id: None,
+            origin_id: None,
         });
         Ok(())
     }
@@ -729,7 +729,7 @@ impl QuarryStore {
         source: DocumentSource,
         precondition: WritePrecondition,
     ) -> Result<WriteOutcome> {
-        self.put_document_with_collab_session(
+        self.put_document_with_origin(
             library,
             path,
             content,
@@ -742,7 +742,7 @@ impl QuarryStore {
         .await
     }
 
-    pub async fn put_document_with_collab_session(
+    pub async fn put_document_with_origin(
         &self,
         library: &str,
         path: &str,
@@ -751,10 +751,10 @@ impl QuarryStore {
         content_type: &str,
         source: DocumentSource,
         precondition: WritePrecondition,
-        collab_session_id: Option<String>,
+        origin_id: Option<String>,
     ) -> Result<WriteOutcome> {
         let outcome = self
-            .commit_document_with_collab_session(
+            .commit_document_without_events(
                 library,
                 path,
                 content,
@@ -764,11 +764,11 @@ impl QuarryStore {
                 precondition,
             )
             .await?;
-        self.emit_document_put_events(&outcome, collab_session_id);
+        self.emit_document_put_events(&outcome, origin_id);
         Ok(outcome)
     }
 
-    pub async fn commit_document_with_collab_session(
+    pub async fn commit_document_without_events(
         &self,
         library: &str,
         path: &str,
@@ -853,11 +853,7 @@ impl QuarryStore {
         Ok(outcome)
     }
 
-    pub fn emit_document_put_events(
-        &self,
-        outcome: &WriteOutcome,
-        collab_session_id: Option<String>,
-    ) {
+    pub fn emit_document_put_events(&self, outcome: &WriteOutcome, origin_id: Option<String>) {
         self.emit_event(StoreEvent {
             kind: StoreEventKind::DocumentPut,
             library_id: outcome.transaction.library_id.clone(),
@@ -871,7 +867,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
-            collab_session_id,
+            origin_id,
         });
         self.emit_event(links_indexed_event(
             outcome.transaction.library_id.clone(),
@@ -1326,7 +1322,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
-            collab_session_id: None,
+            origin_id: None,
         });
         Ok(report)
     }
@@ -1353,7 +1349,7 @@ impl QuarryStore {
             peer_id: Some(peer_id.to_string()),
             applied: Some(applied),
             conflicts: Some(conflicts),
-            collab_session_id: None,
+            origin_id: None,
         });
         Ok(())
     }
@@ -1651,6 +1647,17 @@ impl QuarryStore {
         path: &str,
         version_id: &str,
     ) -> Result<WriteOutcome> {
+        self.restore_document_version_with_origin(library, path, version_id, None)
+            .await
+    }
+
+    pub async fn restore_document_version_with_origin(
+        &self,
+        library: &str,
+        path: &str,
+        version_id: &str,
+        origin_id: Option<String>,
+    ) -> Result<WriteOutcome> {
         let path = normalize_path(path)?;
         let conn = self.conn()?;
         let library_record = self.require_library_conn(&conn, library).await?;
@@ -1663,7 +1670,7 @@ impl QuarryStore {
             .await?;
         drop(conn);
 
-        self.put_document(
+        self.put_document_with_origin(
             library,
             &path,
             content,
@@ -1671,6 +1678,7 @@ impl QuarryStore {
             &version.content_type,
             DocumentSource::Rest,
             WritePrecondition::None,
+            origin_id,
         )
         .await
     }
@@ -1680,6 +1688,17 @@ impl QuarryStore {
         library: &str,
         path: &str,
         source: DocumentSource,
+    ) -> Result<TransactionRecord> {
+        self.delete_document_with_origin(library, path, source, None)
+            .await
+    }
+
+    pub async fn delete_document_with_origin(
+        &self,
+        library: &str,
+        path: &str,
+        source: DocumentSource,
+        origin_id: Option<String>,
     ) -> Result<TransactionRecord> {
         let path = normalize_path(path)?;
         let source_for_event = source.clone();
@@ -1714,16 +1733,17 @@ impl QuarryStore {
             .await?;
             conn.execute(
                 "UPDATE documents SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
-                params![now_timestamp(), doc_id],
+                params![now_timestamp(), doc_id.clone()],
             )
             .await
             .map_err(map_turso_error)?;
             self.reindex_links_conn(&conn, &library.id).await?;
             commit_transaction_record_conn(&conn, &tx.id).await?;
-            self.transaction_conn(&conn, &tx.id).await
+            let tx = self.transaction_conn(&conn, &tx.id).await?;
+            Ok((tx, doc_id))
         }
         .await;
-        let tx = finish_tx(&conn, result).await?;
+        let (tx, doc_id) = finish_tx(&conn, result).await?;
         self.emit_event(StoreEvent {
             kind: StoreEventKind::DocumentDelete,
             library_id: tx.library_id.clone(),
@@ -1731,13 +1751,13 @@ impl QuarryStore {
             new_path: None,
             source: Some(source_for_event),
             tx_id: Some(tx.id.clone()),
-            doc_id: None,
+            doc_id: Some(doc_id),
             version_id: None,
             conflict_id: None,
             peer_id: None,
             applied: None,
             conflicts: None,
-            collab_session_id: None,
+            origin_id,
         });
         self.emit_event(links_indexed_event(tx.library_id.clone(), path));
         Ok(tx)
@@ -1749,6 +1769,18 @@ impl QuarryStore {
         from_path: &str,
         to_path: &str,
         source: DocumentSource,
+    ) -> Result<TransactionRecord> {
+        self.move_document_with_origin(library, from_path, to_path, source, None)
+            .await
+    }
+
+    pub async fn move_document_with_origin(
+        &self,
+        library: &str,
+        from_path: &str,
+        to_path: &str,
+        source: DocumentSource,
+        origin_id: Option<String>,
     ) -> Result<TransactionRecord> {
         let from_path = normalize_path(from_path)?;
         let to_path = normalize_path(to_path)?;
@@ -1826,7 +1858,8 @@ impl QuarryStore {
                 move_path_inode_conn(&conn, &library.id, &from_path, &to_path).await?;
                 self.reindex_links_conn(&conn, &library.id).await?;
                 commit_transaction_record_conn(&conn, &tx.id).await?;
-                return self.transaction_conn(&conn, &tx.id).await;
+                let tx = self.transaction_conn(&conn, &tx.id).await?;
+                return Ok((tx, to_doc_id));
             }
             let tx = insert_transaction_conn(
                 &conn,
@@ -1849,17 +1882,18 @@ impl QuarryStore {
             .await?;
             conn.execute(
                 "UPDATE documents SET path = ?1, updated_at = ?2 WHERE id = ?3",
-                params![to_path.clone(), now_timestamp(), doc_id],
+                params![to_path.clone(), now_timestamp(), doc_id.clone()],
             )
             .await
             .map_err(map_turso_error)?;
             move_path_inode_conn(&conn, &library.id, &from_path, &to_path).await?;
             self.reindex_links_conn(&conn, &library.id).await?;
             commit_transaction_record_conn(&conn, &tx.id).await?;
-            self.transaction_conn(&conn, &tx.id).await
+            let tx = self.transaction_conn(&conn, &tx.id).await?;
+            Ok((tx, doc_id))
         }
         .await;
-        let tx = finish_tx(&conn, result).await?;
+        let (tx, doc_id) = finish_tx(&conn, result).await?;
         self.emit_event(StoreEvent {
             kind: StoreEventKind::DocumentMove,
             library_id: tx.library_id.clone(),
@@ -1867,13 +1901,13 @@ impl QuarryStore {
             new_path: Some(to_path.clone()),
             source: Some(source_for_event),
             tx_id: Some(tx.id.clone()),
-            doc_id: None,
+            doc_id: Some(doc_id),
             version_id: None,
             conflict_id: None,
             peer_id: None,
             applied: None,
             conflicts: None,
-            collab_session_id: None,
+            origin_id,
         });
         self.emit_event(links_indexed_event(tx.library_id.clone(), to_path));
         Ok(tx)
@@ -1954,10 +1988,11 @@ impl QuarryStore {
             move_path_inode_conn(&conn, &library.id, &from_path, &to_path).await?;
             self.reindex_links_conn(&conn, &library.id).await?;
             commit_transaction_record_conn(&conn, &tx.id).await?;
-            self.transaction_conn(&conn, &tx.id).await
+            let tx = self.transaction_conn(&conn, &tx.id).await?;
+            Ok((tx, to_doc_id))
         }
         .await;
-        let tx = finish_tx(&conn, result).await?;
+        let (tx, doc_id) = finish_tx(&conn, result).await?;
         self.emit_event(StoreEvent {
             kind: StoreEventKind::DocumentMove,
             library_id: tx.library_id.clone(),
@@ -1965,13 +2000,13 @@ impl QuarryStore {
             new_path: Some(to_path.clone()),
             source: Some(source_for_event),
             tx_id: Some(tx.id.clone()),
-            doc_id: None,
+            doc_id: Some(doc_id),
             version_id: None,
             conflict_id: None,
             peer_id: None,
             applied: None,
             conflicts: None,
-            collab_session_id: None,
+            origin_id: None,
         });
         self.emit_event(links_indexed_event(tx.library_id.clone(), to_path));
         Ok(tx)
@@ -2299,7 +2334,7 @@ impl QuarryStore {
                             peer_id: None,
                             applied: None,
                             conflicts: None,
-                            collab_session_id: None,
+                            origin_id: None,
                         });
                         events.push(links_indexed_event(tx.library_id.clone(), change.path.clone()));
                     }
@@ -2327,7 +2362,7 @@ impl QuarryStore {
                             peer_id: None,
                             applied: None,
                             conflicts: None,
-                            collab_session_id: None,
+                            origin_id: None,
                         });
                         events.push(links_indexed_event(tx.library_id.clone(), change.path.clone()));
                     }
@@ -2388,7 +2423,7 @@ impl QuarryStore {
                                 peer_id: None,
                                 applied: None,
                                 conflicts: None,
-                                collab_session_id: None,
+                                origin_id: None,
                             });
                             events.push(links_indexed_event(tx.library_id.clone(), new_path));
                             continue;
@@ -2414,7 +2449,7 @@ impl QuarryStore {
                             peer_id: None,
                             applied: None,
                             conflicts: None,
-                            collab_session_id: None,
+                            origin_id: None,
                         });
                         events.push(links_indexed_event(tx.library_id.clone(), new_path));
                     }
@@ -2690,7 +2725,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
-            collab_session_id: None,
+            origin_id: None,
         });
         Ok(conflict)
     }
@@ -2728,7 +2763,7 @@ impl QuarryStore {
             peer_id: None,
             applied: None,
             conflicts: None,
-            collab_session_id: None,
+            origin_id: None,
         });
         Ok(conflict)
     }
@@ -4683,7 +4718,7 @@ fn links_indexed_event(library_id: String, path: String) -> StoreEvent {
         peer_id: None,
         applied: None,
         conflicts: None,
-        collab_session_id: None,
+        origin_id: None,
     }
 }
 

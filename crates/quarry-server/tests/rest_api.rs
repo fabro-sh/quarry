@@ -2559,7 +2559,7 @@ async fn agent_ops_batch_injects_multiple_changed_blocks_into_live_room() {
 
     let event = next_document_put_event(&mut events).await;
     assert!(event
-        .collab_session_id
+        .origin_id
         .as_deref()
         .is_some_and(|session| session.starts_with("agent-injected:")));
     let recovery = store
@@ -2665,7 +2665,7 @@ async fn agent_ops_batch_merges_metadata_live_patch_for_mixed_review_ops() {
 
     let event = next_document_put_event(&mut events).await;
     assert!(event
-        .collab_session_id
+        .origin_id
         .as_deref()
         .is_some_and(|session| session.starts_with("agent-injected:")));
     let recovery = store
@@ -3125,7 +3125,7 @@ async fn agent_ops_comment_add_injects_into_live_collab_room() {
 
     let event = next_document_put_event(&mut events).await;
     assert!(event
-        .collab_session_id
+        .origin_id
         .as_deref()
         .is_some_and(|id| id.starts_with("agent-injected:")));
     let recovery = store
@@ -3265,7 +3265,7 @@ async fn agent_ops_suggestion_add_kinds_inject_into_live_collab_room() {
 
         let event = next_document_put_event(&mut events).await;
         assert!(event
-            .collab_session_id
+            .origin_id
             .as_deref()
             .is_some_and(|session| session.starts_with("agent-injected:")));
         let recovery = store
@@ -3348,7 +3348,7 @@ async fn agent_ops_accept_reject_inject_and_remove_suggestion_metadata() {
     assert_eq!(body["injection"], "injected");
     let event = next_document_put_event(&mut events).await;
     assert!(event
-        .collab_session_id
+        .origin_id
         .as_deref()
         .is_some_and(|session| session.starts_with("agent-injected:")));
     let recovery = store
@@ -3380,7 +3380,7 @@ async fn agent_ops_accept_reject_inject_and_remove_suggestion_metadata() {
     assert_eq!(body["injection"], "injected");
     let event = next_document_put_event(&mut events).await;
     assert!(event
-        .collab_session_id
+        .origin_id
         .as_deref()
         .is_some_and(|session| session.starts_with("agent-injected:")));
     let recovery = store
@@ -3477,7 +3477,7 @@ async fn agent_ops_comment_resolve_injects_metadata_only_live_patch() {
 
     let event = next_document_put_event(&mut events).await;
     assert!(event
-        .collab_session_id
+        .origin_id
         .as_deref()
         .is_some_and(|session| session.starts_with("agent-injected:")));
     let recovery = store
@@ -3564,7 +3564,7 @@ async fn agent_ops_comment_reply_and_reply_delete_inject_metadata_only_live_patc
 
     let event = next_document_put_event(&mut events).await;
     assert!(event
-        .collab_session_id
+        .origin_id
         .as_deref()
         .is_some_and(|session| session.starts_with("agent-injected:")));
     let recovery = store
@@ -3600,7 +3600,7 @@ async fn agent_ops_comment_reply_and_reply_delete_inject_metadata_only_live_patc
     assert_eq!(body["injection"], "metadata_only_injected");
     let event = next_document_put_event(&mut events).await;
     assert!(event
-        .collab_session_id
+        .origin_id
         .as_deref()
         .is_some_and(|session| session.starts_with("agent-injected:")));
     let recovery = store
@@ -3677,7 +3677,7 @@ async fn agent_ops_comment_delete_root_injects_content_and_removes_replies() {
 
     let event = next_document_put_event(&mut events).await;
     assert!(event
-        .collab_session_id
+        .origin_id
         .as_deref()
         .is_some_and(|session| session.starts_with("agent-injected:")));
     let recovery = store
@@ -3780,7 +3780,7 @@ async fn agent_ops_comment_add_without_live_room_uses_external_write() {
     assert_eq!(ops_etag, format!("\"{ops_version_id}\""));
 
     let event = next_document_put_event(&mut events).await;
-    assert_eq!(event.collab_session_id, None);
+    assert_eq!(event.origin_id, None);
     let response = app
         .oneshot(
             Request::builder()
@@ -4455,7 +4455,7 @@ async fn collab_websocket_accepts_yjs_updates_by_document_id() {
 }
 
 #[tokio::test]
-async fn document_put_events_echo_collab_session_id() {
+async fn document_put_events_echo_origin_id() {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
@@ -4474,7 +4474,7 @@ async fn document_put_events_echo_collab_session_id() {
                 .method(Method::PUT)
                 .uri("/v1/libraries/collab-events/documents/live.md")
                 .header(header::CONTENT_TYPE, "text/markdown")
-                .header("X-Quarry-Collab-Session-Id", "browser:session-1")
+                .header("X-Quarry-Origin-Id", "browser:session-1")
                 .body(Body::from("live"))
                 .unwrap(),
         )
@@ -4492,14 +4492,64 @@ async fn document_put_events_echo_collab_session_id() {
     })
     .await
     .unwrap();
-    assert_eq!(
-        event.collab_session_id.as_deref(),
-        Some("browser:session-1")
-    );
+    assert_eq!(event.origin_id.as_deref(), Some("browser:session-1"));
 }
 
 #[tokio::test]
-async fn document_put_with_collab_session_marks_recovery_state_clean() {
+async fn document_delete_events_echo_origin_id_and_doc_id() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    store.create_library("delete-origin").await.unwrap();
+    let written = store
+        .put_document(
+            "delete-origin",
+            "live.md",
+            b"live".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let mut events = store.subscribe_events();
+    let app = router(store);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri("/v1/libraries/delete-origin/documents/live.md")
+                .header("X-Quarry-Origin-Id", "browser:session-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let event = timeout(Duration::from_secs(2), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if event.kind == StoreEventKind::DocumentDelete {
+                break event;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(event.doc_id.as_deref(), Some(written.document.id.as_str()));
+    assert_eq!(event.origin_id.as_deref(), Some("browser:session-1"));
+}
+
+#[tokio::test]
+async fn document_put_with_browser_origin_marks_recovery_state_clean() {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
@@ -4539,7 +4589,7 @@ async fn document_put_with_collab_session_marks_recovery_state_clean() {
                 .uri("/v1/libraries/collab-clean/documents/live.md")
                 .header(header::IF_MATCH, format!("\"{}\"", written.version.id))
                 .header(header::CONTENT_TYPE, "text/markdown")
-                .header("X-Quarry-Collab-Session-Id", "browser:session-1")
+                .header("X-Quarry-Origin-Id", "browser:session-1")
                 .body(Body::from("new"))
                 .unwrap(),
         )

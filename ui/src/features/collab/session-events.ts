@@ -9,7 +9,7 @@ export interface DocumentEventPayload {
   doc_id?: string | null;
   version_id?: string | null;
   etag?: string | null;
-  collab_session_id?: string | null;
+  origin_id?: string | null;
 }
 
 export interface LiveCollabSession {
@@ -22,7 +22,7 @@ export interface LiveCollabSession {
 
 export type LiveDocumentEventDecision =
   | { action: 'pass' }
-  | { action: 'ignore_flush_echo' }
+  | { action: 'ignore_own_mutation_echo' }
   | { action: 'agent_injection_refresh' }
   | { action: 'external_change' }
   | { action: 'external_delete' }
@@ -35,16 +35,18 @@ export function classifyLiveDocumentEvent(
   if (!session || !matchesLiveDocument(payload, session)) return { action: 'pass' };
 
   if (payload.type === 'doc.changed') {
-    if (payload.collab_session_id?.startsWith('agent-injected:')) {
+    if (payload.origin_id?.startsWith('agent-injected:')) {
       return { action: 'agent_injection_refresh' };
     }
-    return isOwnFlushEcho(payload, session)
-      ? { action: 'ignore_flush_echo' }
+    return isOwnMutationEcho(payload, session)
+      ? { action: 'ignore_own_mutation_echo' }
       : { action: 'external_change' };
   }
 
   if (payload.type === 'doc.deleted') {
-    return { action: 'external_delete' };
+    return isOwnMutationEcho(payload, session)
+      ? { action: 'ignore_own_mutation_echo' }
+      : { action: 'external_delete' };
   }
 
   if (payload.type === 'doc.moved' && payload.to) {
@@ -59,9 +61,8 @@ function matchesLiveDocument(payload: DocumentEventPayload, session: LiveCollabS
   return payload.path === session.path || payload.from === session.path;
 }
 
-function isOwnFlushEcho(payload: DocumentEventPayload, session: LiveCollabSession) {
-  if (payload.collab_session_id && payload.collab_session_id === session.sessionId) return true;
-  if (payload.collab_session_id?.startsWith('browser:')) return true;
+function isOwnMutationEcho(payload: DocumentEventPayload, session: LiveCollabSession) {
+  if (payload.origin_id && payload.origin_id === session.sessionId) return true;
   return isAdoptedFlushVersion(session, {
     versionId: payload.version_id,
     etag: payload.etag,

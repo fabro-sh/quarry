@@ -364,8 +364,8 @@ The poll response contains `events` and `nextAfter`. Store `nextAfter` and pass
 it as `after` on the next poll.
 
 `doc.changed` events are sparse wake signals. They include revision metadata
-such as `version_id`/`etag` and may include `collab_session_id`. When live
-`/ops` mutations are injected into an open browser editor, `collab_session_id`
+such as `version_id`/`etag` and may include `origin_id`. When live
+`/ops` mutations are injected into an open browser editor, `origin_id`
 starts with `agent-injected:`. The event may include a review metadata patch
 such as `review.comments`, `review.suggestions`, `review.removeComments`, or
 `review.removeSuggestions`.
@@ -427,7 +427,7 @@ evidence before summarizing:
 - Exact request URL, method, status, and response body
 - Library, document path, and agent id
 - `baseToken` and block `ref` values used
-- Event id, `nextAfter`, and `collab_session_id` if relevant
+- Event id, `nextAfter`, and `origin_id` if relevant
 - Whether a fresh `/snapshot` and one safe retry changed the outcome
 - Any visible mismatch between REST responses and the open browser document
 

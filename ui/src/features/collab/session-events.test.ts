@@ -9,7 +9,7 @@ describe('collaboration session event classification', () => {
   const session: LiveCollabSession = {
     documentId: 'doc-1',
     path: 'notes/daily.md',
-    sessionId: 'session-1',
+    sessionId: 'browser:session-1',
     ackedFlushVersionIds: new Set(['v2']),
     ackedFlushEtags: new Set(['"v2"']),
   };
@@ -32,32 +32,32 @@ describe('collaboration session event classification', () => {
     ).toEqual({ action: 'pass' });
   });
 
-  it('ignores the live session own flush echo by session id', () => {
+  it('ignores the live session own change echo by origin id', () => {
     expect(
       classifyLiveDocumentEvent(
         {
           type: 'doc.changed',
           path: 'notes/daily.md',
           doc_id: 'doc-1',
-          collab_session_id: 'session-1',
+          origin_id: 'browser:session-1',
         },
         session
       )
-    ).toEqual({ action: 'ignore_flush_echo' });
+    ).toEqual({ action: 'ignore_own_mutation_echo' });
   });
 
-  it('ignores a same-document browser peer flush echo by collab provenance', () => {
+  it('treats a same-document browser peer change as external', () => {
     expect(
       classifyLiveDocumentEvent(
         {
           type: 'doc.changed',
           path: 'notes/daily.md',
           doc_id: 'doc-1',
-          collab_session_id: 'browser:peer',
+          origin_id: 'browser:peer',
         },
         session
       )
-    ).toEqual({ action: 'ignore_flush_echo' });
+    ).toEqual({ action: 'external_change' });
   });
 
   it('ignores the live session own flush echo by acked version metadata', () => {
@@ -71,7 +71,7 @@ describe('collaboration session event classification', () => {
         },
         session
       )
-    ).toEqual({ action: 'ignore_flush_echo' });
+    ).toEqual({ action: 'ignore_own_mutation_echo' });
     expect(
       classifyLiveDocumentEvent(
         {
@@ -82,7 +82,7 @@ describe('collaboration session event classification', () => {
         },
         session
       )
-    ).toEqual({ action: 'ignore_flush_echo' });
+    ).toEqual({ action: 'ignore_own_mutation_echo' });
   });
 
   it('surfaces external writes without treating them as safe reloads', () => {
@@ -108,7 +108,7 @@ describe('collaboration session event classification', () => {
           doc_id: 'doc-1',
           version_id: 'v3',
           etag: '"v3"',
-          collab_session_id: 'agent-injected:abc',
+          origin_id: 'agent-injected:abc',
         },
         session
       )
@@ -119,6 +119,34 @@ describe('collaboration session event classification', () => {
     expect(
       classifyLiveDocumentEvent(
         { type: 'doc.deleted', path: 'notes/daily.md', doc_id: 'doc-1' },
+        session
+      )
+    ).toEqual({ action: 'external_delete' });
+  });
+
+  it('ignores the live session own delete echo by origin id', () => {
+    expect(
+      classifyLiveDocumentEvent(
+        {
+          type: 'doc.deleted',
+          path: 'notes/daily.md',
+          doc_id: 'doc-1',
+          origin_id: 'browser:session-1',
+        },
+        session
+      )
+    ).toEqual({ action: 'ignore_own_mutation_echo' });
+  });
+
+  it('treats a same-document browser peer delete as external', () => {
+    expect(
+      classifyLiveDocumentEvent(
+        {
+          type: 'doc.deleted',
+          path: 'notes/daily.md',
+          doc_id: 'doc-1',
+          origin_id: 'browser:peer',
+        },
         session
       )
     ).toEqual({ action: 'external_delete' });
@@ -201,7 +229,7 @@ describe('isAdoptedFlushVersion', () => {
   const session: LiveCollabSession = {
     documentId: 'doc-1',
     path: 'notes/daily.md',
-    sessionId: 'session-1',
+    sessionId: 'browser:session-1',
     ackedFlushVersionIds: new Set(['v2']),
     ackedFlushEtags: new Set(['"v2"']),
   };

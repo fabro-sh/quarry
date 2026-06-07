@@ -2,10 +2,13 @@ import {
   ApiPreconditionError,
   createCollabInvite,
   createDocument,
+  deleteDocument,
   getDocument,
   isTextContentType,
+  moveDocument,
   listAgentPresence,
   putDocument,
+  restoreVersion,
 } from './client';
 
 describe('Quarry API client', () => {
@@ -48,7 +51,7 @@ describe('Quarry API client', () => {
     );
   });
 
-  it('stamps live collaboration saves with the collab session id', async () => {
+  it('stamps existing document saves with the mutation origin id', async () => {
     const fetch = vi.fn(async () =>
       new Response(JSON.stringify({ version: { id: 'v2' } }), {
         headers: { ETag: '"v2"', 'content-type': 'application/json' },
@@ -57,13 +60,13 @@ describe('Quarry API client', () => {
     vi.stubGlobal('fetch', fetch);
 
     await putDocument('notes', 'a.md', 'next', '"v1"', 'text/markdown', {
-      collabSessionId: 'browser:session-1',
+      originId: 'browser:session-1',
     });
 
     expect(fetch).toHaveBeenCalledWith(
       '/v1/libraries/notes/documents/a.md',
       expect.objectContaining({
-        headers: expect.objectContaining({ 'X-Quarry-Collab-Session-Id': 'browser:session-1' }),
+        headers: expect.objectContaining({ 'X-Quarry-Origin-Id': 'browser:session-1' }),
       })
     );
   });
@@ -143,6 +146,80 @@ describe('Quarry API client', () => {
       expect.objectContaining({
         method: 'PUT',
         headers: expect.objectContaining({ 'If-None-Match': '*' }),
+      })
+    );
+  });
+
+  it('stamps document creates with the mutation origin id when provided', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ version: { id: 'v1' } }), {
+        headers: { ETag: '"v1"', 'content-type': 'application/json' },
+      })
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await createDocument('notes', 'new.md', '# New', 'text/markdown', {
+      originId: 'browser:session-1',
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/v1/libraries/notes/documents/new.md',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: expect.objectContaining({ 'X-Quarry-Origin-Id': 'browser:session-1' }),
+      })
+    );
+  });
+
+  it('stamps document deletes with the mutation origin id when provided', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ id: 'tx-1' }), {
+      headers: { 'content-type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetch);
+
+    await deleteDocument('notes', 'old.md', { originId: 'browser:session-1' });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/v1/libraries/notes/documents/old.md',
+      expect.objectContaining({
+        method: 'DELETE',
+        headers: expect.objectContaining({ 'X-Quarry-Origin-Id': 'browser:session-1' }),
+      })
+    );
+  });
+
+  it('stamps document moves with the mutation origin id when provided', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ id: 'tx-1' }), {
+      headers: { 'content-type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetch);
+
+    await moveDocument('notes', 'old.md', 'new.md', { originId: 'browser:session-1' });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/v1/libraries/notes/documents/old.md/move',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Quarry-Origin-Id': 'browser:session-1' }),
+      })
+    );
+  });
+
+  it('stamps version restores with the mutation origin id when provided', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ version: { id: 'v2' } }), {
+        headers: { ETag: '"v2"', 'content-type': 'application/json' },
+      })
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await restoreVersion('notes', 'daily.md', 'v1', { originId: 'browser:session-1' });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/v1/libraries/notes/documents/daily.md/versions/v1/restore',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Quarry-Origin-Id': 'browser:session-1' }),
       })
     );
   });

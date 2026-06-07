@@ -1010,7 +1010,7 @@ async fn events_for_library(
                             doc_id = store_event.doc_id.as_deref().unwrap_or(""),
                             version_id = store_event.version_id.as_deref().unwrap_or(""),
                             conflict_id = store_event.conflict_id.as_deref().unwrap_or(""),
-                            collab_session_id = store_event.collab_session_id.as_deref().unwrap_or(""),
+                            origin_id = store_event.origin_id.as_deref().unwrap_or(""),
                             "SSE event sent"
                         );
                         let event = Event::default().event(event_type).data(payload.to_string());
@@ -1848,10 +1848,13 @@ async fn put_document(
     let content_type = content_type(&headers);
     let metadata = metadata_from_headers(&headers, &content_type)?;
     let precondition = precondition_from_headers(&headers)?;
-    let collab_session_id = optional_header(&headers, "x-quarry-collab-session-id")?;
+    let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
+    let browser_origin = origin_id
+        .as_deref()
+        .is_some_and(|origin| origin.starts_with("browser:"));
     let outcome = state
         .store
-        .put_document_with_collab_session(
+        .put_document_with_origin(
             &library,
             &path,
             body.to_vec(),
@@ -1859,10 +1862,10 @@ async fn put_document(
             &content_type,
             DocumentSource::Rest,
             precondition,
-            collab_session_id,
+            origin_id,
         )
         .await?;
-    if headers.contains_key("x-quarry-collab-session-id") {
+    if browser_origin {
         if let Err(error) = state
             .store
             .mark_collab_recovery_state_clean(
@@ -1939,10 +1942,11 @@ async fn post_document_action(
     Path((library, path)): Path<(String, String)>,
     Json(request): Json<JsonValue>,
 ) -> Result<Response, ApiError> {
+    let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
     if let Some((path, version)) = document_version_restore_path(&path) {
         let outcome = state
             .store
-            .restore_document_version(&library, path, version)
+            .restore_document_version_with_origin(&library, path, version, origin_id.clone())
             .await?;
         return json_with_etag(StatusCode::OK, &outcome, &outcome.version.id);
     }
@@ -1954,7 +1958,13 @@ async fn post_document_action(
             .ok_or_else(|| QuarryError::InvalidPath("move request missing to_path".to_string()))?;
         let transaction = state
             .store
-            .move_document(&library, from_path, to_path, DocumentSource::Rest)
+            .move_document_with_origin(
+                &library,
+                from_path,
+                to_path,
+                DocumentSource::Rest,
+                origin_id.clone(),
+            )
             .await?;
         return json_response(StatusCode::OK, &transaction);
     }
@@ -2168,7 +2178,7 @@ async fn agent_ops_document(
 
     let base_version_id = version_id_from_base_token(&request.base_token)?;
     let live_room = state.collab.live_room(&document.id).await;
-    let (injection_guard, injection_status, injected_session_id) = if let Some(room) = live_room {
+    let (injection_guard, injection_status, injected_origin_id) = if let Some(room) = live_room {
         tracing::debug!(
             event = "collab.agent_injection.attempted",
             document_id = %document.id,
@@ -2252,7 +2262,7 @@ async fn agent_ops_document(
     let outcome = if let Some(guard) = injection_guard {
         let outcome = state
             .store
-            .commit_document_with_collab_session(
+            .commit_document_without_events(
                 library,
                 path,
                 applied.markdown.clone().into_bytes(),
@@ -2265,7 +2275,7 @@ async fn agent_ops_document(
         let _commit_outcome = guard.commit(outcome.version.id.clone()).await;
         state
             .store
-            .emit_document_put_events(&outcome, injected_session_id);
+            .emit_document_put_events(&outcome, injected_origin_id);
         tracing::debug!(
             event = "collab.agent_injection.committed",
             document_id = %outcome.document.id,
@@ -2394,7 +2404,7 @@ async fn agent_edit_document(
     }
 
     let base_version_id = version_id_from_base_token(&request.base_token)?;
-    let injected_session_id = format!("agent-injected:{request_hash}");
+    let injected_origin_id = format!("agent-injected:{request_hash}");
     let review_snapshot = review_meta_patch_from_markdown(&plan.markdown);
     // Track why an edit did or didn't reach the live room, so the response can
     // report it (observability for agents and tests) instead of silently
@@ -2465,7 +2475,7 @@ async fn agent_edit_document(
     let outcome = if let Some(guard) = injection_guard {
         let outcome = state
             .store
-            .commit_document_with_collab_session(
+            .commit_document_without_events(
                 library,
                 path,
                 plan.markdown.clone().into_bytes(),
@@ -2478,7 +2488,7 @@ async fn agent_edit_document(
         let _commit_outcome = guard.commit(outcome.version.id.clone()).await;
         state
             .store
-            .emit_document_put_events(&outcome, Some(injected_session_id));
+            .emit_document_put_events(&outcome, Some(injected_origin_id));
         tracing::debug!(
             event = "collab.agent_injection.committed",
             document_id = %outcome.document.id,
@@ -4030,12 +4040,14 @@ fn markdown_fence_marker(line: &str) -> Option<(char, usize)> {
 )]
 async fn delete_document(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path((library, path)): Path<(String, String)>,
 ) -> Result<Json<TransactionRecord>, ApiError> {
+    let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
     Ok(Json(
         state
             .store
-            .delete_document(&library, &path, DocumentSource::Rest)
+            .delete_document_with_origin(&library, &path, DocumentSource::Rest, origin_id)
             .await?,
     ))
 }
@@ -4637,7 +4649,7 @@ mod tests {
             peer_id: None,
             applied: None,
             conflicts: None,
-            collab_session_id: Some("browser:session-1".to_string()),
+            origin_id: Some("browser:session-1".to_string()),
         };
 
         let event_type = store_event_type(&event);
@@ -4650,7 +4662,54 @@ mod tests {
         assert_eq!(payload["doc_id"], "doc-1");
         assert_eq!(payload["version_id"], "version-1");
         assert_eq!(payload["etag"], "\"version-1\"");
-        assert_eq!(payload["collab_session_id"], "browser:session-1");
+        assert_eq!(payload["origin_id"], "browser:session-1");
+    }
+
+    #[test]
+    fn document_delete_and_move_store_events_map_to_sse_payloads_with_origin() {
+        let delete = StoreEvent {
+            kind: StoreEventKind::DocumentDelete,
+            library_id: "library-id".to_string(),
+            path: Some("notes/daily.md".to_string()),
+            new_path: None,
+            source: Some(DocumentSource::Rest),
+            tx_id: Some("tx-1".to_string()),
+            doc_id: Some("doc-1".to_string()),
+            version_id: None,
+            conflict_id: None,
+            peer_id: None,
+            applied: None,
+            conflicts: None,
+            origin_id: Some("browser:session-1".to_string()),
+        };
+        let event_type = store_event_type(&delete);
+        let payload = store_event_payload("notes", &event_type, &delete);
+        assert_eq!(event_type, "doc.deleted");
+        assert_eq!(payload["doc_id"], "doc-1");
+        assert_eq!(payload["origin_id"], "browser:session-1");
+
+        let move_event = StoreEvent {
+            kind: StoreEventKind::DocumentMove,
+            library_id: "library-id".to_string(),
+            path: Some("notes/daily.md".to_string()),
+            new_path: Some("notes/archive.md".to_string()),
+            source: Some(DocumentSource::Rest),
+            tx_id: Some("tx-2".to_string()),
+            doc_id: Some("doc-1".to_string()),
+            version_id: None,
+            conflict_id: None,
+            peer_id: None,
+            applied: None,
+            conflicts: None,
+            origin_id: Some("browser:session-1".to_string()),
+        };
+        let event_type = store_event_type(&move_event);
+        let payload = store_event_payload("notes", &event_type, &move_event);
+        assert_eq!(event_type, "doc.moved");
+        assert_eq!(payload["from"], "notes/daily.md");
+        assert_eq!(payload["to"], "notes/archive.md");
+        assert_eq!(payload["doc_id"], "doc-1");
+        assert_eq!(payload["origin_id"], "browser:session-1");
     }
 
     #[test]
@@ -4668,7 +4727,7 @@ mod tests {
             peer_id: None,
             applied: None,
             conflicts: None,
-            collab_session_id: None,
+            origin_id: None,
         };
 
         let event_type = store_event_type(&event);
@@ -4696,7 +4755,7 @@ mod tests {
             peer_id: None,
             applied: None,
             conflicts: None,
-            collab_session_id: None,
+            origin_id: None,
         };
 
         let event_type = store_event_type(&event);
@@ -4722,7 +4781,7 @@ mod tests {
             peer_id: None,
             applied: None,
             conflicts: None,
-            collab_session_id: None,
+            origin_id: None,
         };
 
         let event_type = store_event_type(&event);
@@ -4749,7 +4808,7 @@ mod tests {
             peer_id: Some("peer-1".to_string()),
             applied: Some(2),
             conflicts: Some(1),
-            collab_session_id: None,
+            origin_id: None,
         };
 
         let event_type = store_event_type(&event);
@@ -4923,10 +4982,10 @@ fn store_event_payload(library: &str, event_type: &str, event: &StoreEvent) -> J
         if let Some(conflicts) = event.conflicts {
             object.insert("conflicts".to_string(), JsonValue::from(conflicts));
         }
-        if let Some(collab_session_id) = &event.collab_session_id {
+        if let Some(origin_id) = &event.origin_id {
             object.insert(
-                "collab_session_id".to_string(),
-                JsonValue::String(collab_session_id.clone()),
+                "origin_id".to_string(),
+                JsonValue::String(origin_id.clone()),
             );
         }
     }

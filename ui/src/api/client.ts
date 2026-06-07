@@ -25,6 +25,10 @@ export interface SavedDocument {
   etag: string;
 }
 
+export interface DocumentMutationOptions {
+  originId?: string;
+}
+
 export interface GitPeer {
   id: string;
   library_id: string;
@@ -113,13 +117,12 @@ export function putDocument(
   content: string,
   etag: string,
   contentType = 'text/markdown',
-  options: { collabSessionId?: string } = {}
+  options: DocumentMutationOptions = {}
 ) {
-  const headers: Record<string, string> = {
+  const headers = mutationHeaders(options, {
     'If-Match': etag,
     'content-type': contentType,
-  };
-  if (options.collabSessionId) headers['X-Quarry-Collab-Session-Id'] = options.collabSessionId;
+  });
   return writeDocument(library, path, content, headers);
 }
 
@@ -127,12 +130,13 @@ export function createDocument(
   library: string,
   path: string,
   content = '',
-  contentType = 'text/markdown'
+  contentType = 'text/markdown',
+  options: DocumentMutationOptions = {}
 ) {
-  return writeDocument(library, path, content, {
+  return writeDocument(library, path, content, mutationHeaders(options, {
     'If-None-Match': '*',
     'content-type': contentType,
-  });
+  }));
 }
 
 // Create a binary document (e.g. a dropped image) from raw bytes. Uses
@@ -142,27 +146,38 @@ export async function putBinaryDocument(
   library: string,
   path: string,
   blob: Blob,
-  contentType: string
+  contentType: string,
+  options: DocumentMutationOptions = {}
 ): Promise<void> {
   const response = await fetch(documentHref(library, path), {
     method: 'PUT',
-    headers: { 'If-None-Match': '*', 'content-type': contentType },
+    headers: mutationHeaders(options, { 'If-None-Match': '*', 'content-type': contentType }),
     body: blob,
   });
   await assertOk(response);
 }
 
-export async function moveDocument(library: string, fromPath: string, toPath: string) {
+export async function moveDocument(
+  library: string,
+  fromPath: string,
+  toPath: string,
+  options: DocumentMutationOptions = {}
+) {
   return jsonRequest(`/v1/libraries/${segment(library)}/documents/${pathSegments(fromPath)}/move`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: mutationHeaders(options, { 'content-type': 'application/json' }),
     body: JSON.stringify({ to_path: toPath }),
   });
 }
 
-export async function deleteDocument(library: string, path: string) {
+export async function deleteDocument(
+  library: string,
+  path: string,
+  options: DocumentMutationOptions = {}
+) {
   return jsonRequest(`/v1/libraries/${segment(library)}/documents/${pathSegments(path)}`, {
     method: 'DELETE',
+    headers: mutationHeaders(options),
   });
 }
 
@@ -231,13 +246,14 @@ export const diffVersion = (library: string, path: string, version: string, agai
 export async function restoreVersion(
   library: string,
   path: string,
-  version: string
+  version: string,
+  options: DocumentMutationOptions = {}
 ): Promise<SavedDocument> {
   const response = await fetch(
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/versions/${segment(
       version
     )}/restore`,
-    { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }
+    { method: 'POST', headers: mutationHeaders(options, { 'content-type': 'application/json' }), body: '{}' }
   );
   await assertOk(response);
   return {
@@ -303,6 +319,14 @@ async function writeDocument(
     outcome: (await response.json()) as WriteOutcome,
     etag: response.headers.get('etag') ?? '',
   };
+}
+
+function mutationHeaders(
+  options: DocumentMutationOptions = {},
+  headers: Record<string, string> = {}
+) {
+  if (!options.originId) return headers;
+  return { ...headers, 'X-Quarry-Origin-Id': options.originId };
 }
 
 async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {

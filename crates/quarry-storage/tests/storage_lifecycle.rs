@@ -1340,6 +1340,7 @@ async fn visible_writes_emit_in_process_store_events() {
     assert_eq!(event.kind, StoreEventKind::DocumentMove);
     assert_eq!(event.path.as_deref(), Some("notes/a.md"));
     assert_eq!(event.new_path.as_deref(), Some("notes/b.md"));
+    assert_eq!(event.doc_id.as_deref(), Some(write.document.id.as_str()));
     let event = events.recv().await.unwrap();
     assert_eq!(event.kind, StoreEventKind::LinksIndexed);
     assert_eq!(event.library_id, library.id);
@@ -1352,6 +1353,7 @@ async fn visible_writes_emit_in_process_store_events() {
     let event = events.recv().await.unwrap();
     assert_eq!(event.kind, StoreEventKind::DocumentDelete);
     assert_eq!(event.path.as_deref(), Some("notes/b.md"));
+    assert_eq!(event.doc_id.as_deref(), Some(write.document.id.as_str()));
     let event = events.recv().await.unwrap();
     assert_eq!(event.kind, StoreEventKind::LinksIndexed);
     assert_eq!(event.library_id, library.id);
@@ -1397,6 +1399,69 @@ async fn visible_writes_emit_in_process_store_events() {
     assert_eq!(event.peer_id.as_deref(), Some("peer-1"));
     assert_eq!(event.applied, Some(2));
     assert_eq!(event.conflicts, Some(1));
+}
+
+#[tokio::test]
+async fn document_mutation_events_include_origin_and_document_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("origin-events").await.unwrap();
+    let mut events = store.subscribe_events();
+
+    let write = store
+        .put_document_with_origin(
+            &library.slug,
+            "notes/a.md",
+            b"a".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+            Some("browser:origin-1".to_string()),
+        )
+        .await
+        .unwrap();
+    let event = events.recv().await.unwrap();
+    assert_eq!(event.kind, StoreEventKind::DocumentPut);
+    assert_eq!(event.doc_id.as_deref(), Some(write.document.id.as_str()));
+    assert_eq!(event.origin_id.as_deref(), Some("browser:origin-1"));
+    let _links = events.recv().await.unwrap();
+
+    store
+        .move_document_with_origin(
+            &library.slug,
+            "notes/a.md",
+            "notes/b.md",
+            DocumentSource::Rest,
+            Some("browser:origin-1".to_string()),
+        )
+        .await
+        .unwrap();
+    let event = events.recv().await.unwrap();
+    assert_eq!(event.kind, StoreEventKind::DocumentMove);
+    assert_eq!(event.doc_id.as_deref(), Some(write.document.id.as_str()));
+    assert_eq!(event.origin_id.as_deref(), Some("browser:origin-1"));
+    let _links = events.recv().await.unwrap();
+
+    store
+        .delete_document_with_origin(
+            &library.slug,
+            "notes/b.md",
+            DocumentSource::Rest,
+            Some("browser:origin-1".to_string()),
+        )
+        .await
+        .unwrap();
+    let event = events.recv().await.unwrap();
+    assert_eq!(event.kind, StoreEventKind::DocumentDelete);
+    assert_eq!(event.doc_id.as_deref(), Some(write.document.id.as_str()));
+    assert_eq!(event.origin_id.as_deref(), Some("browser:origin-1"));
 }
 
 #[tokio::test]

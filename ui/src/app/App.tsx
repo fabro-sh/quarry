@@ -60,6 +60,7 @@ import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom';
 import useSWR, { useSWRConfig } from 'swr';
 
 import {
+  ApiError,
   ApiPreconditionError,
   type AgentPresenceEntry,
   backlinks,
@@ -157,7 +158,7 @@ interface BrowserEventPayload {
   doc_id?: string | null;
   version_id?: string | null;
   etag?: string | null;
-  collab_session_id?: string | null;
+  origin_id?: string | null;
   source?: string | null;
   tx_id?: string | null;
   peer_id?: string | null;
@@ -361,6 +362,10 @@ function Workspace() {
     collabFlusherRef.current = isFlusher;
     setCollabFlusher(isFlusher);
   }, []);
+
+  function browserMutationOptions() {
+    return { originId: collabSessionIdRef.current };
+  }
 
   const recordCollabFlushAck = useCallback((ack: CollabFlushAck) => {
     const session = liveCollabSessionRef.current;
@@ -572,12 +577,12 @@ function Workspace() {
         collabDebug('event.classify', {
           action: liveDecision.action,
           type: payload.type,
-          collabSessionId: payload.collab_session_id,
+          originId: payload.origin_id,
           versionId: payload.version_id,
           etag: payload.etag,
         });
       }
-      if (liveDecision.action === 'ignore_flush_echo') {
+      if (liveDecision.action === 'ignore_own_mutation_echo') {
         return;
       }
       if (liveDecision.action === 'agent_injection_refresh') {
@@ -736,7 +741,13 @@ function Workspace() {
       upload: async (file) => {
         const path = await imageAssetPath(file);
         try {
-          await putBinaryDocument(activeLibrary, path, file, file.type || 'application/octet-stream');
+          await putBinaryDocument(
+            activeLibrary,
+            path,
+            file,
+            file.type || 'application/octet-stream',
+            browserMutationOptions()
+          );
         } catch (error) {
           // 412 means an identical asset is already stored at this path — reuse it.
           if (!(error instanceof ApiPreconditionError)) throw error;
@@ -833,9 +844,12 @@ function Workspace() {
     transitionSaveState(draft ? 'drafted' : preserveSavedState ? 'saved' : 'clean');
     setConflictRemote(null);
     setConflictDetails(null);
-    if (!sameDocument) {
-      setCollabExternalChange(null);
-    }
+    setCollabExternalChange((current) => {
+      if (!current) return current;
+      if (!sameDocument) return null;
+      if (current.kind === 'deleted' && current.path === selectedPath) return null;
+      return current;
+    });
     setSelectedVersionId(null);
     setCompareVersionId(null);
     setCurrentDiffOpen(false);
@@ -930,7 +944,7 @@ function Workspace() {
     collabDebug('flush.start', { etag: savingEtag, leader: !!collabFlusherRef.current });
     try {
       const saved = await putDocument(savingLibrary, savingPath, savingContent, savingEtag, contentType, {
-        collabSessionId: savingCollabSession?.sessionId ?? undefined,
+        originId: savingCollabSession?.sessionId ?? collabSessionIdRef.current,
       });
       const savedEtag = saved.etag || `"${saved.outcome.version.id}"`;
       collabDebug('flush.ok', { from: savingEtag, to: savedEtag });
@@ -1101,7 +1115,7 @@ function Workspace() {
     if (!activeLibrary) return;
     const path = window.prompt('New document path', defaultPath);
     if (!path) return;
-    await createDocument(activeLibrary, path, '# Untitled\n');
+    await createDocument(activeLibrary, path, '# Untitled\n', 'text/markdown', browserMutationOptions());
     await mutate(['/v1/documents', activeLibrary]);
     setSelectedPath(path);
   }
@@ -1113,7 +1127,7 @@ function Workspace() {
     if (!path) return;
     // Flush the pending draft before creating + switching (see openDocument).
     if (saveStateRef.current === 'drafted' && canCurrentBrowserFlush()) void save();
-    await createDocument(activeLibrary, path, '# Untitled\n');
+    await createDocument(activeLibrary, path, '# Untitled\n', 'text/markdown', browserMutationOptions());
     await Promise.all([
       mutate(['/v1/documents', activeLibrary]),
       selectedPath ? mutate(['/v1/outgoing', activeLibrary, selectedPath]) : Promise.resolve(),
@@ -1125,7 +1139,7 @@ function Workspace() {
     if (!activeLibrary || !selectedPath) return;
     const toPath = window.prompt('Move document to path', selectedPath);
     if (!toPath || toPath === selectedPath) return;
-    await moveDocument(activeLibrary, selectedPath, toPath);
+    await moveDocument(activeLibrary, selectedPath, toPath, browserMutationOptions());
     await mutate(['/v1/documents', activeLibrary]);
     setSelectedPath(toPath);
   }
@@ -1134,7 +1148,7 @@ function Workspace() {
     if (!activeLibrary) return;
     const toPath = window.prompt('Move document to path', fromPath);
     if (!toPath || toPath === fromPath) return;
-    await moveDocument(activeLibrary, fromPath, toPath);
+    await moveDocument(activeLibrary, fromPath, toPath, browserMutationOptions());
     await mutate(['/v1/documents', activeLibrary]);
     if (selectedPath === fromPath) setSelectedPath(toPath);
   }
@@ -1148,7 +1162,9 @@ function Workspace() {
       .map((node) => ({ from: node.path, to: droppedDocumentPath(node, parent) }))
       .filter((move) => move.from !== move.to);
     if (!moves.length) return;
-    await Promise.all(moves.map((move) => moveDocument(activeLibrary, move.from, move.to)));
+    await Promise.all(
+      moves.map((move) => moveDocument(activeLibrary, move.from, move.to, browserMutationOptions()))
+    );
     await mutate(['/v1/documents', activeLibrary]);
     const movedSelection = moves.find((move) => move.from === selectedPath);
     if (movedSelection) setSelectedPath(movedSelection.to);
@@ -1157,7 +1173,7 @@ function Workspace() {
   async function deleteCurrent() {
     if (!activeLibrary || !selectedPath) return;
     if (!window.confirm(`Delete ${selectedPath}?`)) return;
-    await deleteDocument(activeLibrary, selectedPath);
+    await deleteDocument(activeLibrary, selectedPath, browserMutationOptions());
     await mutate(['/v1/documents', activeLibrary]);
     setSelectedPath('');
   }
@@ -1253,14 +1269,14 @@ function Workspace() {
   async function deleteDocumentPath(path: string) {
     if (!activeLibrary) return;
     if (!window.confirm(`Delete ${path}?`)) return;
-    await deleteDocument(activeLibrary, path);
+    await deleteDocument(activeLibrary, path, browserMutationOptions());
     await mutate(['/v1/documents', activeLibrary]);
     if (selectedPath === path) setSelectedPath('');
   }
 
   async function restoreSelectedVersion(versionId: string) {
     if (!activeLibrary || !selectedPath) return;
-    const restored = await restoreVersion(activeLibrary, selectedPath, versionId);
+    const restored = await restoreVersion(activeLibrary, selectedPath, versionId, browserMutationOptions());
     setEtag(restored.etag || `"${restored.outcome.version.id}"`);
     transitionSaveState('saved');
     setSelectedVersionId(null);
@@ -1437,11 +1453,76 @@ function Workspace() {
 
   async function resurrectDeletedCollabDocument() {
     if (!activeLibrary || !selectedPath || !isTextContentType(contentType)) return;
-    const resurrected = await createDocument(activeLibrary, selectedPath, content, contentType);
+    const library = activeLibrary;
+    const path = selectedPath;
+    const localContent = content;
+    const localContentType = contentType;
+    const previousEtag = etag;
+    let resurrected;
+    try {
+      resurrected = await createDocument(
+        library,
+        path,
+        localContent,
+        localContentType,
+        browserMutationOptions()
+      );
+    } catch (error) {
+      if (!(error instanceof ApiPreconditionError)) {
+        transitionSaveState('failed');
+        return;
+      }
+      let remote;
+      try {
+        remote = await getDocument(library, path);
+      } catch (readError) {
+        if (readError instanceof ApiError && readError.status === 404) {
+          transitionSaveState('failed');
+          return;
+        }
+        transitionSaveState('failed');
+        return;
+      }
+      if (activeLibraryRef.current !== library || selectedPathRef.current !== path) return;
+      if (remote.content === localContent) {
+        acceptRemoteDocumentVersion(
+          library,
+          path,
+          {
+            content: remote.content,
+            contentType: remote.contentType,
+            documentId: remote.documentId,
+            etag: remote.etag,
+          },
+          previousEtag
+        );
+        setCollabRebaseKey((key) => key + 1);
+        await mutate(
+          ['/v1/document', library, path],
+          {
+            content: remote.content,
+            contentType: remote.contentType,
+            documentId: remote.documentId,
+            etag: remote.etag,
+            path,
+          },
+          { revalidate: false }
+        );
+        return;
+      }
+      setCollabExternalChange({ kind: 'changed', path, etag: remote.etag });
+      await Promise.all([
+        mutate(['/v1/documents', library]),
+        mutate(['/v1/versions', library, path]),
+        mutate(['/v1/outgoing', library, path]),
+        mutate(['/v1/backlinks', library, path]),
+      ]);
+      return;
+    }
     const nextEtag = resurrected.etag || `"${resurrected.outcome.version.id}"`;
     loadedDocumentRef.current = {
-      library: activeLibrary,
-      path: selectedPath,
+      library,
+      path,
       etag: nextEtag,
       documentId: resurrected.outcome.document.id,
     };
@@ -1450,11 +1531,11 @@ function Workspace() {
     setCollabRebaseKey((key) => key + 1);
     transitionSaveState('saved');
     await Promise.all([
-      mutate(['/v1/document', activeLibrary, selectedPath]),
-      mutate(['/v1/documents', activeLibrary]),
-      mutate(['/v1/versions', activeLibrary, selectedPath]),
-      mutate(['/v1/outgoing', activeLibrary, selectedPath]),
-      mutate(['/v1/backlinks', activeLibrary, selectedPath]),
+      mutate(['/v1/document', library, path]),
+      mutate(['/v1/documents', library]),
+      mutate(['/v1/versions', library, path]),
+      mutate(['/v1/outgoing', library, path]),
+      mutate(['/v1/backlinks', library, path]),
     ]);
   }
 
@@ -1728,6 +1809,7 @@ function Workspace() {
         <ConflictMergeDialog
           activeLibrary={activeLibrary}
           conflict={mergeConflict}
+          originId={collabSessionIdRef.current}
           onClose={() => setMergeConflictId(null)}
         />
       ) : null}
@@ -2295,10 +2377,12 @@ function SettingsDialog({
 function ConflictMergeDialog({
   activeLibrary,
   conflict,
+  originId,
   onClose,
 }: {
   activeLibrary: string;
   conflict: ConflictRecord;
+  originId: string;
   onClose: () => void;
 }) {
   const { mutate } = useSWRConfig();
@@ -2344,7 +2428,9 @@ function ConflictMergeDialog({
     setBusy(true);
     setError('');
     try {
-      await putDocument(activeLibrary, conflict.path, content, head.etag, head.contentType);
+      await putDocument(activeLibrary, conflict.path, content, head.etag, head.contentType, {
+        originId,
+      });
       await resolveConflict(activeLibrary, conflict.id);
       await refreshConflictState();
       onClose();
@@ -2359,7 +2445,7 @@ function ConflictMergeDialog({
     setBusy(true);
     setError('');
     try {
-      await deleteDocument(activeLibrary, conflict.path);
+      await deleteDocument(activeLibrary, conflict.path, { originId });
       await resolveConflict(activeLibrary, conflict.id);
       await refreshConflictState();
       onClose();

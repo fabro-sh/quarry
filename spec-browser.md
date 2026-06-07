@@ -788,9 +788,9 @@ GET /v1/events?library={library}
 Event types:
 
 ```json
-{ "type": "doc.changed", "library": "notes", "path": "Daily.md", "doc_id": "...", "version_id": "...", "etag": "..." }
-{ "type": "doc.deleted", "library": "notes", "path": "Old.md" }
-{ "type": "doc.moved", "library": "notes", "from": "A.md", "to": "B.md" }
+{ "type": "doc.changed", "library": "notes", "path": "Daily.md", "doc_id": "...", "version_id": "...", "etag": "...", "origin_id": "browser:..." }
+{ "type": "doc.deleted", "library": "notes", "path": "Old.md", "doc_id": "...", "origin_id": "browser:..." }
+{ "type": "doc.moved", "library": "notes", "from": "A.md", "to": "B.md", "doc_id": "...", "origin_id": "browser:..." }
 { "type": "links.indexed", "library": "notes", "path": "Daily.md" }
 { "type": "library.reindexed", "library": "notes" }
 { "type": "conflict.created", "library": "notes", "conflict_id": "..." }

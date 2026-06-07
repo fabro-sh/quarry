@@ -361,7 +361,7 @@ Collect raw evidence before summarizing:
 - request URL, method, status, and response body
 - library, document path, and agent id
 - `baseToken` and block refs used
-- event id, `nextAfter`, and `collab_session_id` if relevant
+- event id, `nextAfter`, and `origin_id` if relevant
 - whether a fresh `/snapshot` and one safe retry changed the outcome
 - any mismatch between REST responses and the open browser document
 
