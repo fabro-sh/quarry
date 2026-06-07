@@ -127,8 +127,8 @@ track-change style proposals.
 
 Use `/edit` when the user asks you to directly change document content.
 
-Use `?dryRun=1` before non-trivial direct edits or review operations. Dry runs
-validate refs and planned changes without committing them.
+Write endpoints also accept `?dryRun=1` when you want to validate refs and
+planned changes without committing them.
 
 ## How Block Refs Work
 
@@ -149,12 +149,13 @@ When choosing a target:
 Direct edit operations are `replace_block`, `insert_before`, `insert_after`,
 `delete_block`, and `replace_document`.
 
-Dry run a replacement:
+Replace a block with an idempotency key:
 
 ```sh
-curl -sS -X POST "$DOC/edit?dryRun=1" \
+curl -sS -X POST "$DOC/edit" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
+  -H "Idempotency-Key: edit-abc123-1" \
   -d '{
     "baseToken": "version_123",
     "operations": [
@@ -170,22 +171,13 @@ curl -sS -X POST "$DOC/edit?dryRun=1" \
   }'
 ```
 
-Commit with an idempotency key:
+Insert several blocks at one anchor with `blocks`:
 
 ```sh
 curl -sS -X POST "$DOC/edit" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
-  -H "Idempotency-Key: edit-abc123-1" \
-  -d @edit.json
-```
-
-Insert several blocks at one anchor with `blocks`:
-
-```sh
-curl -sS -X POST "$DOC/edit?dryRun=1" \
-  -H "Content-Type: application/json" \
-  -H "X-Agent-Id: $AGENT_ID" \
+  -H "Idempotency-Key: edit-abc123-2" \
   -d '{
     "baseToken": "version_123",
     "operations": [
@@ -264,9 +256,10 @@ curl -sS -X POST "$DOC/ops" \
 Suggest a replacement:
 
 ```sh
-curl -sS -X POST "$DOC/ops?dryRun=1" \
+curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
+  -H "Idempotency-Key: ops-abc123-2" \
   -d '{
     "baseToken": "version_123",
     "by": "Codex",
@@ -440,7 +433,6 @@ Then report the evidence to the user. Do not keep retrying destructive writes.
 - Prefer comments and suggestions for review requests.
 - Use direct edits for implementation requests.
 - Refresh the snapshot after any event and after any stale write.
-- Use `?dryRun=1` before risky edits or suggestions.
 - Include a readable `by` value so the user can see who acted.
 - Fetch `/.well-known/agent.json` and `/v1/openapi.json` when you need current
   route metadata or schemas.

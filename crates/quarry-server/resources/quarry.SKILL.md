@@ -137,12 +137,13 @@ about to write to again.
 Supported `/edit` operations: `replace_block`, `insert_before`,
 `insert_after`, `delete_block`, `replace_document`.
 
-Dry run non-trivial direct edits:
+Replace a block with an idempotency key:
 
 ```bash
-curl -sS -X POST "$DOC/edit?dryRun=1" \
+curl -sS -X POST "$DOC/edit" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
+  -H "Idempotency-Key: edit-abc123-1" \
   -d '{
     "baseToken": "version_123",
     "operations": [
@@ -158,22 +159,13 @@ curl -sS -X POST "$DOC/edit?dryRun=1" \
   }'
 ```
 
-Commit with an idempotency key:
+Insert several blocks at one anchor with `blocks`:
 
 ```bash
 curl -sS -X POST "$DOC/edit" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
-  -H "Idempotency-Key: edit-abc123-1" \
-  -d @edit.json
-```
-
-Insert several blocks at one anchor with `blocks`:
-
-```bash
-curl -sS -X POST "$DOC/edit?dryRun=1" \
-  -H "Content-Type: application/json" \
-  -H "X-Agent-Id: $AGENT_ID" \
+  -H "Idempotency-Key: edit-abc123-2" \
   -d '{
     "baseToken": "version_123",
     "operations": [
@@ -252,9 +244,10 @@ curl -sS -X POST "$DOC/ops" \
 Suggest a replacement:
 
 ```bash
-curl -sS -X POST "$DOC/ops?dryRun=1" \
+curl -sS -X POST "$DOC/ops" \
   -H "Content-Type: application/json" \
   -H "X-Agent-Id: $AGENT_ID" \
+  -H "Idempotency-Key: ops-abc123-2" \
   -d '{
     "baseToken": "version_123",
     "by": "Codex",
