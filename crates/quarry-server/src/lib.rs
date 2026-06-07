@@ -19,8 +19,9 @@ use pulldown_cmark::{
 };
 use quarry_collab_codec::{
     build_nodes, inline_comment_body, review_block_to_slate, review_blocks_to_slate,
-    review_markdown_to_slate, review_meta_with_inline_comment_bodies, split_review_endmatter,
-    ReviewMeta, ReviewMetaEntry, ReviewMetaPatch, Unsupported,
+    review_markdown_to_slate, review_markers, review_meta_with_inline_comment_bodies,
+    split_review_endmatter, ReviewMeta, ReviewMetaEntry, ReviewMetaPatch,
+    ReviewSuggestionKind as CodecReviewSuggestionKind, Unsupported,
 };
 use quarry_core::{
     now_timestamp, CollabInviteToken, ConflictRecord, DocumentLink, DocumentListEntry,
@@ -34,14 +35,13 @@ use quarry_git::{
     GitExportResult, GitImportResult, GitSyncResult,
 };
 use quarry_storage::{QuarryStore, StoreEvent, StoreEventKind};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::future::{Future, IntoFuture};
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use utoipa::{OpenApi, ToSchema};
@@ -1461,8 +1461,7 @@ pub struct AgentReviewReply {
 pub struct AgentReviewSuggestion {
     pub id: String,
     pub status: String,
-    #[schema(value_type = AgentSuggestionKind)]
-    pub kind: String,
+    pub kind: AgentSuggestionKind,
     pub by: String,
     pub at: String,
     #[serde(rename = "ref")]
@@ -2624,24 +2623,33 @@ fn rebase_edit_operation_refs(
     operations: &mut [AgentBlockOperation],
     markdown: &str,
 ) -> Result<(), ApiError> {
-    let blocks = snapshot_blocks(markdown);
-    for operation in operations {
-        if let Some(block_ref) = operation.block_ref.as_mut() {
-            *block_ref = refreshed_block_ref(block_ref.ordinal, &blocks)?;
-        }
-    }
-    Ok(())
+    rebase_block_refs(
+        operations
+            .iter_mut()
+            .filter_map(|operation| operation.block_ref.as_mut()),
+        markdown,
+    )
 }
 
 fn rebase_ops_operation_refs(
     operations: &mut [AgentOpsOperationRequest],
     markdown: &str,
 ) -> Result<(), ApiError> {
+    rebase_block_refs(
+        operations
+            .iter_mut()
+            .filter_map(|operation| operation.block_ref.as_mut()),
+        markdown,
+    )
+}
+
+fn rebase_block_refs<'a>(
+    block_refs: impl IntoIterator<Item = &'a mut AgentBlockRef>,
+    markdown: &str,
+) -> Result<(), ApiError> {
     let blocks = snapshot_blocks(markdown);
-    for operation in operations {
-        if let Some(block_ref) = operation.block_ref.as_mut() {
-            *block_ref = refreshed_block_ref(block_ref.ordinal, &blocks)?;
-        }
+    for block_ref in block_refs {
+        *block_ref = refreshed_block_ref(block_ref.ordinal, &blocks)?;
     }
     Ok(())
 }
@@ -2917,8 +2925,9 @@ fn agent_review_response_from_markdown(
 ) -> AgentReviewResponse {
     let blocks = snapshot_blocks(&markdown);
     let (_, meta) = review_meta_with_inline_comment_bodies(&markdown);
-    let comments = agent_review_comments(&blocks, &meta, include_resolved);
-    let suggestions = agent_review_suggestions(&blocks, &meta);
+    let markers = agent_review_markers(&blocks);
+    let comments = agent_review_comments(&markers.comments, &meta, include_resolved);
+    let suggestions = agent_review_suggestions(&markers.suggestions, &meta);
     AgentReviewResponse {
         document_id,
         base_token,
@@ -3191,20 +3200,25 @@ struct ReviewCommentMarker {
 struct ReviewSuggestionMarker {
     id: String,
     block_ref: AgentBlockRef,
-    kind: String,
+    kind: AgentSuggestionKind,
     quote: String,
     content: String,
     preview: AgentSuggestionPreview,
-    start: usize,
+}
+
+struct AgentReviewMarkers {
+    comments: Vec<ReviewCommentMarker>,
+    suggestions: Vec<ReviewSuggestionMarker>,
 }
 
 fn agent_review_comments(
-    blocks: &[AgentSnapshotBlock],
+    markers: &[ReviewCommentMarker],
     meta: &ReviewMeta,
     include_resolved: bool,
 ) -> Vec<AgentReviewComment> {
-    review_comment_markers(blocks)
-        .into_iter()
+    let mut replies = agent_review_replies_by_parent(meta, include_resolved);
+    markers
+        .iter()
         .filter_map(|marker| {
             let entry = meta.comments.get(&marker.id)?;
             if entry.re.is_some() || !include_review_entry(entry, include_resolved) {
@@ -3215,229 +3229,112 @@ fn agent_review_comments(
                 status: review_entry_status(entry),
                 by: entry.by.clone(),
                 at: entry.at.clone(),
-                block_ref: marker.block_ref,
-                quote: marker.quote,
-                body: entry.body.clone().unwrap_or(marker.body),
-                replies: agent_review_replies(meta, &marker.id, include_resolved),
+                block_ref: marker.block_ref.clone(),
+                quote: marker.quote.clone(),
+                body: entry.body.clone().unwrap_or_else(|| marker.body.clone()),
+                replies: replies.remove(&marker.id).unwrap_or_default(),
             })
         })
         .collect()
 }
 
-fn agent_review_replies(
+fn agent_review_replies_by_parent(
     meta: &ReviewMeta,
-    parent_id: &str,
     include_resolved: bool,
-) -> Vec<AgentReviewReply> {
-    meta.comments
-        .iter()
-        .filter_map(|(id, entry)| {
-            if entry.re.as_deref() != Some(parent_id)
-                || !include_review_entry(entry, include_resolved)
-            {
-                return None;
-            }
-            Some(AgentReviewReply {
+) -> HashMap<String, Vec<AgentReviewReply>> {
+    let mut replies = HashMap::new();
+    for (id, entry) in &meta.comments {
+        let Some(parent_id) = entry.re.as_deref() else {
+            continue;
+        };
+        if !include_review_entry(entry, include_resolved) {
+            continue;
+        }
+        replies
+            .entry(parent_id.to_string())
+            .or_insert_with(Vec::new)
+            .push(AgentReviewReply {
                 id: id.clone(),
                 status: review_entry_status(entry),
                 by: entry.by.clone(),
                 at: entry.at.clone(),
                 body: entry.body.clone().unwrap_or_default(),
-            })
-        })
-        .collect()
+            });
+    }
+    replies
 }
 
 fn agent_review_suggestions(
-    blocks: &[AgentSnapshotBlock],
+    markers: &[ReviewSuggestionMarker],
     meta: &ReviewMeta,
 ) -> Vec<AgentReviewSuggestion> {
-    review_suggestion_markers(blocks)
-        .into_iter()
+    markers
+        .iter()
         .filter_map(|marker| {
             let entry = meta.suggestions.get(&marker.id)?;
             if review_entry_is_resolved(entry) {
                 return None;
             }
             Some(AgentReviewSuggestion {
-                id: marker.id,
+                id: marker.id.clone(),
                 status: review_entry_status(entry),
-                kind: marker.kind,
+                kind: marker.kind.clone(),
                 by: entry.by.clone(),
                 at: entry.at.clone(),
-                block_ref: marker.block_ref,
-                quote: marker.quote,
-                content: marker.content,
-                preview: marker.preview,
+                block_ref: marker.block_ref.clone(),
+                quote: marker.quote.clone(),
+                content: marker.content.clone(),
+                preview: marker.preview.clone(),
             })
         })
         .collect()
 }
 
-fn review_comment_markers(blocks: &[AgentSnapshotBlock]) -> Vec<ReviewCommentMarker> {
-    let mut seen = HashSet::new();
-    let mut markers = Vec::new();
+fn agent_review_markers(blocks: &[AgentSnapshotBlock]) -> AgentReviewMarkers {
+    let mut seen_comments = HashSet::new();
+    let mut seen_suggestions = HashSet::new();
+    let mut comments = Vec::new();
+    let mut suggestions = Vec::new();
     for block in blocks {
-        for captures in inline_comment_body().captures_iter(&block.markdown) {
-            let Some(id) = captures.get(3).map(|capture| capture.as_str()) else {
-                continue;
-            };
-            if !seen.insert(id.to_string()) {
-                continue;
+        let markers = review_markers(&block.markdown);
+        for marker in markers.comments {
+            if seen_comments.insert(marker.id.clone()) {
+                comments.push(ReviewCommentMarker {
+                    id: marker.id,
+                    block_ref: block.block_ref.clone(),
+                    quote: marker.quote,
+                    body: marker.body,
+                });
             }
-            markers.push(ReviewCommentMarker {
-                id: id.to_string(),
-                block_ref: block.block_ref.clone(),
-                quote: captures
-                    .get(1)
-                    .map(|capture| capture.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                body: captures
-                    .get(2)
-                    .map(|capture| capture.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-            });
         }
-    }
-    markers
-}
-
-fn review_suggestion_markers(blocks: &[AgentSnapshotBlock]) -> Vec<ReviewSuggestionMarker> {
-    let mut seen = HashSet::new();
-    let mut markers = Vec::new();
-    for block in blocks {
-        let mut block_markers = Vec::new();
-        collect_substitution_suggestions(block, &mut block_markers);
-        collect_insert_suggestions(block, &mut block_markers);
-        collect_delete_suggestions(block, &mut block_markers);
-        block_markers.sort_by_key(|marker| marker.start);
-        for marker in block_markers {
-            if seen.insert(marker.id.clone()) {
-                markers.push(marker);
+        for marker in markers.suggestions {
+            if seen_suggestions.insert(marker.id.clone()) {
+                suggestions.push(ReviewSuggestionMarker {
+                    id: marker.id,
+                    block_ref: block.block_ref.clone(),
+                    kind: agent_suggestion_kind(marker.kind),
+                    quote: marker.quote,
+                    content: marker.content,
+                    preview: AgentSuggestionPreview {
+                        before: marker.before,
+                        after: marker.after,
+                    },
+                });
             }
         }
     }
-    markers
-}
-
-fn collect_substitution_suggestions(
-    block: &AgentSnapshotBlock,
-    markers: &mut Vec<ReviewSuggestionMarker>,
-) {
-    for captures in substitution_suggestion_marker().captures_iter(&block.markdown) {
-        let Some(whole) = captures.get(0) else {
-            continue;
-        };
-        let old = captures
-            .get(1)
-            .map(|capture| capture.as_str())
-            .unwrap_or("");
-        let new = captures
-            .get(2)
-            .map(|capture| capture.as_str())
-            .unwrap_or("");
-        let Some(id) = captures.get(3).map(|capture| capture.as_str()) else {
-            continue;
-        };
-        markers.push(ReviewSuggestionMarker {
-            id: id.to_string(),
-            block_ref: block.block_ref.clone(),
-            kind: "substitution".to_string(),
-            quote: old.to_string(),
-            content: new.to_string(),
-            preview: AgentSuggestionPreview {
-                before: old.to_string(),
-                after: new.to_string(),
-            },
-            start: whole.start(),
-        });
+    AgentReviewMarkers {
+        comments,
+        suggestions,
     }
 }
 
-fn collect_insert_suggestions(
-    block: &AgentSnapshotBlock,
-    markers: &mut Vec<ReviewSuggestionMarker>,
-) {
-    for captures in insert_suggestion_marker().captures_iter(&block.markdown) {
-        let Some(whole) = captures.get(0) else {
-            continue;
-        };
-        let content = captures
-            .get(1)
-            .map(|capture| capture.as_str())
-            .unwrap_or("");
-        let Some(id) = captures.get(2).map(|capture| capture.as_str()) else {
-            continue;
-        };
-        markers.push(ReviewSuggestionMarker {
-            id: id.to_string(),
-            block_ref: block.block_ref.clone(),
-            kind: "insert".to_string(),
-            quote: String::new(),
-            content: content.to_string(),
-            preview: AgentSuggestionPreview {
-                before: String::new(),
-                after: content.to_string(),
-            },
-            start: whole.start(),
-        });
+fn agent_suggestion_kind(kind: CodecReviewSuggestionKind) -> AgentSuggestionKind {
+    match kind {
+        CodecReviewSuggestionKind::Insert => AgentSuggestionKind::Insert,
+        CodecReviewSuggestionKind::Delete => AgentSuggestionKind::Delete,
+        CodecReviewSuggestionKind::Substitution => AgentSuggestionKind::Substitution,
     }
-}
-
-fn collect_delete_suggestions(
-    block: &AgentSnapshotBlock,
-    markers: &mut Vec<ReviewSuggestionMarker>,
-) {
-    for captures in delete_suggestion_marker().captures_iter(&block.markdown) {
-        let Some(whole) = captures.get(0) else {
-            continue;
-        };
-        let quote = captures
-            .get(1)
-            .map(|capture| capture.as_str())
-            .unwrap_or("");
-        let Some(id) = captures.get(2).map(|capture| capture.as_str()) else {
-            continue;
-        };
-        markers.push(ReviewSuggestionMarker {
-            id: id.to_string(),
-            block_ref: block.block_ref.clone(),
-            kind: "delete".to_string(),
-            quote: quote.to_string(),
-            content: String::new(),
-            preview: AgentSuggestionPreview {
-                before: quote.to_string(),
-                after: String::new(),
-            },
-            start: whole.start(),
-        });
-    }
-}
-
-fn substitution_suggestion_marker() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| {
-        Regex::new(r"\{~~(?s:(.*?))~>(?s:(.*?))~~\}\{#([A-Za-z0-9_-]+)\}")
-            .expect("substitution suggestion regex is valid")
-    })
-}
-
-fn insert_suggestion_marker() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| {
-        Regex::new(r"\{\+\+(?s:(.*?))\+\+\}\{#([A-Za-z0-9_-]+)\}")
-            .expect("insert suggestion regex is valid")
-    })
-}
-
-fn delete_suggestion_marker() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| {
-        Regex::new(r"\{--(?s:(.*?))--\}\{#([A-Za-z0-9_-]+)\}")
-            .expect("delete suggestion regex is valid")
-    })
 }
 
 fn include_review_entry(entry: &ReviewMetaEntry, include_resolved: bool) -> bool {

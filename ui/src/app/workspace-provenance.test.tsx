@@ -1,17 +1,29 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { SWRConfig } from 'swr';
+import { SWRConfig, type SWRConfiguration } from 'swr';
 
+import type { CollabEditorConfig } from '../features/editor/MarkdownEditor';
 import { App } from './App';
+
+type TestWindow = Window & {
+  __quarryTestCollab?: CollabEditorConfig;
+};
+
+function testWindow() {
+  return window as TestWindow;
+}
 
 vi.mock('../features/editor/MarkdownEditor', () => ({
   MarkdownEditor({
+    collab,
     content,
     onChange,
   }: {
+    collab?: CollabEditorConfig;
     content: string;
     onChange: (content: string) => void;
   }) {
+    testWindow().__quarryTestCollab = collab;
     return (
       <textarea
         aria-label="Plate markdown editor"
@@ -27,6 +39,7 @@ describe('workspace document mutation provenance', () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     localStorage.clear();
+    delete testWindow().__quarryTestCollab;
     window.history.pushState({}, '', '/');
   });
 
@@ -181,6 +194,29 @@ describe('workspace document mutation provenance', () => {
 
     await waitFor(() => expect(screen.queryByText('Deleted externally')).not.toBeInTheDocument());
   });
+
+  it('keeps the selected editor mounted when a collab flush ack outruns the SWR document cache', async () => {
+    stubBrowserOrigin('00000000-0000-4000-8000-000000000007');
+    vi.stubGlobal('fetch', vi.fn(provenanceFetch()));
+    vi.stubGlobal('EventSource', MockEventSource);
+    MockEventSource.instances = [];
+
+    renderApp({ mutate: vi.fn(async () => undefined) });
+
+    await openDailyDocument();
+    const editor = screen.getByLabelText('Plate markdown editor');
+
+    act(() => {
+      testWindow().__quarryTestCollab?.onFlushAck?.({
+        etag: '"v2"',
+        sessionId: 'browser:peer',
+        versionId: 'v2',
+      });
+    });
+
+    expect(screen.queryByLabelText('Document loading')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Plate markdown editor')).toBe(editor);
+  });
 });
 
 async function openDailyDocument() {
@@ -202,9 +238,10 @@ async function showExternalDeleteBanner() {
   expect(await screen.findByText('Deleted externally')).toBeInTheDocument();
 }
 
-function renderApp() {
+function renderApp(config: Record<string, unknown> = {}) {
+  const swrConfig = { provider: () => new Map(), ...config } as SWRConfiguration;
   return render(
-    <SWRConfig value={{ provider: () => new Map() }}>
+    <SWRConfig value={swrConfig}>
       <App />
     </SWRConfig>
   );

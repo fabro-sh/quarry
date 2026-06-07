@@ -98,6 +98,36 @@ impl ReviewMetaPatch {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ReviewMarkers {
+    pub comments: Vec<ReviewCommentMarker>,
+    pub suggestions: Vec<ReviewSuggestionMarker>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewCommentMarker {
+    pub id: String,
+    pub quote: String,
+    pub body: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewSuggestionMarker {
+    pub id: String,
+    pub kind: ReviewSuggestionKind,
+    pub quote: String,
+    pub content: String,
+    pub before: String,
+    pub after: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReviewSuggestionKind {
+    Insert,
+    Delete,
+    Substitution,
+}
+
 fn unknown_review_author() -> String {
     "unknown".to_string()
 }
@@ -172,16 +202,76 @@ pub fn review_meta_with_inline_comment_bodies(markdown: &str) -> (String, Review
     (body, meta)
 }
 
+pub fn review_markers(markdown: &str) -> ReviewMarkers {
+    let mut markers = ReviewMarkers::default();
+    let mut last = 0usize;
+    for region in code_region().find_iter(markdown) {
+        collect_review_markers_segment(&markdown[last..region.start()], &mut markers);
+        last = region.end();
+    }
+    collect_review_markers_segment(&markdown[last..], &mut markers);
+    markers
+}
+
+fn collect_review_markers_segment(segment: &str, markers: &mut ReviewMarkers) {
+    for caps in token().captures_iter(segment) {
+        if let Some(hl) = caps.get(1) {
+            let Some(id) = caps.get(3) else {
+                continue;
+            };
+            markers.comments.push(ReviewCommentMarker {
+                id: id.as_str().to_string(),
+                quote: hl.as_str().to_string(),
+                body: caps
+                    .get(2)
+                    .map(|capture| capture.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+            });
+        } else if let (Some(old), Some(new), Some(id)) = (caps.get(4), caps.get(5), caps.get(6)) {
+            markers.suggestions.push(ReviewSuggestionMarker {
+                id: id.as_str().to_string(),
+                kind: ReviewSuggestionKind::Substitution,
+                quote: old.as_str().to_string(),
+                content: new.as_str().to_string(),
+                before: old.as_str().to_string(),
+                after: new.as_str().to_string(),
+            });
+        } else if let (Some(content), Some(id)) = (caps.get(7), caps.get(8)) {
+            markers.suggestions.push(ReviewSuggestionMarker {
+                id: id.as_str().to_string(),
+                kind: ReviewSuggestionKind::Insert,
+                quote: String::new(),
+                content: content.as_str().to_string(),
+                before: String::new(),
+                after: content.as_str().to_string(),
+            });
+        } else if let (Some(quote), Some(id)) = (caps.get(9), caps.get(10)) {
+            markers.suggestions.push(ReviewSuggestionMarker {
+                id: id.as_str().to_string(),
+                kind: ReviewSuggestionKind::Delete,
+                quote: quote.as_str().to_string(),
+                content: String::new(),
+                before: quote.as_str().to_string(),
+                after: String::new(),
+            });
+        } else if let (Some(body), Some(id)) = (caps.get(11), caps.get(12)) {
+            markers.comments.push(ReviewCommentMarker {
+                id: id.as_str().to_string(),
+                quote: " ".to_string(),
+                body: body.as_str().to_string(),
+            });
+        }
+    }
+}
+
 pub fn hydrate_inline_comment_bodies(body: &str, meta: &mut ReviewMeta) {
-    for captures in inline_comment_body().captures_iter(body) {
-        let Some(comment_body) = captures.get(2) else {
+    for marker in review_markers(body).comments {
+        if marker.body.is_empty() {
             continue;
-        };
-        let Some(id) = captures.get(3) else {
-            continue;
-        };
-        if let Some(entry) = meta.comments.get_mut(id.as_str()) {
-            entry.body = Some(comment_body.as_str().to_string());
+        }
+        if let Some(entry) = meta.comments.get_mut(&marker.id) {
+            entry.body = Some(marker.body);
         }
     }
 }
@@ -653,5 +743,34 @@ mod tests {
         let error = review_blocks_to_slate(&blocks).unwrap_err();
 
         assert_eq!(error.0, "block 0: review marker without {#id}");
+    }
+
+    #[test]
+    fn extracts_review_markers_outside_code_regions() {
+        let markers = review_markers(
+            "See {==this==}{>>Needs work<<}{#c1} and {~~old~>new~~}{#s1}.\n\
+             Ignore `{++code++}{#s2}`.\n\n\
+             ```text\n{--gone--}{#s3}\n```\n",
+        );
+
+        assert_eq!(
+            markers.comments,
+            vec![ReviewCommentMarker {
+                id: "c1".to_string(),
+                quote: "this".to_string(),
+                body: "Needs work".to_string(),
+            }]
+        );
+        assert_eq!(
+            markers.suggestions,
+            vec![ReviewSuggestionMarker {
+                id: "s1".to_string(),
+                kind: ReviewSuggestionKind::Substitution,
+                quote: "old".to_string(),
+                content: "new".to_string(),
+                before: "old".to_string(),
+                after: "new".to_string(),
+            }]
+        );
     }
 }

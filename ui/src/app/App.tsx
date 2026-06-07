@@ -873,17 +873,17 @@ function Workspace() {
   const loadedDocumentForSelection = document?.path === selectedPath ? document : undefined;
   const loadedDocumentContentType = loadedDocumentForSelection?.contentType;
   const selectedContentType = loadedDocumentContentType ?? selectedEntry?.content_type ?? contentType;
+  const activeLoadedDocument =
+    loadedDocumentRef.current?.library === activeLibrary &&
+    loadedDocumentRef.current.path === selectedPath
+      ? loadedDocumentRef.current
+      : null;
   const selectedDocumentBodyReady = Boolean(
-    loadedDocumentForSelection &&
-      loadedDocumentRef.current?.library === activeLibrary &&
-      loadedDocumentRef.current.path === selectedPath &&
-      loadedDocumentRef.current.etag === loadedDocumentForSelection.etag &&
-      etag === loadedDocumentForSelection.etag
+    loadedDocumentForSelection && activeLoadedDocument
   );
-  const collabDocumentId =
-    selectedDocumentBodyReady && loadedDocumentForSelection
-      ? loadedDocumentForSelection.documentId
-      : '';
+  const collabDocumentId = selectedDocumentBodyReady
+    ? activeLoadedDocument?.documentId || loadedDocumentForSelection?.documentId || ''
+    : '';
   const layoutStorageKey = activeLibrary ? `quarry:layout:${activeLibrary}` : 'quarry:layout:workspace';
   const mergeConflict = conflicts.find((conflict) => conflict.id === mergeConflictId) ?? null;
   const saveConflictDialogRef = useDialogFocusTrap(Boolean(conflictRemote), closeSaveConflictDialog);

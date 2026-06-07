@@ -497,7 +497,7 @@ async fn agent_review_lists_open_comments_replies_and_suggestions() {
     .await
     .unwrap();
     let library = store.create_library("agentreviewread").await.unwrap();
-    let markdown = "Alpha {==target==}{>>Needs work.<<}{#c1} and {==done==}{>>Fixed.<<}{#c2}.\n\nUse {~~old~>new~~}{#s1} wording.\n\n---\ncomments:\n  c1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user:a\n  c2:\n    at: \"2026-01-02T00:00:00.000Z\"\n    by: user:b\n    status: resolved\n  r1:\n    at: \"2026-01-01T01:00:00.000Z\"\n    body: Reply body.\n    by: ai:codex\n    re: c1\nsuggestions:\n  s1:\n    at: \"2026-01-03T00:00:00.000Z\"\n    by: ai:codex\n";
+    let markdown = "Alpha {==target==}{>>Needs work.<<}{#c1} and {==done==}{>>Fixed.<<}{#c2}.\n\nUse {~~old~>new~~}{#s1} wording and `{++literal++}{#s_code}`.\n\n```text\n{==ignored==}{>>Nope<<}{#c_code}\n{--gone--}{#s_code2}\n```\n\n---\ncomments:\n  c1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user:a\n  c2:\n    at: \"2026-01-02T00:00:00.000Z\"\n    by: user:b\n    status: resolved\n  c_code:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: user:code\n  r1:\n    at: \"2026-01-01T01:00:00.000Z\"\n    body: Reply body.\n    by: ai:codex\n    re: c1\nsuggestions:\n  s1:\n    at: \"2026-01-03T00:00:00.000Z\"\n    by: ai:codex\n  s_code:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: ai:code\n  s_code2:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: ai:code\n";
     let written = store
         .put_document(
             &library.slug,
@@ -5853,11 +5853,9 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
         .as_array()
         .expect("AgentBlockRef should expose required fields");
     assert!(block_ref_required.iter().any(|value| value == "ordinal"));
-    assert!(
-        !block_ref_required
-            .iter()
-            .any(|value| value == "contentHash")
-    );
+    assert!(!block_ref_required
+        .iter()
+        .any(|value| value == "contentHash"));
     let content_hash_schema =
         &openapi["components"]["schemas"]["AgentBlockRef"]["properties"]["contentHash"];
     assert_schema_type_contains(content_hash_schema, "string");
