@@ -351,6 +351,20 @@ impl CollabRoom {
             let comparable = clean_gate_nodes(&children);
             let stripped = strip_trailing_empty_paragraphs(&comparable);
             if stripped != expected {
+                let mismatch_detail = if stripped.len() != expected.len() {
+                    format!("length mismatch: live {} != expected {}", stripped.len(), expected.len())
+                } else {
+                    stripped
+                        .iter()
+                        .zip(expected.iter())
+                        .enumerate()
+                        .find(|(_, (a, b))| a != b)
+                        .map(|(i, (live, exp))| {
+                            format!("block {i} mismatch:\nlive:     {live:#?}\nexpected: {exp:#?}")
+                        })
+                        .unwrap_or_else(|| "unknown mismatch".to_string())
+                };
+
                 tracing::debug!(
                     event = "collab.agent_injection.rejected",
                     document_id = %self.document_id,
@@ -359,6 +373,7 @@ impl CollabRoom {
                     reason = "live room content does not match the expected base",
                     live_blocks = stripped.len(),
                     expected_blocks = expected.len(),
+                    mismatch_detail = %mismatch_detail,
                     "agent injection clean gate rejected live room"
                 );
                 return None;
