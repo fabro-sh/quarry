@@ -28,7 +28,7 @@ interface MockConflict {
 interface MockLink {
   alias?: string | null;
   end_offset?: number;
-  resolution_status?: 'resolved' | 'unresolved' | 'ambiguous';
+  resolution_status?: 'resolved' | 'unresolved' | 'ambiguous' | 'external';
   resolved?: boolean;
   src_doc_id?: string;
   src_path?: string;

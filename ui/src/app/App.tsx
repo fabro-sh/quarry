@@ -3678,7 +3678,7 @@ function RightPane({
             <LinkList
               activeLibrary={activeLibrary}
               direction="outgoing"
-              links={outgoing}
+              links={outgoing.filter(isDocumentLink)}
               onCreateDocument={onCreateDocumentFromLink}
               onOpenDocument={onOpenDocument}
             />
@@ -3686,7 +3686,7 @@ function RightPane({
             <LinkList
               activeLibrary={activeLibrary}
               direction="incoming"
-              links={incoming}
+              links={incoming.filter(isDocumentLink)}
               onOpenDocument={onOpenDocument}
             />
           </>
@@ -4077,6 +4077,19 @@ function linkStatus(link: DocumentLink) {
   if (link.target_kind === 'tag' || link.target_kind === 'heading') return null;
   if (link.resolution_status === 'ambiguous') return 'Ambiguous';
   return link.resolved ? null : 'Unresolved';
+}
+
+// The Links sidebar shows only links that reference a library document — resolved
+// (target exists) or broken (target intended but missing). It excludes headings and
+// tags, and links with no document destination (external URLs, same-doc `#fragments`),
+// which the backend marks with resolution_status 'external'.
+function isDocumentLink(link: DocumentLink) {
+  return (
+    (link.target_kind === 'wiki_link' ||
+      link.target_kind === 'embed' ||
+      link.target_kind === 'markdown_link') &&
+    link.resolution_status !== 'external'
+  );
 }
 
 function EmptyDocument() {

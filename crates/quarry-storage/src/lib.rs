@@ -3809,7 +3809,7 @@ fn extract_markdown_links(
         }
         let (lookup_target, target_anchor) = split_anchor(target);
         let resolution = if is_external_link(&lookup_target) || lookup_target.starts_with('#') {
-            LinkResolution::unresolved()
+            LinkResolution::external()
         } else {
             resolve_link_target(&lookup_target, documents)
         };
@@ -3939,12 +3939,22 @@ impl<'a> LinkResolution<'a> {
             status: "ambiguous",
         }
     }
+
+    /// The link does not reference a library document: an external URL
+    /// (`https://…`, `mailto:`) or a same-document anchor (`#section`, empty target).
+    fn external() -> Self {
+        Self {
+            target: None,
+            status: "external",
+        }
+    }
 }
 
 fn resolve_link_target<'a>(target: &str, documents: &'a [DocumentListEntry]) -> LinkResolution<'a> {
     let normalized = target.trim().trim_start_matches('/');
     if normalized.is_empty() {
-        return LinkResolution::unresolved();
+        // No document target intended (e.g. a bare `#anchor` or empty `[[]]`).
+        return LinkResolution::external();
     }
     let normalized_lc = normalized.to_lowercase();
     let normalized_md_lc = format!("{normalized_lc}.md");
@@ -4551,6 +4561,8 @@ fn link_from_row(row: &Row) -> Result<DocumentLink> {
         "resolved".to_string()
     } else if stored_resolution_status == "ambiguous" {
         "ambiguous".to_string()
+    } else if stored_resolution_status == "external" {
+        "external".to_string()
     } else {
         "unresolved".to_string()
     };

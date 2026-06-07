@@ -120,7 +120,7 @@ export interface DocumentLink {
   start_offset: number;
   end_offset: number;
   resolved: boolean;
-  resolution_status: 'resolved' | 'unresolved' | 'ambiguous';
+  resolution_status: 'resolved' | 'unresolved' | 'ambiguous' | 'external';
 }
 
 export interface LinkCollection {
@@ -144,7 +144,7 @@ export interface GraphEdge {
   target_kind: string;
   target_text: string;
   resolved: boolean;
-  resolution_status: 'resolved' | 'unresolved' | 'ambiguous';
+  resolution_status: 'resolved' | 'unresolved' | 'ambiguous' | 'external';
 }
 
 export interface GraphResponse {

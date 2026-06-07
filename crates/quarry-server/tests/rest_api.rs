@@ -6481,6 +6481,56 @@ async fn rest_api_marks_ambiguous_links() {
 }
 
 #[tokio::test]
+async fn rest_api_marks_external_links() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("external").await.unwrap();
+
+    store
+        .put_document(
+            &library.slug,
+            "source.md",
+            b"[site](https://example.com)\n".to_vec(),
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/external/documents/source.md/outgoing-links")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    let link = body["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|link| {
+            link["target_kind"] == "markdown_link" && link["target_text"] == "https://example.com"
+        })
+        .unwrap();
+    assert_eq!(link["resolved"], false);
+    assert_eq!(link["resolution_status"], "external");
+}
+
+#[tokio::test]
 async fn rest_api_supports_transaction_metadata_patch_and_move() {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {

@@ -875,6 +875,73 @@ async fn ambiguous_short_wikilinks_remain_unresolved() {
 }
 
 #[tokio::test]
+async fn markdown_links_without_document_targets_are_external() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("externallinks").await.unwrap();
+
+    store
+        .put_document(
+            &library.slug,
+            "source.md",
+            b"[site](https://example.com)\n\n[anchor](#section)\n\n[gone](gone.md)\n".to_vec(),
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    let outgoing = store
+        .outgoing_links(&library.slug, "source.md")
+        .await
+        .unwrap();
+
+    let external_url = outgoing
+        .links
+        .iter()
+        .find(|link| link.target_kind == "markdown_link" && link.target_text == "https://example.com")
+        .unwrap();
+    assert!(!external_url.resolved);
+    assert_eq!(
+        serde_json::to_value(external_url).unwrap()["resolution_status"],
+        "external"
+    );
+
+    let fragment = outgoing
+        .links
+        .iter()
+        .find(|link| {
+            link.target_kind == "markdown_link" && link.target_anchor.as_deref() == Some("section")
+        })
+        .unwrap();
+    assert!(!fragment.resolved);
+    assert_eq!(
+        serde_json::to_value(fragment).unwrap()["resolution_status"],
+        "external"
+    );
+
+    // A link to a missing document is broken, not external — it intended a document target.
+    let broken = outgoing
+        .links
+        .iter()
+        .find(|link| link.target_kind == "markdown_link" && link.target_text == "gone.md")
+        .unwrap();
+    assert!(!broken.resolved);
+    assert_eq!(
+        serde_json::to_value(broken).unwrap()["resolution_status"],
+        "unresolved"
+    );
+}
+
+#[tokio::test]
 async fn link_index_tracks_moves_and_deletes() {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {

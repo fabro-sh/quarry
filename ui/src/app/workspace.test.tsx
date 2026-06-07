@@ -677,6 +677,14 @@ describe('Quarry Browser workspace', () => {
             }),
             link({ target_kind: 'markdown_link', target_text: 'guide.md', target_path: 'guide.md', resolved: true }),
             link({ target_kind: 'heading', target_text: 'Links', target_path: 'links.md', start_offset: 24, resolved: true }),
+            link({
+              target_kind: 'markdown_link',
+              target_text: 'https://example.com',
+              target_path: null,
+              start_offset: 30,
+              resolution_status: 'external',
+              resolved: false,
+            }),
           ],
         });
       }
@@ -728,6 +736,10 @@ describe('Quarry Browser workspace', () => {
     expect(details.getByText('Duplicate')).toBeInTheDocument();
     expect(details.getByText('Ambiguous')).toBeInTheDocument();
     expect(details.queryByRole('button', { name: 'Create document for Duplicate' })).not.toBeInTheDocument();
+    // The Links panel only lists library-document references: headings and external
+    // URLs have no document destination and are filtered out.
+    expect(details.queryByText('# Links')).not.toBeInTheDocument();
+    expect(details.queryByText('https://example.com')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Links');
     const resolvedLinkButtons = details.getAllByRole('button', { name: 'guide.md' });
     await userEvent.hover(resolvedLinkButtons[0]);
