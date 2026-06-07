@@ -370,6 +370,7 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
     assert!(openapi["paths"]["/v1/libraries"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}"]["head"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/snapshot"].is_object());
+    assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/share"].is_object());
     assert!(
         openapi["paths"]["/v1/libraries/{library}/documents/{path}/share/{token}/revoke"]
@@ -383,6 +384,14 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
     );
     assert!(
         openapi["components"]["schemas"]["AgentOpsResponse"]["properties"]["nextBaseToken"]
+            .is_object()
+    );
+    assert!(
+        openapi["components"]["schemas"]["AgentReviewResponse"]["properties"]["comments"]
+            .is_object()
+    );
+    assert!(
+        openapi["components"]["schemas"]["AgentSuggestionPreview"]["properties"]["before"]
             .is_object()
     );
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/presence"].is_object());
@@ -447,6 +456,256 @@ async fn agent_snapshot_exposes_snapshot_scoped_block_refs() {
             .len(),
         64
     );
+}
+
+#[tokio::test]
+async fn agent_review_lists_open_comments_replies_and_suggestions() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentreviewread").await.unwrap();
+    let markdown = "Alpha {==target==}{>>Needs work.<<}{#c1} and {==done==}{>>Fixed.<<}{#c2}.\n\nUse {~~old~>new~~}{#s1} wording.\n\n---\ncomments:\n  c1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user:a\n  c2:\n    at: \"2026-01-02T00:00:00.000Z\"\n    by: user:b\n    status: resolved\n  r1:\n    at: \"2026-01-01T01:00:00.000Z\"\n    body: Reply body.\n    by: ai:codex\n    re: c1\nsuggestions:\n  s1:\n    at: \"2026-01-03T00:00:00.000Z\"\n    by: ai:codex\n";
+    let written = store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            markdown.as_bytes().to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreviewread/documents/notes/review.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let snapshot: Value = response_json(response).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreviewread/documents/notes/review.md/review")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["documentId"], written.document.id);
+    assert_eq!(body["baseToken"], written.version.id);
+    assert_eq!(body["comments"].as_array().unwrap().len(), 1);
+    assert_eq!(body["comments"][0]["id"], "c1");
+    assert_eq!(body["comments"][0]["status"], "open");
+    assert_eq!(body["comments"][0]["by"], "user:a");
+    assert_eq!(body["comments"][0]["at"], "2026-01-01T00:00:00.000Z");
+    assert_eq!(body["comments"][0]["ref"], snapshot["blocks"][0]["ref"]);
+    assert_eq!(body["comments"][0]["quote"], "target");
+    assert_eq!(body["comments"][0]["body"], "Needs work.");
+    assert_eq!(body["comments"][0]["replies"].as_array().unwrap().len(), 1);
+    assert_eq!(body["comments"][0]["replies"][0]["id"], "r1");
+    assert_eq!(body["comments"][0]["replies"][0]["status"], "open");
+    assert_eq!(body["comments"][0]["replies"][0]["by"], "ai:codex");
+    assert_eq!(body["comments"][0]["replies"][0]["body"], "Reply body.");
+
+    assert_eq!(body["suggestions"].as_array().unwrap().len(), 1);
+    assert_eq!(body["suggestions"][0]["id"], "s1");
+    assert_eq!(body["suggestions"][0]["status"], "open");
+    assert_eq!(body["suggestions"][0]["kind"], "substitution");
+    assert_eq!(body["suggestions"][0]["by"], "ai:codex");
+    assert_eq!(body["suggestions"][0]["at"], "2026-01-03T00:00:00.000Z");
+    assert_eq!(body["suggestions"][0]["ref"], snapshot["blocks"][1]["ref"]);
+    assert_eq!(body["suggestions"][0]["quote"], "old");
+    assert_eq!(body["suggestions"][0]["content"], "new");
+    assert_eq!(
+        body["suggestions"][0]["preview"],
+        serde_json::json!({"before": "old", "after": "new"})
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreviewread/documents/notes/review.md/review?includeResolved=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["comments"].as_array().unwrap().len(), 2);
+    assert_eq!(body["comments"][1]["id"], "c2");
+    assert_eq!(body["comments"][1]["status"], "resolved");
+    assert_eq!(body["comments"][1]["quote"], "done");
+    assert_eq!(body["comments"][1]["body"], "Fixed.");
+}
+
+#[tokio::test]
+async fn agent_review_omits_suggestions_after_accept_and_reject() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentreviewgone").await.unwrap();
+    let written = store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            b"Keep {++added++}{#s1} and drop {--bad--}{#s2}.\n\n---\nsuggestions:\n  s1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: AI\n  s2:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: AI\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentreviewgone/documents/notes/review.md/ops",
+            ops_request(
+                format!("\"{}\"", written.version.id),
+                serde_json::json!({"op": "suggestion.accept", "id": "s1"}),
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let base_token = response.headers()[header::ETAG]
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentreviewgone/documents/notes/review.md/ops",
+            ops_request(
+                &base_token,
+                serde_json::json!({"op": "suggestion.reject", "id": "s2"}),
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreviewgone/documents/notes/review.md/review")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert!(body["suggestions"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn agent_review_matches_snapshot_errors_for_missing_and_non_markdown() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentreviewerrors").await.unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "notes/plain.txt",
+            b"plain text".to_vec(),
+            serde_json::json!({"content_type":"text/plain"}),
+            "text/plain",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let snapshot = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreviewerrors/documents/notes/missing.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let review = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreviewerrors/documents/notes/missing.md/review")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(review.status(), snapshot.status());
+    assert_eq!(response_json(review).await, response_json(snapshot).await);
+
+    let snapshot = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreviewerrors/documents/notes/plain.txt/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let review = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentreviewerrors/documents/notes/plain.txt/review")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(review.status(), snapshot.status());
+    assert_eq!(response_json(review).await, response_json(snapshot).await);
 }
 
 #[tokio::test]
@@ -4200,6 +4459,7 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
     .unwrap();
     assert!(docs.contains("comment.reply"));
     assert!(docs.contains("comment.delete"));
+    assert!(docs.contains("GET $DOC/review"));
     assert!(docs.contains("\"blocks\""));
     assert!(docs.contains("replace_document"));
     assert!(docs.contains("repeated `insert_after`"));
@@ -4234,6 +4494,11 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
         .unwrap()
         .iter()
         .any(|capability| capability == "bulk_block_insert"));
+    assert!(body["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|capability| capability == "review"));
     assert!(body["auth_note"]
         .as_str()
         .unwrap()
@@ -4275,6 +4540,14 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
     assert_eq!(
         body["endpoints"]["snapshot"]["url"],
         "http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/snapshot"
+    );
+    assert_eq!(
+        body["endpoints"]["review"]["url"],
+        "http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/review"
+    );
+    assert_eq!(
+        body["route_hints"]["review"],
+        "http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/review"
     );
 }
 
@@ -5165,6 +5438,7 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
     assert!(openapi["paths"]["/v1/libraries/{library}/search"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/backlinks"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/versions"].is_object());
+    assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"].is_object());
     assert!(openapi["paths"]["/v1/events"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/events/stream"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/events/pending"].is_object());
@@ -5221,6 +5495,14 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
     assert!(
         openapi["components"]["schemas"]["AgentOpsResponse"]["properties"]["results"].is_object()
     );
+    assert!(
+        openapi["components"]["schemas"]["AgentReviewResponse"]["properties"]["suggestions"]
+            .is_object()
+    );
+    assert!(
+        openapi["components"]["schemas"]["AgentReviewSuggestion"]["properties"]["preview"]
+            .is_object()
+    );
     assert_schema_enum_contains(
         &openapi,
         &openapi["components"]["schemas"]["AgentPresenceRequest"]["properties"]["status"],
@@ -5245,6 +5527,13 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
         "/v1/libraries/{library}/documents/{path}/ops",
         "post",
         "dryRun",
+        &["1", "true", "yes", "0", "false", "no"],
+    );
+    assert_path_parameter_enum_contains(
+        &openapi,
+        "/v1/libraries/{library}/documents/{path}/review",
+        "get",
+        "includeResolved",
         &["1", "true", "yes", "0", "false", "no"],
     );
 }

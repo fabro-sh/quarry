@@ -946,6 +946,60 @@
         }
       }
     },
+    "/v1/libraries/{library}/documents/{path}/review": {
+      "get": {
+        "tags": [],
+        "operationId": "document_review_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeResolved",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DryRunValue"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentReviewResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/libraries/{library}/documents/{path}/share": {
       "get": {
         "tags": [],
@@ -2791,6 +2845,147 @@
           "error"
         ]
       },
+      "AgentReviewComment": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "by",
+          "at",
+          "ref",
+          "quote",
+          "body",
+          "replies"
+        ],
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "quote": {
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/AgentBlockRef"
+          },
+          "replies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentReviewReply"
+            }
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentReviewReply": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "by",
+          "at",
+          "body"
+        ],
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentReviewResponse": {
+        "type": "object",
+        "required": [
+          "documentId",
+          "baseToken",
+          "comments",
+          "suggestions"
+        ],
+        "properties": {
+          "baseToken": {
+            "type": "string"
+          },
+          "comments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentReviewComment"
+            }
+          },
+          "documentId": {
+            "type": "string"
+          },
+          "suggestions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentReviewSuggestion"
+            }
+          }
+        }
+      },
+      "AgentReviewSuggestion": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "kind",
+          "by",
+          "at",
+          "ref",
+          "quote",
+          "content",
+          "preview"
+        ],
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AgentSuggestionKind"
+          },
+          "preview": {
+            "$ref": "#/components/schemas/AgentSuggestionPreview"
+          },
+          "quote": {
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/AgentBlockRef"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
       "AgentSnapshotBlock": {
         "type": "object",
         "required": [
@@ -2815,6 +3010,21 @@
           "replace",
           "substitution"
         ]
+      },
+      "AgentSuggestionPreview": {
+        "type": "object",
+        "required": [
+          "before",
+          "after"
+        ],
+        "properties": {
+          "after": {
+            "type": "string"
+          },
+          "before": {
+            "type": "string"
+          }
+        }
       },
       "BeginTransactionRequest": {
         "type": "object",

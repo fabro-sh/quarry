@@ -229,6 +229,19 @@ Use `/ops` for review feedback. Supported operations are `comment.add`,
 top-level `baseToken` and `by` author, resolve refs against the original
 snapshot, and commit atomically.
 
+Read existing review work without parsing CriticMarkup:
+
+```sh
+curl -sS "$DOC/review"
+curl -sS "$DOC/review?includeResolved=1"
+```
+
+`GET $DOC/review` returns `documentId`, `baseToken`, root `comments` with nested
+`replies`, and current unapplied `suggestions`. By default, resolved comments
+are omitted; add `includeResolved=1` to include them. Suggestions include
+`quote`, `content`, and `preview: { "before": "...", "after": "..." }` so you
+can decide whether to accept or reject without parsing CriticMarkup.
+
 Add a comment:
 
 ```sh

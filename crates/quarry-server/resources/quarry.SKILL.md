@@ -217,6 +217,19 @@ snapshot, and commit atomically. Put several comments or suggestions in one
 `operations` array instead of refreshing the token between annotations. Use an
 `Idempotency-Key` header when committing a non-dry-run batch.
 
+Read existing review work without parsing CriticMarkup:
+
+```bash
+curl -sS "$DOC/review"
+curl -sS "$DOC/review?includeResolved=1"
+```
+
+`GET $DOC/review` returns `documentId`, `baseToken`, root `comments` with nested
+`replies`, and current unapplied `suggestions`. By default, resolved comments
+are omitted; add `includeResolved=1` to include them. Suggestions include
+`quote`, `content`, and `preview: { "before": "...", "after": "..." }` so you
+can decide whether to accept or reject without parsing CriticMarkup.
+
 Add a comment:
 
 ```bash

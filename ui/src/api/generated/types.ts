@@ -213,6 +213,49 @@ export type AgentOpsOperation =
 
 export type AgentSuggestionKind = 'insert' | 'delete' | 'remove' | 'replace' | 'substitution';
 
+export interface AgentSuggestionPreview {
+  before: string;
+  after: string;
+}
+
+export interface AgentReviewReply {
+  id: string;
+  status: string;
+  by: string;
+  at: string;
+  body: string;
+}
+
+export interface AgentReviewComment {
+  id: string;
+  status: string;
+  by: string;
+  at: string;
+  ref: AgentBlockRef;
+  quote: string;
+  body: string;
+  replies: AgentReviewReply[];
+}
+
+export interface AgentReviewSuggestion {
+  id: string;
+  status: string;
+  kind: AgentSuggestionKind;
+  by: string;
+  at: string;
+  ref: AgentBlockRef;
+  quote: string;
+  content: string;
+  preview: AgentSuggestionPreview;
+}
+
+export interface AgentReviewResponse {
+  documentId: string;
+  baseToken: string;
+  comments: AgentReviewComment[];
+  suggestions: AgentReviewSuggestion[];
+}
+
 export interface AgentOpsOperationRequest {
   op: AgentOpsOperation;
   ref?: AgentBlockRef | null;
