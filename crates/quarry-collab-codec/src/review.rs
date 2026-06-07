@@ -45,7 +45,7 @@ fn token() -> &'static Regex {
 
 /// Parsed review endmatter (the trailing `---\ncomments:`/`suggestions:` YAML).
 /// Mirrors the TS `ReviewMeta` and the server's at-rest representation.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReviewMeta {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub comments: BTreeMap<String, ReviewMetaEntry>,
@@ -104,6 +104,13 @@ pub struct ReviewMarkers {
     pub suggestions: Vec<ReviewSuggestionMarker>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ReviewDocument {
+    pub body: String,
+    pub markers: ReviewMarkers,
+    pub meta: ReviewMeta,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewCommentMarker {
     pub id: String,
@@ -149,8 +156,8 @@ pub fn review_block_to_slate(markdown: &str, meta: &ReviewMeta) -> Result<Vec<No
 /// nodes, mirroring the browser's `markdownToReview`. The endmatter is consumed
 /// into the marks (suggestion `by`/`at`) and never becomes nodes.
 pub fn review_markdown_to_slate(markdown: &str) -> Result<Vec<Node>, Unsupported> {
-    let (body, meta) = split_review_endmatter(markdown);
-    review_block_to_slate(&body, &meta)
+    let document = parse_review_document(markdown);
+    review_block_to_slate(&document.body, &document.meta)
 }
 
 /// Per-block Slate nodes for a review document's blocks (as produced by the
@@ -159,7 +166,7 @@ pub fn review_markdown_to_slate(markdown: &str) -> Result<Vec<Node>, Unsupported
 /// live representation in the Yjs room.
 pub fn review_blocks_to_slate(blocks: &[String]) -> Result<Vec<Vec<Node>>, Unsupported> {
     let markdown = blocks.concat();
-    let (_, meta) = split_review_endmatter(&markdown);
+    let document = parse_review_document(&markdown);
     let endmatter_ordinal = has_review_endmatter(&markdown)
         .then(|| blocks.len().checked_sub(1))
         .flatten();
@@ -170,7 +177,7 @@ pub fn review_blocks_to_slate(blocks: &[String]) -> Result<Vec<Vec<Node>>, Unsup
             if Some(ordinal) == endmatter_ordinal {
                 Ok(Vec::new())
             } else {
-                review_block_to_slate(block, &meta)
+                review_block_to_slate(block, &document.meta)
                     .map_err(|error| error.context(format!("block {ordinal}")))
             }
         })
@@ -197,9 +204,19 @@ pub fn split_review_endmatter(markdown: &str) -> (String, ReviewMeta) {
 }
 
 pub fn review_meta_with_inline_comment_bodies(markdown: &str) -> (String, ReviewMeta) {
-    let (body, mut meta) = split_review_endmatter(markdown);
-    hydrate_inline_comment_bodies(&body, &mut meta);
-    (body, meta)
+    let document = parse_review_document(markdown);
+    (document.body, document.meta)
+}
+
+pub fn parse_review_document(markdown: &str) -> ReviewDocument {
+    let (body, raw_meta) = split_review_endmatter(markdown);
+    let markers = review_markers(&body);
+    let meta = normalize_review_meta(&markers, raw_meta);
+    ReviewDocument {
+        body,
+        markers,
+        meta,
+    }
 }
 
 pub fn review_markers(markdown: &str) -> ReviewMarkers {
@@ -211,6 +228,69 @@ pub fn review_markers(markdown: &str) -> ReviewMarkers {
     }
     collect_review_markers_segment(&markdown[last..], &mut markers);
     markers
+}
+
+fn normalize_review_meta(markers: &ReviewMarkers, raw_meta: ReviewMeta) -> ReviewMeta {
+    let mut comments = BTreeMap::new();
+    let mut live_comment_ids = std::collections::BTreeSet::new();
+    for marker in &markers.comments {
+        if !live_comment_ids.insert(marker.id.clone()) {
+            continue;
+        }
+        let mut entry = raw_meta
+            .comments
+            .get(&marker.id)
+            .cloned()
+            .unwrap_or_else(|| fallback_review_entry(comment_body_for_marker(marker)));
+        entry.re = None;
+        if !marker.body.is_empty() {
+            entry.body = Some(marker.body.clone());
+        }
+        comments.insert(marker.id.clone(), entry);
+    }
+
+    for (id, entry) in &raw_meta.comments {
+        let Some(parent_id) = entry.re.as_deref() else {
+            continue;
+        };
+        if live_comment_ids.contains(parent_id) && !comments.contains_key(id) {
+            comments.insert(id.clone(), entry.clone());
+        }
+    }
+
+    let mut suggestions = BTreeMap::new();
+    let mut live_suggestion_ids = std::collections::BTreeSet::new();
+    for marker in &markers.suggestions {
+        if !live_suggestion_ids.insert(marker.id.clone()) {
+            continue;
+        }
+        let entry = raw_meta
+            .suggestions
+            .get(&marker.id)
+            .cloned()
+            .unwrap_or_else(|| fallback_review_entry(None));
+        suggestions.insert(marker.id.clone(), entry);
+    }
+
+    ReviewMeta {
+        comments,
+        suggestions,
+    }
+}
+
+fn comment_body_for_marker(marker: &ReviewCommentMarker) -> Option<String> {
+    (!marker.body.is_empty()).then(|| marker.body.clone())
+}
+
+fn fallback_review_entry(body: Option<String>) -> ReviewMetaEntry {
+    ReviewMetaEntry {
+        by: unknown_review_author(),
+        at: String::new(),
+        body,
+        re: None,
+        status: None,
+        resolved: None,
+    }
 }
 
 fn collect_review_markers_segment(segment: &str, markers: &mut ReviewMarkers) {
@@ -772,5 +852,63 @@ mod tests {
                 after: "new".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn canonical_review_document_normalizes_orphan_inline_comment() {
+        let document = parse_review_document("See {==this==}{>>Needs work<<}{#c1}.\n");
+
+        assert_eq!(document.body, "See {==this==}{>>Needs work<<}{#c1}.\n");
+        assert_eq!(
+            document.meta.comments.get("c1"),
+            Some(&ReviewMetaEntry {
+                by: "unknown".to_string(),
+                at: String::new(),
+                body: Some("Needs work".to_string()),
+                re: None,
+                status: None,
+                resolved: None,
+            })
+        );
+    }
+
+    #[test]
+    fn canonical_review_document_normalizes_orphan_inline_suggestion() {
+        let document = parse_review_document("Use {~~old~>new~~}{#s1}.\n");
+
+        assert_eq!(
+            document.meta.suggestions.get("s1"),
+            Some(&ReviewMetaEntry {
+                by: "unknown".to_string(),
+                at: String::new(),
+                body: None,
+                re: None,
+                status: None,
+                resolved: None,
+            })
+        );
+    }
+
+    #[test]
+    fn canonical_review_document_prunes_orphan_endmatter_and_dead_replies() {
+        let document = parse_review_document(
+            "See {==live==}{>>Keep<<}{#c1}.\n\n---\ncomments:\n  c1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user\n  c2:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user\n  r1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    body: Live reply.\n    by: user\n    re: c1\n  r2:\n    at: \"2026-01-01T00:00:00.000Z\"\n    body: Dead reply.\n    by: user\n    re: c2\nsuggestions:\n  s1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: AI\n",
+        );
+
+        assert!(document.meta.comments.contains_key("c1"));
+        assert!(document.meta.comments.contains_key("r1"));
+        assert!(!document.meta.comments.contains_key("c2"));
+        assert!(!document.meta.comments.contains_key("r2"));
+        assert!(document.meta.suggestions.is_empty());
+    }
+
+    #[test]
+    fn canonical_review_document_ignores_anonymous_markers() {
+        let document = parse_review_document(
+            "See {==this==}{>>Needs work<<}, use {~~old~>new~~}, add {++x++}, drop {--y--}.\n",
+        );
+
+        assert!(document.meta.comments.is_empty());
+        assert!(document.meta.suggestions.is_empty());
     }
 }

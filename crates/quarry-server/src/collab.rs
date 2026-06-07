@@ -3,9 +3,10 @@ use axum::extract::ws::{Message as WsMessage, WebSocket};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use quarry_collab_codec::{
-    apply_built, apply_review_patch_to_map, build_nodes, encode_update_v1_from_built_with_review,
-    review_block_to_slate, review_blocks_to_slate, review_meta_with_inline_comment_bodies,
-    strip_trailing_empty_paragraphs, xmltext_to_slate, BuiltNode, Node, ReviewMetaPatch,
+    apply_built, build_nodes, encode_update_v1_from_built_with_review, review_block_to_slate,
+    review_blocks_to_slate, review_meta_with_inline_comment_bodies,
+    strip_trailing_empty_paragraphs, write_review_meta_to_map, xmltext_to_slate, BuiltNode, Node,
+    ReviewMeta,
 };
 #[cfg(test)]
 use quarry_collab_codec::{
@@ -777,18 +778,18 @@ async fn persist_empty_clean_recovery_state(
 #[derive(Clone, Debug)]
 pub(crate) struct LiveMutation {
     pub(crate) batch: Option<InjectionBatch>,
-    pub(crate) review: Option<ReviewMetaPatch>,
+    pub(crate) review: Option<ReviewMeta>,
 }
 
 impl LiveMutation {
-    pub(crate) fn content(batch: InjectionBatch, review: Option<ReviewMetaPatch>) -> Self {
+    pub(crate) fn content(batch: InjectionBatch, review: Option<ReviewMeta>) -> Self {
         Self {
             batch: Some(batch),
             review,
         }
     }
 
-    pub(crate) fn metadata(review: ReviewMetaPatch) -> Self {
+    pub(crate) fn metadata(review: ReviewMeta) -> Self {
         Self {
             batch: None,
             review: Some(review),
@@ -870,7 +871,7 @@ impl InjectionGuard {
             }
             if let Some(review) = &self.mutation.review {
                 let review_map = txn.get_or_insert_map(REVIEW_ROOT);
-                apply_review_patch_to_map(&mut txn, &review_map, review);
+                write_review_meta_to_map(&mut txn, &review_map, review);
             }
             let envelope = txn.get_or_insert_map(INJECTION_ROOT);
             envelope.insert(&mut txn, "version_id", new_version_id.clone());
@@ -1929,7 +1930,7 @@ mod tests {
             .begin_live_mutation(
                 LiveMutation::content(
                     batch,
-                    Some(ReviewMetaPatch {
+                    Some(ReviewMeta {
                         comments: std::collections::BTreeMap::from([(
                             "c1".to_string(),
                             ReviewMetaEntry {
@@ -1941,7 +1942,7 @@ mod tests {
                                 resolved: None,
                             },
                         )]),
-                        ..Default::default()
+                        suggestions: std::collections::BTreeMap::new(),
                     }),
                 ),
                 &original_blocks,

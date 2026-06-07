@@ -43,6 +43,20 @@ describe('rfm-codec round-trip', () => {
     expect(out).not.toContain('body:');
   });
 
+  it('normalizes explicit orphan ids without random metadata', () => {
+    const md = 'See {==here==}{>>fix this<<}{#c1}. Add {++x++}{#s1}.\n';
+    const { meta } = markdownToReview(md);
+    expect(meta.comments.c1).toEqual({ by: 'unknown', at: '', body: 'fix this' });
+    expect(meta.suggestions.s1).toEqual({ by: 'unknown', at: '' });
+  });
+
+  it('does not create metadata for anonymous review markers', () => {
+    const md = 'See {==here==}{>>fix this<<}. Add {++x++}.\n';
+    const { meta } = markdownToReview(md);
+    expect(meta.comments).toEqual({});
+    expect(meta.suggestions).toEqual({});
+  });
+
   it('round-trips a GFM table with alignment through the review save path', () => {
     const md = '| A | B |\n| :-- | --: |\n| x | y |\n';
     const { value, meta } = markdownToReview(md);

@@ -1,4 +1,3 @@
-import { nanoid } from 'nanoid';
 import type { Descendant, TElement, TText } from 'platejs';
 
 import { cloneMeta, type ReviewMeta } from './rfm-types';
@@ -26,14 +25,14 @@ const TOKEN = new RegExp(
 );
 
 function ensureSuggestion(meta: ReviewMeta, id: string): { by: string; at: string } {
-  const entry = meta.suggestions[id] ?? { by: 'unknown', at: new Date().toISOString() };
+  const entry = meta.suggestions[id] ?? { by: 'unknown', at: '' };
   meta.suggestions[id] = entry;
   return entry;
 }
 
 function ensureComment(meta: ReviewMeta, id: string, body?: string): void {
   const existing = meta.comments[id];
-  const entry = existing ? { ...existing } : { by: 'unknown', at: new Date().toISOString() };
+  const entry = existing ? { ...existing } : { by: 'unknown', at: '' };
   if (body && !entry.body) entry.body = body;
   meta.comments[id] = entry;
 }
@@ -78,27 +77,47 @@ function expandLeaf(node: TText, meta: ReviewMeta): TText[] {
 
     if (g.hl !== undefined) {
       if (g.cbody !== undefined || g.cid !== undefined) {
-        const id = g.cid ?? nanoid();
+        const id = g.cid;
+        if (!id) {
+          out.push(leaf(rest, {}, m[0]));
+          continue;
+        }
         ensureComment(meta, id, g.cbody);
         out.push(leaf(rest, commentExtra(id), g.hl));
       } else {
         out.push(leaf(rest, {}, g.hl));
       }
     } else if (g.sold !== undefined && g.snew !== undefined) {
-      const id = g.subid ?? nanoid();
+      const id = g.subid;
+      if (!id) {
+        out.push(leaf(rest, {}, m[0]));
+        continue;
+      }
       const entry = ensureSuggestion(meta, id);
       out.push(leaf(rest, suggestionExtra(id, 'remove', entry), g.sold));
       out.push(leaf(rest, suggestionExtra(id, 'insert', entry), g.snew));
     } else if (g.ins !== undefined) {
-      const id = g.insid ?? nanoid();
+      const id = g.insid;
+      if (!id) {
+        out.push(leaf(rest, {}, m[0]));
+        continue;
+      }
       const entry = ensureSuggestion(meta, id);
       out.push(leaf(rest, suggestionExtra(id, 'insert', entry), g.ins));
     } else if (g.del !== undefined) {
-      const id = g.delid ?? nanoid();
+      const id = g.delid;
+      if (!id) {
+        out.push(leaf(rest, {}, m[0]));
+        continue;
+      }
       const entry = ensureSuggestion(meta, id);
       out.push(leaf(rest, suggestionExtra(id, 'remove', entry), g.del));
     } else if (g.conly !== undefined) {
-      const id = g.conlyid ?? nanoid();
+      const id = g.conlyid;
+      if (!id) {
+        out.push(leaf(rest, {}, m[0]));
+        continue;
+      }
       ensureComment(meta, id, g.conly);
       out.push(leaf(rest, commentExtra(id), ' '));
     }
@@ -134,9 +153,9 @@ function walkChildren(value: Descendant[], inCode: boolean, meta: ReviewMeta): D
 
 /**
  * Rewrite CriticMarkup tokens found within single text leaves into Plate review
- * marks. Returns a new value and a shallow copy of `meta` augmented with
- * synthesized ids and lifted inline comment bodies. Leaves inside code blocks or
- * marked `code` are left literal.
+ * marks. Returns a new value and a shallow copy of `meta` normalized with
+ * deterministic fallback entries and lifted inline comment bodies. Leaves
+ * inside code blocks or marked `code` are left literal.
  */
 export function applyCriticMarkup(value: Descendant[], meta: ReviewMeta): { value: Descendant[]; meta: ReviewMeta } {
   const nextMeta = cloneMeta(meta);

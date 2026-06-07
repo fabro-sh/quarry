@@ -41,9 +41,10 @@ export function markdownToReview(markdown: string): ReviewDocument {
   const { body, meta } = splitEndmatter(markdown);
   const rawValue = deserializeEditor().api.markdown.deserialize(expandSubstitutions(body));
   const reviewed = applyCriticMarkup(rawValue, meta ?? emptyReviewMeta());
+  const value = normalizeTablesInValue(applyMermaid(applyWikiLinks(reviewed.value)) as never);
   return {
-    value: normalizeTablesInValue(applyMermaid(applyWikiLinks(reviewed.value)) as never),
-    meta: reviewed.meta,
+    value,
+    meta: pruneMeta(reviewed.meta, liveIds(value)),
   };
 }
 

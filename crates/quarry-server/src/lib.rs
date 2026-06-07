@@ -18,9 +18,9 @@ use pulldown_cmark::{
     Event as MarkdownEvent, Options as MarkdownOptions, Parser as MarkdownParser, Tag,
 };
 use quarry_collab_codec::{
-    build_nodes, inline_comment_body, review_block_to_slate, review_blocks_to_slate,
-    review_markdown_to_slate, review_markers, review_meta_with_inline_comment_bodies,
-    split_review_endmatter, ReviewMeta, ReviewMetaEntry, ReviewMetaPatch,
+    build_nodes, inline_comment_body, parse_review_document, review_block_to_slate,
+    review_blocks_to_slate, review_markdown_to_slate, review_markers,
+    review_meta_with_inline_comment_bodies, ReviewMeta, ReviewMetaEntry,
     ReviewSuggestionKind as CodecReviewSuggestionKind, Unsupported,
 };
 use quarry_core::{
@@ -2360,6 +2360,8 @@ async fn agent_review_process_document(
     let mut results = Vec::new();
     let mut outcomes = Vec::new();
     let mut injection = Vec::new();
+    let initial_markdown = current_document_markdown(state, library, path).await?;
+    let initial_review_comment_ids = review_comment_ids(&initial_markdown);
 
     for (phase_index, phase) in phases.into_iter().enumerate() {
         match phase {
@@ -2389,9 +2391,19 @@ async fn agent_review_process_document(
                 })?;
             }
             AgentReviewProcessPhase::Ops(mut operations) => {
+                let mut current_markdown = None;
                 if phase_index > 0 {
                     let markdown = current_document_markdown(state, library, path).await?;
                     rebase_ops_operation_refs(&mut operations, &markdown)?;
+                    current_markdown = Some(markdown);
+                }
+                results.extend(pruned_comment_resolve_results(
+                    &mut operations,
+                    current_markdown.as_deref().unwrap_or(&initial_markdown),
+                    &initial_review_comment_ids,
+                ));
+                if operations.is_empty() {
+                    continue;
                 }
                 let phase_request = AgentOpsRequest {
                     base_token: current_base_token.clone(),
@@ -2462,6 +2474,7 @@ async fn agent_review_process_dry_run(
         .or_else(|| optional_header(headers, "x-agent-id").ok().flatten())
         .unwrap_or_else(|| "unknown".to_string());
     let mut results = Vec::new();
+    let initial_review_comment_ids = review_comment_ids(&markdown);
 
     for (phase_index, phase) in phases.into_iter().enumerate() {
         match phase {
@@ -2480,6 +2493,14 @@ async fn agent_review_process_dry_run(
             AgentReviewProcessPhase::Ops(mut operations) => {
                 if phase_index > 0 {
                     rebase_ops_operation_refs(&mut operations, &markdown)?;
+                }
+                results.extend(pruned_comment_resolve_results(
+                    &mut operations,
+                    &markdown,
+                    &initial_review_comment_ids,
+                ));
+                if operations.is_empty() {
+                    continue;
                 }
                 let phase_request = AgentOpsRequest {
                     base_token: base_token.clone(),
@@ -2612,6 +2633,41 @@ fn review_process_ops_result(result: AgentOpsResultItem) -> AgentReviewProcessRe
         op: result.op,
         id: result.id,
     }
+}
+
+fn review_comment_ids(markdown: &str) -> HashSet<String> {
+    parse_review_document(markdown)
+        .meta
+        .comments
+        .keys()
+        .cloned()
+        .collect()
+}
+
+fn pruned_comment_resolve_results(
+    operations: &mut Vec<AgentOpsOperationRequest>,
+    markdown: &str,
+    initial_comment_ids: &HashSet<String>,
+) -> Vec<AgentReviewProcessResultItem> {
+    let current_comment_ids = review_comment_ids(markdown);
+    let mut skipped = Vec::new();
+    operations.retain(|operation| {
+        if operation.op != "comment.resolve" {
+            return true;
+        }
+        let Some(id) = operation.id.as_deref() else {
+            return true;
+        };
+        if current_comment_ids.contains(id) || !initial_comment_ids.contains(id) {
+            return true;
+        }
+        skipped.push(AgentReviewProcessResultItem {
+            op: operation.op.clone(),
+            id: Some(id.to_string()),
+        });
+        false
+    });
+    skipped
 }
 
 async fn current_document_markdown(
@@ -2992,7 +3048,7 @@ async fn agent_edit_document(
 
     let base_version_id = version_id_from_base_token(&request.base_token)?;
     let injected_origin_id = format!("agent-injected:{request_hash}");
-    let review_patch = review_removals_patch_from_agent_edit(&markdown, &plan.markdown);
+    let review_meta = parse_review_document(&plan.markdown).meta;
     // Track why an edit did or didn't reach the live room, so the response can
     // report it (observability for agents and tests) instead of silently
     // falling back to a plain write.
@@ -3008,7 +3064,7 @@ async fn agent_edit_document(
                 );
                 match room
                     .begin_live_mutation(
-                        LiveMutation::content(batch, review_patch.clone()),
+                        LiveMutation::content(batch, Some(review_meta.clone())),
                         &plan.original_blocks,
                         base_version_id.clone(),
                     )
@@ -3395,7 +3451,7 @@ fn apply_agent_edit(
         reject_operation_ref(operation)?;
         reject_operation_block(operation)?;
         reject_operation_blocks(operation)?;
-        let next_markdown = required_operation_markdown(operation)?.to_string();
+        let next_markdown = canonical_review_markdown(required_operation_markdown(operation)?)?;
         validate_markdown_roundtrip(&next_markdown)?;
         return Ok(AgentEditPlan {
             blocks: split_markdown_blocks(&next_markdown),
@@ -3491,11 +3547,13 @@ fn apply_agent_edit(
         .into_iter()
         .map(|(_, markdown)| markdown)
         .collect::<Vec<_>>();
-    let next_markdown = final_blocks.iter().cloned().collect::<String>();
+    let next_markdown =
+        canonical_review_markdown(&final_blocks.iter().cloned().collect::<String>())?;
     validate_markdown_roundtrip(&next_markdown)?;
+    let next_blocks = split_markdown_blocks(&next_markdown);
     Ok(AgentEditPlan {
         markdown: next_markdown,
-        blocks: final_blocks,
+        blocks: next_blocks,
         ops,
         original_blocks,
     })
@@ -3526,7 +3584,7 @@ fn agent_edit_injection_batch(plan: &AgentEditPlan) -> Result<InjectionBatch, Un
     };
 
     // New blocks are reproduced against the edited document's own endmatter.
-    let (_, new_meta) = split_review_endmatter(&plan.markdown);
+    let new_meta = parse_review_document(&plan.markdown).meta;
     for (ordinal, block) in plan.blocks.iter().enumerate() {
         review_block_to_slate(block, &new_meta)
             .map_err(|error| error.context(format!("edited block {ordinal}")))?;
@@ -3622,7 +3680,7 @@ fn built_nodes_for_blocks(
 struct AgentOpsLiveMutationPlan {
     batch: Option<InjectionBatch>,
     original_blocks: Vec<String>,
-    review: Option<ReviewMetaPatch>,
+    review: Option<ReviewMeta>,
 }
 
 fn agent_ops_live_mutation_plan(
@@ -3638,7 +3696,7 @@ fn agent_ops_live_mutation_plan(
             &applied.changed_ordinals,
         )?)
     };
-    if batch.is_none() && applied.review_patch.is_none() {
+    if batch.is_none() && applied.review_meta == parse_review_document(original_markdown).meta {
         return Err(Unsupported::new(
             "agent ops mutation produced no live patch",
         ));
@@ -3646,7 +3704,7 @@ fn agent_ops_live_mutation_plan(
     Ok(AgentOpsLiveMutationPlan {
         batch,
         original_blocks: split_markdown_blocks(original_markdown),
-        review: applied.review_patch.clone(),
+        review: Some(applied.review_meta.clone()),
     })
 }
 
@@ -3670,8 +3728,8 @@ fn agent_ops_injection_batch(
             .ok_or_else(|| Unsupported::new("original node count overflow"))?;
     }
 
-    let (edited_body, edited_meta) = split_review_endmatter(edited_markdown);
-    let edited_blocks = split_markdown_blocks(&edited_body);
+    let edited_document = parse_review_document(edited_markdown);
+    let edited_blocks = split_markdown_blocks(&edited_document.body);
     let mut ops = Vec::with_capacity(changed_ordinals.len());
     for ordinal in changed_ordinals {
         let start = *prefix
@@ -3685,8 +3743,8 @@ fn agent_ops_injection_batch(
                     .map_err(|_| Unsupported::new("original node count exceeds u32"))
             })?;
         let new_nodes = if let Some(edited_block) = edited_blocks.get(*ordinal) {
-            built_nodes_for_block(edited_block, &edited_meta)?
-        } else if edited_body.trim().is_empty() {
+            built_nodes_for_block(edited_block, &edited_document.meta)?
+        } else if edited_document.body.trim().is_empty() {
             Vec::new()
         } else {
             return Err(Unsupported::new(format!(
@@ -3706,7 +3764,7 @@ struct AppliedAgentOps {
     markdown: String,
     results: Vec<AgentOpsResultItem>,
     changed_ordinals: Vec<usize>,
-    review_patch: Option<ReviewMetaPatch>,
+    review_meta: ReviewMeta,
 }
 
 #[derive(Clone, Debug)]
@@ -3735,16 +3793,14 @@ fn apply_agent_ops_batch(
         return Err(stale_base_error());
     }
 
-    let (body, mut meta) = split_review_endmatter(markdown);
+    let document = parse_review_document(markdown);
+    let body = document.body;
+    let mut meta = document.meta;
     let original_blocks = split_markdown_blocks(&body);
     let mut reserved_ids = HashSet::new();
     let mut edits = Vec::new();
     let mut changed_ordinals = Vec::new();
     let mut results = Vec::with_capacity(request.operations.len());
-    let mut patch_comment_ids = Vec::new();
-    let mut patch_suggestion_ids = Vec::new();
-    let mut remove_comment_ids = Vec::new();
-    let mut remove_suggestion_ids = Vec::new();
 
     for (order, operation) in request.operations.iter().enumerate() {
         match operation.op.as_str() {
@@ -3789,7 +3845,6 @@ fn apply_agent_ops_batch(
                         resolved: None,
                     },
                 );
-                patch_comment_ids.push(id.clone());
                 results.push(AgentOpsResultItem {
                     op: operation.op.clone(),
                     id: Some(id),
@@ -3833,7 +3888,6 @@ fn apply_agent_ops_batch(
                         resolved: None,
                     },
                 );
-                patch_comment_ids.push(id.clone());
                 results.push(AgentOpsResultItem {
                     op: operation.op.clone(),
                     id: Some(id),
@@ -3875,7 +3929,6 @@ fn apply_agent_ops_batch(
                 for removed_id in &removed_ids {
                     meta.comments.remove(removed_id);
                 }
-                remove_comment_ids.extend(removed_ids);
                 results.push(AgentOpsResultItem {
                     op: operation.op.clone(),
                     id: Some(id.to_string()),
@@ -3954,7 +4007,6 @@ fn apply_agent_ops_batch(
                         resolved: None,
                     },
                 );
-                patch_suggestion_ids.push(id.clone());
                 results.push(AgentOpsResultItem {
                     op: operation.op.clone(),
                     id: Some(id),
@@ -3976,7 +4028,6 @@ fn apply_agent_ops_batch(
                     },
                 )?;
                 meta.suggestions.remove(id);
-                remove_suggestion_ids.push(id.to_string());
                 results.push(AgentOpsResultItem {
                     op: operation.op.clone(),
                     id: Some(id.to_string()),
@@ -3998,7 +4049,6 @@ fn apply_agent_ops_batch(
                     },
                 )?;
                 meta.suggestions.remove(id);
-                remove_suggestion_ids.push(id.to_string());
                 results.push(AgentOpsResultItem {
                     op: operation.op.clone(),
                     id: Some(id.to_string()),
@@ -4010,7 +4060,6 @@ fn apply_agent_ops_batch(
                     QuarryError::InvalidPath(format!("review comment {id} not found"))
                 })?;
                 entry.status = Some("resolved".to_string());
-                patch_comment_ids.push(id.to_string());
                 results.push(AgentOpsResultItem {
                     op: operation.op.clone(),
                     id: Some(id.to_string()),
@@ -4025,20 +4074,14 @@ fn apply_agent_ops_batch(
     }
 
     let next_body = apply_scheduled_block_edits(&original_blocks, &edits)?;
-    let markdown = assemble_review_document(&next_body, &meta)?;
-    let review_patch = build_agent_ops_review_meta_patch(
-        &markdown,
-        &patch_comment_ids,
-        &patch_suggestion_ids,
-        &remove_comment_ids,
-        &remove_suggestion_ids,
-    )?;
+    let markdown = canonical_review_markdown(&assemble_review_document(&next_body, &meta)?)?;
+    let review_meta = parse_review_document(&markdown).meta;
 
     Ok(AppliedAgentOps {
         markdown,
         results,
         changed_ordinals,
-        review_patch,
+        review_meta,
     })
 }
 
@@ -4145,80 +4188,6 @@ fn body_range_to_block_range(
         offset = end;
     }
     Err(QuarryError::InvalidPath("review marker spans multiple blocks".to_string()).into())
-}
-
-fn build_agent_ops_review_meta_patch(
-    markdown: &str,
-    comment_ids: &[String],
-    suggestion_ids: &[String],
-    remove_comment_ids: &[String],
-    remove_suggestion_ids: &[String],
-) -> Result<Option<ReviewMetaPatch>, ApiError> {
-    let (_, meta) = review_meta_with_inline_comment_bodies(markdown);
-    let mut patch = ReviewMetaPatch::default();
-
-    let mut seen = HashSet::new();
-    for id in comment_ids {
-        if !seen.insert(id.as_str()) {
-            continue;
-        }
-        let Some(entry) = meta.comments.get(id) else {
-            continue;
-        };
-        patch.comments.insert(id.clone(), entry.clone());
-    }
-
-    let mut seen = HashSet::new();
-    for id in suggestion_ids {
-        if !seen.insert(id.as_str()) {
-            continue;
-        }
-        let Some(entry) = meta.suggestions.get(id) else {
-            continue;
-        };
-        patch.suggestions.insert(id.clone(), entry.clone());
-    }
-
-    patch.remove_comments = remove_comment_ids.to_vec();
-    patch.remove_suggestions = remove_suggestion_ids.to_vec();
-
-    Ok((!patch.is_empty()).then_some(patch))
-}
-
-fn review_removals_patch_from_agent_edit(
-    original_markdown: &str,
-    edited_markdown: &str,
-) -> Option<ReviewMetaPatch> {
-    let (original_body, original_meta) = review_meta_with_inline_comment_bodies(original_markdown);
-    let (edited_body, _) = review_meta_with_inline_comment_bodies(edited_markdown);
-    let mut patch = ReviewMetaPatch::default();
-
-    for (id, entry) in &original_meta.comments {
-        if entry.re.is_some() || !body_has_review_marker(&original_body, id) {
-            continue;
-        }
-        if body_has_review_marker(&edited_body, id) {
-            continue;
-        }
-        patch.remove_comments.push(id.clone());
-        for (reply_id, reply) in &original_meta.comments {
-            if reply.re.as_deref() == Some(id.as_str()) {
-                patch.remove_comments.push(reply_id.clone());
-            }
-        }
-    }
-
-    for id in original_meta.suggestions.keys() {
-        if body_has_review_marker(&original_body, id) && !body_has_review_marker(&edited_body, id) {
-            patch.remove_suggestions.push(id.clone());
-        }
-    }
-
-    (!patch.is_empty()).then_some(patch)
-}
-
-fn body_has_review_marker(body: &str, id: &str) -> bool {
-    body.contains(&format!("{{#{id}}}"))
 }
 
 fn required_operation_block(operation: &AgentBlockOperation) -> Result<&str, ApiError> {
@@ -4468,8 +4437,16 @@ fn invalid_review_marker(id: &str) -> ApiError {
     QuarryError::InvalidPath(format!("review marker {id} is not a suggestion")).into()
 }
 
-// `split_review_endmatter` / `has_review_endmatter` and their helpers now live
-// in `quarry_collab_codec::review`; imported at the top of this module.
+fn canonical_review_markdown(markdown: &str) -> Result<String, ApiError> {
+    let document = parse_review_document(markdown);
+    if document.meta.comments.is_empty()
+        && document.meta.suggestions.is_empty()
+        && document.body == markdown
+    {
+        return Ok(markdown.to_string());
+    }
+    assemble_review_document(&document.body, &document.meta)
+}
 
 fn assemble_review_document(body: &str, meta: &ReviewMeta) -> Result<String, ApiError> {
     let body = body.trim_end();
@@ -5308,14 +5285,12 @@ mod tests {
     }
 
     #[test]
-    fn review_removals_patch_from_agent_edit_removes_dropped_root_and_replies() {
-        let original = "Quote {==highlight==}{>>Needs support.<<}{#c1} tail\n\n---\ncomments:\n  c1:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n  r1:\n    by: user\n    at: 2026-06-05T03:00:00.000Z\n    body: Reply.\n    re: c1\n";
+    fn canonical_review_markdown_prunes_dropped_root_and_replies() {
         let edited = "Quote highlight tail\n\n---\ncomments:\n  c1:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n  r1:\n    by: user\n    at: 2026-06-05T03:00:00.000Z\n    body: Reply.\n    re: c1\n";
 
-        let patch = review_removals_patch_from_agent_edit(original, edited).unwrap();
+        let markdown = canonical_review_markdown(edited).unwrap();
 
-        assert_eq!(patch.remove_comments, vec!["c1", "r1"]);
-        assert!(patch.comments.is_empty());
+        assert_eq!(markdown, "Quote highlight tail\n");
     }
 
     #[test]

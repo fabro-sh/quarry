@@ -44,12 +44,27 @@ describe('applyCriticMarkup', () => {
     expect(value).toEqual([p([{ text: 'pick ' }, { text: 'this' }, { text: ' please' }])]);
   });
 
-  it('synthesizes an id when a marker has none', () => {
+  it('does not synthesize an id when a marker has none', () => {
     const { value, meta } = applyCriticMarkup([p([{ text: 'add {++x++}' }])], emptyReviewMeta());
+    expect(value).toEqual([p([{ text: 'add ' }, { text: '{++x++}' }])]);
+    expect(meta).toEqual(emptyReviewMeta());
+  });
+
+  it('normalizes an explicit comment id without endmatter deterministically', () => {
+    const { value, meta } = applyCriticMarkup([p([{ text: 'see {==here==}{>>fix this<<}{#c1}' }])], emptyReviewMeta());
     const leaf = (value[0] as { children: Record<string, unknown>[] }).children[1];
-    const data = Object.entries(leaf).find(([k]) => k.startsWith('suggestion_'));
-    expect(data).toBeTruthy();
-    expect(Object.keys(meta.suggestions)).toHaveLength(1);
+    expect(leaf.text).toBe('here');
+    expect(leaf.comment).toBe(true);
+    expect(leaf.comment_c1).toBe(true);
+    expect(meta.comments.c1).toEqual({ by: 'unknown', at: '', body: 'fix this' });
+  });
+
+  it('normalizes an explicit suggestion id without endmatter deterministically', () => {
+    const { value, meta } = applyCriticMarkup([p([{ text: 'add {++x++}{#s1}' }])], emptyReviewMeta());
+    const leaf = (value[0] as { children: Record<string, unknown>[] }).children[1];
+    expect(leaf.suggestion).toBe(true);
+    expect(leaf.suggestion_s1).toEqual({ id: 's1', type: 'insert', userId: 'unknown', createdAt: 0 });
+    expect(meta.suggestions.s1).toEqual({ by: 'unknown', at: '' });
   });
 
   it('derives suggestion createdAt (epoch ms) from the endmatter at timestamp', () => {

@@ -2,12 +2,14 @@ use axum::body::{to_bytes, Body};
 use axum::http::{header, Method, Request, StatusCode};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use quarry_collab_codec::{
-    build_nodes, encode_update_v1_from_built, review_markdown_to_slate, xmltext_to_slate, Node,
+    build_nodes, encode_update_v1_from_built, encode_update_v1_from_built_with_review,
+    review_markdown_to_slate, xmltext_to_slate, Node, ReviewMeta, ReviewMetaEntry,
 };
 use quarry_core::DocumentSource;
 use quarry_server::router;
 use quarry_storage::{QuarryStore, StoreConfig, StoreEvent, StoreEventKind};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use tokio::time::{timeout, Duration};
 use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
 use tower::ServiceExt;
@@ -587,6 +589,120 @@ async fn agent_review_lists_open_comments_replies_and_suggestions() {
     assert_eq!(body["comments"][1]["status"], "resolved");
     assert_eq!(body["comments"][1]["quote"], "done");
     assert_eq!(body["comments"][1]["body"], "Fixed.");
+}
+
+#[tokio::test]
+async fn agent_review_reports_explicit_inline_markers_without_endmatter() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentrevieworphan").await.unwrap();
+    let written = store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            b"See {==this==}{>>Check it<<}{#c_orphan}.\n\nAdd {++better++}{#s_orphan}.\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentrevieworphan/documents/notes/review.md/review")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["documentId"], written.document.id);
+    assert_eq!(body["baseToken"], written.version.id);
+    assert_eq!(body["comments"].as_array().unwrap().len(), 1);
+    assert_eq!(body["comments"][0]["id"], "c_orphan");
+    assert_eq!(body["comments"][0]["by"], "unknown");
+    assert_eq!(body["comments"][0]["at"], "");
+    assert_eq!(body["comments"][0]["body"], "Check it");
+    assert_eq!(body["comments"][0]["quote"], "this");
+    assert_eq!(body["suggestions"].as_array().unwrap().len(), 1);
+    assert_eq!(body["suggestions"][0]["id"], "s_orphan");
+    assert_eq!(body["suggestions"][0]["by"], "unknown");
+    assert_eq!(body["suggestions"][0]["at"], "");
+    assert_eq!(body["suggestions"][0]["kind"], "insert");
+    assert_eq!(body["suggestions"][0]["content"], "better");
+}
+
+#[tokio::test]
+async fn agent_ops_comment_resolve_accepts_orphan_inline_comment() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentresolveorphan").await.unwrap();
+    let written = store
+        .put_document(
+            &library.slug,
+            "notes/review.md",
+            b"See {==this==}{>>Check it<<}{#c_orphan}.\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentresolveorphan/documents/notes/review.md/ops",
+            ops_request(
+                format!("\"{}\"", written.version.id),
+                serde_json::json!({"op": "comment.resolve", "id": "c_orphan"}),
+            ),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["injection"], "no_live_room");
+    assert_eq!(body["results"][0]["id"], "c_orphan");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentresolveorphan/documents/notes/review.md/review?includeResolved=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["comments"].as_array().unwrap().len(), 1);
+    assert_eq!(body["comments"][0]["id"], "c_orphan");
+    assert_eq!(body["comments"][0]["status"], "resolved");
 }
 
 #[tokio::test]
@@ -2204,6 +2320,118 @@ async fn agent_edit_replace_document_injects_into_live_collab_room() {
         to_bytes(response.into_body(), usize::MAX).await.unwrap(),
         replacement
     );
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn agent_edit_replace_document_clears_stale_live_review_map_entries() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("agentlivereplacestale").await.unwrap();
+    let written = store
+        .put_document(
+            &library.slug,
+            "notes/live.md",
+            b"Clean\n".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let stale_meta = ReviewMeta {
+        comments: BTreeMap::from([
+            ("c3806".to_string(), review_entry("user")),
+            ("cbe2".to_string(), review_entry("user")),
+        ]),
+        suggestions: BTreeMap::new(),
+    };
+    let stale_nodes = review_markdown_to_slate("Clean\n").unwrap();
+    let stale_built = build_nodes(&stale_nodes).unwrap();
+    let stale_update = encode_update_v1_from_built_with_review(
+        &stale_built,
+        COLLAB_ROOT,
+        REVIEW_ROOT,
+        &stale_meta,
+    );
+    store
+        .put_collab_recovery_state(
+            &written.document.id,
+            Some(written.version.id.clone()),
+            stale_update,
+            true,
+        )
+        .await
+        .unwrap();
+    let app = router(store.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_app = app.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, server_app).await.unwrap();
+    });
+
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/{}", written.document.id))
+            .await
+            .unwrap();
+    let client_doc = empty_yjs_doc();
+    sync_yjs_doc_from_socket(&mut socket, &client_doc).await;
+    assert_eq!(yjs_plain_text(&client_doc), "Clean");
+    assert!(review_entry_from_doc(&client_doc, "comments", "c3806").is_some());
+    assert!(review_entry_from_doc(&client_doc, "comments", "cbe2").is_some());
+
+    let snapshot = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/agentlivereplacestale/documents/notes/live.md/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(snapshot.status(), StatusCode::OK);
+    let snapshot: Value = response_json(snapshot).await;
+    let replacement = "Really clean\n";
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/agentlivereplacestale/documents/notes/live.md/edit",
+            serde_json::json!({
+                "baseToken": snapshot["baseToken"].as_str().unwrap(),
+                "operations": [{
+                    "op": "replace_document",
+                    "markdown": replacement
+                }]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["injection"], "injected");
+
+    wait_for_yjs_plain_text(&mut socket, &client_doc, "Really clean").await;
+    assert!(review_entry_from_doc(&client_doc, "comments", "c3806").is_none());
+    assert!(review_entry_from_doc(&client_doc, "comments", "cbe2").is_none());
+    let recovery = store
+        .collab_recovery_state(&written.document.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(review_entry_from_update(&recovery.update_v1, "comments", "c3806").is_none());
+    assert!(review_entry_from_update(&recovery.update_v1, "comments", "cbe2").is_none());
 
     server.abort();
 }
@@ -6710,6 +6938,29 @@ fn review_entry_from_update(update: &[u8], section: &str, id: &str) -> Option<Va
         return None;
     }
     section.get_as(&txn, id).ok()
+}
+
+fn review_entry_from_doc(doc: &Doc, section: &str, id: &str) -> Option<Value> {
+    let txn = doc.transact();
+    let review = txn.get_map(REVIEW_ROOT)?;
+    let Out::YMap(section) = review.get(&txn, section)? else {
+        return None;
+    };
+    if !section.contains_key(&txn, id) {
+        return None;
+    }
+    section.get_as(&txn, id).ok()
+}
+
+fn review_entry(by: &str) -> ReviewMetaEntry {
+    ReviewMetaEntry {
+        by: by.to_string(),
+        at: "2026-01-01T00:00:00.000Z".to_string(),
+        body: None,
+        re: None,
+        status: None,
+        resolved: None,
+    }
 }
 
 async fn wait_for_yjs_comment_mark<S>(socket: &mut S, doc: &Doc, id: &str)
