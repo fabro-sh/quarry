@@ -149,6 +149,29 @@ pub struct DocumentVersion {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct DocumentHistoryEntry {
+    pub id: String,
+    pub document_id: String,
+    pub latest_version_id: String,
+    pub earliest_version_id: String,
+    pub raw_version_count: u64,
+    #[serde(default)]
+    pub source: Option<DocumentSource>,
+    #[serde(default)]
+    pub actor: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub provenance: Option<JsonValue>,
+    #[serde(default)]
+    pub checkpoint_reason: Option<String>,
+    pub content_type: String,
+    pub byte_size: u64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct Document {
     pub id: String,
     pub library_id: String,

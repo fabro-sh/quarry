@@ -1305,6 +1305,55 @@
                 "schema": {
                   "type": "array",
                   "items": {
+                    "$ref": "#/components/schemas/DocumentHistoryEntry"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/versions/raw": {
+      "get": {
+        "tags": [],
+        "operationId": "document_versions_raw_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
                     "$ref": "#/components/schemas/DocumentVersion"
                   }
                 }
@@ -3419,6 +3468,91 @@
         ],
         "properties": {
           "slug": {
+            "type": "string"
+          }
+        }
+      },
+      "DocumentHistoryEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "document_id",
+          "latest_version_id",
+          "earliest_version_id",
+          "raw_version_count",
+          "content_type",
+          "byte_size",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "actor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "byte_size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "checkpoint_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "document_id": {
+            "type": "string"
+          },
+          "earliest_version_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "latest_version_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provenance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Value"
+              }
+            ]
+          },
+          "raw_version_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DocumentSource"
+              }
+            ]
+          },
+          "updated_at": {
             "type": "string"
           }
         }

@@ -2006,7 +2006,7 @@ async function installMockApi(
     if (versionsPath) {
       const document = state.documentsByLibrary.get(versionsPath.library)?.get(versionsPath.documentPath);
       const versions = state.versions[versionsPath.documentPath] ?? [];
-      await route.fulfill({ json: document ? versions.map((version) => versionRecord(document, version)) : [] });
+      await route.fulfill({ json: document ? versions.map((version) => historyEntry(document, version)) : [] });
       return;
     }
 
@@ -2282,6 +2282,25 @@ function versionRecord(document: MockDocument, version: MockVersion) {
     content_type: documentContentType(document),
     byte_size: version.content.length,
     created_at: version.created_at ?? 'now',
+  };
+}
+
+function historyEntry(document: MockDocument, version: MockVersion) {
+  return {
+    id: version.id,
+    document_id: document.id,
+    latest_version_id: version.id,
+    earliest_version_id: version.id,
+    raw_version_count: 1,
+    source: 'rest',
+    actor: null,
+    message: null,
+    provenance: {},
+    checkpoint_reason: null,
+    content_type: documentContentType(document),
+    byte_size: version.content.length,
+    created_at: version.created_at ?? 'now',
+    updated_at: version.created_at ?? 'now',
   };
 }
 

@@ -2,6 +2,7 @@ import type {
   ConflictRecord,
   CollabInviteToken,
   DocumentListEntry,
+  DocumentHistoryEntry,
   DocumentVersion,
   DocumentVersionContent,
   Library,
@@ -27,6 +28,9 @@ export interface SavedDocument {
 
 export interface DocumentMutationOptions {
   originId?: string;
+  transactionActor?: string;
+  transactionMessage?: string;
+  transactionProvenance?: Record<string, unknown>;
 }
 
 export interface GitPeer {
@@ -227,8 +231,13 @@ export const backlinks = (library: string, path: string) =>
   );
 
 export const versions = (library: string, path: string) =>
-  jsonRequest<DocumentVersion[]>(
+  jsonRequest<DocumentHistoryEntry[]>(
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/versions`
+  );
+
+export const rawVersions = (library: string, path: string) =>
+  jsonRequest<DocumentVersion[]>(
+    `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/versions/raw`
   );
 
 export const documentVersion = (library: string, path: string, version: string) =>
@@ -325,8 +334,14 @@ function mutationHeaders(
   options: DocumentMutationOptions = {},
   headers: Record<string, string> = {}
 ) {
-  if (!options.originId) return headers;
-  return { ...headers, 'X-Quarry-Origin-Id': options.originId };
+  const next = { ...headers };
+  if (options.originId) next['X-Quarry-Origin-Id'] = options.originId;
+  if (options.transactionActor) next['X-Quarry-Transaction-Actor'] = options.transactionActor;
+  if (options.transactionMessage) next['X-Quarry-Transaction-Message'] = options.transactionMessage;
+  if (options.transactionProvenance) {
+    next['X-Quarry-Transaction-Provenance'] = JSON.stringify(options.transactionProvenance);
+  }
+  return next;
 }
 
 async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {

@@ -71,6 +71,36 @@ describe('Quarry API client', () => {
     );
   });
 
+  it('stamps existing document saves with transaction metadata', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ version: { id: 'v2' } }), {
+        headers: { ETag: '"v2"', 'content-type': 'application/json' },
+      })
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await putDocument('notes', 'a.md', 'next', '"v1"', 'text/markdown', {
+      transactionActor: 'browser',
+      transactionMessage: 'Autosaved edits',
+      transactionProvenance: {
+        history: { kind: 'autosave', reason: 'typing', session_id: 'browser:session-1' },
+      },
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/v1/libraries/notes/documents/a.md',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Quarry-Transaction-Actor': 'browser',
+          'X-Quarry-Transaction-Message': 'Autosaved edits',
+          'X-Quarry-Transaction-Provenance': JSON.stringify({
+            history: { kind: 'autosave', reason: 'typing', session_id: 'browser:session-1' },
+          }),
+        }),
+      })
+    );
+  });
+
   it('mints document-scoped collab invite tokens', async () => {
     const fetch = vi.fn(async () =>
       new Response(

@@ -94,11 +94,11 @@ import {
   versions,
 } from '../api/client';
 import type {
+  ConflictRecord,
+  DocumentHistoryEntry,
   DocumentLink,
   DocumentListEntry,
-  DocumentVersion,
   DocumentVersionContent,
-  ConflictRecord,
   Library as LibraryType,
   SearchResult,
   SearchSuggestion,
@@ -808,7 +808,7 @@ function Workspace() {
     activeLibrary && selectedPath ? ['/v1/versions', activeLibrary, selectedPath] : null,
     () => versions(activeLibrary, selectedPath)
   );
-  const headVersionId = versionList[0]?.id;
+  const headVersionId = versionList[0]?.latest_version_id;
   const { data: selectedVersionContent } = useSWR(
     activeLibrary && selectedPath && selectedVersionId
       ? ['/v1/version-content', activeLibrary, selectedPath, selectedVersionId]
@@ -991,6 +991,15 @@ function Workspace() {
     try {
       const saved = await putDocument(savingLibrary, savingPath, savingContent, savingEtag, contentType, {
         originId: savingCollabSession?.sessionId ?? collabSessionIdRef.current,
+        transactionActor: 'browser',
+        transactionMessage: 'Autosaved edits',
+        transactionProvenance: {
+          history: {
+            kind: 'autosave',
+            reason: 'typing',
+            session_id: savingCollabSession?.sessionId ?? collabSessionIdRef.current,
+          },
+        },
       });
       const savedEtag = saved.etag || `"${saved.outcome.version.id}"`;
       collabDebug('flush.ok', { from: savingEtag, to: savedEtag });
@@ -3604,7 +3613,7 @@ function RightPane({
   selectedVersionDiff?: VersionDiff;
   selectedVersionId: string | null;
   onTabChange: (tab: RightPaneTab) => void;
-  versions: DocumentVersion[];
+  versions: DocumentHistoryEntry[];
 }) {
   const selectedTab = rightPaneTabs.some((tab) => tab.key === activeTab) ? activeTab : 'links';
   const selectedTabLabel = rightPaneTabs.find((tab) => tab.key === selectedTab)?.label ?? 'Links';
@@ -3794,7 +3803,7 @@ function VersionList({
   onView,
   onRestore,
 }: {
-  versions: DocumentVersion[];
+  versions: DocumentHistoryEntry[];
   selectedVersionId: string | null;
   onView: (version: string) => void;
   onRestore: (version: string) => void;
@@ -3808,13 +3817,14 @@ function VersionList({
           <li
             className={cn(
               'flex min-h-10 items-start gap-2 rounded bg-raised px-2 py-1 text-body',
-              selectedVersionId === version.id && 'outline outline-1 outline-accent-ring'
+              selectedVersionId === version.latest_version_id && 'outline outline-1 outline-accent-ring'
             )}
             key={version.id}
           >
             <span className="min-w-0 flex-1 space-y-0.5">
               <span className="block truncate">
-                <span className="font-mono">{version.id.slice(0, 8)}</span> {version.created_at}
+                <span className="font-mono">{version.latest_version_id.slice(0, 8)}</span>{' '}
+                {versionHistoryTitle(version)}
               </span>
               <span className="block truncate text-muted">
                 {version.content_type} · {formatBytes(version.byte_size)} · {versionTransactionLabel(version)}
@@ -3822,17 +3832,17 @@ function VersionList({
               {metadataSummary ? <span className="block truncate text-muted">{metadataSummary}</span> : null}
             </span>
             <button
-              aria-label={`View version ${version.id}`}
+              aria-label={`View version ${version.latest_version_id}`}
               className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-line text-body hover:bg-well"
-              onClick={() => onView(version.id)}
+              onClick={() => onView(version.latest_version_id)}
               type="button"
             >
               <Eye size={13} />
             </button>
             <button
-              aria-label={`Restore version ${version.id}`}
+              aria-label={`Restore version ${version.latest_version_id}`}
               className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-line text-body hover:bg-well"
-              onClick={() => onRestore(version.id)}
+              onClick={() => onRestore(version.latest_version_id)}
               type="button"
             >
               <RotateCcw size={13} />
@@ -3844,16 +3854,23 @@ function VersionList({
   );
 }
 
-function versionTransactionLabel(version: DocumentVersion) {
-  const source = version.transaction_source ?? formatMetadataValue(version.metadata.source);
-  return source ? `Source ${source} · Transaction ${version.tx_id}` : `Transaction ${version.tx_id}`;
+function versionHistoryTitle(version: DocumentHistoryEntry) {
+  if (isGroupedAutosave(version)) {
+    return `Autosaved edits · ${historyTimeRange(version)} · ${version.raw_version_count} revisions`;
+  }
+  return version.updated_at;
 }
 
-function versionMetadataSummary(version: DocumentVersion) {
+function versionTransactionLabel(version: DocumentHistoryEntry) {
+  const source = version.source;
+  return source ? `Source ${source}` : 'History entry';
+}
+
+function versionMetadataSummary(version: DocumentHistoryEntry) {
   const transactionRows = [
-    { key: 'message', value: version.transaction_message },
-    { key: 'actor', value: version.transaction_actor },
-    { key: 'provenance', value: version.transaction_provenance },
+    { key: 'message', value: version.message },
+    { key: 'actor', value: version.actor },
+    { key: 'provenance', value: version.provenance },
   ]
     .map(({ key, value }) => ({ key, value: formatMetadataValue(value) }))
     .filter((row): row is { key: string; value: string } => Boolean(row.value));
@@ -3861,11 +3878,28 @@ function versionMetadataSummary(version: DocumentVersion) {
     return transactionRows.map((row) => `${metadataLabel(row.key)} ${row.value}`).join(' · ');
   }
 
-  const preferredKeys = ['message', 'summary', 'source', 'actor', 'provenance'];
-  const rows = preferredKeys
-    .map((key) => ({ key, value: formatMetadataValue(version.metadata[key]) }))
-    .filter((row): row is { key: string; value: string } => Boolean(row.value));
-  return rows.map((row) => `${metadataLabel(row.key)} ${row.value}`).join(' · ');
+  return '';
+}
+
+function isGroupedAutosave(version: DocumentHistoryEntry) {
+  return (
+    version.raw_version_count > 1 &&
+    version.provenance &&
+    typeof version.provenance === 'object' &&
+    (version.provenance.history as { kind?: unknown } | undefined)?.kind === 'autosave'
+  );
+}
+
+function historyTimeRange(version: DocumentHistoryEntry) {
+  const start = formatHistoryTime(version.created_at);
+  const end = formatHistoryTime(version.updated_at);
+  return start === end ? start : `${start}-${end}`;
+}
+
+function formatHistoryTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
 function VersionDetails({
@@ -3885,7 +3919,7 @@ function VersionDetails({
   currentEditorDiff: string;
   diff?: VersionDiff;
   onCompareVersionChange: (version: string | null) => void;
-  versions: DocumentVersion[];
+  versions: DocumentHistoryEntry[];
 }) {
   if (currentDiffOpen) {
     return (
@@ -3912,10 +3946,10 @@ function VersionDetails({
           >
             <option value="">Latest server</option>
             {versions
-              .filter((version) => version.id !== selectedVersionId)
+              .filter((version) => version.latest_version_id !== selectedVersionId)
               .map((version) => (
-                <option key={version.id} value={version.id}>
-                  {version.id.slice(0, 8)} {version.created_at}
+                <option key={version.id} value={version.latest_version_id}>
+                  {version.latest_version_id.slice(0, 8)} {versionHistoryTitle(version)}
                 </option>
               ))}
           </select>

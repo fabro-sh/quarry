@@ -790,7 +790,7 @@ describe('Quarry Browser workspace', () => {
         return json({ nodes: [], edges: [], truncated: false });
       }
       if (url.endsWith('/versions')) {
-        return json([version(restored ? 'v3' : 'v2'), version('v1')]);
+        return json([historyEntry(restored ? 'v3' : 'v2'), historyEntry('v1')]);
       }
       if (url.endsWith('/versions/v1')) {
         return json({ version: version('v1'), content: '# Old' });
@@ -833,17 +833,18 @@ describe('Quarry Browser workspace', () => {
     const historicalVersion = {
       id: 'v-meta',
       document_id: 'doc-version-meta',
-      tx_id: 'tx-import-1',
-      content_hash: null,
-      inline_content: null,
-      metadata: {},
-      transaction_actor: 'Avery',
-      transaction_source: 'git',
-      transaction_message: 'Imported from Git',
-      transaction_provenance: { remote: 'origin/main' },
+      latest_version_id: 'v-meta',
+      earliest_version_id: 'v-meta',
+      raw_version_count: 1,
+      actor: 'Avery',
+      source: 'git',
+      message: 'Imported from Git',
+      provenance: { remote: 'origin/main' },
+      checkpoint_reason: null,
       content_type: 'text/markdown',
       byte_size: 2048,
       created_at: '2026-05-28T12:00:00Z',
+      updated_at: '2026-05-28T12:00:00Z',
     };
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -886,7 +887,7 @@ describe('Quarry Browser workspace', () => {
     await userEvent.click(await screen.findByRole('treeitem', { name: /Meta/ }));
     await userEvent.click(screen.getByRole('tab', { name: 'Versions' }));
 
-    const transactionText = await screen.findByText(/tx-import-1/);
+    const transactionText = await screen.findByText(/Source git/);
     const versionRow = transactionText.closest('li');
     if (!versionRow) throw new Error('Expected version metadata to render inside a version row');
     expect(versionRow).toHaveTextContent('v-meta');
@@ -929,7 +930,7 @@ describe('Quarry Browser workspace', () => {
       if (url.startsWith('/v1/libraries/version-compare-lib/graph')) {
         return json({ nodes: [], edges: [], truncated: false });
       }
-      if (url.endsWith('/versions')) return json([version('v3'), version('v2'), version('v1')]);
+      if (url.endsWith('/versions')) return json([historyEntry('v3'), historyEntry('v2'), historyEntry('v1')]);
       if (url.endsWith('/versions/v1')) {
         return json({ version: version('v1'), content: '# One' });
       }
@@ -1103,7 +1104,7 @@ describe('Quarry Browser workspace', () => {
       if (url.startsWith('/v1/libraries/cache-lib/graph')) {
         return json({ nodes: [], edges: [], truncated: false });
       }
-      if (url.endsWith('/versions')) return json(recreated ? [version('v-new')] : [version('v-old')]);
+      if (url.endsWith('/versions')) return json(recreated ? [historyEntry('v-new')] : [historyEntry('v-old')]);
       if (url === '/v1/libraries/cache-lib/conflicts') return json([]);
       if (url === '/v1/libraries/cache-lib/git/peers') return json([]);
       if (url.startsWith('/v1/libraries/cache-lib/search')) return json({ results: [], cursor: null });
@@ -1899,6 +1900,25 @@ function version(id: string) {
     content_type: 'text/markdown',
     byte_size: 12,
     created_at: `2026-05-28T12:00:0${id.slice(1)}Z`,
+  };
+}
+
+function historyEntry(id: string) {
+  return {
+    id,
+    document_id: 'doc-versions',
+    latest_version_id: id,
+    earliest_version_id: id,
+    raw_version_count: 1,
+    source: 'rest',
+    actor: null,
+    message: null,
+    provenance: {},
+    checkpoint_reason: null,
+    content_type: 'text/markdown',
+    byte_size: 12,
+    created_at: `2026-05-28T12:00:0${id.slice(1)}Z`,
+    updated_at: `2026-05-28T12:00:0${id.slice(1)}Z`,
   };
 }
 

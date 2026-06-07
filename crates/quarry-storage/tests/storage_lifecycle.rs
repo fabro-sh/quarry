@@ -1,6 +1,200 @@
-use quarry_core::{DocumentSource, QuarryError, WritePrecondition, INLINE_CONTENT_THRESHOLD};
-use quarry_storage::{QuarryStore, StoreConfig, StoreEventKind};
+use quarry_core::{
+    DocumentSource, DocumentVersion, QuarryError, WritePrecondition, INLINE_CONTENT_THRESHOLD,
+};
+use quarry_storage::{
+    group_version_history, QuarryStore, StoreConfig, StoreEventKind, TransactionMetadata,
+};
 use std::time::Duration;
+
+fn history_version(
+    id: &str,
+    document_id: &str,
+    created_at: &str,
+    session_id: Option<&str>,
+    source: DocumentSource,
+    checkpoint_reason: Option<&str>,
+) -> DocumentVersion {
+    let provenance = if let Some(reason) = checkpoint_reason {
+        serde_json::json!({"history": {"kind": "checkpoint", "reason": reason}})
+    } else if let Some(session_id) = session_id {
+        serde_json::json!({"history": {"kind": "autosave", "reason": "typing", "session_id": session_id}})
+    } else {
+        serde_json::json!({"mode": "auto_commit"})
+    };
+    DocumentVersion {
+        id: id.to_string(),
+        document_id: document_id.to_string(),
+        tx_id: format!("tx-{id}"),
+        transaction_source: Some(source),
+        transaction_actor: Some("browser".to_string()),
+        transaction_message: Some("Autosaved edits".to_string()),
+        transaction_provenance: Some(provenance),
+        content_hash: None,
+        inline_content: None,
+        metadata: serde_json::json!({}),
+        content_type: "text/markdown".to_string(),
+        byte_size: 1,
+        created_at: created_at.to_string(),
+    }
+}
+
+#[test]
+fn groups_autosave_history_and_splits_singletons() {
+    let versions = vec![
+        history_version(
+            "v1",
+            "doc",
+            "2026-06-07T10:00:00Z",
+            Some("s1"),
+            DocumentSource::Rest,
+            None,
+        ),
+        history_version(
+            "v2",
+            "doc",
+            "2026-06-07T10:01:00Z",
+            Some("s1"),
+            DocumentSource::Rest,
+            None,
+        ),
+        history_version(
+            "v3",
+            "doc",
+            "2026-06-07T10:04:01Z",
+            Some("s1"),
+            DocumentSource::Rest,
+            None,
+        ),
+        history_version(
+            "v4",
+            "doc",
+            "2026-06-07T10:04:30Z",
+            Some("s2"),
+            DocumentSource::Rest,
+            None,
+        ),
+        history_version(
+            "v5",
+            "doc",
+            "2026-06-07T10:05:00Z",
+            None,
+            DocumentSource::Rest,
+            None,
+        ),
+        history_version(
+            "v6",
+            "doc",
+            "2026-06-07T10:05:30Z",
+            Some("s2"),
+            DocumentSource::Git,
+            None,
+        ),
+        history_version(
+            "v7",
+            "doc",
+            "2026-06-07T10:06:00Z",
+            Some("s2"),
+            DocumentSource::Rest,
+            Some("restore"),
+        ),
+    ];
+
+    let history = group_version_history(versions);
+
+    assert_eq!(
+        history
+            .iter()
+            .map(|entry| (
+                entry.earliest_version_id.as_str(),
+                entry.latest_version_id.as_str(),
+                entry.raw_version_count
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("v7", "v7", 1),
+            ("v6", "v6", 1),
+            ("v5", "v5", 1),
+            ("v4", "v4", 1),
+            ("v3", "v3", 1),
+            ("v1", "v2", 2),
+        ]
+    );
+}
+
+#[test]
+fn autosave_groups_split_after_ten_minute_span() {
+    let versions = vec![
+        history_version(
+            "v1",
+            "doc",
+            "2026-06-07T10:00:00Z",
+            Some("s1"),
+            DocumentSource::Rest,
+            None,
+        ),
+        history_version(
+            "v2",
+            "doc",
+            "2026-06-07T10:02:00Z",
+            Some("s1"),
+            DocumentSource::Rest,
+            None,
+        ),
+        history_version(
+            "v3",
+            "doc",
+            "2026-06-07T10:04:00Z",
+            Some("s1"),
+            DocumentSource::Rest,
+            None,
+        ),
+        history_version(
+            "v4",
+            "doc",
+            "2026-06-07T10:06:00Z",
+            Some("s1"),
+            DocumentSource::Rest,
+            None,
+        ),
+        history_version(
+            "v5",
+            "doc",
+            "2026-06-07T10:08:00Z",
+            Some("s1"),
+            DocumentSource::Rest,
+            None,
+        ),
+        history_version(
+            "v6",
+            "doc",
+            "2026-06-07T10:10:00Z",
+            Some("s1"),
+            DocumentSource::Rest,
+            None,
+        ),
+        history_version(
+            "v7",
+            "doc",
+            "2026-06-07T10:12:00Z",
+            Some("s1"),
+            DocumentSource::Rest,
+            None,
+        ),
+    ];
+
+    let history = group_version_history(versions);
+
+    assert_eq!(
+        history
+            .iter()
+            .map(|entry| (
+                entry.earliest_version_id.as_str(),
+                entry.latest_version_id.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        vec![("v7", "v7"), ("v1", "v6")]
+    );
+}
 
 #[tokio::test]
 async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
@@ -375,7 +569,7 @@ async fn put_after_delete_same_path_creates_new_document_identity_and_history() 
         .await
         .unwrap();
     assert_eq!(history.len(), 1);
-    assert_eq!(history[0].id, second.version.id);
+    assert_eq!(history[0].latest_version_id, second.version.id);
     assert!(store
         .document_version(&library.slug, "notes/daily.md", &first.version.id)
         .await
@@ -446,10 +640,74 @@ async fn explicit_transaction_recreate_same_path_uses_new_document_identity() {
             .await
             .unwrap()
             .iter()
-            .map(|version| version.id.as_str())
+            .map(|version| version.latest_version_id.as_str())
             .collect::<Vec<_>>(),
         vec![staged.id.as_str()]
     );
+}
+
+#[tokio::test]
+async fn autosave_tagged_writes_keep_raw_versions_but_group_history() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library("autosavehistory").await.unwrap();
+    let transaction = || TransactionMetadata {
+        actor: Some("browser".to_string()),
+        message: Some("Autosaved edits".to_string()),
+        provenance: serde_json::json!({
+            "history": {"kind": "autosave", "reason": "typing", "session_id": "browser:s1"}
+        }),
+    };
+
+    let first = store
+        .put_document_with_transaction(
+            &library.slug,
+            "notes/daily.md",
+            b"one".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+            Some("browser:s1".to_string()),
+            transaction(),
+        )
+        .await
+        .unwrap();
+    store
+        .put_document_with_transaction(
+            &library.slug,
+            "notes/daily.md",
+            b"two".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::IfMatch(first.version.id),
+            Some("browser:s1".to_string()),
+            transaction(),
+        )
+        .await
+        .unwrap();
+
+    let raw = store
+        .raw_version_history(&library.slug, "notes/daily.md")
+        .await
+        .unwrap();
+    let grouped = store
+        .version_history(&library.slug, "notes/daily.md")
+        .await
+        .unwrap();
+
+    assert_eq!(raw.len(), 2);
+    assert_eq!(grouped.len(), 1);
+    assert_eq!(grouped[0].raw_version_count, 2);
+    assert_eq!(grouped[0].latest_version_id, raw[0].id);
+    assert_eq!(grouped[0].earliest_version_id, raw[1].id);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -907,7 +1165,9 @@ async fn markdown_links_without_document_targets_are_external() {
     let external_url = outgoing
         .links
         .iter()
-        .find(|link| link.target_kind == "markdown_link" && link.target_text == "https://example.com")
+        .find(|link| {
+            link.target_kind == "markdown_link" && link.target_text == "https://example.com"
+        })
         .unwrap();
     assert!(!external_url.resolved);
     assert_eq!(

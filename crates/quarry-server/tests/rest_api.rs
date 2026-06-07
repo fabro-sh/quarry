@@ -5937,6 +5937,22 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
+    assert_eq!(body[0]["latest_version_id"], latest_intro.version.id);
+    assert_eq!(body[1]["latest_version_id"], first_intro.version.id);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/browser/documents/intro.md/versions/raw")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
     assert_eq!(body[0]["id"], latest_intro.version.id);
     assert_eq!(body[1]["id"], first_intro.version.id);
 
@@ -6059,6 +6075,8 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
     assert!(openapi["paths"]["/v1/libraries/{library}/search"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/backlinks"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/versions"].is_object());
+    assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/versions/raw"].is_object());
+    assert!(openapi["components"]["schemas"]["DocumentHistoryEntry"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"].is_object());
     assert!(
         openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"]["post"].is_object()
@@ -6264,10 +6282,39 @@ async fn version_history_includes_transaction_metadata() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert_eq!(body[0]["transaction_source"], "rest");
-    assert_eq!(body[0]["transaction_actor"], "Avery");
-    assert_eq!(body[0]["transaction_message"], "Imported from Git");
-    assert_eq!(body[0]["transaction_provenance"]["remote"], "origin/main");
+    assert_eq!(body[0]["source"], "rest");
+    assert_eq!(body[0]["actor"], "Avery");
+    assert_eq!(body[0]["message"], "Imported from Git");
+    assert_eq!(body[0]["provenance"]["remote"], "origin/main");
+}
+
+#[tokio::test]
+async fn put_document_rejects_invalid_transaction_provenance_header() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    store.create_library("badprovenance").await.unwrap();
+    let app = router(store);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/badprovenance/documents/a.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header("x-quarry-transaction-provenance", "{bad json")
+                .body(Body::from("body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

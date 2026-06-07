@@ -290,7 +290,7 @@ fn cli_backup_restore_preserves_metadata_versions_and_cas_content() {
         assert!(document.version.content_hash.is_some());
 
         let versions = store
-            .version_history("assets", "blobs/large.bin")
+            .raw_version_history("assets", "blobs/large.bin")
             .await
             .unwrap();
         assert_eq!(versions.len(), 2);

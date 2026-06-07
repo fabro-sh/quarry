@@ -32,6 +32,23 @@ export interface DocumentVersion {
   created_at: string;
 }
 
+export interface DocumentHistoryEntry {
+  id: string;
+  document_id: string;
+  latest_version_id: string;
+  earliest_version_id: string;
+  raw_version_count: number;
+  source: 'rest' | 'git' | 'fuse' | 'cli' | 'system' | null;
+  actor: string | null;
+  message: string | null;
+  provenance: Record<string, unknown> | null;
+  checkpoint_reason: string | null;
+  content_type: string;
+  byte_size: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface DocumentVersionContent {
   version: DocumentVersion;
   content: string;

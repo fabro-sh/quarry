@@ -1,12 +1,13 @@
+use chrono::{DateTime, Utc};
 use fs2::FileExt;
 use quarry_cas::DiskCas;
 use quarry_core::{
     normalize_path, now_timestamp, parent_dirs, ChangeType, CollabInviteToken, ConflictRecord,
-    ConflictStatus, Document, DocumentLink, DocumentListEntry, DocumentSource, DocumentVersion,
-    DocumentVersionContent, GcReport, GitPeer, GraphEdge, GraphNode, GraphResponse, Library,
-    LinkCollection, QuarryError, ReindexReport, Result, SearchResponse, SearchResult,
-    SearchSuggestion, SyncStateEntry, TransactionRecord, TransactionState, VersionDiff,
-    WriteOutcome, WritePrecondition, INLINE_CONTENT_THRESHOLD,
+    ConflictStatus, Document, DocumentHistoryEntry, DocumentLink, DocumentListEntry,
+    DocumentSource, DocumentVersion, DocumentVersionContent, GcReport, GitPeer, GraphEdge,
+    GraphNode, GraphResponse, Library, LinkCollection, QuarryError, ReindexReport, Result,
+    SearchResponse, SearchResult, SearchSuggestion, SyncStateEntry, TransactionRecord,
+    TransactionState, VersionDiff, WriteOutcome, WritePrecondition, INLINE_CONTENT_THRESHOLD,
 };
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -26,6 +27,23 @@ pub struct StoreConfig {
     pub db_path: PathBuf,
     pub cas_path: PathBuf,
     pub lock_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TransactionMetadata {
+    pub actor: Option<String>,
+    pub message: Option<String>,
+    pub provenance: JsonValue,
+}
+
+impl Default for TransactionMetadata {
+    fn default() -> Self {
+        Self {
+            actor: None,
+            message: None,
+            provenance: serde_json::json!({ "mode": "auto_commit" }),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -733,8 +751,35 @@ impl QuarryStore {
         precondition: WritePrecondition,
         origin_id: Option<String>,
     ) -> Result<WriteOutcome> {
+        self.put_document_with_transaction(
+            library,
+            path,
+            content,
+            metadata,
+            content_type,
+            source,
+            precondition,
+            origin_id,
+            TransactionMetadata::default(),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn put_document_with_transaction(
+        &self,
+        library: &str,
+        path: &str,
+        content: Vec<u8>,
+        metadata: JsonValue,
+        content_type: &str,
+        source: DocumentSource,
+        precondition: WritePrecondition,
+        origin_id: Option<String>,
+        transaction: TransactionMetadata,
+    ) -> Result<WriteOutcome> {
         let outcome = self
-            .commit_document_without_events(
+            .commit_document_without_events_with_transaction(
                 library,
                 path,
                 content,
@@ -742,6 +787,7 @@ impl QuarryStore {
                 content_type,
                 source,
                 precondition,
+                transaction,
             )
             .await?;
         self.emit_document_put_events(&outcome, origin_id);
@@ -757,6 +803,31 @@ impl QuarryStore {
         content_type: &str,
         source: DocumentSource,
         precondition: WritePrecondition,
+    ) -> Result<WriteOutcome> {
+        self.commit_document_without_events_with_transaction(
+            library,
+            path,
+            content,
+            metadata,
+            content_type,
+            source,
+            precondition,
+            TransactionMetadata::default(),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn commit_document_without_events_with_transaction(
+        &self,
+        library: &str,
+        path: &str,
+        content: Vec<u8>,
+        metadata: JsonValue,
+        content_type: &str,
+        source: DocumentSource,
+        precondition: WritePrecondition,
+        transaction: TransactionMetadata,
     ) -> Result<WriteOutcome> {
         let path = normalize_path(path)?;
         let content_bytes = content.len();
@@ -783,9 +854,9 @@ impl QuarryStore {
                 &conn,
                 &library.id,
                 source,
-                None,
-                None,
-                serde_json::json!({ "mode": "auto_commit" }),
+                transaction.actor,
+                transaction.message,
+                transaction.provenance,
             )
             .await?;
             let (doc_id, old_version_id) =
@@ -1535,7 +1606,20 @@ impl QuarryStore {
         })
     }
 
-    pub async fn version_history(&self, library: &str, path: &str) -> Result<Vec<DocumentVersion>> {
+    pub async fn version_history(
+        &self,
+        library: &str,
+        path: &str,
+    ) -> Result<Vec<DocumentHistoryEntry>> {
+        let raw = self.raw_version_history(library, path).await?;
+        Ok(group_version_history(raw))
+    }
+
+    pub async fn raw_version_history(
+        &self,
+        library: &str,
+        path: &str,
+    ) -> Result<Vec<DocumentVersion>> {
         let path = normalize_path(path)?;
         let conn = self.conn()?;
         let library = self.require_library_conn(&conn, library).await?;
@@ -1650,7 +1734,7 @@ impl QuarryStore {
             .await?;
         drop(conn);
 
-        self.put_document_with_origin(
+        self.put_document_with_transaction(
             library,
             &path,
             content,
@@ -1659,6 +1743,14 @@ impl QuarryStore {
             DocumentSource::Rest,
             WritePrecondition::None,
             origin_id,
+            TransactionMetadata {
+                actor: None,
+                message: Some(format!("Restore version {version_id}")),
+                provenance: serde_json::json!({
+                    "mode": "auto_commit",
+                    "history": {"kind": "checkpoint", "reason": "restore"}
+                }),
+            },
         )
         .await
     }
@@ -4581,6 +4673,122 @@ fn link_from_row(row: &Row) -> Result<DocumentLink> {
         resolved,
         resolution_status,
     })
+}
+
+const AUTOSAVE_IDLE_SPLIT_SECONDS: i64 = 120;
+const AUTOSAVE_MAX_SPAN_SECONDS: i64 = 600;
+
+pub fn group_version_history(mut versions: Vec<DocumentVersion>) -> Vec<DocumentHistoryEntry> {
+    versions.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    let mut groups: Vec<Vec<DocumentVersion>> = Vec::new();
+    for version in versions {
+        if let Some(current) = groups.last_mut() {
+            if can_group_autosave(current, &version) {
+                current.push(version);
+                continue;
+            }
+        }
+        groups.push(vec![version]);
+    }
+
+    groups
+        .into_iter()
+        .rev()
+        .map(history_entry_from_group)
+        .collect()
+}
+
+fn can_group_autosave(group: &[DocumentVersion], next: &DocumentVersion) -> bool {
+    let Some(first) = group.first() else {
+        return false;
+    };
+    let Some(previous) = group.last() else {
+        return false;
+    };
+    if !is_autosave_version(first) || !is_autosave_version(next) {
+        return false;
+    }
+    if first.transaction_source != next.transaction_source
+        || first.transaction_actor != next.transaction_actor
+        || first.content_type != next.content_type
+        || autosave_session_id(first) != autosave_session_id(next)
+        || checkpoint_reason(first) != checkpoint_reason(next)
+    {
+        return false;
+    }
+    let Some(first_at) = parse_history_time(&first.created_at) else {
+        return false;
+    };
+    let Some(previous_at) = parse_history_time(&previous.created_at) else {
+        return false;
+    };
+    let Some(next_at) = parse_history_time(&next.created_at) else {
+        return false;
+    };
+    next_at.signed_duration_since(previous_at).num_seconds() <= AUTOSAVE_IDLE_SPLIT_SECONDS
+        && next_at.signed_duration_since(first_at).num_seconds() <= AUTOSAVE_MAX_SPAN_SECONDS
+}
+
+fn history_entry_from_group(group: Vec<DocumentVersion>) -> DocumentHistoryEntry {
+    let earliest = group.first().expect("history group must contain a version");
+    let latest = group.last().expect("history group must contain a version");
+    DocumentHistoryEntry {
+        id: latest.id.clone(),
+        document_id: latest.document_id.clone(),
+        latest_version_id: latest.id.clone(),
+        earliest_version_id: earliest.id.clone(),
+        raw_version_count: group.len() as u64,
+        source: latest.transaction_source.clone(),
+        actor: latest.transaction_actor.clone(),
+        message: latest.transaction_message.clone(),
+        provenance: latest.transaction_provenance.clone(),
+        checkpoint_reason: checkpoint_reason(latest),
+        content_type: latest.content_type.clone(),
+        byte_size: latest.byte_size,
+        created_at: earliest.created_at.clone(),
+        updated_at: latest.created_at.clone(),
+    }
+}
+
+fn is_autosave_version(version: &DocumentVersion) -> bool {
+    version
+        .transaction_provenance
+        .as_ref()
+        .and_then(|provenance| provenance.get("history"))
+        .and_then(|history| history.get("kind"))
+        .and_then(JsonValue::as_str)
+        == Some("autosave")
+}
+
+fn autosave_session_id(version: &DocumentVersion) -> Option<String> {
+    version
+        .transaction_provenance
+        .as_ref()
+        .and_then(|provenance| provenance.get("history"))
+        .and_then(|history| history.get("session_id"))
+        .and_then(JsonValue::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn checkpoint_reason(version: &DocumentVersion) -> Option<String> {
+    version
+        .transaction_provenance
+        .as_ref()
+        .and_then(|provenance| provenance.get("history"))
+        .and_then(|history| history.get("reason"))
+        .and_then(JsonValue::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn parse_history_time(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|time| time.with_timezone(&Utc))
 }
 
 fn version_from_row(row: &Row) -> Result<DocumentVersion> {

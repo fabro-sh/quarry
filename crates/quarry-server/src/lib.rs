@@ -24,17 +24,17 @@ use quarry_collab_codec::{
     ReviewSuggestionKind as CodecReviewSuggestionKind, Unsupported,
 };
 use quarry_core::{
-    now_timestamp, CollabInviteToken, ConflictRecord, DocumentLink, DocumentListEntry,
-    DocumentSource, DocumentVersion, DocumentVersionContent, GcReport, GitPeer, GraphEdge,
-    GraphNode, GraphResponse, Library, LinkCollection, QuarryError, ReindexReport, SearchResponse,
-    SearchResult, SearchSuggestion, TransactionRecord, VersionDiff, WriteOutcome,
+    now_timestamp, CollabInviteToken, ConflictRecord, DocumentHistoryEntry, DocumentLink,
+    DocumentListEntry, DocumentSource, DocumentVersion, DocumentVersionContent, GcReport, GitPeer,
+    GraphEdge, GraphNode, GraphResponse, Library, LinkCollection, QuarryError, ReindexReport,
+    SearchResponse, SearchResult, SearchSuggestion, TransactionRecord, VersionDiff, WriteOutcome,
     WritePrecondition,
 };
 use quarry_git::{
     export_worktree, import_worktree, pull_peer, push_peer, sync_peer, GitExportOptions,
     GitExportResult, GitImportResult, GitSyncResult,
 };
-use quarry_storage::{QuarryStore, StoreEvent, StoreEventKind};
+use quarry_storage::{QuarryStore, StoreEvent, StoreEventKind, TransactionMetadata};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -615,6 +615,7 @@ async fn browser_asset(uri: Uri) -> Response {
         agent_events_ack,
         document_ops_openapi,
         document_versions_openapi,
+        document_versions_raw_openapi,
         document_version_openapi,
         document_version_diff_openapi,
         document_version_restore_openapi,
@@ -650,6 +651,7 @@ async fn browser_asset(uri: Uri) -> Response {
         DryRunValue,
         Library,
         DocumentListEntry,
+        DocumentHistoryEntry,
         DocumentVersion,
         DocumentVersionContent,
         WriteOutcome,
@@ -1847,6 +1849,12 @@ async fn get_document(
             &state.store.collab_invite_tokens(&library, path).await?,
         );
     }
+    if let Some(path) = path.strip_suffix("/versions/raw") {
+        return json_response(
+            StatusCode::OK,
+            &state.store.raw_version_history(&library, path).await?,
+        );
+    }
     if let Some(path) = path.strip_suffix("/versions") {
         return json_response(
             StatusCode::OK,
@@ -1959,10 +1967,19 @@ async fn document_share_revoke_openapi() {}
     get,
     path = "/v1/libraries/{library}/documents/{path}/versions",
     params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = [DocumentVersion]), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = [DocumentHistoryEntry]), (status = 404, body = ErrorResponse))
 )]
 #[allow(dead_code)]
 async fn document_versions_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/libraries/{library}/documents/{path}/versions/raw",
+    params(("library" = String, Path), ("path" = String, Path)),
+    responses((status = 200, body = [DocumentVersion]), (status = 404, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn document_versions_raw_openapi() {}
 
 #[utoipa::path(
     get,
@@ -2037,12 +2054,13 @@ async fn put_document(
     let metadata = metadata_from_headers(&headers, &content_type)?;
     let precondition = precondition_from_headers(&headers)?;
     let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
+    let transaction = transaction_metadata_from_headers(&headers)?;
     let browser_origin = origin_id
         .as_deref()
         .is_some_and(|origin| origin.starts_with("browser:"));
     let outcome = state
         .store
-        .put_document_with_origin(
+        .put_document_with_transaction(
             &library,
             &path,
             body.to_vec(),
@@ -2051,6 +2069,7 @@ async fn put_document(
             DocumentSource::Rest,
             precondition,
             origin_id,
+            transaction,
         )
         .await?;
     if browser_origin {
@@ -5537,6 +5556,26 @@ fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<Str
                 .map_err(|_| QuarryError::Storage(format!("invalid {name} header")).into())
         })
         .transpose()
+}
+
+fn transaction_metadata_from_headers(headers: &HeaderMap) -> Result<TransactionMetadata, ApiError> {
+    let actor = optional_header(headers, "x-quarry-transaction-actor")?;
+    let message = optional_header(headers, "x-quarry-transaction-message")?;
+    let provenance = if let Some(value) = headers.get("x-quarry-transaction-provenance") {
+        serde_json::from_str(value.to_str().map_err(|_| {
+            QuarryError::InvalidPath("invalid x-quarry-transaction-provenance".to_string())
+        })?)
+        .map_err(|_| {
+            QuarryError::InvalidPath("invalid x-quarry-transaction-provenance".to_string())
+        })?
+    } else {
+        serde_json::json!({ "mode": "auto_commit" })
+    };
+    Ok(TransactionMetadata {
+        actor,
+        message,
+        provenance,
+    })
 }
 
 fn agent_id_from_headers_or_body(
