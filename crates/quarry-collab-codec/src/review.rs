@@ -25,19 +25,17 @@ use crate::Unsupported;
 const CODE_BLOCK_TYPES: [&str; 2] = ["code_block", "code_line"];
 
 /// One combined matcher for every CriticMarkup family, ported from the `TOKEN`
-/// regex in `apply-critic-markup.ts`. The TS source uses greedy-with-negative-
-/// lookahead spans (`(?:(?!==\}).)*`); the `regex` crate has no lookahead, but a
-/// lazy dot-all span (`(?s:(.*?))`) stops at the same first closing delimiter, so
-/// the two are equivalent. Branch order matches the TS alternation.
+/// regex in `apply-critic-markup.ts`. JavaScript `.` does not cross line
+/// boundaries here, so keep each captured marker span on one line.
 fn token() -> &'static Regex {
     static TOKEN: OnceLock<Regex> = OnceLock::new();
     TOKEN.get_or_init(|| {
         Regex::new(concat!(
-            r"\{==(?s:(.*?))==\}(?:\{>>(?s:(.*?))<<\})?(?:\{#([A-Za-z0-9_-]+)\})?",
-            r"|\{~~(?s:(.*?))~>(?s:(.*?))~~\}(?:\{#([A-Za-z0-9_-]+)\})?",
-            r"|\{\+\+(?s:(.*?))\+\+\}(?:\{#([A-Za-z0-9_-]+)\})?",
-            r"|\{--(?s:(.*?))--\}(?:\{#([A-Za-z0-9_-]+)\})?",
-            r"|\{>>(?s:(.*?))<<\}(?:\{#([A-Za-z0-9_-]+)\})?",
+            r"\{==([^\r\n]*?)==\}(?:\{>>([^\r\n]*?)<<\})?(?:\{#([A-Za-z0-9_-]+)\})?",
+            r"|\{~~([^\r\n]*?)~>([^\r\n]*?)~~\}(?:\{#([A-Za-z0-9_-]+)\})?",
+            r"|\{\+\+([^\r\n]*?)\+\+\}(?:\{#([A-Za-z0-9_-]+)\})?",
+            r"|\{--([^\r\n]*?)--\}(?:\{#([A-Za-z0-9_-]+)\})?",
+            r"|\{>>([^\r\n]*?)<<\}(?:\{#([A-Za-z0-9_-]+)\})?",
         ))
         .expect("review token regex is valid")
     })
@@ -402,7 +400,7 @@ fn is_review_meta_value(value: &serde_yaml::Value) -> bool {
 pub fn inline_comment_body() -> &'static Regex {
     static INLINE_COMMENT_BODY: OnceLock<Regex> = OnceLock::new();
     INLINE_COMMENT_BODY.get_or_init(|| {
-        Regex::new(r"\{==(?s:(.*?))==\}\{>>(?s:(.*?))<<\}\{#([A-Za-z0-9_-]+)\}")
+        Regex::new(r"\{==([^\r\n]*?)==\}\{>>([^\r\n]*?)<<\}\{#([A-Za-z0-9_-]+)\}")
             .expect("inline comment body regex is valid")
     })
 }
@@ -852,6 +850,21 @@ mod tests {
                 after: "new".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn review_markers_do_not_cross_line_boundaries() {
+        let document = parse_review_document(
+            "See {==first\nsecond==}{#c1}.\n\
+             Use {~~old\ntext~>new~~}{#s1}.\n\
+             Add {++one\ntwo++}{#s2}.\n\
+             Drop {--one\ntwo--}{#s3}.\n",
+        );
+
+        assert!(document.markers.comments.is_empty());
+        assert!(document.markers.suggestions.is_empty());
+        assert!(document.meta.comments.is_empty());
+        assert!(document.meta.suggestions.is_empty());
     }
 
     #[test]

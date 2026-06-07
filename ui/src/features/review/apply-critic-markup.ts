@@ -1,4 +1,4 @@
-import type { Descendant, TElement, TText } from 'platejs';
+import { ElementApi, TextApi, type Descendant, type TText } from 'platejs';
 
 import { cloneMeta, type ReviewMeta } from './rfm-types';
 
@@ -128,21 +128,13 @@ function expandLeaf(node: TText, meta: ReviewMeta): TText[] {
   return out;
 }
 
-function isTextLeaf(node: Descendant): node is TText {
-  return typeof node.text === 'string';
-}
-
-function isElement(node: Descendant): node is TElement {
-  return Array.isArray(node.children);
-}
-
 function walkChildren(value: Descendant[], inCode: boolean, meta: ReviewMeta): Descendant[] {
   const out: Descendant[] = [];
   for (const child of value) {
-    if (isElement(child)) {
+    if (ElementApi.isElement(child)) {
       const nextInCode = inCode || CODE_BLOCK_TYPES.has(typeof child.type === 'string' ? child.type : '');
       out.push({ ...child, children: walkChildren(child.children, nextInCode, meta) });
-    } else if (isTextLeaf(child) && !inCode && child.code !== true) {
+    } else if (TextApi.isText(child) && !inCode && child.code !== true) {
       out.push(...expandLeaf(child, meta));
     } else {
       out.push(child);

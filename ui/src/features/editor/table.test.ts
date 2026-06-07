@@ -20,6 +20,12 @@ const rowWidths = (value: PlateValueWithTables) =>
   (value[0].children as Array<{ children: unknown[] }>).map((tableRow) => tableRow.children.length);
 
 describe('table normalization', () => {
+  it('preserves object identity when there are no tables to normalize', () => {
+    const value = [p('plain text')];
+
+    expect(normalizeTablesInValue(value)).toBe(value);
+  });
+
   it('repairs ragged rows to the widest physical row without losing bottom-right content', () => {
     const normalized = normalizeTablesInValue([
       table([
@@ -44,7 +50,7 @@ describe('table normalization', () => {
       ),
     ] as PlateValueWithTables;
 
-    expect(normalizeTablesInValue(value)).toEqual(value);
+    expect(normalizeTablesInValue(value)).toBe(value);
   });
 
   it('strips spans, fixes header/body cell types, and pads shorter rows', () => {

@@ -5559,23 +5559,20 @@ fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<Str
 }
 
 fn transaction_metadata_from_headers(headers: &HeaderMap) -> Result<TransactionMetadata, ApiError> {
-    let actor = optional_header(headers, "x-quarry-transaction-actor")?;
-    let message = optional_header(headers, "x-quarry-transaction-message")?;
-    let provenance = if let Some(value) = headers.get("x-quarry-transaction-provenance") {
-        serde_json::from_str(value.to_str().map_err(|_| {
+    let mut metadata = TransactionMetadata {
+        actor: optional_header(headers, "x-quarry-transaction-actor")?,
+        message: optional_header(headers, "x-quarry-transaction-message")?,
+        ..TransactionMetadata::default()
+    };
+    if let Some(value) = headers.get("x-quarry-transaction-provenance") {
+        metadata.provenance = serde_json::from_str(value.to_str().map_err(|_| {
             QuarryError::InvalidPath("invalid x-quarry-transaction-provenance".to_string())
         })?)
         .map_err(|_| {
             QuarryError::InvalidPath("invalid x-quarry-transaction-provenance".to_string())
-        })?
-    } else {
-        serde_json::json!({ "mode": "auto_commit" })
-    };
-    Ok(TransactionMetadata {
-        actor,
-        message,
-        provenance,
-    })
+        })?;
+    }
+    Ok(metadata)
 }
 
 fn agent_id_from_headers_or_body(

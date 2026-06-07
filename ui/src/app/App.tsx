@@ -98,6 +98,7 @@ import type {
   DocumentHistoryEntry,
   DocumentLink,
   DocumentListEntry,
+  DocumentVersion,
   DocumentVersionContent,
   Library as LibraryType,
   SearchResult,
@@ -400,7 +401,11 @@ function Workspace() {
           },
           { revalidate: false }
         ),
-        mutate(['/v1/versions', library, path], [created.outcome.version], { revalidate: false }),
+        mutate(
+          ['/v1/versions', library, path],
+          [historyEntryFromVersion(created.outcome.version)],
+          { revalidate: false }
+        ),
       ]).then(() => ({ documentId, etag: createdEtag }));
     },
     [mutate]
@@ -3859,6 +3864,31 @@ function versionHistoryTitle(version: DocumentHistoryEntry) {
     return `Autosaved edits · ${historyTimeRange(version)} · ${version.raw_version_count} revisions`;
   }
   return version.updated_at;
+}
+
+function historyEntryFromVersion(version: DocumentVersion): DocumentHistoryEntry {
+  return {
+    id: version.id,
+    document_id: version.document_id,
+    latest_version_id: version.id,
+    earliest_version_id: version.id,
+    raw_version_count: 1,
+    source: version.transaction_source,
+    actor: version.transaction_actor,
+    message: version.transaction_message,
+    provenance: version.transaction_provenance,
+    checkpoint_reason: historyCheckpointReason(version.transaction_provenance),
+    content_type: version.content_type,
+    byte_size: version.byte_size,
+    created_at: version.created_at,
+    updated_at: version.created_at,
+  };
+}
+
+function historyCheckpointReason(provenance: Record<string, unknown> | null) {
+  const history = provenance?.history;
+  const reason = history && typeof history === 'object' ? (history as { reason?: unknown }).reason : undefined;
+  return typeof reason === 'string' ? reason : null;
 }
 
 function versionTransactionLabel(version: DocumentHistoryEntry) {

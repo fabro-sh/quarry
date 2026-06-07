@@ -65,31 +65,50 @@ export function columnAlignOf(tableNode: TElement, colIndex: number): TableAlign
 }
 
 export function normalizeTablesInValue<T extends Descendant[]>(value: T): T {
-  return value.map((node) => normalizeTablesInNode(node)) as T;
+  let changed = false;
+  const normalized = value.map((node) => {
+    const next = normalizeTablesInNode(node);
+    if (next !== node) changed = true;
+    return next;
+  });
+  return changed ? (normalized as T) : value;
 }
 
 function normalizeTablesInNode(node: Descendant): Descendant {
   if (!ElementApi.isElement(node)) return node;
   if (node.type === KEYS.table) return normalizeTableElement(node as TTableElementWithAlign);
+  const children = normalizeTablesInValue(node.children);
+  if (children === node.children) return node;
   return {
     ...node,
-    children: normalizeTablesInValue(node.children),
+    children,
   };
 }
 
-function normalizeTableElement(tableNode: TTableElementWithAlign): TableElementWithShape {
+function normalizeTableElement(tableNode: TTableElementWithAlign): Descendant {
   const rows = tableNode.children.filter(isTableRowElement);
   const width = rows.reduce((max, row) => Math.max(max, row.children.length), 0);
-  const normalizedRows = rows.map((row, rowIndex) => normalizeTableRow(row, rowIndex, width));
+  let changed = rows.length !== tableNode.children.length;
+  const normalizedRows = rows.map((row, rowIndex) => {
+    const next = normalizeTableRow(row, rowIndex, width);
+    if (next !== row) changed = true;
+    return next;
+  });
   const { align: rawAlign, children: _children, colSizes, ...rest } = tableNode as TTableElementWithAlign & {
     colSizes?: unknown;
   };
+  const normalizedAlignValue = Array.isArray(rawAlign) ? normalizedAlign(rawAlign, width) : undefined;
+  if (Array.isArray(rawAlign) && normalizedAlignValue && !sameAlign(rawAlign, normalizedAlignValue)) changed = true;
+  if (!Array.isArray(rawAlign) && 'align' in tableNode) changed = true;
+  if ('colSizes' in tableNode && (!Array.isArray(colSizes) || colSizes.length !== width)) changed = true;
+  if (!changed) return tableNode;
+
   const normalized: Record<string, unknown> = {
     ...rest,
     type: KEYS.table,
     children: normalizedRows,
   };
-  if (Array.isArray(rawAlign)) normalized.align = normalizedAlign(rawAlign, width);
+  if (normalizedAlignValue) normalized.align = normalizedAlignValue;
   if (Array.isArray(colSizes) && colSizes.length === width) normalized.colSizes = colSizes;
   return normalized as TableElementWithShape;
 }
@@ -100,21 +119,39 @@ function normalizeTableRow(
   width: number
 ): TTableRowElement & { children: TTableCellElement[] } {
   const cellType = rowIndex === 0 ? KEYS.th : KEYS.td;
-  const cells = rowNode.children.map((cellNode) => normalizeTableCell(cellNode, cellType));
-  while (cells.length < width) cells.push(emptyTableCell(cellType));
+  let changed = rowNode.type !== KEYS.tr;
+  const cells = rowNode.children.map((cellNode) => {
+    const next = normalizeTableCell(cellNode, cellType);
+    if (next !== cellNode) changed = true;
+    return next;
+  });
+  while (cells.length < width) {
+    changed = true;
+    cells.push(emptyTableCell(cellType));
+  }
+  if (!changed) return rowNode as TTableRowElement & { children: TTableCellElement[] };
   return { ...rowNode, type: KEYS.tr, children: cells };
 }
 
 function normalizeTableCell(cellNode: Descendant, cellType: string): TTableCellElement {
   if (!ElementApi.isElement(cellNode)) return emptyTableCell(cellType);
-  const { children, colSpan: _colSpan, rowSpan: _rowSpan, type: _type, ...rest } = cellNode as TElement & {
+  const normalizedChildren = normalizeTablesInValue(cellNode.children);
+  if (
+    cellNode.type === cellType &&
+    normalizedChildren === cellNode.children &&
+    !('colSpan' in cellNode) &&
+    !('rowSpan' in cellNode)
+  ) {
+    return cellNode as TTableCellElement;
+  }
+  const { children: _children, colSpan: _colSpan, rowSpan: _rowSpan, type: _type, ...rest } = cellNode as TElement & {
     colSpan?: unknown;
     rowSpan?: unknown;
   };
   return {
     ...rest,
     type: cellType,
-    children: normalizeTablesInValue(children),
+    children: normalizedChildren,
   } as TTableCellElement;
 }
 
