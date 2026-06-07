@@ -278,9 +278,30 @@ curl -sS -X POST "$DOC/ops" \
   }'
 ```
 
-Suggestion kinds are `insert`, `delete`, `remove`, `replace`, and
-`substitution`. `insert`, `replace`, and `substitution` require `content`.
-`delete` and `remove` use the quoted text or block anchor.
+Suggestion kinds (each renders as a CriticMarkup redline for the reviewer):
+
+- `insert` — add `content` immediately after the `quote` span, or at the end of
+  the block when `quote` is omitted. Removes nothing. Requires `content`.
+- `delete` / `remove` — propose removing the `quote` span. Aliases. No `content`.
+- `replace` / `substitution` — propose replacing the `quote` span with `content`.
+  Aliases; `substitution` is the default when `kind` is omitted. Requires
+  `content`.
+
+Diff granularity comes from the size of the `quote`, not the kind — `replace`
+and `substitution` are the same operation. For a tight word-level redline,
+quote only the words that change rather than the whole sentence. To turn
+"drivers from the distribution" into "drivers from the distribution's
+repositories", use `replace` with `quote` `distribution` and `content`
+`distribution's repositories`, not the entire sentence.
+
+The `quote` field anchors the annotation to a span inside the block and must
+match the block's `markdown` exactly. Omit it to anchor the whole block. When
+present, it is an exact, case- and whitespace-sensitive substring that must
+occur exactly once: zero matches fail with `ANCHOR_NOT_FOUND`, and two or more
+fail with `AMBIGUOUS_ANCHOR` (extend the quote with adjacent text to make it
+unique). An empty string is rejected; omit the field instead. `/ops` commits
+atomically, so one bad `quote` fails the whole batch — copy quotes verbatim
+from the current `/snapshot`.
 
 Reply to or delete comments:
 
@@ -314,6 +335,11 @@ curl -sS -X POST "$DOC/ops" \
   -H "X-Agent-Id: $AGENT_ID" \
   -d '{"baseToken":"version_123","operations":[{"op":"suggestion.accept","id":"s_123"}]}'
 ```
+
+`suggestion.accept` applies the proposed edit to the document automatically.
+`comment.resolve` only changes the comment's review state; it does not rewrite
+the document text. If a comment asks for a prose change, apply that change with
+`/edit` and then resolve the comment.
 
 ## Presence
 
@@ -379,6 +405,10 @@ curl -sS -X POST "$ORIGIN/v1/libraries/$LIBRARY_ENCODED/events/ack" \
   once.
 - Missing or invalid `ref`: use the exact block ref from the current snapshot.
   Do not invent refs or reuse refs from a previous version.
+- `ANCHOR_NOT_FOUND`: the `quote` is not a substring of the block. Copy it
+  verbatim from `/snapshot`.
+- `AMBIGUOUS_ANCHOR`: the `quote` occurs more than once in the block. Extend it
+  with adjacent text until it is unique.
 - Unsupported operation: check `/.well-known/agent.json` for current
   `edit_operations` and `ops_operations`.
 - Stream lag or pending events: refresh `/snapshot` before continuing.
