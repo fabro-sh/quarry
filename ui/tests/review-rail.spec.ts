@@ -14,18 +14,6 @@ import {
 // the assertions read the exact payload a real checkpoint would receive.
 
 interface MockDocument {
-  // Selection-driven UI (dblclick + the floating-toolbar Comment control) is
-  // currently broken inside live-session editors (pre-existing slate-yjs
-  // selection-sync bug, present since Phase 3 — see the Phase 5 report).
-  // Keyboard selection (Shift+Home) fails the same way (probed 2026-06-10),
-  // so there is no working entry point to assert in-session persistence of a
-  // human-CREATED comment thread directly. Draft-comment tests opt out of
-  // collab to keep the flow covered on the same editor component minus the
-  // Yjs binding; in-session persistence of NEW review entries is covered by
-  // the reply test (new meta entry) and the suggesting-mode typing test (new
-  // doc marks), which exercise the same store→review-map write path a
-  // created comment would take.
-  collab?: boolean;
   content: string;
   id: string;
   metadata?: Record<string, unknown>;
@@ -172,14 +160,15 @@ test.describe('Review rail', () => {
   });
 
   test('commenting opens a draft composer that only persists on submit', async ({ page }) => {
-    await installMockApi(page, [
-      { collab: false, content: 'Comment this word here.\n', id: 'doc-draft', metadata: { title: 'Draft' }, path: 'draft.md', version: 'v1' },
+    const collab = await installMockApi(page, [
+      { content: 'Comment this word here.\n', id: 'doc-draft', metadata: { title: 'Draft' }, path: 'draft.md', version: 'v1' },
     ]);
 
     await page.goto('/');
     await page.getByRole('treeitem', { name: /Draft/ }).click();
     const editor = page.getByLabel('Plate markdown editor');
     await expect(editor).toContainText('Comment this word');
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
 
     // Select a word and raise the floating toolbar, then click Comment. This
     // sets a comment_draft mark (ignored by the codec) and opens the rail
@@ -202,22 +191,29 @@ test.describe('Review rail', () => {
     await expect(page.getByTestId('comment-card')).toBeVisible();
     await expect(page.getByTestId('comment-card')).toContainText('Please clarify');
 
-    // Submission promotes the draft to a real comment mark + card. (In a
-    // live session the same mutation lands in the shared review map and the
-    // checkpoint persists it — covered by the rail reply/resolve tests and
-    // the live smoke spec.)
+    // Submission promotes the draft to a real comment mark + card, and the
+    // new thread persists into the live session: an entry in the shared
+    // review map (with the typed body) that the server checkpoint projects
+    // to a comment row.
     await expect(editor.locator('[data-comment-id]')).toBeVisible();
+    await expect
+      .poll(() => {
+        const comments = collab.roomReviewMeta('doc-draft').comments ?? {};
+        return Object.values(comments).map((entry) => entry.body);
+      })
+      .toEqual(['Please clarify']);
   });
 
   test('cancelling a draft discards it and persists no comment', async ({ page }) => {
-    await installMockApi(page, [
-      { collab: false, content: 'Cancel this draft please.\n', id: 'doc-cancel', metadata: { title: 'Cancel' }, path: 'cancel.md', version: 'v1' },
+    const collab = await installMockApi(page, [
+      { content: 'Cancel this draft please.\n', id: 'doc-cancel', metadata: { title: 'Cancel' }, path: 'cancel.md', version: 'v1' },
     ]);
 
     await page.goto('/');
     await page.getByRole('treeitem', { name: /Cancel/ }).click();
     const editor = page.getByLabel('Plate markdown editor');
     await expect(editor).toContainText('Cancel this draft');
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
 
     await page.getByText('Cancel this draft please.', { exact: false }).dblclick();
     await page.getByTestId('comment-button').click();
@@ -227,8 +223,10 @@ test.describe('Review rail', () => {
     await expect(page.getByTestId('draft-composer')).toHaveCount(0);
     await expect(page.getByTestId('comment-card')).toHaveCount(0);
 
-    // Cancelling leaves the document unchanged: no comment mark, no card.
+    // Cancelling leaves the document unchanged: no comment mark, no card,
+    // and nothing in the session's shared review map.
     await expect(editor.locator('[data-comment-id]')).toHaveCount(0);
+    expect(collab.roomReviewMeta('doc-cancel').comments ?? {}).toEqual({});
   });
 
   test('accept from the rail applies the suggestion and drops the markup', async ({ page }) => {
@@ -382,12 +380,14 @@ async function installMockApi(
         await notFound(route);
         return;
       }
-      const headers: Record<string, string> = {
-        ETag: `"${document.version}"`,
-        'content-type': 'text/markdown',
-      };
-      if (document.collab !== false) headers['x-quarry-document-id'] = document.id;
-      await route.fulfill({ body: document.content, headers });
+      await route.fulfill({
+        body: document.content,
+        headers: {
+          ETag: `"${document.version}"`,
+          'content-type': 'text/markdown',
+          'x-quarry-document-id': document.id,
+        },
+      });
       return;
     }
 

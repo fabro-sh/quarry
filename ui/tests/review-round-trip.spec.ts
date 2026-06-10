@@ -15,12 +15,6 @@ import {
 // checkpoint would receive.
 
 interface MockDocument {
-  // Selection-driven UI (dblclick to reach the floating Accept control) is
-  // currently broken inside live-session editors (pre-existing slate-yjs
-  // selection-sync bug, present since Phase 3 — see the Phase 5 report).
-  // The floating-accept test opts out of collab; session persistence of
-  // accepts is covered by the rail-accept test in review-rail.spec.ts.
-  collab?: boolean;
   content: string;
   id: string;
   metadata?: Record<string, unknown>;
@@ -95,14 +89,15 @@ test.describe('Review round-trip', () => {
     // endmatter, so the Accept control is reachable from a selection inside it.
     const suggestedDoc =
       'Keep {++this++}{#s1} text.\n\n---\nsuggestions:\n  s1:\n    at: "2026-01-01T00:00:00.000Z"\n    by: user\n';
-    await installMockApi(page, [
-      { collab: false, content: suggestedDoc, id: 'doc-acc', metadata: { title: 'ACC' }, path: 'acc.md', version: 'v1' },
+    const collab = await installMockApi(page, [
+      { content: suggestedDoc, id: 'doc-acc', metadata: { title: 'ACC' }, path: 'acc.md', version: 'v1' },
     ]);
 
     await page.goto('/');
     await page.getByRole('treeitem', { name: /ACC/ }).click();
     const editor = page.getByLabel('Plate markdown editor');
     await expect(editor).toContainText('this');
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
 
     // Put the selection inside the suggested word so the Accept control renders.
     // Scope to the editor: the rail's suggestion card also renders this word.
@@ -116,10 +111,14 @@ test.describe('Review round-trip', () => {
     await expect(page.getByTestId('accept-suggestion')).toHaveCount(0);
     await expect(editor).toContainText('Keep this text');
 
-    // The accepted text stays as plain prose with the suggestion marks gone.
-    // (Session persistence of accepts — text in the room doc, entry removed
-    // from the shared review map — is covered by review-rail's rail-accept.)
+    // The accepted text stays as plain prose with the suggestion marks gone,
+    // and the accept persists into the live session: the text stays in the
+    // room doc with the suggestion entry removed from the shared review map.
     await expect(editor.locator('[data-suggestion-id="s1"]')).toHaveCount(0);
+    await expect.poll(() => collab.roomText('doc-acc')).toContain('Keep this text');
+    await expect
+      .poll(() => collab.roomReviewMeta('doc-acc').suggestions ?? {})
+      .toEqual({});
   });
 });
 
@@ -212,12 +211,14 @@ async function installMockApi(
         await notFound(route);
         return;
       }
-      const headers: Record<string, string> = {
-        ETag: `"${document.version}"`,
-        'content-type': 'text/markdown',
-      };
-      if (document.collab !== false) headers['x-quarry-document-id'] = document.id;
-      await route.fulfill({ body: document.content, headers });
+      await route.fulfill({
+        body: document.content,
+        headers: {
+          ETag: `"${document.version}"`,
+          'content-type': 'text/markdown',
+          'x-quarry-document-id': document.id,
+        },
+      });
       return;
     }
 

@@ -116,7 +116,6 @@ import {
   useEventEditorValue,
   useEditorSelector,
   useFormInputProps,
-  useIncrementVersion,
   useMarkToolbarButton,
   useMarkToolbarButtonState,
   usePlateEditor,
@@ -857,15 +856,31 @@ function CollabSaveStateBridge({
   return null;
 }
 
+// Nudges Plate's version-keyed selectors (the review rail, the floating
+// toolbar) after externally-applied editor changes — Yjs init seeding and
+// remote session updates mutate `editor.children` without a Slate change
+// notification reaching the mounted <Slate> context.
+//
+// The nudge MUST go through `editor.onChange()` rather than a local
+// `useIncrementVersion`: Plate's `useIncrementVersion` keeps a private
+// per-hook counter ref, so a second instance writes the same small integers
+// as the canonical one inside Plate's `useSlateProps`. Whenever the two
+// counters collided, the jotai version-set was value-equal and swallowed,
+// freezing every `useEditorSelector` in the live editor — which is exactly
+// the "expanded selections never show the floating toolbar in a session"
+// bug. Routing through `editor.onChange()` keeps a single writer.
 function PlateValueRevisionBridge({ revision }: { revision: number }) {
-  const bumpEditor = useIncrementVersion('versionEditor');
-  const bumpValue = useIncrementVersion('versionValue');
+  const editor = useEditorRef();
 
   useEffect(() => {
     if (revision === 0) return;
-    bumpEditor();
-    bumpValue();
-  }, [revision, bumpEditor, bumpValue]);
+    // Deferred one tick: this child effect runs BEFORE the parent <Slate>
+    // effect that registers its change handler (child-before-parent effect
+    // order), and an onChange with no handler registered is silently lost —
+    // exactly the Yjs-init case this bridge exists for.
+    const timer = window.setTimeout(() => editor.api.onChange(), 0);
+    return () => window.clearTimeout(timer);
+  }, [revision, editor]);
 
   return null;
 }

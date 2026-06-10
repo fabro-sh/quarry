@@ -1,15 +1,15 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page, type Route } from 'playwright/test';
+import * as Y from 'yjs';
 
 import { installMockCollabServer } from './helpers/mock-collab-server';
 
 interface MockDocument {
   byteSize?: number;
-  // Selection-driven UI (floating toolbar, dblclick comment drafting) is
-  // currently broken inside live-session editors (pre-existing slate-yjs
-  // selection-sync bug, present since Phase 3 — see the Phase 5 report).
-  // Tests that exercise it opt out of collab to keep the coverage alive on
-  // the same editor component minus the Yjs binding.
+  // Documents are session-backed (collab) by default. The two remaining
+  // opt-outs model the sessionless content-adoption paths that still exist:
+  // SSE-driven refetch and version restore (legacy clearing paths slated for
+  // Phase 7 — see the plan).
   collab?: boolean;
   content: string;
   contentHash?: string | null;
@@ -106,7 +106,7 @@ test.describe('Quarry Browser smoke flows', () => {
   test('inserts and removes a hyperlink from the floating toolbar', async ({ page }) => {
     await installMockApi(page, {
       documents: [
-        { collab: false, content: 'Visit example soon.\n', id: 'doc-link', metadata: { title: 'Linky' }, path: 'link.md', version: 'v1' },
+        { content: 'Visit example soon.\n', id: 'doc-link', metadata: { title: 'Linky' }, path: 'link.md', version: 'v1' },
       ],
     });
 
@@ -271,7 +271,7 @@ test.describe('Quarry Browser smoke flows', () => {
   test('turns a block into a mermaid diagram from the toolbar', async ({ page }) => {
     await installMockApi(page, {
       documents: [
-        { collab: false, content: '# Make\n\ngraph TD; A-->B\n', id: 'doc-mk', metadata: { title: 'Makemmd' }, path: 'makemmd.md', version: 'v1' },
+        { content: '# Make\n\ngraph TD; A-->B\n', id: 'doc-mk', metadata: { title: 'Makemmd' }, path: 'makemmd.md', version: 'v1' },
       ],
     });
 
@@ -361,7 +361,7 @@ test.describe('Quarry Browser smoke flows', () => {
   test('turns a block into a table from the toolbar', async ({ page }) => {
     await installMockApi(page, {
       documents: [
-        { collab: false, content: '# Doc\n\nseed line\n', id: 'doc-t2', metadata: { title: 'T2' }, path: 't2.md', version: 'v1' },
+        { content: '# Doc\n\nseed line\n', id: 'doc-t2', metadata: { title: 'T2' }, path: 't2.md', version: 'v1' },
       ],
     });
     await page.goto('/');
@@ -1022,7 +1022,6 @@ test.describe('Quarry Browser smoke flows', () => {
           id: 'doc-fmt',
           metadata: { title: 'Format' },
           path: 'format.md',
-          collab: false,
           version: 'v1',
         },
       ],
@@ -1032,6 +1031,9 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.getByRole('treeitem', { name: /Format/ }).click();
     const editor = page.getByLabel('Plate markdown editor');
     await expect(editor).toContainText('Some body text');
+    // The editor is read-only until the session is live; wait for the header
+    // to settle before selecting.
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
 
     await expect(page.getByRole('button', { name: 'Bold' })).toHaveCount(0);
 
@@ -1052,6 +1054,54 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(editor.locator('em').first()).toBeVisible();
   });
 
+  // Regression: an expanded selection in a live editor must survive the
+  // re-renders the session itself produces — the checkpoint ack that settles
+  // the header to Saved, and a remote update from another collaborator. A
+  // version-counter collision in the revision bridge used to freeze Plate's
+  // selection-driven selectors, killing the toolbar and snapping the DOM
+  // selection on exactly these re-renders.
+  test('keeps an expanded selection through checkpoint acks and remote session updates', async ({ page }) => {
+    const api = await installMockApi(page, {
+      documents: [
+        {
+          content: 'Select example words here.\n\nRemote target paragraph.\n',
+          id: 'doc-selhold',
+          metadata: { title: 'SelHold' },
+          path: 'selhold.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /SelHold/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Select example words');
+
+    // Type so a checkpoint is pending, then select while it is in flight.
+    // (The click lands the caret at the document end, so ' x' appends to the
+    // second paragraph.)
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' x');
+    await editor.getByText('example', { exact: false }).dblclick();
+    await expect(page.getByRole('button', { name: 'Bold' })).toBeVisible();
+
+    // The checkpoint ack settles the header to Saved; the selection and the
+    // toolbar must survive that re-render.
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
+    await expect(page.getByRole('button', { name: 'Bold' })).toBeVisible();
+    expect(await page.evaluate(() => document.getSelection()?.toString())).toBe('example');
+
+    // A remote collaborator edit lands in another block; same requirement.
+    const roomDoc = api.collab.roomDoc('doc-selhold');
+    if (!roomDoc) throw new Error('room doc missing');
+    appendToBlockContaining(roomDoc, 'Remote target', ' (agent edit)');
+    await expect(editor).toContainText('Remote target paragraph. x (agent edit)');
+    await expect(page.getByRole('button', { name: 'Bold' })).toBeVisible();
+    expect(await page.evaluate(() => document.getSelection()?.toString())).toBe('example');
+  });
+
   test('turns a block into a heading from the floating toolbar', async ({ page }) => {
     await installMockApi(page, {
       documents: [
@@ -1060,7 +1110,6 @@ test.describe('Quarry Browser smoke flows', () => {
           id: 'doc-blocks',
           metadata: { title: 'Blocks' },
           path: 'blocks.md',
-          collab: false,
           version: 'v1',
         },
       ],
@@ -1115,7 +1164,6 @@ test.describe('Quarry Browser smoke flows', () => {
           id: 'doc-lists',
           metadata: { title: 'Lists' },
           path: 'lists.md',
-          collab: false,
           version: 'v1',
         },
       ],
@@ -1296,7 +1344,6 @@ test.describe('Quarry Browser smoke flows', () => {
           id: 'doc-underline',
           metadata: { title: 'Underliney' },
           path: 'underliney.md',
-          collab: false,
           version: 'v1',
         },
       ],
@@ -1323,7 +1370,6 @@ test.describe('Quarry Browser smoke flows', () => {
           id: 'doc-sup',
           metadata: { title: 'SupSub' },
           path: 'supsub.md',
-          collab: false,
           version: 'v1',
         },
       ],
@@ -1355,7 +1401,6 @@ test.describe('Quarry Browser smoke flows', () => {
           id: 'doc-todobar',
           metadata: { title: 'TodoBar' },
           path: 'todobar.md',
-          collab: false,
           version: 'v1',
         },
       ],
@@ -1428,7 +1473,6 @@ test.describe('Quarry Browser smoke flows', () => {
           id: 'doc-code',
           metadata: { title: 'Codey' },
           path: 'codey.md',
-          collab: false,
           version: 'v1',
         },
       ],
@@ -1491,6 +1535,8 @@ test.describe('Quarry Browser smoke flows', () => {
           id: 'doc-versioned',
           metadata: { title: 'Versioned' },
           path: 'versioned.md',
+          // Version restore adopts content via the sessionless path (a
+          // remaining legacy clearing path — Phase 7 work in the plan).
           collab: false,
           version: 'v-current',
         },
@@ -2348,4 +2394,29 @@ async function expectRectangularRows(table: Locator, expectedCellCounts: number[
 
 async function notFound(route: Route) {
   await route.fulfill({ body: 'not found', status: 404 });
+}
+
+// Appends text to the end of the top-level block whose text contains `marker`,
+// as a remote collaborator would (its own transaction in the room doc; the
+// mock server relays the update to the page). slate-yjs models the document
+// as a 'content' Y.XmlText whose delta embeds one Y.XmlText per block.
+function appendToBlockContaining(doc: Y.Doc, marker: string, text: string) {
+  const root = doc.get('content', Y.XmlText);
+  const blocks = (root.toDelta() as Array<{ insert?: unknown }>)
+    .map((op) => op.insert)
+    .filter((insert): insert is Y.XmlText => insert instanceof Y.XmlText);
+  const block = blocks.find((candidate) => xmlTextString(candidate).includes(marker));
+  if (!block) throw new Error(`no block contains marker: ${marker}`);
+  doc.transact(() => {
+    block.insert(block.length, text);
+  }, 'test:remote-collaborator');
+}
+
+function xmlTextString(node: Y.XmlText): string {
+  let out = '';
+  for (const op of node.toDelta() as Array<{ insert?: unknown }>) {
+    if (typeof op.insert === 'string') out += op.insert;
+    else if (op.insert instanceof Y.XmlText) out += xmlTextString(op.insert);
+  }
+  return out;
 }
