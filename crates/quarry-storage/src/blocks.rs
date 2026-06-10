@@ -152,6 +152,77 @@ pub struct NewBlockReviewItem {
     pub parent_item_id: Option<String>,
 }
 
+/// A whole-file Markdown write of a BlockDocument, reconciled against the
+/// canonical block rows via diff3 (Phase 4). Adapters (Git, FUSE, CLI) differ
+/// only in base bookkeeping; the single implementation lives in quarry-server
+/// (it owns the mutation gateway and the session mode switch) and is
+/// installed into the store by the serving process — see
+/// [`QuarryStore::set_block_markdown_writer`].
+#[derive(Clone, Debug)]
+pub struct BlockMarkdownWrite {
+    pub library: String,
+    pub path: String,
+    /// The full incoming text (frontmatter + body).
+    pub markdown: String,
+    /// Caller metadata merged over the incoming frontmatter (at minimum
+    /// `{"content_type": …}`), mirroring the import path's metadata rule.
+    pub metadata: JsonValue,
+    pub base: BlockWriteBase,
+    pub source: DocumentSource,
+    /// Actor kind recorded on the transaction history ("git", "fuse", "cli",
+    /// "rest").
+    pub surface: String,
+    /// Display label for history attribution (e.g. "Git sync (origin)").
+    pub actor_label: Option<String>,
+}
+
+/// The diff3 base selector for one whole-file write.
+#[derive(Clone, Debug)]
+pub enum BlockWriteBase {
+    /// Two-way degenerate case (CLI, missing shadow base): the base is the
+    /// current canonical state, so nothing can conflict and every incoming
+    /// difference applies.
+    CurrentCanonical,
+    /// A stored shadow base: Git peer bases, FUSE open-handle bases, REST
+    /// `If-Match` version content. The full text (frontmatter tolerated);
+    /// `version_id` engages the gateway's rebase acks when it names a known
+    /// version.
+    Markdown {
+        markdown: String,
+        version_id: Option<String>,
+    },
+}
+
+/// What a reconciled whole-file write did.
+#[derive(Clone, Debug)]
+pub struct BlockMarkdownWriteOutcome {
+    /// The head after the write: a fresh commit when `changed`, the
+    /// untouched current head otherwise.
+    pub outcome: WriteOutcome,
+    /// `false` when the incoming text was byte-identical to the head
+    /// content: nothing was committed (no version churn on re-imports and
+    /// no-op saves).
+    pub changed: bool,
+    /// The canonical Markdown BODY (no frontmatter) after the write — what
+    /// shadow bases store.
+    pub canonical_body: String,
+    /// Conflict review items recorded by this write.
+    pub conflicts: usize,
+}
+
+/// The Phase 4 whole-file write path. Reconciliation failures never fail the
+/// write (conflicts become review items); errors are content errors
+/// (CriticMarkup → [`QuarryError::UnsupportedMarkdown`]) or ordinary storage
+/// failures.
+pub trait BlockMarkdownWriter: Send + Sync {
+    fn write_markdown(
+        &self,
+        write: BlockMarkdownWrite,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<BlockMarkdownWriteOutcome>> + Send + '_>,
+    >;
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlockShadowBase {
     pub surface: String,
@@ -268,7 +339,58 @@ pub enum BlockMutationOutcome {
     Replayed(BlockTransactionRecord),
 }
 
+/// The empty writer-registry slot (`Weak::<dyn …>::new()` needs a sized
+/// type to coerce from); never instantiated.
+pub(crate) struct NoBlockMarkdownWriter;
+
+impl BlockMarkdownWriter for NoBlockMarkdownWriter {
+    fn write_markdown(
+        &self,
+        _write: BlockMarkdownWrite,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<BlockMarkdownWriteOutcome>> + Send + '_>,
+    > {
+        unreachable!("NoBlockMarkdownWriter is never constructed")
+    }
+}
+
 impl QuarryStore {
+    /// Installs the whole-file Markdown write path (Phase 4). The serving
+    /// process (quarry-server) calls this once at startup and keeps the
+    /// strong `Arc` alive for the serving lifetime (the registry holds a
+    /// `Weak` — see the field docs); Git/FUSE/CLI then route every
+    /// BlockDocument file write through
+    /// [`QuarryStore::write_block_markdown`].
+    pub fn set_block_markdown_writer(&self, writer: &Arc<dyn BlockMarkdownWriter>) {
+        *self
+            .block_markdown_writer
+            .write()
+            .expect("writer registry lock") = Arc::downgrade(writer);
+    }
+
+    /// Routes a whole-file BlockDocument write through the installed
+    /// reconciling writer. Errors when no writer is installed — adapters
+    /// must never fall back to the legacy byte path for Markdown, or the
+    /// write would clear the block projection and bypass live sessions.
+    pub async fn write_block_markdown(
+        &self,
+        write: BlockMarkdownWrite,
+    ) -> Result<BlockMarkdownWriteOutcome> {
+        let writer = self
+            .block_markdown_writer
+            .read()
+            .expect("writer registry lock")
+            .upgrade()
+            .ok_or_else(|| {
+                QuarryError::Unsupported(
+                    "no block markdown writer installed; markdown writes require the owning \
+                     quarry process"
+                        .to_string(),
+                )
+            })?;
+        writer.write_markdown(write).await
+    }
+
     /// Loads a document's block rows in depth-first document order (parents
     /// before children, siblings by `position`).
     pub async fn load_block_tree(&self, document_id: &str) -> Result<Vec<BlockRow>> {
@@ -310,6 +432,33 @@ impl QuarryStore {
         content_type: &str,
         source: DocumentSource,
         precondition: WritePrecondition,
+    ) -> Result<WriteOutcome> {
+        self.import_block_document_with_origin(
+            library,
+            path,
+            markdown,
+            metadata,
+            content_type,
+            source,
+            precondition,
+            None,
+        )
+        .await
+    }
+
+    /// [`QuarryStore::import_block_document`] with an `origin_id` echoed on
+    /// the emitted `doc.changed` event (the Phase 4 first-import path).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn import_block_document_with_origin(
+        &self,
+        library: &str,
+        path: &str,
+        markdown: &str,
+        metadata: JsonValue,
+        content_type: &str,
+        source: DocumentSource,
+        precondition: WritePrecondition,
+        origin_id: Option<String>,
     ) -> Result<WriteOutcome> {
         let path = normalize_path(path)?;
         if document_kind(&path, content_type) == DocumentKind::RawDocument {
@@ -386,7 +535,7 @@ impl QuarryStore {
         }
         .await;
         let outcome = finish_tx(&conn, result).await?;
-        self.emit_document_put_events(&outcome, None);
+        self.emit_document_put_events(&outcome, origin_id);
         Ok(outcome)
     }
 

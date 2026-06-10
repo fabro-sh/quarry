@@ -1,5 +1,6 @@
 mod collab;
 mod gateway;
+mod markdown_write;
 mod session;
 
 #[cfg(feature = "bundle_ui")]
@@ -177,10 +178,39 @@ impl AgentPresenceRegistry {
     }
 }
 
-pub fn router(store: QuarryStore) -> Router {
+/// Builds the server state for `store`. Pair with
+/// [`install_markdown_writer`] so same-process Git/FUSE/CLI writes route
+/// through the gateway and the session mode switch (one owning process per
+/// database; out-of-process writers cannot open the store at all).
+pub fn app_state(store: QuarryStore) -> AppState {
     let agent_events = AgentEventJournal::default();
     agent_events.spawn_ingest(store.clone());
+    let sessions = session::SessionHub::new(store.clone());
+    AppState {
+        store,
+        sessions,
+        agent_events,
+        agent_presence: AgentPresenceRegistry::default(),
+    }
+}
 
+/// Creates the Phase 4 whole-file Markdown writer over `state` and installs
+/// it into the store. The store keeps only a `Weak` reference (the writer
+/// holds store clones — a strong registry ref would leak the store and its
+/// lock file past shutdown), so the caller must hold the returned handle for
+/// as long as file writes should be served.
+pub fn install_markdown_writer(state: &AppState) -> Arc<dyn quarry_storage::BlockMarkdownWriter> {
+    let writer: Arc<dyn quarry_storage::BlockMarkdownWriter> =
+        Arc::new(markdown_write::GatewayMarkdownWriter::new(state.clone()));
+    state.store.set_block_markdown_writer(&writer);
+    writer
+}
+
+pub fn router(store: QuarryStore) -> Router {
+    router_with_state(app_state(store))
+}
+
+pub fn router_with_state(state: AppState) -> Router {
     let router = Router::new()
         .route("/quarry.SKILL.md", get(quarry_skill))
         .route("/agent-docs", get(agent_docs))
@@ -266,13 +296,7 @@ pub fn router(store: QuarryStore) -> Router {
 
     let router = router.layer(middleware::from_fn(request_tracing_middleware));
 
-    let sessions = session::SessionHub::new(store.clone());
-    router.with_state(AppState {
-        store,
-        sessions,
-        agent_events,
-        agent_presence: AgentPresenceRegistry::default(),
-    })
+    router.with_state(state)
 }
 
 async fn request_tracing_middleware(request: Request, next: Next) -> Response {
@@ -330,6 +354,21 @@ pub async fn serve_with_shutdown<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    serve_state_with_shutdown(app_state(store), addr, shutdown).await
+}
+
+/// Serves an already-built [`AppState`] — the same-process embedding hook
+/// (`quarry mount --serve-addr` shares one state between the FUSE mount's
+/// store-installed writer and the HTTP server, so file writes reach the live
+/// sessions).
+pub async fn serve_state_with_shutdown<F>(
+    state: AppState,
+    addr: SocketAddr,
+    shutdown: F,
+) -> std::io::Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
     warn_if_non_loopback(addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(
@@ -338,7 +377,10 @@ where
         "quarry REST server listening"
     );
     let (shutdown_started_tx, shutdown_started_rx) = tokio::sync::oneshot::channel::<()>();
-    let server = axum::serve(listener, router(store))
+    // Whole-file Git/FUSE/CLI writes in this process route through the
+    // gateway for as long as the server lives.
+    let _markdown_writer = install_markdown_writer(&state);
+    let server = axum::serve(listener, router_with_state(state))
         .with_graceful_shutdown(async move {
             shutdown.await;
             let _ = shutdown_started_tx.send(());
@@ -2048,6 +2090,29 @@ async fn put_document(
         }
     }
 
+    // Phase 4: a BlockDocument PUT is a whole-file write reconciled via
+    // diff3 against the canonical block rows — block ids and review anchors
+    // survive, true conflicts become review items, and a live session
+    // receives the merge as a collaborator edit. RawDocuments keep the
+    // untouched legacy byte path below.
+    if quarry_storage::document_kind(&path, &content_type)
+        == quarry_storage::DocumentKind::BlockDocument
+    {
+        return gateway::gateway_reply(
+            markdown_write::put_block_document(
+                &state,
+                &library,
+                &path,
+                body.to_vec(),
+                metadata,
+                precondition,
+                origin_id,
+                transaction,
+            )
+            .await,
+        );
+    }
+
     let outcome = state
         .store
         .put_document_with_transaction(
@@ -3106,6 +3171,16 @@ pub struct ApiError {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ErrorResponse {
     error: String,
+}
+
+impl ApiError {
+    pub(crate) fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 impl From<QuarryError> for ApiError {

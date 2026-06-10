@@ -179,7 +179,7 @@ pub(crate) enum GatewayErrorCode {
 }
 
 impl GatewayErrorCode {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::StaleBase => "STALE_BASE",
             Self::BlockDeleted => "BLOCK_DELETED",
@@ -219,7 +219,15 @@ pub(crate) struct GatewayError {
 }
 
 impl GatewayError {
-    fn new(code: GatewayErrorCode, message: impl Into<String>) -> Self {
+    pub(crate) fn code(&self) -> GatewayErrorCode {
+        self.code
+    }
+
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub(crate) fn new(code: GatewayErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -283,7 +291,9 @@ impl From<QuarryError> for GatewayFailure {
     }
 }
 
-fn gateway_reply(result: Result<Response, GatewayFailure>) -> Result<Response, ApiError> {
+pub(crate) fn gateway_reply(
+    result: Result<Response, GatewayFailure>,
+) -> Result<Response, ApiError> {
     match result {
         Ok(response) => Ok(response),
         Err(GatewayFailure::Typed(error)) => Ok(error.into_response()),
@@ -1812,6 +1822,9 @@ pub(crate) struct TransactionSettings {
     /// Replaces the document metadata at commit (whole-file writes carry
     /// incoming frontmatter); `None` keeps the snapshot metadata.
     pub metadata: Option<JsonValue>,
+    /// Legacy `x-quarry-transaction-*` attribution carried by direct PUTs;
+    /// actor falls back to the transaction actor's display name.
+    pub transaction: quarry_storage::TransactionMetadata,
 }
 
 impl Default for TransactionSettings {
@@ -1820,6 +1833,7 @@ impl Default for TransactionSettings {
             source: DocumentSource::Rest,
             origin_id: None,
             metadata: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
         }
     }
 }
@@ -1965,9 +1979,14 @@ async fn apply_rows_transaction(
             client_tx_id: ctx.client_tx_id.clone(),
             actor_kind: ctx.actor.kind.clone(),
             actor_id: ctx.actor.id.clone(),
-            transaction_actor: Some(ctx.actor.display()),
-            transaction_message: None,
-            transaction_provenance: None,
+            transaction_actor: settings
+                .transaction
+                .actor
+                .clone()
+                .or_else(|| Some(ctx.actor.display())),
+            transaction_message: settings.transaction.message.clone(),
+            transaction_provenance: Some(settings.transaction.provenance.clone())
+                .filter(|provenance| !provenance.is_null() && provenance != &json!({})),
             origin_id: settings.origin_id.clone(),
             source: settings.source.clone(),
             recorded_ops: recorded_ops(
@@ -2090,9 +2109,14 @@ async fn apply_session_transaction(
         client_tx_id: ctx.client_tx_id.clone(),
         actor_kind: ctx.actor.kind.clone(),
         actor_id: ctx.actor.id.clone(),
-        transaction_actor: Some(ctx.actor.display()),
-        transaction_message: None,
-        transaction_provenance: None,
+        transaction_actor: settings
+            .transaction
+            .actor
+            .clone()
+            .or_else(|| Some(ctx.actor.display())),
+        transaction_message: settings.transaction.message.clone(),
+        transaction_provenance: Some(settings.transaction.provenance.clone())
+            .filter(|provenance| !provenance.is_null() && provenance != &json!({})),
         // In-session browsers classify this as a benign refresh
         // (`session-events.ts`), exactly like checkpoint commits — for
         // whole-file writes too, since the session doc already carries the
@@ -2169,7 +2193,7 @@ fn normalized_markdown(rows: &[BlockRow], metadata: &JsonValue) -> Result<String
     ))
 }
 
-fn require_block_document(path: &str, content_type: &str) -> Result<(), GatewayError> {
+pub(crate) fn require_block_document(path: &str, content_type: &str) -> Result<(), GatewayError> {
     if document_kind(path, content_type) == DocumentKind::RawDocument {
         return Err(GatewayError::new(
             GatewayErrorCode::UnsupportedBlockDocument,
@@ -2433,7 +2457,23 @@ mod tests {
         let first = apply_ops(&state, &ops, &actor(), "tx-deterministic").unwrap();
         let second = apply_ops(&state, &ops, &actor(), "tx-deterministic").unwrap();
         assert_eq!(first.rows, second.rows);
-        assert_eq!(first.review_items, second.review_items);
+        // Timestamps come from the wall clock at apply time; everything else
+        // must be identical.
+        let timeless = |items: &[BlockReviewItem]| -> Vec<BlockReviewItem> {
+            items
+                .iter()
+                .cloned()
+                .map(|mut item| {
+                    item.created_at = String::new();
+                    item.updated_at = String::new();
+                    item
+                })
+                .collect()
+        };
+        assert_eq!(
+            timeless(&first.review_items),
+            timeless(&second.review_items)
+        );
 
         // A DIFFERENT transaction mints different ids.
         let other = apply_ops(&state, &ops, &actor(), "tx-other").unwrap();

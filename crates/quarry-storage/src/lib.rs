@@ -1,9 +1,10 @@
 mod blocks;
 
 pub use blocks::{
-    document_kind, BlockMutationCommit, BlockMutationOutcome, BlockMutationState, BlockReviewItem,
-    BlockReviewKind, BlockReviewState, BlockShadowBase, BlockTransactionRecord, DocumentKind,
-    NewBlockReviewItem, SessionSeedState,
+    document_kind, BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockMarkdownWriter,
+    BlockMutationCommit, BlockMutationOutcome, BlockMutationState, BlockReviewItem,
+    BlockReviewKind, BlockReviewState, BlockShadowBase, BlockTransactionRecord, BlockWriteBase,
+    DocumentKind, NewBlockReviewItem, SessionSeedState,
 };
 
 use chrono::{DateTime, Utc};
@@ -122,6 +123,14 @@ pub struct QuarryStore {
     write_lock: Arc<Mutex<()>>,
     operation_lock: Arc<Mutex<()>>,
     event_tx: broadcast::Sender<StoreEvent>,
+    /// Phase 4: the whole-file Markdown write path for BlockDocuments,
+    /// installed by the serving process (quarry-server owns the single
+    /// reconciliation implementation and the session mode switch). Shared
+    /// across store clones. Weak: the writer itself holds store clones, so a
+    /// strong ref here would cycle and keep the store (and its lock file)
+    /// alive past shutdown — the installer keeps the strong handle for the
+    /// serving lifetime.
+    block_markdown_writer: Arc<std::sync::RwLock<std::sync::Weak<dyn BlockMarkdownWriter>>>,
     _lock_guard: Arc<LockGuard>,
 }
 
@@ -225,6 +234,9 @@ impl QuarryStore {
             write_lock: Arc::new(Mutex::new(())),
             operation_lock: Arc::new(Mutex::new(())),
             event_tx,
+            block_markdown_writer: Arc::new(std::sync::RwLock::new(std::sync::Weak::<
+                blocks::NoBlockMarkdownWriter,
+            >::new())),
             _lock_guard: Arc::new(lock_guard),
         };
         store.migrate().await?;
@@ -5164,7 +5176,9 @@ fn directory_path_and_parents(path: &str) -> Vec<String> {
     dirs
 }
 
-fn merge_json(target: &mut JsonValue, patch: JsonValue) {
+/// Deep-merges `patch` into `target` (objects merge recursively, scalars
+/// replace). Shared with the Phase 4 reconciled write path in quarry-server.
+pub fn merge_json(target: &mut JsonValue, patch: JsonValue) {
     match (target, patch) {
         (JsonValue::Object(target), JsonValue::Object(patch)) => {
             for (key, value) in patch {
@@ -5197,7 +5211,9 @@ fn markdown_frontmatter_metadata(content: &[u8]) -> Result<JsonValue> {
 
 /// Splits leading YAML frontmatter from a Markdown document: the parsed
 /// frontmatter (an empty object when absent) and the body after it.
-fn split_markdown_frontmatter(text: &str) -> Result<(JsonValue, &str)> {
+/// Splits leading YAML frontmatter from a Markdown text: `(frontmatter
+/// metadata, body)`. Shared with the Phase 4 reconciled write path.
+pub fn split_markdown_frontmatter(text: &str) -> Result<(JsonValue, &str)> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let Some(open_len) = markdown_frontmatter_open_len(text) else {
         return Ok((serde_json::json!({}), text));

@@ -244,9 +244,11 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
         response.headers()["x-quarry-document-id"],
         document_id.as_str()
     );
+    // Markdown PUTs land via the Phase 4 reconciled write: content is the
+    // deterministic normalized export (trailing newline), not the raw bytes.
     assert_eq!(
         to_bytes(response.into_body(), usize::MAX).await.unwrap(),
-        "one"
+        "one\n"
     );
 
     let response = app
@@ -2504,9 +2506,10 @@ async fn rest_api_rejects_stale_transaction_commit_with_precondition_failed() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    // Normalized by the Phase 4 reconciled markdown write.
     assert_eq!(
         to_bytes(response.into_body(), usize::MAX).await.unwrap(),
-        "newer"
+        "newer\n"
     );
 
     let response = app
@@ -5234,4 +5237,238 @@ async fn conflict_add_requires_an_existing_attachment_block() {
     )
     .await;
     assert_typed_error(status, &body, "BLOCK_DELETED", false);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: the reconciled Markdown PUT.
+// ---------------------------------------------------------------------------
+
+/// A stale-but-known `If-Match` is a BASE SELECTOR now, not a failing
+/// precondition: the canonical edit and the external edit (computed against
+/// the old version) both land, sibling block ids survive, and anchors
+/// outside the changed hunks stay open.
+#[tokio::test]
+async fn markdown_put_merges_against_the_if_match_base_preserving_ids_and_anchors() {
+    let (_root, app, _store) = block_test_app().await;
+    // The separator keeps the two edited regions apart: edits to ADJACENT
+    // blocks (no stable block between them) are conflict-absorbed by design.
+    put_block_markdown(
+        &app,
+        "merge.md",
+        "# Title\n\nAlpha.\n\nSeparator.\n\nBravo.\n",
+    )
+    .await;
+    let tree = get_block_tree(&app, "merge.md").await;
+    let base_clock = tree["document_clock"].as_str().unwrap().to_string();
+    let ids: Vec<String> = tree["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|block| block["block_id"].as_str().unwrap().to_string())
+        .collect();
+    let base_export = get_document_markdown(&app, "merge.md").await;
+
+    // A live anchor on the Title block (untouched by either side).
+    commit_block_transaction(
+        &app,
+        "merge.md",
+        block_tx(
+            "tx-anchor-title",
+            serde_json::json!([{
+                "op": "comment.add", "block_id": ids[0], "start": 0, "end": 5, "body": "keep me"
+            }]),
+        ),
+    )
+    .await;
+    // Canonical edit to Alpha (a browser/agent write after the export).
+    commit_block_transaction(
+        &app,
+        "merge.md",
+        block_tx(
+            "tx-canonical-alpha",
+            serde_json::json!([{
+                "op": "replace_block_content", "block_id": ids[1], "text": "Alpha, canonical."
+            }]),
+        ),
+    )
+    .await;
+
+    // The external writer edits Bravo against the OLD export and PUTs with
+    // the old clock.
+    let incoming = base_export.replace("Bravo.", "Bravo, external.");
+    assert_ne!(incoming, base_export);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/merge.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header(header::IF_MATCH, format!("\"{base_clock}\""))
+                .body(Body::from(incoming))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Both sides landed; nothing conflicted.
+    let merged = get_document_markdown(&app, "merge.md").await;
+    assert_eq!(
+        merged,
+        "# Title\n\nAlpha, canonical.\n\nSeparator.\n\nBravo, external.\n"
+    );
+    let tree = get_block_tree(&app, "merge.md").await;
+    let merged_ids: Vec<String> = tree["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|block| block["block_id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(merged_ids, ids, "sibling block ids survive the file write");
+    let review = get_block_review(&app, "merge.md", false).await;
+    assert_eq!(review["conflicts"].as_array().unwrap().len(), 0);
+    assert_eq!(review["comments"][0]["status"], "open");
+    assert_eq!(review["comments"][0]["anchor"]["blockId"], ids[0].as_str());
+}
+
+/// Overlapping edits (canonical and incoming both touched Bravo since the
+/// base) never fail the write: the canonical side is retained and the losing
+/// hunk surfaces as a conflict review item anchored after Alpha.
+#[tokio::test]
+async fn markdown_put_overlapping_edits_become_conflict_review_items() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "clash.md", "# Title\n\nAlpha.\n\nBravo.\n").await;
+    let tree = get_block_tree(&app, "clash.md").await;
+    let base_clock = tree["document_clock"].as_str().unwrap().to_string();
+    let ids: Vec<String> = tree["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|block| block["block_id"].as_str().unwrap().to_string())
+        .collect();
+    let base_export = get_document_markdown(&app, "clash.md").await;
+
+    commit_block_transaction(
+        &app,
+        "clash.md",
+        block_tx(
+            "tx-canonical-bravo",
+            serde_json::json!([{
+                "op": "replace_block_content", "block_id": ids[2], "text": "Bravo, canonical."
+            }]),
+        ),
+    )
+    .await;
+
+    let incoming = base_export.replace("Bravo.", "Bravo, external.");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/clash.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header(header::IF_MATCH, format!("\"{base_clock}\""))
+                .body(Body::from(incoming))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "conflicts never fail the write"
+    );
+
+    // Canonical side retained…
+    assert_eq!(
+        get_document_markdown(&app, "clash.md").await,
+        "# Title\n\nAlpha.\n\nBravo, canonical.\n"
+    );
+    // …and the losing hunk rides in a conflict review item.
+    let review = get_block_review(&app, "clash.md", false).await;
+    let conflicts = review["conflicts"].as_array().unwrap();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0]["afterBlockId"].as_str(), Some(ids[1].as_str()));
+    assert_eq!(conflicts[0]["incomingMarkdown"], "Bravo, external.\n");
+    assert_eq!(conflicts[0]["baseMarkdown"], "Bravo.\n");
+    assert_eq!(conflicts[0]["canonicalMarkdown"], "Bravo, canonical.\n");
+}
+
+/// A byte-identical PUT acks with the current head and commits nothing.
+#[tokio::test]
+async fn byte_identical_markdown_put_commits_no_new_version() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "noop.md", "Alpha.\n").await;
+    let _ = get_block_tree(&app, "noop.md").await; // materialize + normalize
+    let content = get_document_markdown(&app, "noop.md").await;
+    let versions_before = raw_version_count(&app, "noop.md").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/noop.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .body(Body::from(content.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let outcome = response_json(response).await;
+    assert!(outcome["version"]["id"].is_string());
+    assert_eq!(raw_version_count(&app, "noop.md").await, versions_before);
+    assert_eq!(get_document_markdown(&app, "noop.md").await, content);
+}
+
+/// CriticMarkup is a content error on API import paths (it collides with the
+/// review codec): the PUT fails typed, not silently as bytes.
+#[tokio::test]
+async fn markdown_put_with_critic_markup_fails_typed_unsupported() {
+    let (_root, app, _store) = block_test_app().await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/critic.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .body(Body::from("Some {++inserted++} text.\n"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    assert_typed_error(status, &body, "UNSUPPORTED_MARKDOWN", false);
+}
+
+/// RawDocuments keep the untouched byte path: bytes round-trip exactly and
+/// no block tables are touched.
+#[tokio::test]
+async fn raw_document_put_bypasses_the_block_model_entirely() {
+    let (_root, app, store) = block_test_app().await;
+    let bytes: Vec<u8> = vec![0u8, 159, 146, 150, 13, 10, 0];
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/data.bin")
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from(bytes.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let document = store.get_document("blocks", "data.bin").await.unwrap();
+    assert_eq!(document.content, bytes);
+    assert_eq!(
+        store.load_block_tree(&document.id).await.unwrap(),
+        Vec::<quarry_collab_codec::BlockRow>::new()
+    );
 }
