@@ -1731,16 +1731,9 @@ impl QuarryStore {
         })
     }
 
-    pub async fn restore_document_version(
-        &self,
-        library: &str,
-        path: &str,
-        version_id: &str,
-    ) -> Result<WriteOutcome> {
-        self.restore_document_version_with_origin(library, path, version_id, None)
-            .await
-    }
-
+    /// Restores a version through the legacy byte path. RawDocuments only:
+    /// the server routes BlockDocument restores through the reconciling
+    /// gateway (`markdown_write::restore_block_document_version`).
     pub async fn restore_document_version_with_origin(
         &self,
         library: &str,

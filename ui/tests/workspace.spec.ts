@@ -7,9 +7,10 @@ import { installMockCollabServer } from './helpers/mock-collab-server';
 interface MockDocument {
   byteSize?: number;
   // Documents are session-backed (collab) by default. The two remaining
-  // opt-outs model the sessionless content-adoption paths that still exist:
-  // SSE-driven refetch and version restore (legacy clearing paths slated for
-  // Phase 7 — see the plan).
+  // opt-outs model the sessionless UI surface (documents opened without a
+  // live session): SSE-driven refetch adoption and the version-restore flow.
+  // Server-side both writes route through the gateway; session-backed
+  // rendering of those writes is covered by the live suite and rest_api.rs.
   collab?: boolean;
   content: string;
   contentHash?: string | null;
@@ -1535,8 +1536,11 @@ test.describe('Quarry Browser smoke flows', () => {
           id: 'doc-versioned',
           metadata: { title: 'Versioned' },
           path: 'versioned.md',
-          // Version restore adopts content via the sessionless path (a
-          // remaining legacy clearing path — Phase 7 work in the plan).
+          // This mock exercises the sessionless UI flow (button → restore
+          // call → refetch). Server-side, restores route through the
+          // reconciling gateway and land in a live session as collaborator
+          // edits — pinned by rest_api.rs
+          // version_restore_lands_in_a_live_session_as_a_collaborator_edit.
           collab: false,
           version: 'v-current',
         },

@@ -1731,9 +1731,13 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
         )
         .await
         .unwrap();
+    // The restore routes through the reconciling gateway (Phase 7), which
+    // publishes the canonical normalized form: this version was written by a
+    // legacy byte put with out-of-band `title` metadata, so the one-time
+    // normalization renders that metadata as frontmatter.
     assert_eq!(
         to_bytes(response.into_body(), usize::MAX).await.unwrap(),
-        "# Intro\n\nLinks to [[Daily|today]], [[Missing]], [Guide](guide.md), and #planning.\n"
+        "---\ntitle: Intro\n---\n# Intro\n\nLinks to [[Daily|today]], [[Missing]], [Guide](guide.md), and #planning.\n"
     );
 
     let response = app
@@ -5461,6 +5465,125 @@ async fn markdown_put_overlapping_edits_become_conflict_review_items() {
     assert_eq!(conflicts[0]["incomingMarkdown"], "Bravo, external.\n");
     assert_eq!(conflicts[0]["baseMarkdown"], "Bravo.\n");
     assert_eq!(conflicts[0]["canonicalMarkdown"], "Bravo, canonical.\n");
+}
+
+/// Phase 7: a version restore on a BlockDocument is a whole-file write
+/// through the reconciler (the two-way degenerate merge), not a legacy byte
+/// put — the block projection survives (ids stable, anchors live) and the
+/// content equals the restored version exactly.
+#[tokio::test]
+async fn version_restore_merges_through_the_gateway_preserving_ids_and_anchors() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "undo.md", "# Title\n\nAlpha.\n\nBravo.\n").await;
+    let tree = get_block_tree(&app, "undo.md").await;
+    let restore_to = tree["document_clock"].as_str().unwrap().to_string();
+    let ids: Vec<String> = tree["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|block| block["block_id"].as_str().unwrap().to_string())
+        .collect();
+    let original = get_document_markdown(&app, "undo.md").await;
+
+    // A live anchor on the Title block and a later content edit to Alpha.
+    commit_block_transaction(
+        &app,
+        "undo.md",
+        block_tx(
+            "tx-anchor-title",
+            serde_json::json!([{
+                "op": "comment.add", "block_id": ids[0], "start": 0, "end": 5, "body": "survive the restore"
+            }]),
+        ),
+    )
+    .await;
+    commit_block_transaction(
+        &app,
+        "undo.md",
+        block_tx(
+            "tx-edit-alpha",
+            serde_json::json!([{
+                "op": "replace_block_content", "block_id": ids[1], "text": "Alpha, edited."
+            }]),
+        ),
+    )
+    .await;
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            &format!("/v1/libraries/blocks/documents/undo.md/versions/{restore_to}/restore"),
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // The content is the restored version, as a NEW head.
+    assert_eq!(get_document_markdown(&app, "undo.md").await, original);
+    let restored = get_block_tree(&app, "undo.md").await;
+    assert_ne!(restored["document_clock"], serde_json::json!(restore_to));
+    let restored_ids: Vec<String> = restored["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|block| block["block_id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        restored_ids, ids,
+        "the restore merges through the reconciler instead of clearing the projection"
+    );
+    let review = get_block_review(&app, "undo.md", false).await;
+    assert_eq!(review["comments"][0]["status"], "open");
+    assert_eq!(review["comments"][0]["anchor"]["blockId"], ids[0].as_str());
+    assert_eq!(review["conflicts"], serde_json::json!([]));
+}
+
+/// A restore during a live session dispatches through the session mode
+/// switch: the restored content lands in the live doc as a collaborator
+/// edit, never by clearing the projection underneath the session.
+#[tokio::test]
+async fn version_restore_lands_in_a_live_session_as_a_collaborator_edit() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "Stable block.\n\nOld text.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+    let tree = get_block_tree(&app, "live.md").await;
+    let restore_to = tree["document_clock"].as_str().unwrap().to_string();
+    let edited = tree["blocks"][1]["block_id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "live.md",
+        block_tx(
+            "tx-edit",
+            serde_json::json!([{
+                "op": "replace_block_content", "block_id": edited, "text": "New text."
+            }]),
+        ),
+    )
+    .await;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            &format!("/v1/libraries/blocks/documents/live.md/versions/{restore_to}/restore"),
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Rows are durable at ack time and the live doc converged via the socket.
+    let after = get_block_tree(&app, "live.md").await;
+    assert_eq!(after["blocks"][1]["text"], "Old text.");
+    assert_eq!(after["blocks"][1]["block_id"], edited.as_str());
+    wait_for_yjs_plain_text(&mut socket, &doc, "Stable block.Old text.").await;
+
+    socket.close(None).await.unwrap();
+    server.abort();
 }
 
 /// A byte-identical PUT acks with the current head and commits nothing.

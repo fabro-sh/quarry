@@ -2179,6 +2179,27 @@ async fn post_document_action(
 ) -> Result<Response, ApiError> {
     let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
     if let Some((path, version)) = document_version_restore_path(&path) {
+        let target = state
+            .store
+            .document_version(&library, path, version)
+            .await?;
+        // BlockDocument restores are whole-file writes through the reconciler
+        // (gateway-dispatched: projection preserved, session-mode aware);
+        // RawDocuments keep the byte path.
+        if quarry_storage::document_kind(path, &target.version.content_type)
+            == quarry_storage::DocumentKind::BlockDocument
+        {
+            return gateway::gateway_reply(
+                markdown_write::restore_block_document_version(
+                    &state,
+                    &library,
+                    path,
+                    &target,
+                    origin_id.clone(),
+                )
+                .await,
+            );
+        }
         let outcome = state
             .store
             .restore_document_version_with_origin(&library, path, version, origin_id.clone())

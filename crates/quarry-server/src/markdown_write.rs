@@ -137,6 +137,52 @@ pub(crate) async fn put_block_document(
     )?)
 }
 
+/// A version restore on a BlockDocument: restore IS a whole-file write of
+/// the stored version's content through the reconciler. The two-way base
+/// (current canonical) makes the merge degenerate — the result equals the
+/// restored content exactly — while unchanged blocks keep their `block_id`s
+/// and live review anchors, and the write rides the mode switch (an active
+/// browser session receives the restore as a collaborator edit instead of
+/// having its projection cleared underneath it). RawDocument restores keep
+/// the legacy byte path in storage.
+pub(crate) async fn restore_block_document_version(
+    state: &AppState,
+    library: &str,
+    path: &str,
+    version: &quarry_core::DocumentVersionContent,
+    origin_id: Option<String>,
+) -> Result<axum::response::Response, GatewayFailure> {
+    let version_id = &version.version.id;
+    let result = write_markdown_with(
+        state,
+        BlockMarkdownWrite {
+            library: library.to_string(),
+            path: path.to_string(),
+            markdown: version.content.clone(),
+            metadata: version.version.metadata.clone(),
+            base: BlockWriteBase::CurrentCanonical,
+            source: DocumentSource::Rest,
+            surface: "rest".to_string(),
+            actor_label: Some(format!("Restore version {version_id}")),
+        },
+        origin_id,
+        quarry_storage::TransactionMetadata {
+            actor: None,
+            message: Some(format!("Restore version {version_id}")),
+            provenance: serde_json::json!({
+                "mode": "auto_commit",
+                "history": {"kind": "checkpoint", "reason": "restore"}
+            }),
+        },
+    )
+    .await?;
+    Ok(crate::json_with_etag(
+        StatusCode::OK,
+        &result.outcome,
+        &result.outcome.version.id,
+    )?)
+}
+
 /// A metadata patch on a BlockDocument (metadata IS the frontmatter): a
 /// zero-op gateway transaction with a metadata override. The block rows and
 /// review items are untouched (the body did not change — rows stay valid by
