@@ -1,17 +1,24 @@
 pub mod markdown;
+pub mod markdown_writer;
 pub mod normalize;
 pub mod review;
+pub mod rows;
 pub mod slate;
 pub mod trailing;
 pub mod yjs_builder;
 
 pub use markdown::{block_markdown_to_slate, block_markdown_to_slate_raw};
+pub use markdown_writer::slate_to_markdown;
 pub use review::{
     has_review_endmatter, hydrate_inline_comment_bodies, inline_comment_body,
     parse_review_document, review_block_to_slate, review_blocks_to_slate, review_markdown_to_slate,
     review_markers, review_meta_with_inline_comment_bodies, split_review_endmatter,
     ReviewCommentMarker, ReviewDocument, ReviewMarkers, ReviewMeta, ReviewMetaEntry,
     ReviewMetaPatch, ReviewSuggestionKind, ReviewSuggestionMarker,
+};
+pub use rows::{
+    block_rows_to_markdown, block_rows_to_nodes, is_utf16_boundary, markdown_to_block_rows,
+    utf16_len, BlockRow, LinkRange, MarkRun,
 };
 pub use slate::{Attrs, Node};
 pub use trailing::{is_empty_paragraph, strip_trailing_empty_paragraphs};

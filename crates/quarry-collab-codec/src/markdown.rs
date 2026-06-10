@@ -7,7 +7,7 @@ use pulldown_cmark::{
 };
 use serde_json::{json, Value};
 
-const CRITIC_MARKERS: [&str; 6] = ["{==", "{++", "{--", "{~~", "{>>", "{#"];
+pub(crate) const CRITIC_MARKERS: [&str; 6] = ["{==", "{++", "{--", "{~~", "{>>", "{#"];
 
 pub fn block_markdown_to_slate(markdown: &str) -> Result<Vec<Node>, Unsupported> {
     if CRITIC_MARKERS
@@ -28,11 +28,21 @@ pub fn block_markdown_to_slate_raw(markdown: &str) -> Result<Vec<Node>, Unsuppor
     let events = Parser::new_ext(markdown, browser_compatible_markdown_options())
         .map(|event| event.into_static())
         .collect::<Vec<_>>();
+    slate_from_block_events(events)
+}
+
+/// Parse an already-collected slice of top-level pulldown events into Slate
+/// nodes. Used by `crate::rows` to parse one top-level block at a time so a
+/// failing block can fall back to `raw_markdown` without rejecting the rest
+/// of the document.
+pub(crate) fn slate_from_block_events(
+    events: Vec<Event<'static>>,
+) -> Result<Vec<Node>, Unsupported> {
     let mut parser = EventParser { events, index: 0 };
     normalize_insert_nodes(parser.parse_top_level()?).pipe(Ok)
 }
 
-fn browser_compatible_markdown_options() -> Options {
+pub(crate) fn browser_compatible_markdown_options() -> Options {
     // Keep this as an explicit allowlist instead of `Options::all()` so new
     // pulldown-cmark extensions cannot silently change the Rust shadow codec.
     //
