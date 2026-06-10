@@ -51,8 +51,9 @@ use yrs::branch::{Branch, BranchID};
 use yrs::types::text::YChange;
 use yrs::updates::decoder::Decode;
 use yrs::{
-    Any, Assoc, Doc, IndexedSequence, Offset, OffsetKind, Options, Out, ReadTxn, StateVector,
-    StickyIndex, Text, Transact, TransactionMut, Update, WriteTxn, Xml, XmlTextPrelim, XmlTextRef,
+    Any, Assoc, ClientID, Doc, IndexedSequence, Offset, OffsetKind, Options, Out, ReadTxn,
+    StateVector, StickyIndex, Text, Transact, TransactionMut, Update, WriteTxn, Xml, XmlTextPrelim,
+    XmlTextRef,
 };
 
 const ROOT: &str = "content";
@@ -205,21 +206,25 @@ fn fixture_anchors() -> Vec<AnchorRow> {
 // anchors → sticky indices.
 // ---------------------------------------------------------------------------
 
-fn new_session_doc() -> Doc {
+/// Deterministic client IDs: yrs tie-breaks concurrent edits by client ID, so
+/// random IDs (the `Options` default) would make interleaved-edit tests flaky.
+const SERVER_CLIENT_ID: ClientID = ClientID::new(1);
+const BROWSER_CLIENT_ID: ClientID = ClientID::new(2);
+
+fn new_session_doc(client_id: ClientID) -> Doc {
     Doc::with_options(Options {
+        client_id,
         offset_kind: OffsetKind::Utf16,
         ..Default::default()
     })
 }
 
 fn seed(rows: &[BlockRow], anchors: &[AnchorRow]) -> (Doc, Vec<SessionAnchor>) {
-    let doc = new_session_doc();
+    let doc = new_session_doc(SERVER_CLIENT_ID);
     let built = build_nodes(&rows_to_nodes(rows)).expect("fixture rows build");
     {
         let mut txn = doc.transact_mut();
-        let text = txn.get_or_insert_text(ROOT);
-        let root: &XmlTextRef = text.as_ref();
-        let root = root.clone();
+        let root = content_root_mut(&mut txn);
         apply_built(&mut txn, &root, 0, &built);
     }
     let session = {
@@ -317,12 +322,18 @@ fn marked_runs(text: &str, marks: &[MarkRun], from: u32, to: u32) -> Vec<Node> {
 // and sticky indices → anchor offsets.
 // ---------------------------------------------------------------------------
 
-fn checkpoint_blocks(doc: &Doc) -> Vec<BlockRow> {
+/// The slate node tree currently observable in the session doc.
+fn observable_children(doc: &Doc) -> Vec<Node> {
     let txn = doc.transact();
     let fragment = xmltext_to_slate(&txn, &content_root(&txn)).expect("session doc projects");
     let Node::Element { children, .. } = fragment else {
         panic!("root projection must be a fragment");
     };
+    children
+}
+
+fn checkpoint_blocks(doc: &Doc) -> Vec<BlockRow> {
+    let children = observable_children(doc);
     let mut rows = Vec::new();
     for (position, child) in children.iter().enumerate() {
         collect_row(child, None, position as u32, &mut rows);
@@ -683,10 +694,16 @@ fn content_root<T: ReadTxn>(txn: &T) -> XmlTextRef {
     root.clone()
 }
 
+fn content_root_mut(txn: &mut TransactionMut) -> XmlTextRef {
+    let text = txn.get_or_insert_text(ROOT);
+    let root: &XmlTextRef = text.as_ref();
+    root.clone()
+}
+
 /// Simulates a concurrent browser edit: clone the server state into a second
 /// Yjs client, apply the edit there, and merge the resulting update back.
 fn apply_browser_edit(server: &Doc, edit: impl FnOnce(&mut TransactionMut, &XmlTextRef)) {
-    let browser = new_session_doc();
+    let browser = new_session_doc(BROWSER_CLIENT_ID);
     let snapshot = server
         .transact()
         .encode_state_as_update_v1(&StateVector::default());
@@ -697,9 +714,7 @@ fn apply_browser_edit(server: &Doc, edit: impl FnOnce(&mut TransactionMut, &XmlT
     let server_state = server.transact().state_vector();
     {
         let mut txn = browser.transact_mut();
-        let text = txn.get_or_insert_text(ROOT);
-        let root: &XmlTextRef = text.as_ref();
-        let root = root.clone();
+        let root = content_root_mut(&mut txn);
         edit(&mut txn, &root);
     }
     let delta = browser.transact().encode_state_as_update_v1(&server_state);
@@ -761,7 +776,7 @@ fn first_link_text<T: ReadTxn>(txn: &T, root: &XmlTextRef, block_id: &str) -> Xm
         .expect("block contains a link embed")
 }
 
-fn session<'a>(anchors: &'a [SessionAnchor], anchor_id: &str) -> &'a SessionAnchor {
+fn session_anchor<'a>(anchors: &'a [SessionAnchor], anchor_id: &str) -> &'a SessionAnchor {
     anchors
         .iter()
         .find(|anchor| anchor.anchor_id == anchor_id)
@@ -790,12 +805,7 @@ fn renumbered(mut rows: Vec<BlockRow>) -> Vec<BlockRow> {
 // ---------------------------------------------------------------------------
 
 fn read_top_level_block(doc: &Doc, block_id: &str) -> (Node, u32) {
-    let txn = doc.transact();
-    let Node::Element { children, .. } =
-        xmltext_to_slate(&txn, &content_root(&txn)).expect("session doc projects")
-    else {
-        panic!("root projection must be a fragment");
-    };
+    let children = observable_children(doc);
     let from_index = children
         .iter()
         .position(|child| {
@@ -809,9 +819,7 @@ fn read_top_level_block(doc: &Doc, block_id: &str) -> (Node, u32) {
 fn yjs_move_block(doc: &Doc, block_id: &str, to_index: u32) {
     let (node, from_index) = read_top_level_block(doc, block_id);
     let mut txn = doc.transact_mut();
-    let text = txn.get_or_insert_text(ROOT);
-    let root: &XmlTextRef = text.as_ref();
-    let root = root.clone();
+    let root = content_root_mut(&mut txn);
     root.remove_range(&mut txn, from_index, 1);
     apply_built(&mut txn, &root, to_index, std::slice::from_ref(&node));
 }
@@ -895,6 +903,92 @@ fn byte_of_utf16(text: &str, target: u32) -> usize {
 fn identity_round_trip_preserves_blocks_and_anchor_offsets_exactly() {
     let (doc, session_anchors) = seeded_fixture();
 
+    // Pin the seeded slate/Yjs shape against an independent hand-written
+    // literal. The row → inline encoding and its inverse are author-mirrored,
+    // so a symmetric bug there would self-cancel in the round-trip assertions
+    // below; this literal breaks that self-confirmation window.
+    assert_eq!(
+        serde_json::to_value(observable_children(&doc)).unwrap(),
+        json!([
+            {
+                "type": "h1",
+                "id": "b-heading",
+                "children": [{ "text": "Gate A 👍 heading" }]
+            },
+            {
+                "type": "p",
+                "id": "b-intro",
+                "children": [
+                    { "text": "Intro with " },
+                    { "bold": true, "text": "bold" },
+                    { "text": " and " },
+                    { "italic": true, "text": "italic" },
+                    { "text": " runs." }
+                ]
+            },
+            {
+                "type": "p",
+                "id": "b-link",
+                "children": [
+                    { "text": "See the " },
+                    {
+                        "type": "a",
+                        "url": "https://example.test/docs",
+                        "children": [{ "text": "docs site" }]
+                    },
+                    { "text": " for details." }
+                ]
+            },
+            {
+                "type": "p",
+                "id": "b-list-1",
+                "indent": 1,
+                "listStyleType": "disc",
+                "children": [{ "text": "First item" }]
+            },
+            {
+                "type": "p",
+                "id": "b-list-2",
+                "indent": 2,
+                "listStyleType": "disc",
+                "children": [{ "text": "Nested item" }]
+            },
+            {
+                "type": "code_block",
+                "id": "b-code",
+                "lang": "rust",
+                "children": [
+                    {
+                        "type": "code_line",
+                        "id": "b-code-1",
+                        "children": [{ "text": "fn main() {" }]
+                    },
+                    {
+                        "type": "code_line",
+                        "id": "b-code-2",
+                        "children": [{ "text": "    println!(\"hi\");" }]
+                    },
+                    {
+                        "type": "code_line",
+                        "id": "b-code-3",
+                        "children": [{ "text": "}" }]
+                    }
+                ]
+            },
+            {
+                "type": "raw_markdown",
+                "id": "b-raw",
+                "markdown": "::: warning\nNot supported yet.\n:::",
+                "children": [{ "text": "" }]
+            },
+            {
+                "type": "p",
+                "id": "b-outro",
+                "children": [{ "text": "Outro paragraph for end anchors." }]
+            }
+        ])
+    );
+
     let rows = checkpoint_blocks(&doc);
     assert_eq!(rows, fixture_rows());
     let ids: Vec<&str> = rows.iter().map(|row| row.block_id.as_str()).collect();
@@ -915,7 +1009,7 @@ fn identity_round_trip_preserves_blocks_and_anchor_offsets_exactly() {
         ]
     );
 
-    let a = |id| checkpoint_anchor(&doc, session(&session_anchors, id));
+    let a = |id| checkpoint_anchor(&doc, session_anchor(&session_anchors, id));
     assert_eq!(a("a-start"), Some(anchor("a-start", "b-heading", 0, 4)));
     assert_eq!(a("a-emoji"), Some(anchor("a-emoji", "b-heading", 7, 9)));
     assert_eq!(a("a-mid"), Some(anchor("a-mid", "b-intro", 11, 15)));
@@ -948,12 +1042,12 @@ fn concurrent_text_inserts_resolve_anchor_offsets_through_the_crdt() {
     assert_eq!(checkpoint_blocks(&doc), expected);
 
     assert_eq!(
-        checkpoint_anchor(&doc, session(&session_anchors, "a-mid")),
+        checkpoint_anchor(&doc, session_anchor(&session_anchors, "a-mid")),
         Some(anchor("a-mid", "b-intro", 13, 20))
     );
     // Anchors in untouched blocks are unaffected.
     assert_eq!(
-        checkpoint_anchor(&doc, session(&session_anchors, "a-end")),
+        checkpoint_anchor(&doc, session_anchor(&session_anchors, "a-end")),
         Some(anchor("a-end", "b-outro", 20, 32))
     );
 }
@@ -973,12 +1067,12 @@ fn anchor_at_block_start_excludes_text_inserted_at_its_start_boundary() {
 
     // The anchor still covers exactly "Gate": it shifted right, it did not grow.
     assert_eq!(
-        checkpoint_anchor(&doc, session(&session_anchors, "a-start")),
+        checkpoint_anchor(&doc, session_anchor(&session_anchors, "a-start")),
         Some(anchor("a-start", "b-heading", 4, 8))
     );
     // Surrogate-pair offsets stay exact in UTF-16 code units.
     assert_eq!(
-        checkpoint_anchor(&doc, session(&session_anchors, "a-emoji")),
+        checkpoint_anchor(&doc, session_anchor(&session_anchors, "a-emoji")),
         Some(anchor("a-emoji", "b-heading", 11, 13))
     );
 }
@@ -998,7 +1092,7 @@ fn anchor_ending_at_block_end_excludes_text_appended_at_its_end_boundary() {
 
     // The anchor still covers exactly "end anchors.": appended text excluded.
     assert_eq!(
-        checkpoint_anchor(&doc, session(&session_anchors, "a-end")),
+        checkpoint_anchor(&doc, session_anchor(&session_anchors, "a-end")),
         Some(anchor("a-end", "b-outro", 20, 32))
     );
 }
@@ -1020,15 +1114,15 @@ fn inserting_a_block_between_blocks_preserves_ids_positions_and_anchors() {
 
     // Structural insertion does not disturb text anchors in sibling blocks.
     assert_eq!(
-        checkpoint_anchor(&doc, session(&session_anchors, "a-mid")),
+        checkpoint_anchor(&doc, session_anchor(&session_anchors, "a-mid")),
         Some(anchor("a-mid", "b-intro", 11, 15))
     );
     assert_eq!(
-        checkpoint_anchor(&doc, session(&session_anchors, "a-code")),
+        checkpoint_anchor(&doc, session_anchor(&session_anchors, "a-code")),
         Some(anchor("a-code", "b-code-2", 4, 12))
     );
     assert_eq!(
-        checkpoint_anchor(&doc, session(&session_anchors, "a-end")),
+        checkpoint_anchor(&doc, session_anchor(&session_anchors, "a-end")),
         Some(anchor("a-end", "b-outro", 20, 32))
     );
 }
@@ -1047,12 +1141,12 @@ fn moving_a_block_preserves_identity_and_anchors_when_transplanted() {
 
     // Same block_id, same offsets, in the moved block.
     assert_eq!(
-        checkpoint_anchor(&doc, session(&session_anchors, "a-mid")),
+        checkpoint_anchor(&doc, session_anchor(&session_anchors, "a-mid")),
         Some(anchor("a-mid", "b-intro", 11, 15))
     );
     // Anchors in unmoved blocks were never disturbed.
     assert_eq!(
-        checkpoint_anchor(&doc, session(&session_anchors, "a-end")),
+        checkpoint_anchor(&doc, session_anchor(&session_anchors, "a-end")),
         Some(anchor("a-end", "b-outro", 20, 32))
     );
 }
@@ -1074,7 +1168,7 @@ fn naive_yjs_move_without_anchor_transplant_loses_anchor_resolution() {
     // the anchor no longer resolves into any live block. This is the Gate A
     // finding that makes anchor transplantation a hard requirement of move.
     assert_eq!(
-        checkpoint_anchor(&doc, session(&session_anchors, "a-mid")),
+        checkpoint_anchor(&doc, session_anchor(&session_anchors, "a-mid")),
         None
     );
 }
@@ -1097,7 +1191,7 @@ fn fully_deleted_anchor_range_collapses_to_a_point_at_the_deletion_site() {
     // Rule: a fully deleted range checkpoints as a collapsed (start == end)
     // anchor at the deletion site; the row layer marks it orphaned.
     assert_eq!(
-        checkpoint_anchor(&doc, session(&session_anchors, "a-mid")),
+        checkpoint_anchor(&doc, session_anchor(&session_anchors, "a-mid")),
         Some(anchor("a-mid", "b-intro", 11, 11))
     );
 }
@@ -1125,13 +1219,13 @@ fn insert_inside_link_text_keeps_anchors_exact_across_inline_embeds() {
     // a-span-link covered "the docs site for" at [4, 21): its start (parent
     // text) holds, its end (parent text after the link) shifts by the insert.
     assert_eq!(
-        checkpoint_anchor(&doc, session(&session_anchors, "a-span-link")),
+        checkpoint_anchor(&doc, session_anchor(&session_anchors, "a-span-link")),
         Some(anchor("a-span-link", "b-link", 4, 26))
     );
     // a-in-link covered "site" inside the link at [13, 17): both endpoints
     // live inside the link branch and shift together.
     assert_eq!(
-        checkpoint_anchor(&doc, session(&session_anchors, "a-in-link")),
+        checkpoint_anchor(&doc, session_anchor(&session_anchors, "a-in-link")),
         Some(anchor("a-in-link", "b-link", 18, 22))
     );
 }
