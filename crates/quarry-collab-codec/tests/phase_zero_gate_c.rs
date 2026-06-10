@@ -14,6 +14,13 @@
 //! identity rules below, and the spike must demonstrably contain no similarity
 //! heuristics.
 //!
+//! Spike-grade complexity warning: `lcs_matching` allocates a full O(n·m)
+//! score matrix and `stable_anchors` intersects the two matchings in O(n²).
+//! Fine for these fixtures; do NOT transcribe verbatim into the production
+//! reconciler — a 10k-block document would allocate hundreds of MB. Production
+//! needs a linear-space diff (Myers/Hirschberg) and a sorted-merge
+//! intersection.
+//!
 //! ## Hunk-to-operation mapping rules (the Gate C deliverable)
 //!
 //! Block-ify all three texts (base, incoming, canonical) with the production
@@ -31,10 +38,17 @@
 //!    - incoming == canonical → both made the same change → no ops
 //!    - canonical == base     → only incoming changed → emit ops (rule 4)
 //!    - otherwise             → true conflict: keep the canonical slice and
-//!      emit `ConflictArtifact { block_ids, base, incoming, canonical }`; the
-//!      write still succeeds and ops from other regions still apply.
-//!      Edit-vs-delete lands here naturally: the incoming slice is empty, the
-//!      canonical block stays, and the artifact records the delete intent.
+//!      emit a `ConflictArtifact`; the write still succeeds and ops from
+//!      other regions still apply. The artifact carries the canonical block
+//!      refs, the incoming hunk, the base context, and `after_block_id` — the
+//!      stable block immediately preceding the region in the merged document
+//!      (`None` at document start) — so the future `kind = conflict` review
+//!      item has an attachment point even when no canonical block survives in
+//!      the region. Edit-vs-delete lands here naturally (incoming slice
+//!      empty: canonical block kept, artifact records the delete intent), as
+//!      does its mirror, canonical-delete vs incoming-edit (`block_ids` and
+//!      `canonical` empty: the canonical delete stands, the incoming edit
+//!      rides only in the artifact, anchored by `after_block_id`).
 //! 4. Inside an incoming-only region, canonical == base positionally, so every
 //!    base index maps 1:1 to a canonical `block_id`. Within-region LCS matches
 //!    are unchanged blocks (no op). The remaining gaps yield delete candidates
@@ -49,7 +63,8 @@
 //! 6. *Positional replace pairing per gap:* the k-th remaining deleted base
 //!    block pairs with the k-th remaining inserted incoming block. Same block
 //!    type → `replace_block_content` (children changed) and/or
-//!    `set_block_attrs` (attrs changed, replaced wholesale) on the mapped ID.
+//!    `set_block_attrs` (attrs changed, replaced wholesale), in that order,
+//!    on the mapped ID.
 //!    A changed block *type* is not representable in the op vocabulary, so it
 //!    degrades to `delete_block` + `insert_block` (fresh ID).
 //! 7. Leftover deletes → `delete_block`; leftover inserts → `insert_block`
@@ -77,6 +92,13 @@
 //! - A block that is simultaneously moved and edited is not move-paired (move
 //!   pairing is exact-equality only); it degrades to delete + insert with a
 //!   fresh ID.
+//! - A move whose source block sits inside a conflict region duplicates that
+//!   block's content: the conflict region conservatively keeps the canonical
+//!   copy (conflict regions contribute no delete candidates), so the move
+//!   destination has nothing to pair with and becomes a fresh insert.
+//!   Deterministic and lossless — resolving the conflict review item to the
+//!   incoming side removes the stale copy — but it is a duplication surprise
+//!   until then.
 
 use quarry_collab_codec::slate::attrs;
 use quarry_collab_codec::{block_markdown_to_slate, Attrs as SlateAttrs, Node};
@@ -129,6 +151,12 @@ enum Op {
 #[derive(Debug, PartialEq)]
 struct ConflictArtifact {
     block_ids: Vec<String>,
+    /// Attachment point: the stable canonical block immediately preceding this
+    /// region in the merged document (`None` = document start). This is what
+    /// the review item anchors to when `block_ids` is empty — i.e. when no
+    /// canonical block survives in the region (canonical-delete vs
+    /// incoming-edit).
+    after_block_id: Option<String>,
     base: Vec<Node>,
     incoming: Vec<Node>,
     canonical: Vec<Node>,
@@ -206,7 +234,11 @@ struct UnstableRegion {
 #[derive(Debug)]
 enum Segment {
     /// A base block matched in both alignments: unchanged everywhere, no ops.
-    Stable,
+    /// Carries its canonical index so conflict artifacts can reference the
+    /// preceding stable block as their attachment point.
+    Stable {
+        canonical: usize,
+    },
     Unstable(UnstableRegion),
 }
 
@@ -242,7 +274,7 @@ fn build_segments(
                 canonical: c..sc,
             }));
         }
-        out.push(Segment::Stable);
+        out.push(Segment::Stable { canonical: sc });
         b = sb + 1;
         i = si + 1;
         c = sc + 1;
@@ -338,9 +370,13 @@ fn reconcile(
     let mut plans = Vec::new();
     let mut conflicts = Vec::new();
     let mut canonical_id_by_base: HashMap<usize, String> = HashMap::new();
+    let mut last_stable: Option<usize> = None;
     for segment in segments {
         match segment {
-            Segment::Stable => plans.push(SegmentPlan::Stable),
+            Segment::Stable { canonical: index } => {
+                last_stable = Some(index);
+                plans.push(SegmentPlan::Stable);
+            }
             Segment::Unstable(region) => {
                 let base_slice = &base[region.base.clone()];
                 let incoming_slice = &incoming[region.incoming.clone()];
@@ -364,6 +400,7 @@ fn reconcile(
                             .iter()
                             .map(|block| block.block_id.clone())
                             .collect(),
+                        after_block_id: last_stable.map(|index| canonical[index].block_id.clone()),
                         base: base_slice.to_vec(),
                         incoming: incoming_slice.to_vec(),
                         canonical: canonical_slice.to_vec(),
@@ -407,9 +444,11 @@ fn reconcile(
     let moved_bases: HashSet<usize> = moved_by_insert.values().copied().collect();
 
     // Pass 3: per-gap positional replace pairing on whatever move pairing left
-    // behind; leftovers become deletes and fresh inserts.
-    let mut replace_ops: Vec<(usize, Vec<Op>)> = Vec::new();
-    let mut delete_bases: Vec<usize> = Vec::new();
+    // behind; leftovers become deletes and fresh inserts. Plans, gaps within a
+    // plan, and pairs within a gap are all walked in ascending base order, so
+    // both op vectors come out sorted by base index with no explicit sort.
+    let mut replace_ops: Vec<Op> = Vec::new();
+    let mut delete_ops: Vec<Op> = Vec::new();
     let mut replaced_by_insert: HashMap<usize, String> = HashMap::new();
     for plan in &plans {
         let SegmentPlan::ApplyIncoming(region_plan) = plan else {
@@ -437,26 +476,26 @@ fn reconcile(
                         if base_ty != inc_ty {
                             // No `set_block_type` in the op vocabulary: a type
                             // change degrades to delete + insert (fresh ID).
-                            delete_bases.push(b);
+                            delete_ops.push(Op::DeleteBlock { block_id });
                             continue;
                         }
-                        let mut ops = Vec::new();
                         if base_children != inc_children {
-                            ops.push(Op::ReplaceBlockContent {
+                            replace_ops.push(Op::ReplaceBlockContent {
                                 block_id: block_id.clone(),
                                 content: inc_children.to_vec(),
                             });
                         }
                         if base_attrs != inc_attrs {
-                            ops.push(Op::SetBlockAttrs {
+                            replace_ops.push(Op::SetBlockAttrs {
                                 block_id: block_id.clone(),
                                 attrs: inc_attrs.clone(),
                             });
                         }
-                        replace_ops.push((b, ops));
                         replaced_by_insert.insert(i, block_id);
                     }
-                    (Some(&b), None) => delete_bases.push(b),
+                    (Some(&b), None) => delete_ops.push(Op::DeleteBlock {
+                        block_id: canonical_id_by_base[&b].clone(),
+                    }),
                     (None, Some(_)) => {} // stays a fresh insert
                     (None, None) => unreachable!("k < max(len, len)"),
                 }
@@ -497,17 +536,8 @@ fn reconcile(
         }
     }
 
-    replace_ops.sort_by_key(|(b, _)| *b);
-    delete_bases.sort_unstable();
-    let mut ops: Vec<Op> = Vec::new();
-    for (_, mut pair_ops) in replace_ops {
-        ops.append(&mut pair_ops);
-    }
-    for b in delete_bases {
-        ops.push(Op::DeleteBlock {
-            block_id: canonical_id_by_base[&b].clone(),
-        });
-    }
+    let mut ops = replace_ops;
+    ops.extend(delete_ops);
     ops.extend(placement_ops);
     MergeResult { ops, conflicts }
 }
@@ -695,6 +725,53 @@ fn unchanged_document_produces_no_ops_and_preserves_all_block_ids() {
     assert_eq!(apply_ops(&canonical, &result.ops), canonical);
 }
 
+/// Canonical-only drift, the most common production case: a surface writes
+/// the file back unchanged (incoming == base) after a browser session edited
+/// one block and inserted another. The whole canonical state — edits, the new
+/// block, and every ID — is kept verbatim; no ops, no conflict.
+#[test]
+fn canonical_only_drift_keeps_canonical_with_no_ops_and_no_conflicts() {
+    let canonical = canonical_doc(
+        "# Title\n\nAlpha paragraph.\n\nBravo paragraph, canonical edit.\n\nNew canonical paragraph.\n\nCharlie paragraph.\n",
+        &["b-title", "b-alpha", "b-bravo", "b-new", "b-charlie"],
+    );
+
+    let result = reconcile(Some(BASE), BASE, &canonical);
+
+    assert_eq!(result.ops, []);
+    assert_eq!(result.conflicts, []);
+    let merged = apply_ops(&canonical, &result.ops);
+    assert_eq!(merged, canonical);
+    assert_eq!(
+        ids_of(&merged),
+        ["b-title", "b-alpha", "b-bravo", "b-new", "b-charlie"]
+    );
+}
+
+/// Convergent change: incoming and canonical both turned the same base block
+/// into the same text (incoming == canonical ≠ base). Nothing to do — no ops,
+/// no conflict, and the canonical block keeps its ID.
+#[test]
+fn convergent_identical_changes_produce_no_ops_and_no_conflicts() {
+    let canonical = canonical_doc(
+        "# Title\n\nAlpha paragraph.\n\nBravo paragraph, same edit.\n\nCharlie paragraph.\n",
+        &BASE_IDS,
+    );
+    let incoming =
+        "# Title\n\nAlpha paragraph.\n\nBravo paragraph, same edit.\n\nCharlie paragraph.\n";
+
+    let result = reconcile(Some(BASE), incoming, &canonical);
+
+    assert_eq!(result.ops, []);
+    assert_eq!(result.conflicts, []);
+    let merged = apply_ops(&canonical, &result.ops);
+    assert_eq!(merged, canonical);
+    assert_eq!(
+        merged[2],
+        entry("b-bravo", paragraph("Bravo paragraph, same edit."))
+    );
+}
+
 #[test]
 fn edited_block_emits_one_replace_on_the_base_mapped_id_and_leaves_siblings_untouched() {
     let canonical = base_canonical();
@@ -746,6 +823,39 @@ fn attrs_only_change_emits_set_block_attrs_without_touching_content() {
     let merged = apply_ops(&canonical, &result.ops);
     assert_eq!(ids_of(&merged), ["b-first", "b-second"]);
     assert_eq!(merged[1], entry("b-second", list_item(2, "Second item")));
+}
+
+/// A block whose content AND attrs both changed emits both ops on the same
+/// mapped ID, pinned in this order: `replace_block_content`, then
+/// `set_block_attrs`.
+#[test]
+fn content_and_attrs_both_changed_emit_replace_then_set_block_attrs_on_the_same_id() {
+    let base = "- First item\n- Second item\n";
+    let canonical = canonical_doc(base, &["b-first", "b-second"]);
+    let incoming = "- First item\n  - Second item, edited\n";
+
+    let result = reconcile(Some(base), incoming, &canonical);
+
+    assert_eq!(
+        result.ops,
+        [
+            Op::ReplaceBlockContent {
+                block_id: "b-second".to_string(),
+                content: text_content("Second item, edited"),
+            },
+            Op::SetBlockAttrs {
+                block_id: "b-second".to_string(),
+                attrs: attrs([("indent", json!(2)), ("listStyleType", json!("disc"))]),
+            },
+        ]
+    );
+    assert_eq!(result.conflicts, []);
+    let merged = apply_ops(&canonical, &result.ops);
+    assert_eq!(ids_of(&merged), ["b-first", "b-second"]);
+    assert_eq!(
+        merged[1],
+        entry("b-second", list_item(2, "Second item, edited"))
+    );
 }
 
 #[test]
@@ -876,6 +986,43 @@ fn block_moved_earlier_emits_a_deterministic_equivalent_move() {
     );
 }
 
+/// Characterized limitation: a block that is moved AND edited in the same
+/// write is not move-paired (move pairing is exact-equality only). It degrades
+/// to delete + insert with a fresh ID, so its anchors orphan/invalidate like
+/// any deleted block's.
+#[test]
+fn moved_and_edited_block_is_not_move_paired_and_degrades_to_delete_plus_insert() {
+    let canonical = base_canonical();
+    let incoming =
+        "# Title\n\nAlpha paragraph.\n\nCharlie paragraph.\n\nBravo paragraph, edited and moved.\n";
+
+    let result = reconcile(Some(BASE), incoming, &canonical);
+
+    assert_eq!(
+        result.ops,
+        [
+            Op::DeleteBlock {
+                block_id: "b-bravo".to_string(),
+            },
+            Op::InsertBlock {
+                block_id: "fresh-1".to_string(),
+                node: paragraph("Bravo paragraph, edited and moved."),
+                position: 3,
+            },
+        ]
+    );
+    assert_eq!(result.conflicts, []);
+    let merged = apply_ops(&canonical, &result.ops);
+    assert_eq!(
+        ids_of(&merged),
+        ["b-title", "b-alpha", "b-charlie", "fresh-1"]
+    );
+    assert_eq!(
+        anchor_fate(&comment("b-bravo"), &result.ops),
+        AnchorFate::Orphaned
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Duplicate blocks: deterministic rules, no guessing.
 // ---------------------------------------------------------------------------
@@ -977,6 +1124,7 @@ fn true_conflict_keeps_canonical_emits_artifact_and_still_applies_sibling_ops() 
         result.conflicts,
         [ConflictArtifact {
             block_ids: vec!["b-bravo".to_string()],
+            after_block_id: Some("b-alpha".to_string()),
             base: vec![paragraph("Bravo paragraph.")],
             incoming: vec![paragraph("Bravo paragraph, incoming edit.")],
             canonical: vec![paragraph("Bravo paragraph, canonical edit.")],
@@ -1024,6 +1172,7 @@ fn edit_vs_delete_conflict_keeps_canonical_block_and_records_the_delete_intent()
         result.conflicts,
         [ConflictArtifact {
             block_ids: vec!["b-bravo".to_string()],
+            after_block_id: Some("b-alpha".to_string()),
             base: vec![paragraph("Bravo paragraph.")],
             incoming: vec![],
             canonical: vec![paragraph("Bravo paragraph, canonical edit.")],
@@ -1032,6 +1181,40 @@ fn edit_vs_delete_conflict_keeps_canonical_block_and_records_the_delete_intent()
     // The edited canonical block survives the incoming delete.
     let merged = apply_ops(&canonical, &result.ops);
     assert_eq!(merged, canonical);
+}
+
+/// The mirror of edit-vs-delete: canonical deleted Bravo since the base while
+/// the incoming file edits it. No canonical block survives in the region, so
+/// `block_ids` and `canonical` are empty — the documented rule is that the
+/// artifact then anchors via `after_block_id`, the stable block immediately
+/// preceding the region in the merged document. The canonical delete stands;
+/// the incoming edit rides only in the artifact.
+#[test]
+fn canonical_delete_vs_incoming_edit_conflicts_and_anchors_after_the_preceding_stable_block() {
+    let canonical = canonical_doc(
+        "# Title\n\nAlpha paragraph.\n\nCharlie paragraph.\n",
+        &["b-title", "b-alpha", "b-charlie"],
+    );
+    let incoming =
+        "# Title\n\nAlpha paragraph.\n\nBravo paragraph, incoming edit.\n\nCharlie paragraph.\n";
+
+    let result = reconcile(Some(BASE), incoming, &canonical);
+
+    assert_eq!(result.ops, []);
+    assert_eq!(
+        result.conflicts,
+        [ConflictArtifact {
+            block_ids: vec![],
+            after_block_id: Some("b-alpha".to_string()),
+            base: vec![paragraph("Bravo paragraph.")],
+            incoming: vec![paragraph("Bravo paragraph, incoming edit.")],
+            canonical: vec![],
+        }]
+    );
+    // The canonically deleted block stays deleted.
+    let merged = apply_ops(&canonical, &result.ops);
+    assert_eq!(merged, canonical);
+    assert_eq!(ids_of(&merged), ["b-title", "b-alpha", "b-charlie"]);
 }
 
 /// Region-granularity finding: conflicts are bounded by the nearest blocks
@@ -1055,6 +1238,7 @@ fn incoming_edit_adjacent_to_a_conflict_is_absorbed_into_the_conflict_region() {
         result.conflicts,
         [ConflictArtifact {
             block_ids: vec!["b-bravo".to_string(), "b-charlie".to_string()],
+            after_block_id: Some("b-alpha".to_string()),
             base: vec![
                 paragraph("Bravo paragraph."),
                 paragraph("Charlie paragraph.")
@@ -1070,6 +1254,56 @@ fn incoming_edit_adjacent_to_a_conflict_is_absorbed_into_the_conflict_region() {
         }]
     );
     assert_eq!(apply_ops(&canonical, &result.ops), canonical);
+}
+
+/// Characterized limitation: incoming moves Bravo to the end while canonical
+/// edited the adjacent Alpha. Bravo's source region conflicts (Alpha and Bravo
+/// share it — no stable separator), and conflict regions contribute no delete
+/// candidates, so the move destination has nothing to pair with: it becomes a
+/// fresh insert while the conflict region conservatively keeps the canonical
+/// Bravo. The content is duplicated — deterministically and losslessly —
+/// until the conflict review item is resolved (resolving to the incoming side
+/// removes the stale copy).
+#[test]
+fn move_out_of_a_conflict_region_becomes_a_fresh_insert_and_duplicates_content() {
+    let canonical = canonical_doc(
+        "# Title\n\nAlpha paragraph, canonical edit.\n\nBravo paragraph.\n\nCharlie paragraph.\n",
+        &BASE_IDS,
+    );
+    let incoming = "# Title\n\nAlpha paragraph.\n\nCharlie paragraph.\n\nBravo paragraph.\n";
+
+    let result = reconcile(Some(BASE), incoming, &canonical);
+
+    assert_eq!(
+        result.ops,
+        [Op::InsertBlock {
+            block_id: "fresh-1".to_string(),
+            node: paragraph("Bravo paragraph."),
+            position: 4,
+        }]
+    );
+    assert_eq!(
+        result.conflicts,
+        [ConflictArtifact {
+            block_ids: vec!["b-alpha".to_string(), "b-bravo".to_string()],
+            after_block_id: Some("b-title".to_string()),
+            base: vec![paragraph("Alpha paragraph."), paragraph("Bravo paragraph.")],
+            incoming: vec![paragraph("Alpha paragraph.")],
+            canonical: vec![
+                paragraph("Alpha paragraph, canonical edit."),
+                paragraph("Bravo paragraph.")
+            ],
+        }]
+    );
+    let merged = apply_ops(&canonical, &result.ops);
+    assert_eq!(
+        ids_of(&merged),
+        ["b-title", "b-alpha", "b-bravo", "b-charlie", "fresh-1"]
+    );
+    // The duplication, pinned explicitly: the canonical Bravo copy survives in
+    // the conflict region AND the moved copy lands at the end as a fresh block.
+    assert_eq!(merged[2].node, paragraph("Bravo paragraph."));
+    assert_eq!(merged[4].node, paragraph("Bravo paragraph."));
 }
 
 // ---------------------------------------------------------------------------
