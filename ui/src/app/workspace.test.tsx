@@ -2,7 +2,6 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
 
-import { draftKey } from '../features/editor/drafts';
 import { App } from './App';
 
 describe('Quarry Browser workspace', () => {
@@ -58,12 +57,15 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
-    // Autosave: a freshly loaded document reads "Saved", there is no manual Save
-    // button, and the mode selector is the header's document control. (Autosave's
-    // round-trip and stale-conflict flows need real typing, so they live in e2e.)
-    expect(await screen.findByLabelText('Save status')).toHaveTextContent('Saved');
+    // The save state derives from the live collab session (connection +
+    // checkpoint acks); without a session none is shown, there is no manual
+    // Save button, and the mode selector is the header's document control.
+    // (Save-state round trips need a real websocket, so they live in e2e.)
+    expect(await screen.findByRole('button', { name: 'Document mode' })).toHaveTextContent(
+      'Editing'
+    );
     expect(screen.queryByRole('button', { name: 'Save document' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Document mode' })).toHaveTextContent('Editing');
+    expect(screen.queryByLabelText('Save status')).not.toBeInTheDocument();
   });
 
   it('opens Add agent instructions and copies the agent prompt', async () => {
@@ -1130,78 +1132,6 @@ describe('Quarry Browser workspace', () => {
     expect(editor).not.toHaveTextContent('Old cached body');
     expect(confirm).toHaveBeenCalledWith('Delete daily.md?');
     expect(prompt).toHaveBeenCalledWith('New document path', 'untitled.md');
-  });
-
-  it('accepts a newer remote version when the local draft already has the same content', async () => {
-    let content = '# Base\n';
-    let etag = '"v1"';
-    let documentGets = 0;
-    localStorage.setItem(
-      draftKey('collab-lib', 'daily.md', '"v1"'),
-      JSON.stringify({
-        library: 'collab-lib',
-        path: 'daily.md',
-        etag: '"v1"',
-        content: '# Peer edit\n',
-        savedAt: '2026-06-03T12:00:00Z',
-      })
-    );
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === '/v1/libraries') {
-        return json([{ id: 'lib-collab', slug: 'collab-lib', created_at: 'now', settings: {} }]);
-      }
-      if (url === '/v1/libraries/collab-lib/documents') {
-        return json([
-          {
-            id: 'doc-collab',
-            path: 'daily.md',
-            head_version_id: etag === '"v1"' ? 'v1' : 'v2',
-            content_type: 'text/markdown',
-            byte_size: content.length,
-            metadata: { title: 'Daily' },
-            updated_at: 'now',
-          },
-        ]);
-      }
-      if (url === '/v1/libraries/collab-lib/documents/daily.md') {
-        documentGets += 1;
-        return new Response(content, {
-          headers: { ETag: etag, 'content-type': 'text/markdown' },
-        });
-      }
-      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) {
-        return json({ path: 'daily.md', links: [] });
-      }
-      if (url.startsWith('/v1/libraries/collab-lib/graph')) {
-        return json({ nodes: [], edges: [], truncated: false });
-      }
-      if (url.endsWith('/versions')) return json([]);
-      if (url === '/v1/libraries/collab-lib/conflicts') return json([]);
-      if (url.startsWith('/v1/libraries/collab-lib/search')) return json({ results: [], cursor: null });
-      return new Response('not found', { status: 404 });
-    });
-    vi.stubGlobal('fetch', fetch);
-    vi.stubGlobal('EventSource', MockEventSource);
-    MockEventSource.instances = [];
-
-    renderApp();
-
-    await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
-    expect(await screen.findByLabelText('Plate markdown editor')).toHaveTextContent('Peer edit');
-
-    content = '# Peer edit\n';
-    etag = '"v2"';
-    act(() => {
-      MockEventSource.instances[0].emit('stream.lagged', {
-        type: 'stream.lagged',
-        library: 'collab-lib',
-      });
-    });
-
-    await waitFor(() => expect(documentGets).toBeGreaterThan(1));
-    expect(screen.queryByRole('dialog', { name: 'Save conflict' })).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Save status')).toHaveTextContent('Saved');
   });
 
   it('falls back to polling when the event stream errors', async () => {

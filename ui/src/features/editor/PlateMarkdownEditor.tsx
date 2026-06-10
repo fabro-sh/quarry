@@ -160,22 +160,27 @@ import {
 import { ReviewRail } from '../review/ui/ReviewRail';
 import { RemoteCursorOverlay } from '../collab/RemoteCursorOverlay';
 import {
-  clearCollabAwareness,
-  collectFlushAcks,
-  collectRecoveryErrors,
-  type CollabFlushAck,
-  type CollabRecoveryError,
-  updateCollabAwareness,
-} from '../collab/flusher-lease';
-import { RUST_WS_PROVIDER_TYPE, registerRustWsProviderType } from '../collab/rust-ws-provider';
+  RUST_WS_PROVIDER_TYPE,
+  RustWsProviderWrapper,
+  registerRustWsProviderType,
+} from '../collab/rust-ws-provider';
+import {
+  checkpointCoversDoc,
+  collabSaveState,
+  type CollabSaveState,
+} from '../collab/save-state';
 import { collabDebug } from '../collab/collab-debug';
-import { parseInjectionEnvelope, type InjectionEnvelope } from '../collab/session-events';
+import { RawMarkdownPlugin, rawMarkdownMdRules } from './raw-markdown';
 
 registerRustWsProviderType();
 
-const INJECTION_ROOT = '__quarry_injection';
 const REVIEW_RESOLUTION_PUBLISH_ATTEMPTS = 20;
 const REVIEW_RESOLUTION_PUBLISH_INTERVAL_MS = 50;
+// How long after a failed/lost connection the editor mounts a fresh
+// doc + provider attempt. Reconnects never reuse a Y.Doc: the session was
+// reseeded server-side, and merging a stale doc back in would duplicate
+// content (online-only browsers have no pending local state worth keeping).
+const RECONNECT_RETRY_MS = 2_000;
 
 // Notion-style markdown shortcuts: typing the markdown prefix at the start of a
 // block (or wrapping marks) auto-converts it. Scoped to the surface Quarry
@@ -299,6 +304,7 @@ const plateMarkdownPlugins = [
   }),
   WikiLinkPlugin,
   MermaidPlugin,
+  RawMarkdownPlugin,
   ...TableKit,
   ...ImageKit,
   DndPlugin.configure({
@@ -316,7 +322,7 @@ const plateMarkdownPlugins = [
   }),
   ...reviewKit,
   MarkdownPlugin.configure({
-    options: { remarkPlugins: [remarkGfm, remarkInlineMarks], rules: { ...wikiLinkMdRules, ...mermaidMdRules, ...tableMdRules } },
+    options: { remarkPlugins: [remarkGfm, remarkInlineMarks], rules: { ...wikiLinkMdRules, ...mermaidMdRules, ...tableMdRules, ...rawMarkdownMdRules } },
   }),
 ] as const;
 
@@ -326,21 +332,11 @@ export type EditorMode = 'editing' | 'suggesting' | 'viewing';
 
 export interface CollabEditorConfig {
   documentId: string;
-  flushAck?: CollabFlushAck | null;
-  loadedEtag?: string | null;
-  onInjectedAdopted?: (
-    version: CollabInjectedVersion,
-    result: { content: string; hadLocalEdits: boolean }
-  ) => void;
-  onFlushAck?: (ack: CollabFlushAck) => void;
-  onFlusherChange?: (isFlusher: boolean) => void;
-  onRecoveryError?: (error: CollabRecoveryError) => void;
-  rebaseKey?: number;
+  /** Save state for the document header: Saved / Saving… / Reconnecting. */
+  onSaveStateChange?: (state: CollabSaveState) => void;
   sessionId: string;
   token?: string;
 }
-
-export type CollabInjectedVersion = InjectionEnvelope;
 
 interface CollabYjsInitOptions {
   autoConnect: true;
@@ -380,10 +376,22 @@ export function PlateMarkdownEditor({
   const storeGetMeta = useReviewStore((s) => s.getMeta);
   const collabEnabled = Boolean(collab?.documentId);
   const collabDocumentId = collab?.documentId ?? '';
-  const collabRebaseKey = collab?.rebaseKey ?? 0;
   const collabSessionId = collab?.sessionId ?? '';
   const collabToken = collab?.token;
-  const [isCollabFlusher, setIsCollabFlusher] = useState(false);
+  // Bumped to reconnect: a new epoch recreates the editor with a FRESH
+  // Y.Doc + provider, which reseeds from the (server-seeded) session.
+  const [collabEpoch, setCollabEpoch] = useState(0);
+  const [collabState, setCollabState] = useState<CollabSaveState>('reconnecting');
+  const [collabInitCompleted, setCollabInitCompleted] = useState(false);
+  const onSaveStateChange = collab?.onSaveStateChange;
+  const handleCollabSaveState = useCallback(
+    (state: CollabSaveState) => {
+      setCollabState(state);
+      onSaveStateChange?.(state);
+    },
+    [onSaveStateChange]
+  );
+  const collabLive = collabState !== 'reconnecting';
 
   // The review codec serializes both the value (inline CriticMarkup) and the
   // store's metadata (YAML endmatter). `syncSuggestionsFromValue` mirrors any
@@ -407,14 +415,8 @@ export function PlateMarkdownEditor({
   }
   const lastContentRef = useRef(content);
   const lastSerializedRef = useRef(serialize(initialValueRef.current));
-  const pendingInjectedVersionRef = useRef<CollabInjectedVersion | null>(null);
-  const ackedInjectedVersionIdsRef = useRef<Set<string>>(new Set());
-  const injectionFallbackTimerRef = useRef<number | null>(null);
   const reviewResolutionPublishTimerRef = useRef<number | null>(null);
-  const sharedReviewPublishTimerRef = useRef<number | null>(null);
   const yjsChangeFallbackTimerRef = useRef<number | null>(null);
-  const hasLocalEditsSinceCleanRef = useRef(false);
-  const remoteChangeSinceCleanRef = useRef(false);
   const [collabInitTick, setCollabInitTick] = useState(0);
   const [externalValueRevision, setExternalValueRevision] = useState(0);
   const editorPlugins = useMemo(() => {
@@ -452,7 +454,7 @@ export function PlateMarkdownEditor({
       skipInitialization: collabEnabled,
       value: collabEnabled ? undefined : (initialValueRef.current as never),
     },
-    [collabDocumentId]
+    [collabDocumentId, collabEpoch]
   );
 
   // Set the suggesting author before any suggesting can happen; withSuggestion
@@ -472,12 +474,8 @@ export function PlateMarkdownEditor({
     const { value, meta } = markdownToReview(content);
     lastContentRef.current = content;
     lastSerializedRef.current = reviewToMarkdown(value as never, meta);
-    hasLocalEditsSinceCleanRef.current = false;
-    remoteChangeSinceCleanRef.current = false;
-    pendingInjectedVersionRef.current = null;
-    const loadedVersionId = versionIdFromEtag(collab.loadedEtag);
-    ackedInjectedVersionIdsRef.current = new Set(loadedVersionId ? [loadedVersionId] : []);
     storeHydrate(meta);
+    setCollabInitCompleted(false);
 
     let disposed = false;
     let initStarted = false;
@@ -491,10 +489,12 @@ export function PlateMarkdownEditor({
           if (!disposed) {
             setCollabInitTick((tick) => tick + 1);
             setExternalValueRevision((revision) => revision + 1);
+            setCollabInitCompleted(true);
           }
         })
         .catch((error: unknown) => {
           if (!disposed) console.warn('[collab] failed to initialize Yjs editor', error);
+          if (!disposed) setCollabInitCompleted(true);
         });
     }, 0);
 
@@ -503,7 +503,23 @@ export function PlateMarkdownEditor({
       window.clearTimeout(initTimer);
       if (initStarted) yjs.destroy();
     };
-  }, [collabDocumentId, collabEnabled, collabRebaseKey, editor, storeHydrate]);
+    // `content` is deliberately NOT a dependency: it is only the bootstrap
+    // value for an empty room; once live, the session doc is authoritative.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collabDocumentId, collabEnabled, collabEpoch, editor, storeHydrate]);
+
+  // Reconnect loop: while collab is wanted but not live, mount a fresh
+  // attempt every RECONNECT_RETRY_MS once the current attempt has finished
+  // initializing (sync or timeout). The provider itself never retries — a
+  // stale Y.Doc must not merge back into a freshly seeded session.
+  useEffect(() => {
+    if (!collabEnabled || collabLive || !collabInitCompleted) return;
+    const timer = window.setTimeout(() => {
+      collabDebug('reconnect.retry', { epoch: collabEpoch + 1 });
+      setCollabEpoch((epoch) => epoch + 1);
+    }, RECONNECT_RETRY_MS);
+    return () => window.clearTimeout(timer);
+  }, [collabEnabled, collabEpoch, collabInitCompleted, collabLive]);
 
   useEffect(() => {
     if (collabEnabled) return;
@@ -522,57 +538,14 @@ export function PlateMarkdownEditor({
     // synchronously inside `storeHydrate` with the new meta; the baseline must
     // match that, or a pure load spuriously fires onChange.
     lastSerializedRef.current = reviewToMarkdown(value as never, meta);
-    hasLocalEditsSinceCleanRef.current = false;
-    remoteChangeSinceCleanRef.current = false;
-    pendingInjectedVersionRef.current = null;
-    ackedInjectedVersionIdsRef.current = new Set();
     storeHydrate(meta);
   }, [collabEnabled, content, editor, storeHydrate]);
 
-  const isInjectedVersionAlreadyAdopted = useCallback((versionId: string) => {
-    return ackedInjectedVersionIdsRef.current.has(versionId);
-  }, []);
-
-  const consumeInjectionEnvelope = useCallback(
-    (injectedVersion: CollabInjectedVersion, value: PlateValue) => {
-      if (!collab) return false;
-      if (isInjectedVersionAlreadyAdopted(injectedVersion.versionId)) {
-        if (pendingInjectedVersionRef.current?.versionId === injectedVersion.versionId) {
-          pendingInjectedVersionRef.current = null;
-        }
-        return false;
-      }
-      const nextMarkdown = serializeWithMeta(value, storeGetMeta());
-      collabDebug('inject.inband', {
-        versionId: injectedVersion.versionId,
-        hadLocalEdits: hasLocalEditsSinceCleanRef.current,
-      });
-      pendingInjectedVersionRef.current = null;
-      ackedInjectedVersionIdsRef.current.add(injectedVersion.versionId);
-      const hadLocalEdits = hasLocalEditsSinceCleanRef.current;
-      lastContentRef.current = nextMarkdown;
-      lastSerializedRef.current = nextMarkdown;
-      remoteChangeSinceCleanRef.current = false;
-      if (!hadLocalEdits) {
-        hasLocalEditsSinceCleanRef.current = false;
-      }
-      const { meta } = markdownToReview(nextMarkdown);
-      storeHydrate(meta);
-      collab.onInjectedAdopted?.(injectedVersion, {
-        content: nextMarkdown,
-        hadLocalEdits,
-      });
-      return true;
-    },
-    [collab, isInjectedVersionAlreadyAdopted, serializeWithMeta, storeGetMeta, storeHydrate]
-  );
-
+  // `onChange` only maintains the App's local Markdown mirror (downloads,
+  // the current-editor diff). Durability is the session checkpoint; nothing
+  // here marks the document dirty or schedules a save.
   const publishSerializedMarkdown = useCallback(
-    (
-      nextMarkdown: string,
-      isLocalChange: boolean,
-      options: { guardUnhydratedBlank?: boolean } = {}
-    ) => {
+    (nextMarkdown: string, options: { guardUnhydratedBlank?: boolean } = {}) => {
       if (nextMarkdown === lastSerializedRef.current) return false;
       if (
         options.guardUnhydratedBlank &&
@@ -580,11 +553,6 @@ export function PlateMarkdownEditor({
       ) {
         collabDebug('editor.skip_unhydrated_blank');
         return false;
-      }
-      if (isLocalChange) {
-        hasLocalEditsSinceCleanRef.current = true;
-      } else {
-        remoteChangeSinceCleanRef.current = true;
       }
       lastContentRef.current = nextMarkdown;
       lastSerializedRef.current = nextMarkdown;
@@ -595,31 +563,10 @@ export function PlateMarkdownEditor({
   );
 
   const publishSerializedValue = useCallback(
-    (
-      value: PlateValue,
-      isLocalChange: boolean,
-      options: { guardUnhydratedBlank?: boolean } = {}
-    ) => {
-      return publishSerializedMarkdown(serialize(value), isLocalChange, options);
+    (value: PlateValue, options: { guardUnhydratedBlank?: boolean } = {}) => {
+      return publishSerializedMarkdown(serialize(value), options);
     },
     [publishSerializedMarkdown, serialize]
-  );
-
-  const handleSharedReviewMeta = useCallback(
-    (meta: ReviewMeta) => {
-      storeHydrate(meta);
-      if (!isCollabFlusher) return;
-      if (sharedReviewPublishTimerRef.current !== null) {
-        window.clearTimeout(sharedReviewPublishTimerRef.current);
-      }
-      sharedReviewPublishTimerRef.current = window.setTimeout(() => {
-        sharedReviewPublishTimerRef.current = null;
-        publishSerializedValue(editor.children as PlateValue, true, {
-          guardUnhydratedBlank: true,
-        });
-      }, 0);
-    },
-    [editor, isCollabFlusher, publishSerializedValue, storeHydrate]
   );
 
   const scheduleReviewResolutionPublish = useCallback((attempt = 0) => {
@@ -628,7 +575,7 @@ export function PlateMarkdownEditor({
     }
     reviewResolutionPublishTimerRef.current = window.setTimeout(() => {
       reviewResolutionPublishTimerRef.current = null;
-      if (publishSerializedValue(editor.children as PlateValue, true)) return;
+      if (publishSerializedValue(editor.children as PlateValue)) return;
       if (attempt + 1 < REVIEW_RESOLUTION_PUBLISH_ATTEMPTS) {
         scheduleReviewResolutionPublish(attempt + 1);
       }
@@ -644,7 +591,7 @@ export function PlateMarkdownEditor({
       );
       applyReviewMutation((meta) => removeSuggestion(meta, id));
       setExternalValueRevision((revision) => revision + 1);
-      if (resolvedMarkdown && publishSerializedMarkdown(resolvedMarkdown, true)) return;
+      if (resolvedMarkdown && publishSerializedMarkdown(resolvedMarkdown)) return;
       scheduleReviewResolutionPublish();
     },
     [publishSerializedMarkdown, scheduleReviewResolutionPublish]
@@ -656,62 +603,13 @@ export function PlateMarkdownEditor({
         window.clearTimeout(reviewResolutionPublishTimerRef.current);
         reviewResolutionPublishTimerRef.current = null;
       }
-      if (sharedReviewPublishTimerRef.current !== null) {
-        window.clearTimeout(sharedReviewPublishTimerRef.current);
-        sharedReviewPublishTimerRef.current = null;
-      }
     };
   }, []);
 
-  const scheduleInjectionFallback = useCallback(
-    (injectedVersion: CollabInjectedVersion) => {
-      if (injectionFallbackTimerRef.current !== null) {
-        window.clearTimeout(injectionFallbackTimerRef.current);
-      }
-      injectionFallbackTimerRef.current = window.setTimeout(() => {
-        injectionFallbackTimerRef.current = null;
-        if (pendingInjectedVersionRef.current?.versionId !== injectedVersion.versionId) return;
-        consumeInjectionEnvelope(injectedVersion, editor.children as PlateValue);
-      }, 0);
-    },
-    [consumeInjectionEnvelope, editor]
-  );
-
-  useEffect(() => {
-    if (!collabEnabled) return;
-    const awareness = editor.getOption(YjsPlugin, 'awareness') as { doc?: Y.Doc } | undefined;
-    const doc = awareness?.doc;
-    if (!doc) return;
-    const injectionMap = doc.getMap<unknown>(INJECTION_ROOT);
-    const handleEnvelope = () => {
-      const raw = injectionEnvelopeMapValue(injectionMap);
-      if (!raw) return;
-      const injectedVersion = parseInjectionEnvelope(raw);
-      if (!injectedVersion) return;
-      if (isInjectedVersionAlreadyAdopted(injectedVersion.versionId)) return;
-      pendingInjectedVersionRef.current = injectedVersion;
-      collabDebug('inject.envelope.pending', { versionId: injectedVersion.versionId });
-      scheduleInjectionFallback(injectedVersion);
-    };
-
-    injectionMap.observe(handleEnvelope);
-    handleEnvelope();
-    return () => {
-      injectionMap.unobserve(handleEnvelope);
-      if (injectionFallbackTimerRef.current !== null) {
-        window.clearTimeout(injectionFallbackTimerRef.current);
-        injectionFallbackTimerRef.current = null;
-      }
-    };
-  }, [
-    collabDocumentId,
-    collabEnabled,
-    collabInitTick,
-    editor,
-    isInjectedVersionAlreadyAdopted,
-    scheduleInjectionFallback,
-  ]);
-
+  // Remote session updates (peers, gateway-collaborator transactions,
+  // whole-file merges) land in the doc without a Slate onValueChange; mirror
+  // them into the App content the same way local edits are mirrored. Nothing
+  // is marked dirty — the session already owns durability.
   useEffect(() => {
     if (!collabEnabled || collabInitTick === 0) return;
     const awareness = editor.getOption(YjsPlugin, 'awareness') as { doc?: Y.Doc } | undefined;
@@ -727,10 +625,8 @@ export function PlateMarkdownEditor({
       yjsChangeFallbackTimerRef.current = window.setTimeout(() => {
         yjsChangeFallbackTimerRef.current = null;
         if (disposed) return;
-        if (pendingInjectedVersionRef.current) return;
-        const isLocalChange = !YjsEditor.isYjsEditor(editor) || YjsEditor.isLocal(editor);
         setExternalValueRevision((revision) => revision + 1);
-        publishSerializedValue(editor.children as PlateValue, isLocalChange, {
+        publishSerializedValue(editor.children as PlateValue, {
           guardUnhydratedBlank: true,
         });
       }, 0);
@@ -747,28 +643,22 @@ export function PlateMarkdownEditor({
     };
   }, [collabDocumentId, collabEnabled, collabInitTick, editor, publishSerializedValue]);
 
-  useEffect(() => {
-    if (!collab?.flushAck) return;
-    ackedInjectedVersionIdsRef.current.add(collab.flushAck.versionId);
-    hasLocalEditsSinceCleanRef.current = false;
-    remoteChangeSinceCleanRef.current = false;
-    pendingInjectedVersionRef.current = null;
-  }, [collab?.flushAck?.versionId]);
-
   // Replies/resolves and synced suggestions live in the store, not the editor
-  // value, so an editor-value change won't fire. Save on store changes too.
+  // value, so an editor-value change won't fire. Mirror store changes too.
   // The review store is a module-global singleton; safe because Quarry mounts
   // exactly one editor at a time (this subscription assumes a single editor).
   useEffect(() => {
     return useReviewStore.subscribe(() => {
-      publishSerializedValue(editor.children as PlateValue, true, {
+      publishSerializedValue(editor.children as PlateValue, {
         guardUnhydratedBlank: collabEnabled,
       });
     });
   }, [collabEnabled, editor, publishSerializedValue]);
 
-  // Viewing is the only read-only mode; autosave never freezes the surface.
-  const readOnly = mode === 'viewing';
+  // Viewing is the user's read-only mode; a collab editor is additionally
+  // read-only whenever it is not live (disconnected or reseeding) — no
+  // local-only edits can exist, so nothing is ever lost on reconnect.
+  const readOnly = mode === 'viewing' || (collabEnabled && !collabLive);
 
   return (
     <WikiLinkProvider value={wikiLink ?? {}}>
@@ -790,45 +680,15 @@ export function PlateMarkdownEditor({
               syncSuggestionsFromValue(meta, value as never)
             );
           }
-          const nextMarkdown = serialize(value as PlateValue);
-          if (!isLocalChange || pendingInjectedVersionRef.current) {
-            collabDebug('editor.change', {
-              isLocal: isLocalChange,
-              pending: !!pendingInjectedVersionRef.current,
-              changed: nextMarkdown !== lastSerializedRef.current,
-            });
-          }
-          if (pendingInjectedVersionRef.current) {
-            const injectedVersion = pendingInjectedVersionRef.current;
-            if (consumeInjectionEnvelope(injectedVersion, value as PlateValue)) {
-              if (injectionFallbackTimerRef.current !== null) {
-                window.clearTimeout(injectionFallbackTimerRef.current);
-                injectionFallbackTimerRef.current = null;
-              }
-              return;
-            }
-            pendingInjectedVersionRef.current = null;
-          }
-          if (injectionFallbackTimerRef.current !== null) {
-            window.clearTimeout(injectionFallbackTimerRef.current);
-            injectionFallbackTimerRef.current = null;
-          }
-          publishSerializedMarkdown(nextMarkdown, isLocalChange);
+          publishSerializedMarkdown(serialize(value as PlateValue));
         }}
       >
         <PlateValueRevisionBridge revision={externalValueRevision} />
-        {collabEnabled && collab ? (
-          <CollabAwarenessBridge
-            collab={collab}
-            onLocalFlusherChange={setIsCollabFlusher}
-          />
+        {collabEnabled ? (
+          <CollabSaveStateBridge onSaveStateChange={handleCollabSaveState} />
         ) : null}
         {collabEnabled ? (
-          <ReviewDocBridge
-            documentId={collabDocumentId}
-            isFlusher={isCollabFlusher}
-            onMeta={handleSharedReviewMeta}
-          />
+          <ReviewDocBridge documentId={collabDocumentId} onMeta={storeHydrate} />
         ) : null}
         {readOnly ? null : (
           <FloatingFormatToolbar
@@ -837,7 +697,7 @@ export function PlateMarkdownEditor({
         )}
         <PlateContainer
           className="relative flex h-full min-h-0"
-          data-collab-flusher={collabEnabled ? (isCollabFlusher ? 'true' : 'false') : undefined}
+          data-collab-save-state={collabEnabled ? collabState : undefined}
         >
           <div
             className="relative min-w-0 flex-1 overflow-auto"
@@ -868,33 +728,15 @@ export function PlateMarkdownEditor({
   );
 }
 
-function versionIdFromEtag(etag?: string | null): string | null {
-  const value = etag?.trim();
-  if (!value) return null;
-  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
-    return value.slice(1, -1);
-  }
-  return value;
-}
-
-function injectionEnvelopeMapValue(map: Y.Map<unknown>): Record<string, unknown> | null {
-  const version_id = map.get('version_id');
-  const etag = map.get('etag');
-  if (version_id === undefined && etag === undefined) return null;
-  return { etag, version_id };
-}
-
 export function shouldSkipUnhydratedCollabPublish(nextMarkdown: string, lastMarkdown: string) {
   return nextMarkdown.trim() === '' && lastMarkdown.trim() !== '';
 }
 
 function ReviewDocBridge({
   documentId,
-  isFlusher,
   onMeta,
 }: {
   documentId: string;
-  isFlusher: boolean;
   onMeta: (meta: ReviewMeta) => void;
 }) {
   const editor = useEditorRef();
@@ -905,11 +747,56 @@ function ReviewDocBridge({
     const doc = awareness?.doc;
     if (!doc) return;
     return bindReviewDoc(doc, {
-      isFlusher,
       isSynced,
       onMeta,
     });
-  }, [documentId, editor, isFlusher, isSynced, onMeta]);
+  }, [documentId, editor, isSynced, onMeta]);
+
+  return null;
+}
+
+/**
+ * Derives the document save state inside the live Plate context:
+ * connection + sync come from the Yjs plugin, checkpoint coverage from
+ * comparing the provider's last ack snapshot against the local doc (see
+ * save-state.ts). Recomputed on every doc update and every ack frame.
+ */
+function CollabSaveStateBridge({
+  onSaveStateChange,
+}: {
+  onSaveStateChange: (state: CollabSaveState) => void;
+}) {
+  const editor = useEditorRef();
+  const isConnected = Boolean(usePluginOption(YjsPlugin, '_isConnected'));
+  const isSynced = Boolean(usePluginOption(YjsPlugin, '_isSynced'));
+  const providers = usePluginOption(YjsPlugin, '_providers');
+  const [covered, setCovered] = useState(false);
+
+  useEffect(() => {
+    const provider = providers?.find(
+      (candidate): candidate is RustWsProviderWrapper =>
+        candidate instanceof RustWsProviderWrapper
+    );
+    const awareness = editor.getOption(YjsPlugin, 'awareness') as { doc?: Y.Doc } | undefined;
+    const doc = awareness?.doc;
+    if (!provider || !doc) {
+      setCovered(false);
+      return;
+    }
+    const recompute = () => setCovered(checkpointCoversDoc(provider.lastCheckpoint, doc));
+    recompute();
+    const unsubscribeAck = provider.onCheckpoint(recompute);
+    doc.on('update', recompute);
+    return () => {
+      unsubscribeAck();
+      doc.off('update', recompute);
+    };
+  }, [editor, providers]);
+
+  const state = collabSaveState({ connected: isConnected, synced: isSynced, covered });
+  useEffect(() => {
+    onSaveStateChange(state);
+  }, [onSaveStateChange, state]);
 
   return null;
 }
@@ -923,80 +810,6 @@ function PlateValueRevisionBridge({ revision }: { revision: number }) {
     bumpEditor();
     bumpValue();
   }, [revision, bumpEditor, bumpValue]);
-
-  return null;
-}
-
-function CollabAwarenessBridge({
-  collab,
-  onLocalFlusherChange,
-}: {
-  collab: CollabEditorConfig;
-  onLocalFlusherChange: (isFlusher: boolean) => void;
-}) {
-  const editor = useEditorRef();
-  const flushAckRef = useRef<CollabFlushAck | null>(collab.flushAck ?? null);
-  const callbacksRef = useRef({
-    onFlushAck: collab.onFlushAck,
-    onFlusherChange: collab.onFlusherChange,
-    onRecoveryError: collab.onRecoveryError,
-  });
-
-  useEffect(() => {
-    flushAckRef.current = collab.flushAck ?? null;
-    callbacksRef.current = {
-      onFlushAck: collab.onFlushAck,
-      onFlusherChange: collab.onFlusherChange,
-      onRecoveryError: collab.onRecoveryError,
-    };
-    const awareness = editor.getOption(YjsPlugin, 'awareness');
-    if (awareness) {
-      const isFlusher = updateCollabAwareness(awareness, collab.sessionId, flushAckRef.current);
-      onLocalFlusherChange(isFlusher);
-      callbacksRef.current.onFlusherChange?.(isFlusher);
-    }
-  }, [
-    collab.flushAck,
-    collab.onFlushAck,
-    collab.onFlusherChange,
-    collab.onRecoveryError,
-    collab.sessionId,
-    editor,
-    onLocalFlusherChange,
-  ]);
-
-  useEffect(() => {
-    const awareness = editor.getOption(YjsPlugin, 'awareness');
-    if (!awareness) return;
-    let disposed = false;
-
-    const publish = () => {
-      if (disposed) return;
-      const isFlusher = updateCollabAwareness(awareness, collab.sessionId, flushAckRef.current);
-      onLocalFlusherChange(isFlusher);
-      callbacksRef.current.onFlusherChange?.(isFlusher);
-      for (const ack of collectFlushAcks(awareness)) {
-        callbacksRef.current.onFlushAck?.(ack);
-      }
-      for (const error of collectRecoveryErrors(awareness)) {
-        callbacksRef.current.onRecoveryError?.(error);
-      }
-    };
-    const awarenessEvents = awareness as typeof awareness & {
-      off: (event: 'change', handler: () => void) => void;
-      on: (event: 'change', handler: () => void) => void;
-    };
-
-    awarenessEvents.on('change', publish);
-    publish();
-    return () => {
-      disposed = true;
-      awarenessEvents.off('change', publish);
-      clearCollabAwareness(awareness);
-      onLocalFlusherChange(false);
-      callbacksRef.current.onFlusherChange?.(false);
-    };
-  }, [collab.documentId, collab.sessionId, editor, onLocalFlusherChange]);
 
   return null;
 }

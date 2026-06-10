@@ -1,4 +1,5 @@
 import type {
+  AgentReviewResponse,
   BlockTransactionAck,
   BlockTransactionErrorCode,
   BlockTransactionRequest,
@@ -299,6 +300,15 @@ export async function restoreVersion(
 export const getDocumentBlocks = (library: string, path: string) =>
   jsonRequest<BlockTreeResponse>(
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/blocks`
+  );
+
+// The rows-backed review projection: comments and suggestions with their
+// row anchors and states (open/resolved/orphaned/invalidated), plus diff3
+// conflict review items. Resolved items are included so the Comments panel
+// can show the document's full review record.
+export const getDocumentReview = (library: string, path: string) =>
+  jsonRequest<AgentReviewResponse>(
+    `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/review?includeResolved=1`
   );
 
 // Submits one semantic block transaction. Non-2xx responses with the gateway's

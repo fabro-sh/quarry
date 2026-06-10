@@ -53,17 +53,22 @@ describe('agent invite helpers', () => {
       'GET http://127.0.0.1:5173/v1/libraries/team%20notes/events/pending?after=<last-seen-id>'
     );
     expect(prompt).toContain(
-      'POST http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md/edit'
+      'GET http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md/blocks'
     );
     expect(prompt).toContain(
-      'POST http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md/ops'
+      'POST http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md/transactions'
     );
     expect(prompt).toContain(
-      'POST http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md/review'
+      'GET http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md/review'
     );
-    expect(prompt).toContain('top-level baseToken, optional by, and an operations array');
-    expect(prompt).toContain('suggestion.accept, or suggestion.reject');
-    expect(prompt).toContain('edit.* block operations');
+    expect(prompt).toContain('client_tx_id');
+    expect(prompt).toContain('base_clock');
+    expect(prompt).toContain('suggestion.accept, suggestion.reject');
+    expect(prompt).toContain('{code, retryable, message}');
+    // The quarantined legacy facades are no longer advertised.
+    expect(prompt).not.toContain('/edit');
+    expect(prompt).not.toContain('/ops');
+    expect(prompt).not.toContain('baseToken');
     expect(prompt).toContain('Skill: http://127.0.0.1:5173/quarry.SKILL.md');
     expect(prompt).toContain('Docs: http://127.0.0.1:5173/agent-docs');
     expect(prompt).toContain('Discovery: http://127.0.0.1:5173/.well-known/agent.json');

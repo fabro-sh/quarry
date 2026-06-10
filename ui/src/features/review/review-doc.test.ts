@@ -30,7 +30,7 @@ describe('review Yjs document binding', () => {
   it('writes mutations through the shared review map and mirrors them into the store', () => {
     const doc = new Y.Doc();
     const observed = vi.fn((meta: ReviewMeta) => useReviewStore.getState().hydrate(meta));
-    bindReviewDoc(doc, { isFlusher: true, isSynced: true, onMeta: observed });
+    bindReviewDoc(doc, { isSynced: true, onMeta: observed });
 
     applyReviewMutation((meta) => addComment(meta, 'c1', { by: 'user', at, body: 'hello' }));
 
@@ -45,8 +45,8 @@ describe('review Yjs document binding', () => {
     reconcileReviewMap(a.getMap(REVIEW_ROOT), seededMeta());
     Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
 
-    bindReviewDoc(a, { isFlusher: true, isSynced: true, onMeta: () => {} });
-    bindReviewDoc(b, { isFlusher: false, isSynced: true, onMeta: () => {} });
+    bindReviewDoc(a, { isSynced: true, onMeta: () => {} });
+    bindReviewDoc(b, { isSynced: true, onMeta: () => {} });
 
     applyReviewMutation((meta) => resolveComment(meta, 'c1'));
     Y.applyUpdate(a, Y.encodeStateAsUpdate(b));
@@ -54,39 +54,22 @@ describe('review Yjs document binding', () => {
     expect(metaFromReviewMap(a.getMap(REVIEW_ROOT)).comments.c1.status).toBe('resolved');
   });
 
-  it('seeds an empty synced map from preloaded store metadata when this client is the flusher', () => {
+  it('treats an empty synced map as authoritative (the server seeds it from rows)', () => {
     const doc = new Y.Doc();
-    const meta = seededMeta();
-    useReviewStore.getState().hydrate(meta);
-
-    bindReviewDoc(doc, {
-      isFlusher: true,
-      isSynced: true,
-      onMeta: (next) => useReviewStore.getState().hydrate(next),
-    });
-
-    expect(metaFromReviewMap(doc.getMap(REVIEW_ROOT))).toEqual(meta);
-    expect(useReviewStore.getState().getMeta()).toEqual(meta);
-  });
-
-  it('does not mirror an empty map over preloaded store metadata for a non-flusher', () => {
-    const doc = new Y.Doc();
-    const meta = seededMeta();
     const observed = vi.fn((next: ReviewMeta) => useReviewStore.getState().hydrate(next));
-    useReviewStore.getState().hydrate(meta);
+    useReviewStore.getState().hydrate(seededMeta());
 
-    bindReviewDoc(doc, { isFlusher: false, isSynced: true, onMeta: observed });
+    bindReviewDoc(doc, { isSynced: true, onMeta: observed });
 
-    expect(observed).not.toHaveBeenCalled();
-    expect(useReviewStore.getState().getMeta()).toEqual(meta);
-    expect(metaFromReviewMap(doc.getMap(REVIEW_ROOT))).toEqual(emptyReviewMeta());
+    expect(observed).toHaveBeenCalledWith(emptyReviewMeta());
+    expect(useReviewStore.getState().getMeta()).toEqual(emptyReviewMeta());
   });
 
   it('does not emit unchanged shared metadata echoes', () => {
     const doc = new Y.Doc();
     reconcileReviewMap(doc.getMap(REVIEW_ROOT), seededMeta());
     const observed = vi.fn();
-    bindReviewDoc(doc, { isFlusher: true, isSynced: true, onMeta: observed });
+    bindReviewDoc(doc, { isSynced: true, onMeta: observed });
 
     const comments = doc.getMap(REVIEW_ROOT).get('comments') as Y.Map<unknown>;
     comments.set('c1', { at, by: 'user', body: 'tighten this' });

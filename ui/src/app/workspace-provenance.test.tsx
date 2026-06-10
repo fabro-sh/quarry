@@ -43,7 +43,7 @@ describe('workspace document mutation provenance', () => {
     window.history.pushState({}, '', '/');
   });
 
-  it('stamps toolbar deletes with the browser origin, clears selection, and ignores its own delete echo', async () => {
+  it('stamps toolbar deletes with the browser origin and clears the selection', async () => {
     stubBrowserOrigin('00000000-0000-4000-8000-000000000001');
     const fetch = vi.fn(provenanceFetch());
     vi.stubGlobal('fetch', fetch);
@@ -66,21 +66,9 @@ describe('workspace document mutation provenance', () => {
     expect(deleteCall?.[1]?.headers).toMatchObject({
       'X-Quarry-Origin-Id': 'browser:00000000-0000-4000-8000-000000000001',
     });
-
-    act(() => {
-      MockEventSource.instances[0].emit('doc.deleted', {
-        type: 'doc.deleted',
-        library: 'provenance-lib',
-        path: 'daily.md',
-        doc_id: 'doc-daily',
-        origin_id: 'browser:00000000-0000-4000-8000-000000000001',
-      });
-    });
-
-    expect(screen.queryByText('Deleted externally')).not.toBeInTheDocument();
   });
 
-  it('shows the deleted banner for an external delete of the selected live document', async () => {
+  it('clears the selection when the open document is deleted externally', async () => {
     stubBrowserOrigin('00000000-0000-4000-8000-000000000002');
     vi.stubGlobal('fetch', vi.fn(provenanceFetch()));
     vi.stubGlobal('EventSource', MockEventSource);
@@ -95,107 +83,39 @@ describe('workspace document mutation provenance', () => {
         library: 'provenance-lib',
         path: 'daily.md',
         doc_id: 'doc-daily',
+        origin_id: 'external:cli',
       });
     });
 
-    expect(await screen.findByText('Deleted externally')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Resurrect' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Discard' })).toBeInTheDocument();
+    // No draft exists to protect or resurrect: deletion simply closes the
+    // document (the legacy "Deleted externally" banner died with drafts).
+    await waitFor(() => expect(screen.getByText('No document open')).toBeInTheDocument());
   });
 
-  it('clears the deleted banner after a successful resurrect stamped with the browser origin', async () => {
+  it('wires the session-backed editor to the header save state', async () => {
     stubBrowserOrigin('00000000-0000-4000-8000-000000000003');
-    const fetch = vi.fn(provenanceFetch());
-    vi.stubGlobal('fetch', fetch);
+    vi.stubGlobal('fetch', vi.fn(provenanceFetch()));
     vi.stubGlobal('EventSource', MockEventSource);
     MockEventSource.instances = [];
 
     renderApp();
 
-    await showExternalDeleteBanner();
-    await userEvent.click(screen.getByRole('button', { name: 'Resurrect' }));
+    await openDailyDocument();
+    const collab = testWindow().__quarryTestCollab;
+    expect(collab?.documentId).toBe('doc-daily');
+    expect(collab?.sessionId).toMatch(/^browser:/);
 
-    await waitFor(() => expect(screen.queryByText('Deleted externally')).not.toBeInTheDocument());
-    const resurrectCall = fetch.mock.calls.find(
-      ([input, init]) =>
-        String(input) === '/v1/libraries/provenance-lib/documents/daily.md' &&
-        init?.method === 'PUT' &&
-        (init.headers as Record<string, string>)['If-None-Match'] === '*'
-    );
-    expect(resurrectCall?.[1]?.headers).toMatchObject({
-      'X-Quarry-Origin-Id': 'browser:00000000-0000-4000-8000-000000000003',
-    });
+    act(() => collab?.onSaveStateChange?.('saving'));
+    expect(screen.getByLabelText('Save status')).toHaveTextContent('Saving…');
+
+    act(() => collab?.onSaveStateChange?.('reconnecting'));
+    expect(screen.getByLabelText('Save status')).toHaveTextContent('Reconnecting (read-only)');
+
+    act(() => collab?.onSaveStateChange?.('saved'));
+    expect(screen.getByLabelText('Save status')).toHaveTextContent('Saved');
   });
 
-  it('accepts a resurrect 412 when the live document already has the same content', async () => {
-    stubBrowserOrigin('00000000-0000-4000-8000-000000000004');
-    const fetch = vi.fn(
-      provenanceFetch({
-        putResponse: () =>
-          json({ error: 'already exists' }, { 'content-type': 'application/json' }, 412),
-        documentAfterPut: { content: '# Local', etag: '"v2"' },
-      })
-    );
-    vi.stubGlobal('fetch', fetch);
-    vi.stubGlobal('EventSource', MockEventSource);
-    MockEventSource.instances = [];
-
-    renderApp();
-
-    await showExternalDeleteBanner();
-    await userEvent.click(screen.getByRole('button', { name: 'Resurrect' }));
-
-    await waitFor(() => expect(screen.queryByText('Deleted externally')).not.toBeInTheDocument());
-    expect(screen.queryByRole('button', { name: 'Review' })).not.toBeInTheDocument();
-  });
-
-  it('switches a resurrect 412 with different content to the external-change review path', async () => {
-    stubBrowserOrigin('00000000-0000-4000-8000-000000000005');
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        provenanceFetch({
-          putResponse: () =>
-            json({ error: 'already exists' }, { 'content-type': 'application/json' }, 412),
-          documentAfterPut: { content: '# Remote', etag: '"v2"' },
-        })
-      )
-    );
-    vi.stubGlobal('EventSource', MockEventSource);
-    MockEventSource.instances = [];
-
-    renderApp();
-
-    await showExternalDeleteBanner();
-    await userEvent.click(screen.getByRole('button', { name: 'Resurrect' }));
-
-    await waitFor(() => expect(screen.queryByText('Deleted externally')).not.toBeInTheDocument());
-    expect(screen.getByText(/External version available/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Review' })).toBeInTheDocument();
-  });
-
-  it('clears a stale deleted banner when SWR loads an existing selected document', async () => {
-    stubBrowserOrigin('00000000-0000-4000-8000-000000000006');
-    const documentState = { current: { content: '# Local', etag: '"v1"' } };
-    vi.stubGlobal('fetch', vi.fn(provenanceFetch({ documentState })));
-    vi.stubGlobal('EventSource', MockEventSource);
-    MockEventSource.instances = [];
-
-    renderApp();
-
-    await showExternalDeleteBanner();
-    documentState.current = { content: '# Local', etag: '"v2"' };
-    act(() => {
-      MockEventSource.instances[0].emit('stream.lagged', {
-        type: 'stream.lagged',
-        library: 'provenance-lib',
-      });
-    });
-
-    await waitFor(() => expect(screen.queryByText('Deleted externally')).not.toBeInTheDocument());
-  });
-
-  it('keeps the selected editor mounted when a collab flush ack outruns the SWR document cache', async () => {
+  it('keeps the selected editor mounted across a checkpoint head move', async () => {
     stubBrowserOrigin('00000000-0000-4000-8000-000000000007');
     vi.stubGlobal('fetch', vi.fn(provenanceFetch()));
     vi.stubGlobal('EventSource', MockEventSource);
@@ -207,10 +127,13 @@ describe('workspace document mutation provenance', () => {
     const editor = screen.getByLabelText('Plate markdown editor');
 
     act(() => {
-      testWindow().__quarryTestCollab?.onFlushAck?.({
-        etag: '"v2"',
-        sessionId: 'browser:peer',
-        versionId: 'v2',
+      MockEventSource.instances[0].emit('doc.changed', {
+        type: 'doc.changed',
+        library: 'provenance-lib',
+        path: 'daily.md',
+        doc_id: 'doc-daily',
+        origin_id: 'agent-injected:session-checkpoint:1',
+        version_id: 'v2',
       });
     });
 
@@ -222,20 +145,6 @@ describe('workspace document mutation provenance', () => {
 async function openDailyDocument() {
   await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
   expect(await screen.findByLabelText('Plate markdown editor')).toHaveValue('# Local');
-}
-
-async function showExternalDeleteBanner() {
-  await openDailyDocument();
-  act(() => {
-    MockEventSource.instances[0].emit('doc.deleted', {
-      type: 'doc.deleted',
-      library: 'provenance-lib',
-      path: 'daily.md',
-      doc_id: 'doc-daily',
-      origin_id: 'external:cli',
-    });
-  });
-  expect(await screen.findByText('Deleted externally')).toBeInTheDocument();
 }
 
 function renderApp(config: Record<string, unknown> = {}) {
@@ -251,17 +160,8 @@ function stubBrowserOrigin(uuid: `${string}-${string}-${string}-${string}-${stri
   vi.spyOn(crypto, 'randomUUID').mockReturnValue(uuid);
 }
 
-function provenanceFetch({
-  documentState,
-  documentAfterPut,
-  putResponse,
-}: {
-  documentState?: { current: { content: string; etag: string } };
-  documentAfterPut?: { content: string; etag: string };
-  putResponse?: () => Response;
-} = {}) {
+function provenanceFetch() {
   let document = { content: '# Local', etag: '"v1"' };
-  let useDocumentAfterPut = false;
 
   return async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -269,24 +169,19 @@ function provenanceFetch({
       return json([{ id: 'lib-provenance', slug: 'provenance-lib', created_at: 'now', settings: {} }]);
     }
     if (url === '/v1/libraries/provenance-lib/documents') {
-      const current = documentState?.current ?? document;
       return json([
         {
           id: 'doc-daily',
           path: 'daily.md',
-          head_version_id: current.etag === '"v1"' ? 'v1' : 'v2',
+          head_version_id: document.etag === '"v1"' ? 'v1' : 'v2',
           content_type: 'text/markdown',
-          byte_size: current.content.length,
+          byte_size: document.content.length,
           metadata: { title: 'Daily' },
           updated_at: 'now',
         },
       ]);
     }
     if (url === '/v1/libraries/provenance-lib/documents/daily.md' && init?.method === 'PUT') {
-      if (putResponse) {
-        useDocumentAfterPut = true;
-        return putResponse();
-      }
       document = { content: String(init.body), etag: '"v2"' };
       return json(
         { document: { id: 'doc-daily' }, version: { id: 'v2' } },
@@ -297,11 +192,9 @@ function provenanceFetch({
       return json({ id: 'tx-delete' });
     }
     if (url === '/v1/libraries/provenance-lib/documents/daily.md') {
-      const current =
-        useDocumentAfterPut && documentAfterPut ? documentAfterPut : documentState?.current ?? document;
-      return new Response(current.content, {
+      return new Response(document.content, {
         headers: {
-          ETag: current.etag,
+          ETag: document.etag,
           'content-type': 'text/markdown',
           'x-quarry-document-id': 'doc-daily',
         },
@@ -314,6 +207,15 @@ function provenanceFetch({
       return json({ path: 'daily.md', links: [] });
     }
     if (url.endsWith('/versions')) return json([]);
+    if (url.endsWith('/review')) {
+      return json({
+        documentId: 'doc-daily',
+        baseToken: 'v1',
+        comments: [],
+        suggestions: [],
+        conflicts: [],
+      });
+    }
     if (url === '/v1/libraries/provenance-lib/conflicts') return json([]);
     if (url === '/v1/libraries/provenance-lib/git/peers') return json([]);
     if (url.startsWith('/v1/libraries/provenance-lib/search')) {

@@ -64,6 +64,7 @@ import {
   ApiPreconditionError,
   type AgentPresenceEntry,
   backlinks,
+  getDocumentReview,
   createCollabInvite,
   createDocument,
   createGitPeer,
@@ -94,6 +95,7 @@ import {
   versions,
 } from '../api/client';
 import type {
+  AgentReviewResponse,
   ConflictRecord,
   DocumentHistoryEntry,
   DocumentLink,
@@ -113,16 +115,13 @@ import type {
 } from '../api/client';
 import {
   classifyLiveDocumentEvent,
-  isAdoptedFlushVersion,
   type LiveCollabSession,
 } from '../features/collab/session-events';
 import { collabDebug } from '../features/collab/collab-debug';
-import type { CollabFlushAck, CollabRecoveryError } from '../features/collab/flusher-lease';
-import { clearDraft, loadDraft, saveDraft } from '../features/editor/drafts';
+import { saveStateLabel, type CollabSaveState } from '../features/collab/save-state';
 import {
   MarkdownEditor,
   type CollabEditorConfig,
-  type CollabInjectedVersion,
   type EditorMode,
   type ImageApi,
   type WikiLinkApi,
@@ -136,16 +135,11 @@ import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../featur
 import { cn } from '../lib/utils';
 import { buildAddAgentPrompt, buildTokenizedDocumentUrl } from './agent-invite';
 
-type SaveState = 'clean' | 'dirty' | 'drafted' | 'saving' | 'saved' | 'stale' | 'failed';
 type EventState = 'idle' | 'connecting' | 'open' | 'polling' | 'error';
 type ThemePreference = 'light' | 'dark';
 type TreeOpenState = Record<string, boolean>;
 type RightPaneTab = 'links' | 'versions' | 'conflicts' | 'comments';
 const EVENT_POLL_INTERVAL_MS = 5_000;
-// How long after the last edit autosave pushes the draft to the server. Long
-// enough to coalesce a burst of typing into one version, short enough to feel
-// automatic.
-const AUTOSAVE_DEBOUNCE_MS = 1_500;
 // How long the settled "Saved" status lingers before it fades away, so the
 // header confirms the save and then gets out of the way.
 const SAVED_STATUS_LINGER_MS = 2_000;
@@ -165,18 +159,6 @@ interface BrowserEventPayload {
   peer_id?: string | null;
   applied?: number | null;
   conflicts?: number | null;
-}
-
-interface SaveConflictDetails {
-  baseEtag: string;
-  path: string;
-  remoteEtag: string;
-}
-
-interface CollabExternalChange {
-  kind: 'changed' | 'deleted';
-  path: string;
-  etag?: string | null;
 }
 
 interface TreeMenuState {
@@ -224,10 +206,11 @@ function Workspace() {
   const [content, setContent] = useState('');
   const [etag, setEtag] = useState('');
   const [contentType, setContentType] = useState('text/markdown');
-  const [saveState, setSaveState] = useState<SaveState>('clean');
+  // The Phase 5 save state: derived inside the collab editor from
+  // connection state + checkpoint-ack coverage; null = no session-backed
+  // document open (nothing to save from the browser).
+  const [saveState, setSaveState] = useState<CollabSaveState | null>(null);
   const [editorMode, setEditorMode] = useState<EditorMode>('editing');
-  const [conflictRemote, setConflictRemote] = useState<string | null>(null);
-  const [conflictDetails, setConflictDetails] = useState<SaveConflictDetails | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [compareVersionId, setCompareVersionId] = useState<string | null>(null);
   const [currentDiffOpen, setCurrentDiffOpen] = useState(false);
@@ -260,7 +243,6 @@ function Workspace() {
   const activeLibraryRef = useRef(activeLibrary);
   const contentRef = useRef(content);
   const openDocumentRef = useRef<(path: string) => void>(() => {});
-  const saveStateRef = useRef(saveState);
   const loadedDocumentRef = useRef<{
     library: string;
     path: string;
@@ -269,14 +251,8 @@ function Workspace() {
   } | null>(null);
   const liveCollabSessionRef = useRef<LiveCollabSession | null>(null);
   const collabSessionIdRef = useRef(makeCollabSessionId());
-  const collabFlusherRef = useRef(false);
   const searchQueryRef = useRef(searchQuery);
   const appliedRouteRef = useRef(location.pathname);
-  const [collabExternalChange, setCollabExternalChange] = useState<CollabExternalChange | null>(null);
-  const [collabFlushAck, setCollabFlushAck] = useState<CollabFlushAck | null>(null);
-  const [collabFlusher, setCollabFlusher] = useState(false);
-  const [collabRebaseKey, setCollabRebaseKey] = useState(0);
-  const [collabRecoveryError, setCollabRecoveryError] = useState<CollabRecoveryError | null>(null);
 
   useEffect(() => {
     if (!activeLibrary && libraries.length >= 1) {
@@ -355,15 +331,6 @@ function Workspace() {
     openDocumentRef.current = openDocument;
   });
 
-  useEffect(() => {
-    saveStateRef.current = saveState;
-  }, [saveState]);
-
-  const changeCollabFlusher = useCallback((isFlusher: boolean) => {
-    collabFlusherRef.current = isFlusher;
-    setCollabFlusher(isFlusher);
-  }, []);
-
   function browserMutationOptions() {
     return { originId: collabSessionIdRef.current };
   }
@@ -410,105 +377,6 @@ function Workspace() {
     },
     [mutate]
   );
-
-  const recordCollabFlushAck = useCallback((ack: CollabFlushAck) => {
-    const session = liveCollabSessionRef.current;
-    if (!session) return;
-    const library = activeLibraryRef.current;
-    const path = selectedPathRef.current;
-    const loaded = loadedDocumentRef.current;
-    liveCollabSessionRef.current = ackLiveCollabFlush(session, ack.versionId, ack.etag);
-    if (!library || !path || loaded?.documentId !== session.documentId) return;
-    if (loaded.etag === ack.etag) return;
-
-    clearDraft(library, path, loaded.etag);
-    loadedDocumentRef.current = {
-      library,
-      path,
-      etag: ack.etag,
-      documentId: session.documentId,
-    };
-    setEtag(ack.etag);
-    setCollabFlushAck(ack);
-    setCollabExternalChange((current) => (current?.etag === ack.etag ? null : current));
-    if (saveStateRef.current === 'drafted') transitionSaveState('saved');
-    void mutate(
-      ['/v1/document', library, path],
-      {
-        content: contentRef.current,
-        contentType,
-        documentId: session.documentId,
-        etag: ack.etag,
-        path,
-      },
-      { revalidate: false }
-    );
-  }, [contentType, mutate]);
-
-  const adoptInjectedCollabVersion = useCallback(
-    (
-      version: CollabInjectedVersion,
-      result: { content: string; hadLocalEdits: boolean }
-    ) => {
-      const library = activeLibraryRef.current;
-      const path = selectedPathRef.current;
-      if (!library || !path) return;
-      collabDebug('inject.adopt', {
-        versionId: version.versionId,
-        etag: version.etag,
-        hadLocalEdits: result.hadLocalEdits,
-      });
-      const loaded = loadedDocumentRef.current;
-      const previousEtag = loaded?.etag;
-      const documentId = loaded?.documentId ?? liveCollabSessionRef.current?.documentId ?? '';
-      contentRef.current = result.content;
-      loadedDocumentRef.current = {
-        library,
-        path,
-        etag: version.etag,
-        documentId,
-      };
-      setContent(result.content);
-      setEtag(version.etag);
-      if (previousEtag) clearDraft(library, path, previousEtag);
-      const session = liveCollabSessionRef.current;
-      if (session) {
-        liveCollabSessionRef.current = ackLiveCollabFlush(
-          session,
-          version.versionId,
-          version.etag
-        );
-        setCollabFlushAck({
-          etag: version.etag,
-          sessionId: session.sessionId ?? collabSessionIdRef.current,
-          versionId: version.versionId,
-        });
-      }
-      if (result.hadLocalEdits) {
-        saveDraft(library, path, version.etag, result.content);
-        transitionSaveState('drafted');
-      } else {
-        transitionSaveState('clean');
-      }
-      setCollabExternalChange(null);
-      void mutate(
-        ['/v1/document', library, path],
-        {
-          content: result.content,
-          contentType,
-          documentId,
-          etag: version.etag,
-          path,
-        },
-        { revalidate: false }
-      );
-    },
-    [contentType, mutate]
-  );
-
-  const recordCollabRecoveryError = useCallback((error: CollabRecoveryError) => {
-    setCollabRecoveryError(error);
-  }, []);
 
   useEffect(() => {
     searchQueryRef.current = searchQuery;
@@ -631,30 +499,12 @@ function Workspace() {
           etag: payload.etag,
         });
       }
-      if (liveDecision.action === 'ignore_own_mutation_echo') {
-        return;
-      }
-      if (liveDecision.action === 'agent_injection_refresh') {
+      if (liveDecision.action === 'session_refresh') {
+        // Every write to the session document reaches the editor through
+        // the live doc; the event only refreshes metadata caches.
         if (currentPath) {
           void mutate(['/v1/versions', activeLibrary, currentPath]);
-          void mutate(['/v1/outgoing', activeLibrary, currentPath]);
-          void mutate(['/v1/backlinks', activeLibrary, currentPath]);
-        }
-        return;
-      }
-      if (liveDecision.action === 'external_change') {
-        if (currentPath) {
-          setCollabExternalChange({ kind: 'changed', path: currentPath, etag: payload.etag });
-          void mutate(['/v1/versions', activeLibrary, currentPath]);
-          void mutate(['/v1/outgoing', activeLibrary, currentPath]);
-          void mutate(['/v1/backlinks', activeLibrary, currentPath]);
-        }
-        return;
-      }
-      if (liveDecision.action === 'external_delete') {
-        if (currentPath) {
-          setCollabExternalChange({ kind: 'deleted', path: currentPath, etag: payload.etag });
-          void mutate(['/v1/versions', activeLibrary, currentPath]);
+          void mutate(['/v1/review', activeLibrary, currentPath]);
           void mutate(['/v1/outgoing', activeLibrary, currentPath]);
           void mutate(['/v1/backlinks', activeLibrary, currentPath]);
         }
@@ -668,7 +518,6 @@ function Workspace() {
           };
         }
         setSelectedPath(liveDecision.path);
-        setCollabExternalChange(null);
         invalidateCurrentBacklinks();
         return;
       }
@@ -845,62 +694,32 @@ function Workspace() {
     const loadedDocument = loadedDocumentRef.current;
     const sameDocument =
       loadedDocument?.library === activeLibrary && loadedDocument.path === selectedPath;
-    if (sameDocument && hasUnsavedEditorState(saveStateRef.current)) {
-      if (loadedDocument.etag !== document.etag) {
-        if (contentRef.current === document.content) {
-          acceptRemoteDocumentVersion(
-            activeLibrary,
-            selectedPath,
-            {
-              content: document.content,
-              contentType: document.contentType,
-              documentId: document.documentId,
-              etag: document.etag,
-            },
-            loadedDocument.etag
-          );
-          return;
-        }
-        loadedDocumentRef.current = {
-          library: activeLibrary,
-          path: selectedPath,
-          etag: document.etag,
-          documentId: document.documentId,
-        };
-        setEtag(document.etag);
-        setContentType(document.contentType);
-        setConflictDetails({
-          baseEtag: loadedDocument.etag,
-          path: selectedPath,
-          remoteEtag: document.etag,
-        });
-        setConflictRemote(document.content);
-        transitionSaveState('stale');
-      }
+    if (sameDocument) {
+      // A head move on the open document (checkpoint, agent transaction,
+      // whole-file merge). A session-backed editor already carries the
+      // state through the live doc — its serialized mirror is fresher than
+      // the refetched canonical content, so only the bookkeeping moves.
+      loadedDocumentRef.current = {
+        library: activeLibrary,
+        path: selectedPath,
+        etag: document.etag,
+        documentId: document.documentId,
+      };
+      setEtag(document.etag);
+      setContentType(document.contentType);
+      if (!liveCollabSessionRef.current) setContent(document.content);
       return;
     }
 
-    const preserveSavedState =
-      sameDocument && loadedDocument?.etag === document.etag && saveStateRef.current === 'saved';
-    const draft = loadDraft(activeLibrary, selectedPath, document.etag);
     loadedDocumentRef.current = {
       library: activeLibrary,
       path: selectedPath,
       etag: document.etag,
       documentId: document.documentId,
     };
-    setContent(draft?.content ?? document.content);
+    setContent(document.content);
     setEtag(document.etag);
     setContentType(document.contentType);
-    transitionSaveState(draft ? 'drafted' : preserveSavedState ? 'saved' : 'clean');
-    setConflictRemote(null);
-    setConflictDetails(null);
-    setCollabExternalChange((current) => {
-      if (!current) return current;
-      if (!sameDocument) return null;
-      if (current.kind === 'deleted' && current.path === selectedPath) return null;
-      return current;
-    });
     setSelectedVersionId(null);
     setCompareVersionId(null);
     setCurrentDiffOpen(false);
@@ -936,7 +755,6 @@ function Workspace() {
     : '';
   const layoutStorageKey = activeLibrary ? `quarry:layout:${activeLibrary}` : 'quarry:layout:workspace';
   const mergeConflict = conflicts.find((conflict) => conflict.id === mergeConflictId) ?? null;
-  const saveConflictDialogRef = useDialogFocusTrap(Boolean(conflictRemote), closeSaveConflictDialog);
   const { data: agentPresence = { presence: [] } } = useSWR(
     activeLibrary && selectedPath && isTextContentType(selectedContentType)
       ? ['/v1/agent-presence', activeLibrary, selectedPath]
@@ -944,231 +762,37 @@ function Workspace() {
     () => listAgentPresence(activeLibrary, selectedPath),
     { refreshInterval: 3_000 }
   );
+  // The rows-backed review projection feeds the Comments panel (states,
+  // orphaned/invalidated badges, diff3 conflict items). Refreshed by the
+  // SSE classification above whenever the document changes.
+  const { data: documentReview } = useSWR(
+    activeLibrary && selectedPath && isMarkdownDocument(selectedPath, selectedContentType)
+      ? ['/v1/review', activeLibrary, selectedPath]
+      : null,
+    () => getDocumentReview(activeLibrary, selectedPath)
+  );
 
   useEffect(() => {
-    if (selectedPath && collabDocumentId && isTextContentType(selectedContentType)) {
+    if (selectedPath && collabDocumentId && isMarkdownDocument(selectedPath, selectedContentType)) {
       liveCollabSessionRef.current = {
         documentId: collabDocumentId,
         path: selectedPath,
-        sessionId: collabSessionIdRef.current,
       };
-      setCollabFlushAck(null);
-      setCollabRebaseKey(0);
-      setCollabRecoveryError(null);
     } else {
       liveCollabSessionRef.current = null;
-      setCollabFlushAck(null);
-      setCollabRebaseKey(0);
-      setCollabRecoveryError(null);
+      setSaveState(null);
     }
   }, [collabDocumentId, selectedContentType, selectedPath]);
 
-  async function save() {
-    const savingLibrary = activeLibrary;
-    const savingPath = selectedPath;
-    const savingEtag = etag;
-    const savingContent = content;
-    const savingDocumentId =
-      loadedDocumentRef.current?.documentId ?? document?.documentId ?? selectedEntry?.id ?? '';
-    if (!savingLibrary || !savingPath || !savingEtag) return;
-    if (!isTextContentType(contentType)) return;
-    if (saveStateRef.current === 'saving') return;
-    const savingCollabSession =
-      liveCollabSessionRef.current?.documentId === savingDocumentId
-        ? liveCollabSessionRef.current
-        : null;
-    if (
-      savingCollabSession &&
-      (!collabFlusherRef.current || collabExternalChange || collabRecoveryError)
-    ) {
-      transitionSaveState('drafted');
-      return;
-    }
-
-    // Autosave can resolve after you've kept typing or switched documents. Gate
-    // every post-await state write on still viewing the document we saved, so a
-    // late response never clobbers a different document's state.
-    const onSameDocument = () =>
-      selectedPathRef.current === savingPath && activeLibraryRef.current === savingLibrary;
-
-    transitionSaveState('saving');
-    collabDebug('flush.start', { etag: savingEtag, leader: !!collabFlusherRef.current });
-    try {
-      const saved = await putDocument(savingLibrary, savingPath, savingContent, savingEtag, contentType, {
-        originId: savingCollabSession?.sessionId ?? collabSessionIdRef.current,
-        transactionActor: 'browser',
-        transactionMessage: 'Autosaved edits',
-        transactionProvenance: {
-          history: {
-            kind: 'autosave',
-            reason: 'typing',
-            session_id: savingCollabSession?.sessionId ?? collabSessionIdRef.current,
-          },
-        },
-      });
-      const savedEtag = saved.etag || `"${saved.outcome.version.id}"`;
-      collabDebug('flush.ok', { from: savingEtag, to: savedEtag });
-      const savedDocumentId = saved.outcome.document.id || savingDocumentId;
-      clearDraft(savingLibrary, savingPath, savingEtag);
-      if (!onSameDocument()) return;
-      loadedDocumentRef.current = {
-        library: savingLibrary,
-        path: savingPath,
-        etag: savedEtag,
-        documentId: savedDocumentId,
-      };
-      setEtag(savedEtag);
-      if (savingCollabSession && liveCollabSessionRef.current?.documentId === savedDocumentId) {
-        const ack = {
-          etag: savedEtag,
-          sessionId: savingCollabSession.sessionId ?? collabSessionIdRef.current,
-          versionId: saved.outcome.version.id,
-        };
-        liveCollabSessionRef.current = ackLiveCollabFlush(
-          liveCollabSessionRef.current,
-          ack.versionId,
-          ack.etag
-        );
-        setCollabFlushAck(ack);
-      }
-      // If edits landed while the request was in flight, the newer text still
-      // needs saving: re-draft under the new ETag and drop back to `drafted` so
-      // autosave fires again. Otherwise we're caught up.
-      if (contentRef.current === savingContent) {
-        transitionSaveState('saved');
-      } else {
-        saveDraft(savingLibrary, savingPath, savedEtag, contentRef.current);
-        transitionSaveState('drafted');
-      }
-      await Promise.all([
-        mutate(
-          ['/v1/document', savingLibrary, savingPath],
-          {
-            content: savingContent,
-            contentType,
-            documentId: savedDocumentId,
-            etag: savedEtag,
-            path: savingPath,
-          },
-          { revalidate: false }
-        ),
-        mutate(['/v1/documents', savingLibrary]),
-        mutate(['/v1/versions', savingLibrary, savingPath]),
-        mutate(['/v1/outgoing', savingLibrary, savingPath]),
-        mutate(['/v1/backlinks', savingLibrary, savingPath]),
-        searchQuery ? mutate(['/v1/search', savingLibrary, searchQuery]) : Promise.resolve(),
-      ]);
-    } catch (error) {
-      if (!onSameDocument()) return;
-      if (error instanceof ApiPreconditionError) {
-        transitionSaveState('stale');
-        const remote = await getDocument(savingLibrary, savingPath);
-        if (!onSameDocument()) return;
-        const latestEditorContent = contentRef.current;
-        const remoteMatchesLatestEditor = remote.content === latestEditorContent;
-        const remoteMatchesSavingRequest = remote.content === savingContent;
-        // A version this live session already adopted (a flush echo or a
-        // server agent-injection) is not a real conflict — the agent edit is
-        // authoritative and already persisted. Reconcile silently instead of
-        // raising the conflict dialog, even when the browser's re-serialized
-        // markdown differs byte-wise from the stored markdown.
-        const remoteIsAdopted = isAdoptedFlushVersion(liveCollabSessionRef.current, {
-          etag: remote.etag,
-        });
-        collabDebug('flush.412', {
-          savingEtag,
-          remoteEtag: remote.etag,
-          adopted: remoteIsAdopted,
-          matchedEditor: remoteMatchesLatestEditor,
-          matchedRequest: remoteMatchesSavingRequest,
-        });
-        if (remoteMatchesLatestEditor || remoteMatchesSavingRequest || remoteIsAdopted) {
-          acceptRemoteDocumentVersion(
-            savingLibrary,
-            savingPath,
-            {
-              content: remote.content,
-              contentType: remote.contentType,
-              documentId: remote.documentId || savingDocumentId,
-              etag: remote.etag,
-            },
-            savingEtag
-          );
-          if (!remoteMatchesLatestEditor) {
-            contentRef.current = latestEditorContent;
-            setContent(latestEditorContent);
-            saveDraft(savingLibrary, savingPath, remote.etag, latestEditorContent);
-            transitionSaveState('drafted');
-          }
-          await mutate(
-            ['/v1/document', savingLibrary, savingPath],
-            {
-              content: remote.content,
-              contentType: remote.contentType,
-              documentId: remote.documentId || savingDocumentId,
-              etag: remote.etag,
-              path: savingPath,
-            },
-            { revalidate: false }
-          );
-          return;
-        }
-        collabDebug('flush.conflict', { savingEtag, remoteEtag: remote.etag });
-        setConflictDetails({ baseEtag: savingEtag, path: savingPath, remoteEtag: remote.etag });
-        setConflictRemote(remote.content);
-        setEtag(remote.etag);
-        return;
-      }
-      transitionSaveState('failed');
-    }
-  }
-
-  // Debounced autosave: every edit writes a local draft and marks `drafted`; a
-  // beat after typing stops, that draft is pushed to the server. Only an editable
-  // draft autosaves — Viewing has nothing to save, `stale`/`failed` waits for the
-  // next edit, and an open conflict dialog blocks until it's resolved.
-  const saveRef = useRef(save);
-  useEffect(() => {
-    saveRef.current = save;
-  });
-  useEffect(() => {
-    if (editorMode === 'viewing') return;
-    if (conflictRemote) return;
-    if (collabExternalChange) return;
-    if (collabRecoveryError) return;
-    if (liveCollabSessionRef.current && !collabFlusher) return;
-    if (saveState !== 'drafted') return;
-    const timer = window.setTimeout(() => void saveRef.current(), AUTOSAVE_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [
-    collabExternalChange,
-    collabFlusher,
-    collabRecoveryError,
-    content,
-    saveState,
-    editorMode,
-    conflictRemote,
-  ]);
-
-  useEffect(() => {
-    const flushBeforePageHide = () => {
-      if (saveStateRef.current !== 'drafted') return;
-      if (!canCurrentBrowserFlush()) return;
-      void saveRef.current();
-    };
-    window.addEventListener('pagehide', flushBeforePageHide);
-    return () => window.removeEventListener('pagehide', flushBeforePageHide);
+  const changeSaveState = useCallback((state: CollabSaveState) => {
+    setSaveState(state);
   }, []);
 
+  // The editor's serialized mirror: feeds downloads and the current-editor
+  // diff. Durability belongs to the session checkpoint, never to this state.
   function changeContent(next: string) {
     contentRef.current = next;
     setContent(next);
-    if (activeLibrary && selectedPath && etag) {
-      saveDraft(activeLibrary, selectedPath, etag, next);
-      transitionSaveState('drafted');
-    } else {
-      transitionSaveState('dirty');
-    }
   }
 
   async function createNewDocument(defaultPath = 'untitled.md') {
@@ -1194,8 +818,6 @@ function Workspace() {
     const defaultPath = defaultDocumentPathForLink(link);
     const path = window.prompt('New document path', defaultPath);
     if (!path) return;
-    // Flush the pending draft before creating + switching (see openDocument).
-    if (saveStateRef.current === 'drafted' && canCurrentBrowserFlush()) void save();
     const initialContent = '# Untitled\n';
     const initialContentType = 'text/markdown';
     const created = await createDocument(
@@ -1359,7 +981,6 @@ function Workspace() {
     if (!activeLibrary || !selectedPath) return;
     const restored = await restoreVersion(activeLibrary, selectedPath, versionId, browserMutationOptions());
     setEtag(restored.etag || `"${restored.outcome.version.id}"`);
-    transitionSaveState('saved');
     setSelectedVersionId(null);
     setCompareVersionId(null);
     await Promise.all([
@@ -1379,9 +1000,6 @@ function Workspace() {
 
   function openDocument(path: string) {
     if (!path || path === selectedPath) return;
-    // Flush the pending draft before leaving; `save` is guarded on the
-    // originating document, so a late response won't disturb the next one.
-    if (saveStateRef.current === 'drafted' && canCurrentBrowserFlush()) void save();
     setSelectedPath(path);
   }
 
@@ -1473,161 +1091,6 @@ function Workspace() {
     setPaletteQuery('');
   }
 
-  function closeSaveConflictDialog() {
-    setConflictRemote(null);
-    setConflictDetails(null);
-  }
-
-  function acceptRemoteDocumentVersion(
-    library: string,
-    path: string,
-    remote: { content: string; contentType: string; documentId: string; etag: string },
-    previousEtag: string
-  ) {
-    contentRef.current = remote.content;
-    loadedDocumentRef.current = {
-      library,
-      path,
-      etag: remote.etag,
-      documentId: remote.documentId,
-    };
-    clearDraft(library, path, previousEtag);
-    setContent(remote.content);
-    setEtag(remote.etag);
-    setContentType(remote.contentType);
-    setConflictRemote(null);
-    setConflictDetails(null);
-    setCollabExternalChange(null);
-    transitionSaveState('saved');
-  }
-
-  function useRemoteConflictVersion() {
-    if (!conflictRemote || !conflictDetails || !activeLibrary || !selectedPath) return;
-    contentRef.current = conflictRemote;
-    loadedDocumentRef.current = {
-      library: activeLibrary,
-      path: selectedPath,
-      etag: conflictDetails.remoteEtag,
-      documentId:
-        loadedDocumentRef.current?.documentId ??
-        loadedDocumentForSelection?.documentId ??
-        selectedEntry?.id ??
-        '',
-    };
-    clearDraft(activeLibrary, selectedPath, conflictDetails.baseEtag);
-    setContent(conflictRemote);
-    setEtag(conflictDetails.remoteEtag);
-    setConflictRemote(null);
-    setConflictDetails(null);
-    setCollabExternalChange(null);
-    setCollabRebaseKey((key) => key + 1);
-    transitionSaveState('clean');
-  }
-
-  async function reviewCollabExternalChange() {
-    if (!activeLibrary || !selectedPath || !etag) return;
-    const remote = await getDocument(activeLibrary, selectedPath);
-    setConflictDetails({ baseEtag: etag, path: selectedPath, remoteEtag: remote.etag });
-    setConflictRemote(remote.content);
-    setEtag(remote.etag);
-  }
-
-  async function resurrectDeletedCollabDocument() {
-    if (!activeLibrary || !selectedPath || !isTextContentType(contentType)) return;
-    const library = activeLibrary;
-    const path = selectedPath;
-    const localContent = content;
-    const localContentType = contentType;
-    const previousEtag = etag;
-    let resurrected;
-    try {
-      resurrected = await createDocument(
-        library,
-        path,
-        localContent,
-        localContentType,
-        browserMutationOptions()
-      );
-    } catch (error) {
-      if (!(error instanceof ApiPreconditionError)) {
-        transitionSaveState('failed');
-        return;
-      }
-      let remote;
-      try {
-        remote = await getDocument(library, path);
-      } catch (readError) {
-        if (readError instanceof ApiError && readError.status === 404) {
-          transitionSaveState('failed');
-          return;
-        }
-        transitionSaveState('failed');
-        return;
-      }
-      if (activeLibraryRef.current !== library || selectedPathRef.current !== path) return;
-      if (remote.content === localContent) {
-        acceptRemoteDocumentVersion(
-          library,
-          path,
-          {
-            content: remote.content,
-            contentType: remote.contentType,
-            documentId: remote.documentId,
-            etag: remote.etag,
-          },
-          previousEtag
-        );
-        setCollabRebaseKey((key) => key + 1);
-        await mutate(
-          ['/v1/document', library, path],
-          {
-            content: remote.content,
-            contentType: remote.contentType,
-            documentId: remote.documentId,
-            etag: remote.etag,
-            path,
-          },
-          { revalidate: false }
-        );
-        return;
-      }
-      setCollabExternalChange({ kind: 'changed', path, etag: remote.etag });
-      await Promise.all([
-        mutate(['/v1/documents', library]),
-        mutate(['/v1/versions', library, path]),
-        mutate(['/v1/outgoing', library, path]),
-        mutate(['/v1/backlinks', library, path]),
-      ]);
-      return;
-    }
-    const nextEtag = resurrected.etag || `"${resurrected.outcome.version.id}"`;
-    loadedDocumentRef.current = {
-      library,
-      path,
-      etag: nextEtag,
-      documentId: resurrected.outcome.document.id,
-    };
-    setEtag(nextEtag);
-    setCollabExternalChange(null);
-    setCollabRebaseKey((key) => key + 1);
-    transitionSaveState('saved');
-    await seedCreatedDocumentCaches(library, path, localContent, localContentType, resurrected);
-    await Promise.all([
-      mutate(['/v1/documents', library]),
-      mutate(['/v1/outgoing', library, path]),
-      mutate(['/v1/backlinks', library, path]),
-    ]);
-  }
-
-  function transitionSaveState(next: SaveState) {
-    saveStateRef.current = next;
-    setSaveState(next);
-  }
-
-  function canCurrentBrowserFlush() {
-    return !liveCollabSessionRef.current || collabFlusherRef.current;
-  }
-
   return (
     <main
       className="isolate flex h-screen min-h-0 flex-col overflow-hidden bg-canvas text-ink antialiased"
@@ -1680,6 +1143,7 @@ function Workspace() {
             <div className="flex h-full min-h-0 flex-col">
               <DocumentToolbar
                 agentPresence={agentPresence.presence}
+                isMarkdown={isMarkdownDocument(selectedPath, selectedContentType)}
                 isText={isTextContentType(selectedContentType)}
                 mode={editorMode}
                 onModeChange={setEditorMode}
@@ -1691,40 +1155,23 @@ function Workspace() {
                 onRename={renameCurrent}
                 onShare={() => void shareCurrentDocument()}
               />
-              {collabExternalChange ? (
-                <CollabExternalChangeBanner
-                  change={collabExternalChange}
-                  onDiscard={() => setSelectedPath('')}
-                  onReview={() => void reviewCollabExternalChange()}
-                  onResurrect={() => void resurrectDeletedCollabDocument()}
-                />
-              ) : null}
-              {collabRecoveryError ? (
-                <CollabRecoveryErrorBanner error={collabRecoveryError} />
-              ) : null}
               {selectedDocumentBodyReady ? (
                 <DocumentBody
                   activeLibrary={activeLibrary}
                   author={author}
                   byteSize={selectedEntry?.byte_size}
                   collabSessionId={collabSessionIdRef.current}
-                  collabFlushAck={collabFlushAck}
-                  onCollabInjectedAdopted={adoptInjectedCollabVersion}
-                  onCollabFlushAck={recordCollabFlushAck}
-                  onCollabFlusherChange={changeCollabFlusher}
-                  onCollabRecoveryError={recordCollabRecoveryError}
                   collabToken={routeCollabToken}
-                  collabRebaseKey={collabRebaseKey}
                   contentHash={selectedEntry?.content_hash}
                   content={content}
                   contentType={selectedContentType}
                   documentId={collabDocumentId}
-                  etag={etag}
                   image={imageApi}
                   mode={editorMode}
                   path={selectedPath}
                   wikiLink={wikiLink}
                   onChange={changeContent}
+                  onSaveStateChange={changeSaveState}
                 />
               ) : (
                 <LoadingDocument />
@@ -1764,6 +1211,7 @@ function Workspace() {
             onRestoreVersion={restoreSelectedVersion}
             onViewVersion={viewSelectedVersion}
             outgoing={outgoing.links}
+            review={documentReview}
             selectedVersionContent={selectedVersionContent}
             selectedVersionDiff={selectedVersionDiff}
             selectedVersionId={selectedVersionId}
@@ -1772,60 +1220,6 @@ function Workspace() {
           />
         </Panel>
       </PanelGroup>
-
-      {conflictRemote ? (
-        <Dialog open>
-          <div className="fixed inset-0 z-40 bg-black/20" />
-          <div
-            aria-label="Save conflict"
-            aria-modal="true"
-            className="fixed left-1/2 top-1/2 z-50 grid w-[min(900px,92vw)] -translate-x-1/2 -translate-y-1/2 grid-cols-2 gap-3 rounded-md border border-line-strong bg-surface p-4 shadow-xl"
-            ref={saveConflictDialogRef}
-            role="dialog"
-            tabIndex={-1}
-          >
-            {conflictDetails ? (
-              <dl className="col-span-2 grid gap-2 rounded-md border border-line bg-raised px-3 py-2 text-xs text-body sm:grid-cols-3">
-                <div className="min-w-0 truncate">
-                  <dt className="inline font-semibold uppercase text-muted">Path</dt>{' '}
-                  <dd className="inline font-mono">{conflictDetails.path}</dd>
-                </div>
-                <div className="min-w-0 truncate">
-                  <dt className="inline font-semibold uppercase text-muted">Base</dt>{' '}
-                  <dd className="inline font-mono">{conflictDetails.baseEtag}</dd>
-                </div>
-                <div className="min-w-0 truncate">
-                  <dt className="inline font-semibold uppercase text-muted">Latest</dt>{' '}
-                  <dd className="inline font-mono">{conflictDetails.remoteEtag}</dd>
-                </div>
-              </dl>
-            ) : null}
-            <div>
-              <h2 className="mb-2 text-sm font-semibold">Local draft</h2>
-              <pre className="max-h-[50vh] overflow-auto rounded border border-line bg-raised p-3 text-xs">
-                {content}
-              </pre>
-            </div>
-            <div>
-              <h2 className="mb-2 text-sm font-semibold">Latest remote</h2>
-              <pre className="max-h-[50vh] overflow-auto rounded border border-line bg-raised p-3 text-xs">
-                {conflictRemote}
-              </pre>
-            </div>
-            <div className="col-span-2 flex justify-end gap-2">
-              <button className={secondaryButton} onClick={useRemoteConflictVersion}>
-                Use remote
-              </button>
-              <button
-                className={primaryButton}
-                onClick={closeSaveConflictDialog}
-              >
-                Keep editing local draft
-              </button>
-            </div>
-          </div>
-        </Dialog>
-      ) : null}
 
       <CommandPalette
         documents={documents}
@@ -1901,61 +1295,43 @@ function DocumentBody({
   activeLibrary,
   author,
   byteSize,
-  collabFlushAck,
   collabSessionId,
   collabToken,
-  collabRebaseKey,
   contentHash,
   content,
   contentType,
   documentId,
-  etag,
   image,
   mode,
   path,
   wikiLink,
   onChange,
-  onCollabFlushAck,
-  onCollabFlusherChange,
-  onCollabInjectedAdopted,
-  onCollabRecoveryError,
+  onSaveStateChange,
 }: {
   activeLibrary: string;
   author: string;
   byteSize?: number;
-  collabFlushAck: CollabFlushAck | null;
   collabSessionId: string;
   collabToken?: string;
-  collabRebaseKey: number;
   contentHash?: string | null;
   content: string;
   contentType: string;
   documentId: string;
-  etag: string;
   image: ImageApi;
   mode: EditorMode;
   path: string;
   wikiLink: WikiLinkApi;
   onChange: (content: string) => void;
-  onCollabFlushAck: (ack: CollabFlushAck) => void;
-  onCollabFlusherChange: (isFlusher: boolean) => void;
-  onCollabInjectedAdopted: (
-    version: CollabInjectedVersion,
-    result: { content: string; hadLocalEdits: boolean }
-  ) => void;
-  onCollabRecoveryError: (error: CollabRecoveryError) => void;
+  onSaveStateChange: (state: CollabSaveState) => void;
 }) {
-  if (isTextContentType(contentType)) {
+  // Markdown documents edit through the live session — always. Other text
+  // documents are RawDocuments on the byte path: the browser shows their
+  // source read-only (their write surfaces are files, Git, and agents).
+  if (isMarkdownDocument(path, contentType)) {
     const collab: CollabEditorConfig | undefined = documentId
       ? {
           documentId,
-          flushAck: collabFlushAck,
-          loadedEtag: etag,
-          onFlushAck: onCollabFlushAck,
-          onFlusherChange: onCollabFlusherChange,
-          onInjectedAdopted: onCollabInjectedAdopted,
-          onRecoveryError: onCollabRecoveryError,
-          rebaseKey: collabRebaseKey,
+          onSaveStateChange,
           sessionId: collabSessionId,
           token: collabToken,
         }
@@ -1971,6 +1347,10 @@ function DocumentBody({
         onChange={onChange}
       />
     );
+  }
+
+  if (isTextContentType(contentType)) {
+    return <TextSourcePreview content={content} contentType={contentType} path={path} />;
   }
 
   if (isImageContentType(contentType)) {
@@ -1992,6 +1372,33 @@ function DocumentBody({
       href={documentHref(activeLibrary, path)}
       path={path}
     />
+  );
+}
+
+// Read-only source view for non-Markdown text documents (JSON, YAML, plain
+// text). They are RawDocuments: the browser never edits them — whole-file
+// writers (files, Git, agents) own their bytes.
+function TextSourcePreview({
+  content,
+  contentType,
+  path,
+}: {
+  content: string;
+  contentType: string;
+  path: string;
+}) {
+  return (
+    <section aria-label="Text document preview" className="flex min-h-0 flex-1 flex-col bg-surface">
+      <div className="flex h-11 shrink-0 items-center gap-3 border-b border-line px-3 text-sm text-body">
+        <FileText size={15} className="shrink-0 text-accent" />
+        <span className="min-w-0 flex-1 truncate">{path}</span>
+        <span className="shrink-0 text-xs text-muted">{contentType}</span>
+        <span className="shrink-0 text-xs text-muted">Read-only</span>
+      </div>
+      <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap px-8 py-6 font-mono text-[13px] leading-6 text-body">
+        {content}
+      </pre>
+    </section>
   );
 }
 
@@ -3275,12 +2682,13 @@ const editorModes: ReadonlyArray<{ value: EditorMode; label: string; icon: typeo
   { value: 'viewing', label: 'Viewing', icon: Eye },
 ];
 
-// Header save status. The settled "Saved" state fades out after a beat so the
-// header doesn't stay labelled; active states (saving, drafting, stale, failed)
-// persist until they resolve. The element stays mounted and keeps its text so it
-// remains a stable query target and the layout never jumps.
-function SaveStatusIndicator({ saveState }: { saveState: SaveState }) {
-  const settled = saveState === 'clean' || saveState === 'saved';
+// Header save status (Phase 5 model): `Saved` means connected with the last
+// checkpoint covering everything on screen; `Saving…` means a commit is
+// owed; `Reconnecting (read-only)` means no live session. The settled
+// "Saved" fades out after a beat; the element stays mounted so it remains a
+// stable query target and the layout never jumps.
+function SaveStatusIndicator({ saveState }: { saveState: CollabSaveState }) {
+  const settled = saveState === 'saved';
   const [faded, setFaded] = useState(false);
   useEffect(() => {
     setFaded(false);
@@ -3296,8 +2704,10 @@ function SaveStatusIndicator({ saveState }: { saveState: SaveState }) {
         faded && 'opacity-0'
       )}
     >
-      {saveState === 'stale' ? <AlertTriangle className="shrink-0 text-warn-ink" size={14} /> : null}
-      {statusText(saveState)}
+      {saveState === 'reconnecting' ? (
+        <AlertTriangle className="shrink-0 text-warn-ink" size={14} />
+      ) : null}
+      {saveStateLabel(saveState)}
     </span>
   );
 }
@@ -3430,59 +2840,9 @@ function DocumentModeSelect({
   );
 }
 
-function CollabExternalChangeBanner({
-  change,
-  onDiscard,
-  onReview,
-  onResurrect,
-}: {
-  change: CollabExternalChange;
-  onDiscard: () => void;
-  onReview: () => void;
-  onResurrect: () => void;
-}) {
-  const detail =
-    change.kind === 'deleted'
-      ? 'Deleted externally'
-      : `External version available${change.etag ? ` · ${change.etag}` : ''}`;
-  return (
-    <div className="flex min-h-9 items-center gap-2 border-b border-warn-line bg-warn-tint px-4 text-xs text-warn-ink">
-      <AlertTriangle className="shrink-0" size={14} />
-      <span className="min-w-0 flex-1 truncate">
-        <span className="font-medium">{detail}</span>
-        <span className="text-warn-ink/80"> · {change.path}</span>
-      </span>
-      {change.kind === 'changed' ? (
-        <button className={secondaryButton} onClick={onReview} type="button">
-          Review
-        </button>
-      ) : null}
-      {change.kind === 'deleted' ? (
-        <button className={secondaryButton} onClick={onResurrect} type="button">
-          Resurrect
-        </button>
-      ) : null}
-      <button className={secondaryButton} onClick={onDiscard} type="button">
-        Discard
-      </button>
-    </div>
-  );
-}
-
-function CollabRecoveryErrorBanner({ error }: { error: CollabRecoveryError }) {
-  return (
-    <div className="flex min-h-9 items-center gap-2 border-b border-warn-line bg-warn-tint px-4 text-xs text-warn-ink">
-      <AlertTriangle className="shrink-0" size={14} />
-      <span className="min-w-0 truncate">
-        <span className="font-medium">Collaboration recovery is not persisted</span>
-        <span className="text-warn-ink/80"> · {error.message}</span>
-      </span>
-    </div>
-  );
-}
-
 function DocumentToolbar({
   agentPresence,
+  isMarkdown,
   isText,
   mode,
   onModeChange,
@@ -3495,11 +2855,12 @@ function DocumentToolbar({
   onShare,
 }: {
   agentPresence: AgentPresenceEntry[];
+  isMarkdown: boolean;
   isText: boolean;
   mode: EditorMode;
   onModeChange: (mode: EditorMode) => void;
   path: string;
-  saveState: SaveState;
+  saveState: CollabSaveState | null;
   onAddAgent: () => void;
   onDelete: () => void;
   onDownload: () => void;
@@ -3518,9 +2879,9 @@ function DocumentToolbar({
           </span>
         ))}
       </h1>
-      {isText ? <SaveStatusIndicator saveState={saveState} /> : null}
-      {isText ? <AgentPresencePill presence={agentPresence} /> : null}
-      {isText ? (
+      {isMarkdown && saveState ? <SaveStatusIndicator saveState={saveState} /> : null}
+      {isMarkdown ? <AgentPresencePill presence={agentPresence} /> : null}
+      {isMarkdown ? (
         <button
           aria-label="Add agent"
           className={cn(secondaryButton, 'px-2 sm:px-3')}
@@ -3531,7 +2892,7 @@ function DocumentToolbar({
           <span className="hidden sm:inline">Add agent</span>
         </button>
       ) : null}
-      {isText ? <DocumentModeSelect mode={mode} onModeChange={onModeChange} /> : null}
+      {isMarkdown ? <DocumentModeSelect mode={mode} onModeChange={onModeChange} /> : null}
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
           <button aria-label="Document actions" className={iconButton} type="button">
@@ -3590,6 +2951,7 @@ function RightPane({
   onToggleCollapsed,
   onViewVersion,
   outgoing,
+  review,
   selectedVersionContent,
   selectedVersionDiff,
   selectedVersionId,
@@ -3614,6 +2976,7 @@ function RightPane({
   onToggleCollapsed: () => void;
   onViewVersion: (version: string) => void;
   outgoing: DocumentLink[];
+  review?: AgentReviewResponse;
   selectedVersionContent?: DocumentVersionContent;
   selectedVersionDiff?: VersionDiff;
   selectedVersionId: string | null;
@@ -3738,7 +3101,7 @@ function RightPane({
         {selectedTab === 'comments' ? (
           <>
             <h2 className={rightHeading}>{selectedTabLabel}</h2>
-            <CommentsPanel />
+            <CommentsPanel review={review} />
           </>
         ) : null}
       </section>
@@ -4327,23 +3690,6 @@ function unifiedLineDiff(base: string, against: string, baseLabel = 'base', agai
   return lines.join('\n');
 }
 
-function statusText(state: SaveState) {
-  const label: Record<SaveState, string> = {
-    clean: 'Saved',
-    dirty: 'Unsaved changes',
-    drafted: 'Draft saved locally',
-    saving: 'Saving…',
-    saved: 'Saved',
-    stale: 'Stale',
-    failed: 'Failed',
-  };
-  return label[state];
-}
-
-function hasUnsavedEditorState(state: SaveState) {
-  return state === 'dirty' || state === 'drafted' || state === 'stale' || state === 'failed';
-}
-
 function orderLibrariesByRecent(libraries: LibraryType[], activeLibrary: string) {
   const recentIndex = new Map<string, number>();
   for (const slug of [activeLibrary, ...loadRecentLibraries()]) {
@@ -4437,6 +3783,16 @@ function isImageContentType(contentType: string) {
   return contentType.split(';', 1)[0]?.trim().toLowerCase().startsWith('image/') ?? false;
 }
 
+// Mirrors the server's BlockDocument classification (`document_kind`):
+// .md/.markdown paths or a markdown content type edit through live sessions;
+// everything else stays on the raw byte path.
+function isMarkdownDocument(path: string, contentType: string) {
+  const normalized = contentType.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+  if (normalized === 'text/markdown' || normalized === 'text/x-markdown') return true;
+  const lower = path.toLowerCase();
+  return lower.endsWith('.md') || lower.endsWith('.markdown');
+}
+
 function formatBytes(bytes: number) {
   if (bytes === 1) return '1 byte';
   if (bytes < 1024) return `${bytes} bytes`;
@@ -4527,14 +3883,6 @@ function makeCollabSessionId() {
     return `browser:${crypto.randomUUID()}`;
   }
   return `browser:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
-}
-
-function ackLiveCollabFlush(session: LiveCollabSession, versionId: string, etag: string): LiveCollabSession {
-  return {
-    ...session,
-    ackedFlushEtags: new Set([...(session.ackedFlushEtags ?? []), etag]),
-    ackedFlushVersionIds: new Set([...(session.ackedFlushVersionIds ?? []), versionId]),
-  };
 }
 
 function parseBrowserEvent(event: MessageEvent): BrowserEventPayload | null {

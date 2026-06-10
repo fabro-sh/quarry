@@ -1,11 +1,7 @@
 import * as Y from 'yjs';
 
 import { isRecord } from '../../lib/utils';
-import {
-  isEmptyReviewMeta,
-  type ReviewMeta,
-  type ReviewMetaEntry,
-} from './rfm-types';
+import { type ReviewMeta, type ReviewMetaEntry } from './rfm-types';
 import { useReviewStore } from './review-store';
 
 export const REVIEW_ROOT = 'review';
@@ -21,7 +17,6 @@ interface ReviewDocBinding {
 }
 
 export interface ReviewDocBindOptions {
-  isFlusher: boolean;
   isSynced: boolean;
   onMeta: (meta: ReviewMeta) => void;
 }
@@ -62,27 +57,15 @@ export function bindReviewDoc(doc: Y.Doc, options: ReviewDocBindOptions): () => 
   };
   activeBinding = binding;
 
+  // The review map is seeded server-side from canonical review rows at
+  // session seed (see `session.rs`), so a synced map is authoritative —
+  // including an EMPTY one. (The legacy flusher-only bootstrap that seeded
+  // the map from endmatter-parsed store metadata died with the Phase 5
+  // autosave machinery.)
   const tryBecomeReady = () => {
     if (!options.isSynced) return;
-
-    const mapMeta = metaFromReviewMap(root);
-    if (!isEmptyReviewMeta(mapMeta)) {
-      binding.ready = true;
-      emitMeta(binding, mapMeta);
-      return;
-    }
-
-    const storeMeta = useReviewStore.getState().getMeta();
-    if (!isEmptyReviewMeta(storeMeta)) {
-      if (!options.isFlusher) return;
-      binding.ready = true;
-      reconcileReviewMap(root, storeMeta);
-      emitMeta(binding, storeMeta);
-      return;
-    }
-
     binding.ready = true;
-    emitMeta(binding, mapMeta);
+    emitMeta(binding, metaFromReviewMap(root));
   };
 
   const handleChange = () => {

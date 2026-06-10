@@ -1,11 +1,10 @@
 import { lazy, Suspense } from 'react';
-import type { CollabEditorConfig, CollabInjectedVersion, EditorMode } from './PlateMarkdownEditor';
+import type { CollabEditorConfig, EditorMode } from './PlateMarkdownEditor';
 import type { ImageApi } from './image-element';
 import type { WikiLinkApi } from './wiki-link-element';
 
 export type { EditorMode };
 export type { CollabEditorConfig };
-export type { CollabInjectedVersion };
 export type { WikiLinkApi };
 export type { ImageApi };
 

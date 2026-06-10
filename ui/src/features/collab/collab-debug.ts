@@ -1,7 +1,7 @@
 // Toggleable collaboration-lifecycle logging. The collab path (SSE event
-// classification → agent-injection adoption → draft/flush → conflict) is hard
-// to observe after the fact, so this channel emits structured `[collab]` console
-// debug lines at each decision point. It is a no-op unless explicitly enabled:
+// classification → editor mirroring → reconnect epochs) is hard to observe
+// after the fact, so this channel emits structured `[collab]` console debug
+// lines at each decision point. It is a no-op unless explicitly enabled:
 //
 //   - add `?collabDebug` (or `?collabDebug=1`) to the URL, or
 //   - set `localStorage['quarry:collabDebug'] = '1'`.

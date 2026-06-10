@@ -77,10 +77,11 @@ Document path: ${path}
    When an event arrives, refresh the snapshot before replying or editing.
 
 5. Do not edit until the user gives further instructions.
-   For direct block edits, POST ${documentApi}/edit using the latest baseToken and block refs.
-   For review annotations, POST ${documentApi}/ops with a top-level baseToken, optional by, and an operations array containing comment.add, comment.reply, comment.delete, suggestion.add, suggestion.accept, or suggestion.reject.
-   To process existing feedback in one convenience workflow, POST ${documentApi}/review with suggestion decisions, edit.* block operations, and comment resolutions.
-   If an edit is stale, refresh the snapshot and retry from the new baseToken.
+   Read the canonical block tree first: GET ${documentApi}/blocks returns stable block_ids plus the current document_clock.
+   For every edit and review operation, POST ${documentApi}/transactions with {"client_tx_id":"<unique-id>","base_clock":"<document_clock>","actor":{"kind":"agent","id":"<agent-id>"},"ops":[...]}.
+   Ops: insert_block, delete_block, move_block, replace_block_content, set_block_attrs, mark/link ops, comment.add, comment.reply, comment.resolve, comment.delete, suggestion.add, suggestion.accept, suggestion.reject.
+   To read existing comments, suggestions, and merge conflicts, GET ${documentApi}/review.
+   Errors are typed {code, retryable, message}; when retryable, refresh GET ${documentApi}/blocks and resubmit with the new document_clock.
 
 6. If you need setup details for deeper interaction, fetch:
    Skill: ${discoveryOrigin}/quarry.SKILL.md
