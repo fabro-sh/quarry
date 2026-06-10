@@ -1,4 +1,5 @@
 mod collab;
+mod gateway;
 
 #[cfg(feature = "bundle_ui")]
 use axum::body::Body;
@@ -604,6 +605,8 @@ async fn browser_asset(uri: Uri) -> Response {
         document_outgoing_links_openapi,
         document_snapshot_openapi,
         document_review_openapi,
+        document_blocks_openapi,
+        document_block_transactions_openapi,
         document_events_stream_openapi,
         document_share_openapi,
         document_share_create_openapi,
@@ -687,6 +690,15 @@ async fn browser_asset(uri: Uri) -> Response {
         AgentOpsOperationRequest,
         AgentOpsResponse,
         AgentOpsResultItem,
+        gateway::BlockTreeResponse,
+        gateway::BlockNodePayload,
+        gateway::BlockMarkRunPayload,
+        gateway::BlockLinkRangePayload,
+        gateway::BlockReviewAnchor,
+        gateway::BlockTransactionRequest,
+        gateway::BlockTransactionActor,
+        gateway::BlockTransactionAck,
+        gateway::BlockTransactionError,
         CollabInviteToken,
         CreateCollabInviteRequest,
         TransactionRecord,
@@ -1450,6 +1462,10 @@ pub struct AgentReviewComment {
     pub quote: String,
     pub body: String,
     pub replies: Vec<AgentReviewReply>,
+    /// Row-anchored position; present only when the document has canonical
+    /// block rows (the Phase 2 review projection).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<gateway::BlockReviewAnchor>,
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
@@ -1473,6 +1489,10 @@ pub struct AgentReviewSuggestion {
     pub quote: String,
     pub content: String,
     pub preview: AgentSuggestionPreview,
+    /// Row-anchored position; present only when the document has canonical
+    /// block rows (the Phase 2 review projection).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<gateway::BlockReviewAnchor>,
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
@@ -1815,6 +1835,9 @@ async fn get_document(
             &state.store.outgoing_links(&library, path).await?,
         );
     }
+    if let Some(path) = path.strip_suffix("/blocks") {
+        return gateway::document_blocks(&state, &library, path).await;
+    }
     if let Some(path) = path.strip_suffix("/snapshot") {
         return json_response(
             StatusCode::OK,
@@ -1925,6 +1948,35 @@ async fn document_snapshot_openapi() {}
 )]
 #[allow(dead_code)]
 async fn document_review_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/libraries/{library}/documents/{path}/blocks",
+    params(("library" = String, Path), ("path" = String, Path)),
+    responses(
+        (status = 200, body = gateway::BlockTreeResponse),
+        (status = 404, body = ErrorResponse),
+        (status = 422, body = gateway::BlockTransactionError)
+    )
+)]
+#[allow(dead_code)]
+async fn document_blocks_openapi() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/libraries/{library}/documents/{path}/transactions",
+    params(("library" = String, Path), ("path" = String, Path)),
+    request_body = gateway::BlockTransactionRequest,
+    responses(
+        (status = 200, body = gateway::BlockTransactionAck),
+        (status = 400, body = gateway::BlockTransactionError),
+        (status = 404, body = gateway::BlockTransactionError),
+        (status = 412, body = gateway::BlockTransactionError),
+        (status = 422, body = gateway::BlockTransactionError)
+    )
+)]
+#[allow(dead_code)]
+async fn document_block_transactions_openapi() {}
 
 #[utoipa::path(
     get,
@@ -2226,6 +2278,10 @@ async fn post_document_action(
         })?;
         let response = agent_presence_document(&state, &headers, &library, path, request).await?;
         return json_response(StatusCode::OK, &response);
+    }
+
+    if let Some(path) = path.strip_suffix("/transactions") {
+        return gateway::document_block_transactions(&state, &library, path, request).await;
     }
 
     Err(QuarryError::NotFound(path).into())
@@ -2987,6 +3043,20 @@ async fn agent_document_review(
     include_resolved: bool,
 ) -> Result<AgentReviewResponse, ApiError> {
     let document = store.get_document(library, path).await?;
+    // Documents with canonical block rows project review items from
+    // `block_review_items` (the Phase 2 rows-backed projection); documents
+    // without rows keep the legacy CriticMarkup/endmatter projection.
+    let rows = store.load_block_tree(&document.id).await?;
+    if !rows.is_empty() {
+        let items = store.list_block_review_items(&document.id).await?;
+        return Ok(gateway::review_response_from_rows(
+            document.id,
+            document.version.id,
+            &rows,
+            &items,
+            include_resolved,
+        ));
+    }
     let markdown = document_markdown(&document)?;
     Ok(agent_review_response_from_markdown(
         document.id,
@@ -3312,6 +3382,7 @@ fn agent_review_comments(
                 quote: marker.quote.clone(),
                 body: entry.body.clone().unwrap_or_else(|| marker.body.clone()),
                 replies: replies.remove(&marker.id).unwrap_or_default(),
+                anchor: None,
             })
         })
         .collect()
@@ -3364,6 +3435,7 @@ fn agent_review_suggestions(
                 quote: marker.quote.clone(),
                 content: marker.content.clone(),
                 preview: marker.preview.clone(),
+                anchor: None,
             })
         })
         .collect()
