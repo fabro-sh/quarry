@@ -18,12 +18,13 @@
 //! re-imported. An imported empty body is canonicalized to one empty
 //! paragraph row so "zero rows" always means "no projection". Document moves
 //! keep the projection (rows are keyed by document id and content does not
-//! change). Phase 4's diff3 reconciliation replaces clearing with
-//! identity-preserving merges.
+//! change). Since Phase 4, every Markdown writer (REST PUT, Git, FUSE, CLI)
+//! reconciles through [`BlockMarkdownWriter`] instead — the clearing path
+//! remains only for raw documents and staged-transaction commits.
 //!
-//! `block_shadow_bases` (diff3 bases, Phase 4) and `block_transactions`
-//! (semantic mutation history, Phase 2) get schema plus minimal read/write
-//! helpers only; their real consumers arrive in later phases.
+//! `block_shadow_bases` holds the Phase 4 diff3 bases (currently Git peer
+//! bases; FUSE bases are per-open-handle in memory, the CLI is two-way);
+//! `block_transactions` is the semantic mutation history (Phase 2).
 
 use super::*;
 use quarry_collab_codec::{

@@ -127,13 +127,16 @@
 //! Markdown payloads. Documents without rows keep the legacy
 //! CriticMarkup/endmatter projection untouched (`conflicts` empty).
 //!
-//! ## Transitional caveats (until Phases 4/5 replace the legacy paths)
+//! ## Whole-file writes (Phase 4)
 //!
-//! - A Markdown PUT from OUTSIDE a live session still clears the block
-//!   projection fail-closed (Phase 1 policy); the next gateway read/write
-//!   re-materializes rows with fresh `block_id`s, and a live session's next
-//!   checkpoint supersedes the write entirely. Phase 4's diff3
-//!   reconciliation replaces both behaviors.
+//! Markdown PUTs, Git sync/import, FUSE flushes, and CLI puts reconcile via
+//! diff3 against the canonical rows and dispatch through
+//! [`execute_block_transaction`] — see the `markdown_write` module. They are
+//! ordinary transactions here: rows-mode or session-mode per the switch,
+//! identity-preserving, conflicts as `conflict.add` ops.
+//!
+//! ## Transitional caveats (until Phase 5 replaces the legacy browser)
+//!
 //! - A PUT from a session PARTICIPANT is a checkpoint trigger, not a write
 //!   (see the `session` module docs).
 

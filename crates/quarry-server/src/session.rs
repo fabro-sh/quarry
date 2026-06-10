@@ -50,11 +50,14 @@
 //! Both rules dissolve when Phase 5 deletes the flusher and the external
 //! version classification.
 //!
-//! ## Known transitional hazards (accepted, fixed by Phases 4/5)
+//! ## Known transitional hazards (accepted, fixed by Phase 5)
 //!
-//! - An external legacy Markdown write racing a live session is overwritten
-//!   by the next checkpoint (session-authoritative, whole-document
-//!   last-writer-wins). Phase 4's diff3 reconciliation replaces this.
+//! - Whole-file writes (Markdown PUT, Git, FUSE, CLI) no longer race
+//!   sessions: Phase 4 routes them through the gateway dispatch, where they
+//!   take this module's document mutex and merge into the live doc as
+//!   collaborator edits. Only the legacy non-Markdown byte path and staged
+//!   transaction commits remain outside (they clear the projection
+//!   fail-closed).
 //! - A browser whose provider reconnects with its OLD Y.Doc after the
 //!   session was discarded merges stale content into the fresh seed
 //!   (duplication). Phase 5 reseeds reconnecting browsers with a fresh doc.

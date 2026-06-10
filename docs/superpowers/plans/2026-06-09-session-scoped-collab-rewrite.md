@@ -129,12 +129,12 @@ Envelope: `{client_tx_id, base_clock?, actor{kind,id,label}, ops[]}`. Response: 
 
 **Files:** new `crates/quarry-collab-codec/src/reconcile.rs`, `crates/quarry-storage/src/lib.rs` (shadow bases, local adapter helper), `crates/quarry-git/src/lib.rs`, `crates/quarry-fuse/src/lib.rs`, `crates/quarry-cli/src/lib.rs`, `crates/quarry-server/src/lib.rs` (Markdown `PUT` route), tests in `crates/quarry-collab-codec/tests/`, `crates/quarry-git/tests/git_roundtrip.rs`, `crates/quarry-fuse/tests/projection.rs`, `crates/quarry/tests/cli_smoke.rs`, `crates/quarry-server/tests/rest_api.rs`.
 
-- [ ] Implement `reconcile(base, incoming, canonical) -> {ops, conflicts}` per Gate C rules: positional identity mapping, minimal ops for changed hunks, structured conflict artifacts for true three-way conflicts.
-- [ ] Conflict artifacts persist as conflict review items (`kind = conflict` on `block_review_items`, carrying the losing hunk and base context), visible via `GET /review` and resolvable like other review items. File writes succeed regardless.
-- [ ] Shadow base bookkeeping: Git records base per peer+path at export/import; FUSE records base per open handle at `open()`; CLI uses current canonical export as base (two-way degenerate case); server Markdown `PUT` honors `If-Match`-style clock as base selector, falling back to two-way.
-- [ ] Route whole-file writers through reconcile → gateway transaction (rows-mode or session-mode per the switch): Git import/sync, FUSE create/write/release/truncate, CLI `put`, server Markdown `PUT`.
-- [ ] RawDocument bypass coverage in all three adapters: bytes round-trip with no block tables touched.
-- [ ] Adapter tests: editing one block externally preserves sibling `block_id`s and live anchors; concurrent canonical edit + external write converges with conflict review items for overlapping hunks; FUSE flush during an active browser session converges through the session (no errno for reconciliation outcomes).
+- [x] Implement `reconcile(base, incoming, canonical) -> {ops, conflicts}` per Gate C rules: positional identity mapping, minimal ops for changed hunks, structured conflict artifacts for true three-way conflicts.
+- [x] Conflict artifacts persist as conflict review items (`kind = conflict` on `block_review_items`, carrying the losing hunk and base context), visible via `GET /review` and resolvable like other review items. File writes succeed regardless.
+- [x] Shadow base bookkeeping: Git records base per peer+path at export/import; FUSE records base per open handle at `open()`; CLI uses current canonical export as base (two-way degenerate case); server Markdown `PUT` honors `If-Match`-style clock as base selector, falling back to two-way.
+- [x] Route whole-file writers through reconcile → gateway transaction (rows-mode or session-mode per the switch): Git import/sync, FUSE create/write/release/truncate, CLI `put`, server Markdown `PUT`.
+- [x] RawDocument bypass coverage in all three adapters: bytes round-trip with no block tables touched.
+- [x] Adapter tests: editing one block externally preserves sibling `block_id`s and live anchors; concurrent canonical edit + external write converges with conflict review items for overlapping hunks; FUSE flush during an active browser session converges through the session (no errno for reconciliation outcomes).
 
 ### Phase 5: Browser Simplification
 
