@@ -857,9 +857,10 @@ function CollabSaveStateBridge({
 }
 
 // Nudges Plate's version-keyed selectors (the review rail, the floating
-// toolbar) after externally-applied editor changes — Yjs init seeding and
-// remote session updates mutate `editor.children` without a Slate change
-// notification reaching the mounted <Slate> context.
+// toolbar) after externally-applied editor changes — Yjs init seeding,
+// remote session updates, and suggestion resolution (collab or not) mutate
+// `editor.children` / the review store without a Slate change notification
+// reaching the mounted <Slate> context.
 //
 // The nudge MUST go through `editor.onChange()` rather than a local
 // `useIncrementVersion`: Plate's `useIncrementVersion` keeps a private
@@ -874,10 +875,12 @@ function PlateValueRevisionBridge({ revision }: { revision: number }) {
 
   useEffect(() => {
     if (revision === 0) return;
-    // Deferred one tick: this child effect runs BEFORE the parent <Slate>
-    // effect that registers its change handler (child-before-parent effect
-    // order), and an onChange with no handler registered is silently lost —
-    // exactly the Yjs-init case this bridge exists for.
+    // Deferred one tick: the bridge renders as an earlier sibling of the
+    // editor surface, so this effect flushes BEFORE the <Slate> effect (in
+    // the later PlateContent subtree) that registers the editor's change
+    // handler — and an onChange with no handler registered is silently
+    // lost. Exactly the Yjs-init / epoch-remount case this bridge exists
+    // for.
     const timer = window.setTimeout(() => editor.api.onChange(), 0);
     return () => window.clearTimeout(timer);
   }, [revision, editor]);
