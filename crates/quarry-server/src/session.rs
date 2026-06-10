@@ -157,6 +157,24 @@ impl SessionHub {
 
     async fn entry(&self, document_id: &str) -> Arc<DocEntry> {
         let mut entries = self.entries.lock().await;
+        // Phase 4 funnels every Git/FUSE/CLI whole-file write through
+        // `lock_document`, so entries must not accumulate one Arc per
+        // document ever locked. Sweep on each access: an entry is evictable
+        // only when nothing outside this map can reach it — no outstanding
+        // `Arc<DocEntry>` (held by `serve_socket` for a socket's lifetime),
+        // no outstanding state Arc (owned mutex guards, pending `lock_owned`
+        // futures, and a live session's checkpoint task all hold one), and
+        // no live session. Re-creating an entry later is safe because no
+        // holder of the old mutex can still exist.
+        entries.retain(|_, entry| {
+            if Arc::strong_count(entry) > 1 || Arc::strong_count(&entry.state) > 1 {
+                return true;
+            }
+            match entry.state.try_lock() {
+                Ok(state) => state.session.is_some(),
+                Err(_) => true,
+            }
+        });
         entries
             .entry(document_id.to_string())
             .or_insert_with(|| {
@@ -165,6 +183,11 @@ impl SessionHub {
                 })
             })
             .clone()
+    }
+
+    #[cfg(test)]
+    async fn entry_count(&self) -> usize {
+        self.entries.lock().await.len()
     }
 
     /// Serializes against seed/checkpoint/discard/transactions for one
@@ -1022,6 +1045,34 @@ pub(crate) fn doc_image(
 mod tests {
     use super::*;
     use quarry_collab_codec::SessionProjection;
+
+    /// Adapter whole-file writes lock every document they touch; the hub must
+    /// not keep one entry per document forever. Uncontended, sessionless
+    /// entries are swept on the next access; an entry whose mutex is still
+    /// held (an in-flight write or transaction) survives.
+    #[tokio::test]
+    async fn lock_document_entries_evict_once_uncontended_and_sessionless() {
+        let root = tempfile::tempdir().unwrap();
+        let store = quarry_storage::QuarryStore::open(quarry_storage::StoreConfig {
+            db_path: root.path().join("quarry.db"),
+            cas_path: root.path().join("cas"),
+            lock_path: None,
+        })
+        .await
+        .unwrap();
+        let hub = SessionHub::new(store);
+
+        let released = hub.lock_document("doc-released").await;
+        drop(released);
+        assert_eq!(hub.entry_count().await, 1, "entries linger until a sweep");
+
+        // The next access sweeps doc-released; doc-held survives while its
+        // guard lives.
+        let _held = hub.lock_document("doc-held").await;
+        assert_eq!(hub.entry_count().await, 1);
+        let _third = hub.lock_document("doc-third").await;
+        assert_eq!(hub.entry_count().await, 2);
+    }
 
     fn item(id: &str, kind: BlockReviewKind, start: u32, end: u32) -> BlockReviewItem {
         BlockReviewItem {
