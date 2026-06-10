@@ -137,6 +137,95 @@ pub(crate) async fn put_block_document(
     )?)
 }
 
+/// A metadata patch on a BlockDocument (metadata IS the frontmatter): a
+/// zero-op gateway transaction with a metadata override. The block rows and
+/// review items are untouched (the body did not change — rows stay valid by
+/// construction); only the rendered frontmatter in the normalized content
+/// moves. Dispatching through [`gateway::execute_block_transaction`] takes
+/// the per-document mutex and composes with a live session for free: the
+/// session doc carries body content only, so session mode flushes pending
+/// typing, applies the empty op set (a no-op on the doc), and commits the
+/// flushed rows under the new metadata — typing and frontmatter both land.
+///
+/// A projection-less BlockDocument (legacy write cleared its rows)
+/// materializes here exactly like `GET /blocks` does, publishing the
+/// one-time normalized content alongside the new metadata.
+pub(crate) async fn patch_block_document_metadata(
+    state: &AppState,
+    library: &str,
+    path: &str,
+    patch: JsonValue,
+    precondition: WritePrecondition,
+) -> Result<axum::response::Response, GatewayFailure> {
+    let document = state.store.get_document(library, path).await?;
+    // The legacy patch enforced preconditions against the head via
+    // put_document; mirror that strictness (a metadata patch is not a
+    // content merge, so If-Match is a true precondition here, not a base
+    // selector).
+    match &precondition {
+        WritePrecondition::IfMatch(version) if *version != document.version.id => {
+            return Err(GatewayFailure::Api(
+                QuarryError::PreconditionFailed(format!(
+                    "If-Match {version} does not match the head of {path}"
+                ))
+                .into(),
+            ));
+        }
+        WritePrecondition::IfNoneMatch => {
+            return Err(GatewayFailure::Api(
+                QuarryError::PreconditionFailed(format!("{path} already exists")).into(),
+            ));
+        }
+        _ => {}
+    }
+    // Read-merge-write against the head we just loaded; a concurrent
+    // metadata write between this read and the commit loses, exactly like
+    // the legacy read-merge-put path.
+    let mut metadata = document.metadata;
+    merge_json(&mut metadata, patch);
+    let ctx = TransactionContext {
+        client_tx_id: Uuid::new_v4().to_string(),
+        base_clock: None,
+        actor: BlockTransactionActor {
+            kind: "rest".to_string(),
+            id: None,
+            label: Some("Metadata patch".to_string()),
+        },
+    };
+    let settings = TransactionSettings {
+        source: DocumentSource::Rest,
+        origin_id: None,
+        metadata: Some(metadata),
+        transaction: quarry_storage::TransactionMetadata::default(),
+    };
+    let mut plan = |_snapshot: &quarry_storage::BlockMutationState| {
+        Ok(TransactionPlan {
+            ops: Vec::new(),
+            ops_json: JsonValue::Array(Vec::new()),
+        })
+    };
+    let reply =
+        gateway::execute_block_transaction(state, library, path, &ctx, &settings, &mut plan)
+            .await?;
+    let committed = match reply {
+        TransactionReply::Committed(committed) => committed,
+        TransactionReply::Replayed(record) => {
+            return Err(GatewayFailure::Api(
+                QuarryError::Storage(format!(
+                    "fresh client_tx_id {} unexpectedly replayed",
+                    record.client_tx_id
+                ))
+                .into(),
+            ))
+        }
+    };
+    Ok(crate::json_with_etag(
+        StatusCode::OK,
+        &*committed.outcome,
+        &committed.outcome.version.id,
+    )?)
+}
+
 /// The reconciled whole-file write. See the module docs; returns gateway
 /// failures so the REST route keeps its typed error payloads.
 pub(crate) async fn write_markdown_reconciled(

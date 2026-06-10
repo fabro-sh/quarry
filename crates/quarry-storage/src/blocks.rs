@@ -19,8 +19,11 @@
 //! paragraph row so "zero rows" always means "no projection". Document moves
 //! keep the projection (rows are keyed by document id and content does not
 //! change). Since Phase 4, every Markdown writer (REST PUT, Git, FUSE, CLI)
-//! reconciles through [`BlockMarkdownWriter`] instead — the clearing path
-//! remains only for raw documents and staged-transaction commits.
+//! reconciles through [`BlockMarkdownWriter`] and metadata patches commit
+//! through the gateway with a metadata override — the clearing path remains
+//! for raw documents, staged-transaction commits, version restores, and any
+//! direct `put_document`/`patch_metadata` caller that bypasses the server
+//! routes.
 //!
 //! `block_shadow_bases` holds the Phase 4 diff3 bases (currently Git peer
 //! bases; FUSE bases are per-open-handle in memory, the CLI is two-way);

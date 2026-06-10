@@ -2150,6 +2150,27 @@ async fn patch_document_metadata(
         )
         .into());
     };
+    // Phase 4: a metadata patch on a BlockDocument must NOT destroy the
+    // block projection (the legacy path re-puts the content, which clears
+    // rows and review items fail-closed, and bypasses the session mutex).
+    // It routes through the gateway as a zero-op transaction with a
+    // metadata override instead — see `markdown_write::patch_block_document_metadata`.
+    if let Ok(head) = state.store.head_document(&library, path).await {
+        if quarry_storage::document_kind(path, &head.content_type)
+            == quarry_storage::DocumentKind::BlockDocument
+        {
+            return gateway::gateway_reply(
+                markdown_write::patch_block_document_metadata(
+                    &state,
+                    &library,
+                    path,
+                    patch,
+                    precondition_from_headers(&headers)?,
+                )
+                .await,
+            );
+        }
+    }
     let outcome = state
         .store
         .patch_metadata(

@@ -5472,3 +5472,230 @@ async fn raw_document_put_bypasses_the_block_model_entirely() {
         Vec::<quarry_collab_codec::BlockRow>::new()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 4 review fixes: metadata patches, session-concurrent file writes,
+// conflict reply boundary.
+// ---------------------------------------------------------------------------
+
+/// A metadata patch is frontmatter-only: it must NOT destroy the block
+/// projection. Rows, ids, review anchors, and conflict artifacts all survive;
+/// only the rendered frontmatter (and the version clock) moves.
+#[tokio::test]
+async fn metadata_patch_preserves_rows_anchors_and_conflict_items() {
+    let (_root, app, store) = block_test_app().await;
+    put_block_markdown(&app, "meta.md", "# Title\n\nAlpha.\n").await;
+    let tree = get_block_tree(&app, "meta.md").await;
+    let ids: Vec<String> = tree["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|block| block["block_id"].as_str().unwrap().to_string())
+        .collect();
+    commit_block_transaction(
+        &app,
+        "meta.md",
+        block_tx(
+            "tx-meta-anchor",
+            serde_json::json!([
+                {"op": "comment.add", "block_id": ids[1], "start": 0, "end": 5, "body": "keep"},
+                {"op": "conflict.add", "after_block_id": ids[0],
+                 "base_markdown": "Old.\n", "incoming_markdown": "New.\n",
+                 "canonical_markdown": "Alpha.\n"}
+            ]),
+        ),
+    )
+    .await;
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::PATCH,
+            "/v1/libraries/blocks/documents/meta.md/metadata",
+            serde_json::json!({"title": "Patched Title", "rank": 7}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let outcome = response_json(response).await;
+    assert_eq!(outcome["version"]["metadata"]["title"], "Patched Title");
+
+    // The projection survived: same block ids, anchored comment still open,
+    // conflict artifact intact.
+    let tree = get_block_tree(&app, "meta.md").await;
+    let ids_after: Vec<String> = tree["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|block| block["block_id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids_after, ids);
+    let review = get_block_review(&app, "meta.md", false).await;
+    assert_eq!(review["comments"][0]["status"], "open");
+    assert_eq!(review["comments"][0]["anchor"]["blockId"], ids[1].as_str());
+    assert_eq!(review["conflicts"][0]["incomingMarkdown"], "New.\n");
+    // The new frontmatter rides in the normalized content.
+    let content = get_document_markdown(&app, "meta.md").await;
+    assert!(
+        content.starts_with("---\n"),
+        "frontmatter present: {content}"
+    );
+    assert!(content.contains("title: Patched Title"));
+    assert!(content.ends_with("# Title\n\nAlpha.\n"));
+    // Rows persist in storage too.
+    let document_id = store.head_document("blocks", "meta.md").await.unwrap().id;
+    assert_eq!(store.load_block_tree(&document_id).await.unwrap().len(), 2);
+}
+
+/// A metadata patch composes with a live session: it waits on the document
+/// mutex, flushes pending typing, and commits the typed rows under the new
+/// metadata — typing and frontmatter both land, the session stays alive.
+#[tokio::test]
+async fn metadata_patch_composes_with_an_active_session() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "meta-live.md", "Session content.\n").await;
+    let document_id = document_id_of(&store, "meta-live.md").await;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.insert(txn, 16, " Typed.");
+    })
+    .await;
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::PATCH,
+            "/v1/libraries/blocks/documents/meta-live.md/metadata",
+            serde_json::json!({"title": "Live Patch"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Both the in-flight typing and the new frontmatter are durable.
+    let content = get_document_markdown(&app, "meta-live.md").await;
+    assert!(content.contains("title: Live Patch"), "{content}");
+    assert!(content.contains("Session content. Typed."), "{content}");
+
+    // The session is still live: further typing checkpoints normally.
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.insert(txn, 0, "Still here: ");
+    })
+    .await;
+    let content = wait_for_markdown_containing(&app, "meta-live.md", "Still here:").await;
+    assert!(content.contains("title: Live Patch"), "{content}");
+    socket.close(None).await.ok();
+    server.abort();
+}
+
+/// The reviewer's probe, pinned directly: in-flight (un-checkpointed) typing
+/// plus a concurrent whole-file write through the live session. The file
+/// write carries its base clock, so the merge is a true three-way: BOTH
+/// edits survive — no last-writer-wins in either direction.
+#[tokio::test]
+async fn in_flight_typing_and_concurrent_file_write_both_survive_through_the_session() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    // The separator keeps the typed region and the file-edited region apart:
+    // edits to ADJACENT blocks are conflict-absorbed by design (pinned by
+    // the codec suite), which would mask the both-edits-survive assertion.
+    put_block_markdown(
+        &app,
+        "race.md",
+        "# Title\n\nAlpha.\n\nSeparator.\n\nBravo.\n",
+    )
+    .await;
+    let tree = get_block_tree(&app, "race.md").await;
+    let base_clock = tree["document_clock"].as_str().unwrap().to_string();
+    let ids: Vec<String> = tree["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|block| block["block_id"].as_str().unwrap().to_string())
+        .collect();
+    let base_export = get_document_markdown(&app, "race.md").await;
+    let document_id = document_id_of(&store, "race.md").await;
+
+    // A browser types into Alpha; the debounce has not checkpointed yet.
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 1);
+        block.insert(txn, 6, " Typed mid-flight.");
+    })
+    .await;
+
+    // An external writer edits Bravo against the pre-typing export.
+    let incoming = base_export.replace("Bravo.", "Bravo, from the file write.");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/race.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header(header::IF_MATCH, format!("\"{base_clock}\""))
+                .body(Body::from(incoming))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Both edits landed durably (the write flushed the typing, then merged).
+    let content = get_document_markdown(&app, "race.md").await;
+    assert_eq!(
+        content,
+        "# Title\n\nAlpha. Typed mid-flight.\n\nSeparator.\n\nBravo, from the file write.\n"
+    );
+    let tree = get_block_tree(&app, "race.md").await;
+    let ids_after: Vec<String> = tree["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|block| block["block_id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids_after, ids, "the merge preserved every block id");
+    let review = get_block_review(&app, "race.md", false).await;
+    assert_eq!(review["conflicts"].as_array().unwrap().len(), 0);
+    socket.close(None).await.ok();
+    server.abort();
+}
+
+/// Replies stay comment-only: `comment.reply` on a conflict item is
+/// `ANCHOR_NOT_FOUND` (conflicts resolve/delete with the comment vocabulary
+/// but cannot host threads).
+#[tokio::test]
+async fn comment_reply_on_a_conflict_item_is_anchor_not_found() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "conf-reply.md", "Alpha.\n").await;
+    let _ = get_block_tree(&app, "conf-reply.md").await;
+    commit_block_transaction(
+        &app,
+        "conf-reply.md",
+        block_tx(
+            "tx-conflict-for-reply",
+            serde_json::json!([{
+                "op": "conflict.add",
+                "incoming_markdown": "Hunk.\n"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "conf-reply.md", false).await;
+    let conflict_id = review["conflicts"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "conf-reply.md",
+        block_tx(
+            "tx-reply-to-conflict",
+            serde_json::json!([{
+                "op": "comment.reply", "item_id": conflict_id, "body": "no threads here"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "ANCHOR_NOT_FOUND", false);
+}
