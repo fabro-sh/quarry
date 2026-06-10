@@ -13,6 +13,14 @@ use serde_json::Value;
 
 /// Inline mark nesting order, outermost first. `code` is innermost because
 /// code spans are atomic (no marks render inside them).
+/// Whether `key` is an inline mark the Markdown writer can render. Marks
+/// outside this set make [`slate_to_markdown`] fail with [`Unsupported`];
+/// the session checkpoint projection drops them up front (see
+/// `session_doc::classify_marks`) so a live session can always persist.
+pub fn is_known_inline_mark(key: &str) -> bool {
+    MARK_ORDER.contains(&key)
+}
+
 const MARK_ORDER: [&str; 7] = [
     "bold",
     "italic",

@@ -80,13 +80,13 @@
 //! preserves the block's Markdown source and its id; review marks inside
 //! such a block are dropped (their anchors orphan at the row layer).
 
-use crate::markdown_writer::slate_to_markdown;
+use crate::markdown_writer::{is_known_inline_mark, slate_to_markdown};
 use crate::rows::{is_utf16_boundary, utf16_len, BlockRow, LinkRange, MarkRun};
 use crate::slate::{Attrs, Node};
 use crate::yjs_builder::{apply_built, xmltext_to_slate};
 use crate::Unsupported;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use yrs::{Map, MapRef, Out, ReadTxn, Text, TransactionMut, Xml, XmlTextRef};
 
 const INLINE_LINK_TYPE: &str = "a";
@@ -124,6 +124,11 @@ pub struct SessionAnchor {
 pub struct SessionProjection {
     pub rows: Vec<BlockRow>,
     pub anchors: Vec<SessionAnchor>,
+    /// Inline mark keys the projection DROPPED because the Markdown writer
+    /// cannot render them (see `is_known_inline_mark`). Dropping them keeps
+    /// every checkpoint exportable — an unknown mark must never wedge a
+    /// session into unpersistable state. Callers log these.
+    pub dropped_marks: BTreeSet<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -459,6 +464,7 @@ pub fn project_session_nodes(
     let mut projection = SessionProjection {
         rows: Vec::new(),
         anchors: Vec::new(),
+        dropped_marks: BTreeSet::new(),
     };
     let mut taken = HashSet::new();
     for (position, child) in children.iter().enumerate() {
@@ -575,6 +581,7 @@ fn collect_block(
             row.links = extraction.links;
             out.rows.push(row);
             out.anchors.extend(extraction.anchors);
+            out.dropped_marks.extend(extraction.dropped_marks);
         }
         Err(_) => {
             // Inline content the row model cannot represent (wikilinks,
@@ -657,6 +664,7 @@ struct InlineExtraction {
     marks: Vec<MarkRun>,
     links: Vec<LinkRange>,
     anchors: Vec<SessionAnchor>,
+    dropped_marks: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -665,10 +673,14 @@ struct AnchorAccumulator {
     ranges: BTreeMap<String, (SessionAnchorKind, u32, u32, Option<String>, i64)>,
     /// suggestion id → (replacement text, first insert position, by, at_ms)
     inserts: BTreeMap<String, (String, u32, Option<String>, i64)>,
+    /// Unknown mark keys dropped from this block's leaves.
+    dropped: BTreeSet<String>,
 }
 
 struct ClassifiedMarks {
     formatting: Attrs,
+    /// Unknown formatting keys, dropped so the row export always renders.
+    dropped: Vec<String>,
     comment_ids: Vec<String>,
     /// suggestion id → (is_insert, by, at_ms)
     suggestions: Vec<(String, bool, Option<String>, i64)>,
@@ -678,6 +690,7 @@ struct ClassifiedMarks {
 
 fn classify_marks(marks: &Attrs) -> ClassifiedMarks {
     let mut formatting = Attrs::new();
+    let mut dropped = Vec::new();
     let mut comment_ids = Vec::new();
     let mut suggestions: Vec<(String, bool, Option<String>, i64)> = Vec::new();
     for (key, value) in marks {
@@ -703,7 +716,11 @@ fn classify_marks(marks: &Attrs) -> ClassifiedMarks {
             suggestions.push((id.to_string(), ty == "insert", by, at_ms));
             continue;
         }
-        formatting.insert(key.clone(), value.clone());
+        if is_known_inline_mark(key) {
+            formatting.insert(key.clone(), value.clone());
+        } else {
+            dropped.push(key.clone());
+        }
     }
     let insert_suggestion_ids = (!suggestions.is_empty()
         && suggestions.iter().all(|(_, insert, _, _)| *insert))
@@ -715,6 +732,7 @@ fn classify_marks(marks: &Attrs) -> ClassifiedMarks {
     });
     ClassifiedMarks {
         formatting,
+        dropped,
         comment_ids,
         suggestions,
         insert_suggestion_ids,
@@ -760,12 +778,14 @@ fn extract_inline(block_id: &str, children: &[Node]) -> Result<InlineExtraction,
             }
         }
     }
+    let dropped_marks = std::mem::take(&mut accumulator.dropped);
     let anchors = accumulator.into_anchors(block_id);
     Ok(InlineExtraction {
         text,
         marks: runs,
         links,
         anchors,
+        dropped_marks,
     })
 }
 
@@ -777,6 +797,7 @@ fn append_leaf(
     marks: &Attrs,
 ) {
     let classified = classify_marks(marks);
+    accumulator.dropped.extend(classified.dropped.clone());
     let position = utf16_len(text);
     if let Some(ids) = classified.insert_suggestion_ids {
         for (id, by, at_ms) in ids {

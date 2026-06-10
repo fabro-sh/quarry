@@ -60,6 +60,20 @@
 //!   (duplication). Phase 5 reseeds reconnecting browsers with a fresh doc.
 //! - The collab websocket remains unauthenticated (phase-one loopback
 //!   posture, design delta 2); sessions do not widen exposure.
+//! - **Persistent checkpoint failure loses the session at discard.** When
+//!   the doc→rows projection or the Markdown export of a checkpoint fails,
+//!   the commit is skipped with a warn log; the session stays dirty and
+//!   retries on the next edit/PUT/transaction, but if the failure persists
+//!   until the last subscriber leaves, the final checkpoint fails too and
+//!   every un-checkpointed edit is lost with the discarded doc. The known
+//!   trigger classes are contained: unknown inline marks are DROPPED at
+//!   projection time (`collab.session.unknown_marks_dropped` — they would
+//!   otherwise fail the Markdown writer on every retry), and inline
+//!   elements the row model cannot represent degrade blocks to
+//!   `raw_markdown` rows. Residual triggers (e.g. doc shapes the writer
+//!   still rejects) remain possible until Phase 4's reconciler replaces
+//!   the export path; the loss is bounded by the checkpoint debounce plus
+//!   the failure window.
 
 use crate::collab::{serve_session_socket, SHARED_ROOT};
 use axum::extract::ws::WebSocket;
@@ -604,6 +618,15 @@ impl LiveSession {
         };
         let projection = project_session_nodes(&children, || Uuid::new_v4().to_string())
             .map_err(session_projection_error)?;
+        if !projection.dropped_marks.is_empty() {
+            tracing::warn!(
+                event = "collab.session.unknown_marks_dropped",
+                document_id = %self.document_id,
+                marks = ?projection.dropped_marks,
+                "dropped inline marks the Markdown writer cannot render; \
+                 the checkpoint persists without them"
+            );
+        }
         let meta = match txn.get_map(REVIEW_ROOT) {
             Some(map) => read_review_meta_from_map(&txn, &map),
             None => ReviewMeta::default(),
@@ -1047,7 +1070,11 @@ mod tests {
     }
 
     fn projection(rows: Vec<BlockRow>, anchors: Vec<SessionAnchor>) -> SessionProjection {
-        SessionProjection { rows, anchors }
+        SessionProjection {
+            rows,
+            anchors,
+            dropped_marks: Default::default(),
+        }
     }
 
     fn prior(items: &[BlockReviewItem]) -> HashMap<String, BlockReviewItem> {

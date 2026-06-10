@@ -592,6 +592,78 @@ fn comment_draft_marks_are_transient_and_never_reach_rows() {
 }
 
 #[test]
+fn unknown_inline_marks_are_dropped_so_the_projection_always_exports() {
+    // An unknown mark (anything outside the writer's MARK_ORDER: a future
+    // Plate plugin, or arbitrary bytes on the unauthenticated socket) must
+    // never wedge a session into unpersistable state: the projection drops
+    // it, keeps known marks, and reports what it dropped.
+    let nodes = vec![Node::element(
+        "p",
+        [("id".to_string(), json!("b1"))].into_iter().collect(),
+        vec![
+            Node::text("typed ", Attrs::new()),
+            Node::text(
+                "weird",
+                [
+                    ("weird_mark".to_string(), json!(true)),
+                    ("bold".to_string(), json!(true)),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            Node::text(" tail", Attrs::new()),
+        ],
+    )];
+
+    let projection = project(&nodes);
+
+    assert_eq!(projection.rows[0].text, "typed weird tail");
+    assert_eq!(projection.rows[0].marks, vec![mark(6, 11, "bold")]);
+    assert_eq!(
+        projection.dropped_marks,
+        ["weird_mark".to_string()].into_iter().collect()
+    );
+    // The dropped mark no longer blocks the Markdown export.
+    quarry_collab_codec::block_rows_to_markdown(&projection.rows).expect("rows export");
+}
+
+#[test]
+fn unknown_marks_inside_degraded_blocks_do_not_block_the_raw_fallback() {
+    // A block that degrades to raw_markdown (wikilink) AND carries an
+    // unknown mark must still degrade rather than fail the checkpoint.
+    let nodes = vec![Node::element(
+        "p",
+        [("id".to_string(), json!("b1"))].into_iter().collect(),
+        vec![
+            Node::text(
+                "see ",
+                [("weird_mark".to_string(), json!(true))]
+                    .into_iter()
+                    .collect(),
+            ),
+            Node::element(
+                "wikilink",
+                [("target".to_string(), json!("Other"))]
+                    .into_iter()
+                    .collect(),
+                vec![Node::text("", Attrs::new())],
+            ),
+        ],
+    )];
+
+    let projection = project(&nodes);
+
+    assert_eq!(projection.rows[0].block_type, "raw_markdown");
+    assert_eq!(
+        projection.rows[0]
+            .attrs
+            .get("markdown")
+            .and_then(Value::as_str),
+        Some("see [[Other]]")
+    );
+}
+
+#[test]
 fn block_with_a_wikilink_degrades_to_a_raw_markdown_row() {
     let nodes = vec![Node::element(
         "p",
