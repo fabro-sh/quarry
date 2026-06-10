@@ -46,36 +46,24 @@
 //! `gateway::apply_session_transaction`). Writers arriving mid-transition
 //! wait on the mutex; they are never rejected because a session exists.
 //!
-//! ## Transitional rules (until Phase 5 simplifies the browser)
+//! ## Event provenance
 //!
-//! The unmodified browser still runs its autosave flusher and SSE
-//! classification. Two rules keep it coherent:
+//! Checkpoint and session-mode transaction commits emit `doc.changed`
+//! events with an `agent-injected:…` `origin_id`. Session participants
+//! already carry that state in their live doc, so the browser classifies
+//! these as benign metadata refreshes (`session-events.ts`) rather than
+//! external changes. (The Phase 3 PUT-as-checkpoint autosave rule that also
+//! relied on this dissolved with the Phase 5 browser: a browser-origin
+//! Markdown PUT is now an ordinary whole-file write through the Phase 4
+//! reconciler, like any other external writer.)
 //!
-//! - **Markdown PUT from a session participant** (an `x-quarry-origin-id`
-//!   starting with `browser:` on a document with an active session) is
-//!   treated as a checkpoint trigger, not an independent write: the session
-//!   doc is authoritative and already contains those edits, so the server
-//!   checkpoints and acks with the new head ETag, ignoring the PUT body and
-//!   its `If-Match` (the flusher's clock is routinely stale once checkpoints
-//!   move the head). See `put_document` in `lib.rs`.
-//! - **Checkpoint `doc.changed` events carry an `agent-injected:…`
-//!   `origin_id`**, which today's browser classifies as a benign refresh
-//!   (`session-events.ts`) instead of "External version available".
+//! ## Known hazards (accepted)
 //!
-//! Both rules dissolve when Phase 5 deletes the flusher and the external
-//! version classification.
-//!
-//! ## Known transitional hazards (accepted, fixed by Phase 5)
-//!
-//! - Whole-file writes (Markdown PUT, Git, FUSE, CLI) no longer race
-//!   sessions: Phase 4 routes them through the gateway dispatch, where they
-//!   take this module's document mutex and merge into the live doc as
-//!   collaborator edits. Only the legacy non-Markdown byte path and staged
-//!   transaction commits remain outside (they clear the projection
-//!   fail-closed).
-//! - A browser whose provider reconnects with its OLD Y.Doc after the
-//!   session was discarded merges stale content into the fresh seed
-//!   (duplication). Phase 5 reseeds reconnecting browsers with a fresh doc.
+//! - Whole-file writes (Markdown PUT, Git, FUSE, CLI) do not race sessions:
+//!   Phase 4 routes them through the gateway dispatch, where they take this
+//!   module's document mutex and merge into the live doc as collaborator
+//!   edits. Only the legacy non-Markdown byte path and staged transaction
+//!   commits remain outside (they clear the projection fail-closed).
 //! - The collab websocket remains unauthenticated (phase-one loopback
 //!   posture, design delta 2); sessions do not widen exposure.
 //! - **Persistent checkpoint failure loses the session at discard.** When
@@ -225,30 +213,6 @@ impl SessionHub {
         }
     }
 
-    /// The transitional autosave rule: a Markdown PUT from a session
-    /// participant acks the session's durable state instead of writing.
-    /// `Ok(None)` = no live session, the PUT proceeds as a legacy write.
-    pub(crate) async fn checkpoint_for_autosave(
-        &self,
-        document_id: &str,
-    ) -> Result<Option<WriteOutcome>, QuarryError> {
-        let guard = self.lock_document(document_id).await;
-        let Some(session) = guard.session() else {
-            return Ok(None);
-        };
-        if let Some(outcome) = session.checkpoint_browser_session(&self.store).await? {
-            return Ok(Some(outcome));
-        }
-        if let Some(outcome) = session.last_outcome() {
-            return Ok(Some(outcome));
-        }
-        // A clean session that has never committed: force one
-        // identical-content checkpoint so the autosave acks a real version.
-        let awareness = session.awareness().write().await;
-        let outcome = session.commit_doc_state(&self.store, &awareness).await?;
-        Ok(Some(outcome))
-    }
-
     pub(crate) async fn serve_socket(&self, document_id: String, socket: WebSocket) {
         let collab_session_id = Uuid::new_v4().to_string();
         let entry = self.entry(&document_id).await;
@@ -364,7 +328,6 @@ pub(crate) struct LiveSession {
     /// The committed doc state as a v1-encoded snapshot (seed or last
     /// commit), served to new subscribers and broadcast on every commit.
     committed_snapshot: StdMutex<Vec<u8>>,
-    last_outcome: StdMutex<Option<WriteOutcome>>,
     /// The full review item set as of the last seed/checkpoint/transaction.
     items: StdMutex<HashMap<String, BlockReviewItem>>,
     subscribers: AtomicUsize,
@@ -473,7 +436,6 @@ impl LiveSession {
             checkpointed_seq: AtomicU64::new(0),
             head_version_id: StdMutex::new(seed.head_version_id.clone()),
             committed_snapshot: StdMutex::new(committed_snapshot),
-            last_outcome: StdMutex::new(None),
             items: StdMutex::new(items),
             subscribers: AtomicUsize::new(0),
         });
@@ -539,10 +501,6 @@ impl LiveSession {
         let frame = checkpoint_ack_frame(&snapshot);
         *self.committed_snapshot.lock().unwrap() = snapshot;
         let _ = self.broadcast_tx.send(frame);
-    }
-
-    pub(crate) fn last_outcome(&self) -> Option<WriteOutcome> {
-        self.last_outcome.lock().unwrap().clone()
     }
 
     pub(crate) fn items_snapshot(&self) -> Vec<BlockReviewItem> {
@@ -646,7 +604,6 @@ impl LiveSession {
                     self.checkpointed_seq.store(seq, Ordering::SeqCst);
                     *self.head_version_id.lock().unwrap() = outcome.version.id.clone();
                     *self.items.lock().unwrap() = items;
-                    *self.last_outcome.lock().unwrap() = Some((*outcome).clone());
                     self.record_committed_snapshot(snapshot);
                     tracing::debug!(
                         event = "collab.session.checkpointed",
@@ -741,7 +698,6 @@ impl LiveSession {
             .iter()
             .map(|item| (item.id.clone(), item.clone()))
             .collect();
-        *self.last_outcome.lock().unwrap() = Some(outcome.clone());
         self.record_committed_snapshot(awareness.doc().transact().snapshot().encode_v1());
     }
 }

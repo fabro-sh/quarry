@@ -2065,34 +2065,6 @@ async fn put_document(
     let precondition = precondition_from_headers(&headers)?;
     let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
     let transaction = transaction_metadata_from_headers(&headers)?;
-    let browser_origin = origin_id
-        .as_deref()
-        .is_some_and(|origin| origin.starts_with("browser:"));
-
-    // Transitional rule (Phase 3, dissolves with the Phase 5 browser): a
-    // Markdown PUT from a live-session participant is a checkpoint trigger,
-    // not an independent write. The session doc is authoritative and already
-    // contains those edits (the autosave body is the flusher's serialization
-    // of the same doc), so checkpoint and ack with the new head ETag. The
-    // PUT body and its If-Match are deliberately ignored — checkpoints move
-    // the head, so the flusher's clock is routinely stale.
-    if browser_origin
-        && quarry_storage::document_kind(&path, &content_type)
-            == quarry_storage::DocumentKind::BlockDocument
-    {
-        if let Ok(document) = state.store.head_document(&library, &path).await {
-            if let Some(outcome) = state.sessions.checkpoint_for_autosave(&document.id).await? {
-                tracing::debug!(
-                    event = "collab.session.autosave_checkpoint",
-                    document_id = %document.id,
-                    path = %path,
-                    version_id = %outcome.version.id,
-                    "browser autosave acknowledged via session checkpoint"
-                );
-                return json_with_etag(StatusCode::OK, &outcome, &outcome.version.id);
-            }
-        }
-    }
 
     // Phase 4: a BlockDocument PUT is a whole-file write reconciled via
     // diff3 against the canonical block rows — block ids and review anchors

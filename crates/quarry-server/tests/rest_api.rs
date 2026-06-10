@@ -4541,27 +4541,10 @@ async fn checkpoint_succeeds_despite_unknown_inline_marks() {
     })
     .await;
 
-    // Force the checkpoint (the autosave path): it must succeed, persist
-    // the typing and the known mark, and drop the unknown one.
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::PUT)
-                .uri("/v1/libraries/blocks/documents/live.md")
-                .header(header::CONTENT_TYPE, "text/markdown")
-                .header("X-Quarry-Origin-Id", "browser:flusher-1")
-                .body(Body::from(""))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    assert_eq!(
-        get_document_markdown(&app, "live.md").await,
-        "Mark **target** text. Typed.\n"
-    );
+    // The debounced checkpoint must succeed, persist the typing and the
+    // known mark, and drop the unknown one.
+    let markdown = wait_for_markdown_containing(&app, "live.md", "Typed.").await;
+    assert_eq!(markdown, "Mark **target** text. Typed.\n");
     let tree = get_block_tree(&app, "live.md").await;
     assert_eq!(tree["blocks"][0]["text"], "Mark target text. Typed.");
     let marks = tree["blocks"][0]["marks"].as_array().unwrap();
@@ -4601,25 +4584,8 @@ async fn checkpoint_succeeds_with_code_marks_inside_link_text() {
     })
     .await;
 
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::PUT)
-                .uri("/v1/libraries/blocks/documents/live.md")
-                .header(header::CONTENT_TYPE, "text/markdown")
-                .header("X-Quarry-Origin-Id", "browser:flusher-1")
-                .body(Body::from(""))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    assert_eq!(
-        get_document_markdown(&app, "live.md").await,
-        "See [`docs`](https://example.test) now. Typed.\n"
-    );
+    let markdown = wait_for_markdown_containing(&app, "live.md", "Typed.").await;
+    assert_eq!(markdown, "See [`docs`](https://example.test) now. Typed.\n");
     let tree = get_block_tree(&app, "live.md").await;
     assert_eq!(tree["blocks"][0]["text"], "See docs now. Typed.");
     assert_eq!(
@@ -4963,12 +4929,22 @@ async fn two_transactions_share_one_session() {
     server.abort();
 }
 
+/// Phase 5 deleted the PUT-as-checkpoint transitional rule: a Markdown PUT
+/// carrying a `browser:*` origin on a session-active document is an
+/// ordinary whole-file write through the Phase 4 reconciler — its body is
+/// honored, it merges into the live doc as a collaborator edit, and the
+/// session's own typing survives the merge.
 #[tokio::test]
-async fn browser_autosave_put_acks_session_checkpoint_without_writing_the_body() {
+async fn browser_origin_markdown_put_is_an_ordinary_reconciled_write() {
     let (_root, addr, app, store, server) = spawn_session_server().await;
-    put_block_markdown(&app, "live.md", "Session content.\n").await;
+    put_block_markdown(
+        &app,
+        "live.md",
+        "Session content.\n\nStable separator.\n\nPut target.\n",
+    )
+    .await;
     let document_id = document_id_of(&store, "live.md").await;
-    let mut events = store.subscribe_events();
+    let base_etag = head_etag(&app, "live.md").await;
 
     let (mut socket, doc) = connect_session(addr, &document_id).await;
     send_local_edit(&mut socket, &doc, |txn, _root| {
@@ -4977,9 +4953,8 @@ async fn browser_autosave_put_acks_session_checkpoint_without_writing_the_body()
     })
     .await;
 
-    // The flusher's autosave: stale If-Match, serialized body. Both are
-    // ignored — the session is authoritative; the PUT is a checkpoint
-    // trigger and acks the checkpoint's version.
+    // A browser-origin PUT editing the LAST block, based on the pre-typing
+    // version: diff3 applies its hunk while the session keeps the typing.
     let response = app
         .clone()
         .oneshot(
@@ -4987,56 +4962,52 @@ async fn browser_autosave_put_acks_session_checkpoint_without_writing_the_body()
                 .method(Method::PUT)
                 .uri("/v1/libraries/blocks/documents/live.md")
                 .header(header::CONTENT_TYPE, "text/markdown")
-                .header("If-Match", "\"definitely-stale\"")
-                .header("X-Quarry-Origin-Id", "browser:flusher-1")
-                .body(Body::from("FLUSHER BODY THAT MUST NOT BE WRITTEN\n"))
+                .header("If-Match", &base_etag)
+                .header("X-Quarry-Origin-Id", "browser:writer-1")
+                .body(Body::from(
+                    "Session content.\n\nStable separator.\n\nPut target rewritten.\n",
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let etag = response
+
+    assert_eq!(
+        get_document_markdown(&app, "live.md").await,
+        "Session content. Typed.\n\nStable separator.\n\nPut target rewritten.\n"
+    );
+    wait_for_yjs_plain_text(
+        &mut socket,
+        &doc,
+        "Session content. Typed.Stable separator.Put target rewritten.",
+    )
+    .await;
+
+    socket.close(None).await.unwrap();
+    server.abort();
+}
+
+async fn head_etag(app: &axum::Router, path: &str) -> String {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/libraries/blocks/documents/{path}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response
         .headers()
         .get(header::ETAG)
         .unwrap()
         .to_str()
         .unwrap()
-        .to_string();
-    let outcome = response_json(response).await;
-    assert_eq!(
-        etag,
-        format!("\"{}\"", outcome["version"]["id"].as_str().unwrap())
-    );
-
-    // The persisted content is the session state, not the PUT body, and the
-    // block projection survived (it was a checkpoint, not a legacy write).
-    assert_eq!(
-        get_document_markdown(&app, "live.md").await,
-        "Session content. Typed.\n"
-    );
-    let tree = get_block_tree(&app, "live.md").await;
-    assert_eq!(tree["blocks"][0]["text"], "Session content. Typed.");
-
-    // The checkpoint's doc.changed event carries the benign provenance
-    // today's browser classifies as a refresh, never "External version".
-    let event = timeout(Duration::from_secs(2), async {
-        loop {
-            let event = events.recv().await.unwrap();
-            if event.kind == StoreEventKind::DocumentPut {
-                break event;
-            }
-        }
-    })
-    .await
-    .unwrap();
-    assert!(event
-        .origin_id
-        .as_deref()
-        .unwrap()
-        .starts_with("agent-injected:"));
-
-    socket.close(None).await.unwrap();
-    server.abort();
+        .to_string()
 }
 
 #[tokio::test]
@@ -5051,21 +5022,8 @@ async fn server_restart_reseeds_sessions_from_last_checkpoint() {
         block.insert(txn, 15, " Checkpointed.");
     })
     .await;
-    // Force the checkpoint (the autosave path) so the typing is canonical.
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::PUT)
-                .uri("/v1/libraries/blocks/documents/live.md")
-                .header(header::CONTENT_TYPE, "text/markdown")
-                .header("X-Quarry-Origin-Id", "browser:flusher-1")
-                .body(Body::from(""))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    // Wait for the debounced checkpoint so the typing is canonical.
+    wait_for_markdown_containing(&app, "live.md", "Checkpointed.").await;
 
     // "Restart": the process dies (sessions vanish with it); a new server
     // opens over the same store.
