@@ -3,6 +3,7 @@ pub mod markdown_writer;
 pub mod normalize;
 pub mod review;
 pub mod rows;
+pub mod session_doc;
 pub mod slate;
 pub mod trailing;
 pub mod yjs_builder;
@@ -19,6 +20,10 @@ pub use review::{
 pub use rows::{
     block_rows_to_markdown, block_rows_to_nodes, is_utf16_boundary, markdown_to_block_rows,
     utf16_len, BlockRow, LinkRange, MarkRun,
+};
+pub use session_doc::{
+    project_session_nodes, read_review_meta_from_map, reconcile_session_children,
+    seed_session_nodes, SessionAnchor, SessionAnchorKind, SessionProjection,
 };
 pub use slate::{Attrs, Node};
 pub use trailing::{is_empty_paragraph, strip_trailing_empty_paragraphs};
