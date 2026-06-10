@@ -116,14 +116,14 @@ Envelope: `{client_tx_id, base_clock?, actor{kind,id,label}, ops[]}`. Response: 
 
 **Files:** new `crates/quarry-server/src/session.rs`, `crates/quarry-server/src/collab.rs` (rewire websocket to sessions; delete injection gate), `crates/quarry-server/src/gateway.rs` (session-mode dispatch), tests in `crates/quarry-server/tests/rest_api.rs` and `crates/quarry-server/src/session.rs` unit tests.
 
-- [ ] Implement per-document session lifecycle: first websocket subscriber seeds a fresh Yjs doc from rows (Gate A projection); updates broadcast to peers; awareness relayed, never persisted.
-- [ ] Debounced checkpoint (target 2–5s after last update; tunable constant): project session doc → rows + one coalesced `browser_session` history row + document event. Checkpoint is the only durable effect of typing.
-- [ ] Last subscriber leaves → final checkpoint → discard the session doc.
-- [ ] Per-document async mutex serializes seed, checkpoint, discard, and transaction application. Transactions arriving mid-transition wait; they are never rejected because a session exists.
-- [ ] Gateway session-mode: translate ops to Yjs edits, apply as a dedicated collaborator client ID (Gate B mechanics), force a checkpoint, then ack. `changed_block_ids` and history recorded the same as rows-mode.
-- [ ] Delete the injection gate and its rejection paths from `collab.rs`; delete `LIVE_ROOM_ACTIVE`-class error emission. Grep proves no remaining producer.
-- [ ] Server restart test: sessions vanish, reconnecting browser reseeds from rows, content equals last checkpoint.
-- [ ] Concurrency tests: transaction racing seed; transaction racing final checkpoint/discard; two transactions during one session; checkpoint-before-ack ordering proven by reading rows immediately after ack.
+- [x] Implement per-document session lifecycle: first websocket subscriber seeds a fresh Yjs doc from rows (Gate A projection); updates broadcast to peers; awareness relayed, never persisted.
+- [x] Debounced checkpoint (target 2–5s after last update; tunable constant): project session doc → rows + one coalesced `browser_session` history row + document event. Checkpoint is the only durable effect of typing.
+- [x] Last subscriber leaves → final checkpoint → discard the session doc.
+- [x] Per-document async mutex serializes seed, checkpoint, discard, and transaction application. Transactions arriving mid-transition wait; they are never rejected because a session exists.
+- [x] Gateway session-mode: translate ops to Yjs edits, apply as a dedicated collaborator client ID (Gate B mechanics), force a checkpoint, then ack. `changed_block_ids` and history recorded the same as rows-mode. (Review anchors ride in the session doc as the browser's own comment/suggestion marks rather than server-side sticky indices — see `quarry_collab_codec::session_doc` module docs for the rationale and the proven equivalences.)
+- [x] Delete the injection gate and its rejection paths from `collab.rs`; delete `LIVE_ROOM_ACTIVE`-class error emission. Grep proves no remaining producer. (`/edit` and `/ops` are quarantined with typed `UNSUPPORTED_LEGACY_ENDPOINT` errors; transitional rule: a Markdown PUT from a session participant is a checkpoint trigger, and checkpoint events carry an `agent-injected:` origin so the unmodified browser classifies them as benign.)
+- [x] Server restart test: sessions vanish, reconnecting browser reseeds from rows, content equals last checkpoint.
+- [x] Concurrency tests: transaction racing seed; transaction racing final checkpoint/discard; two transactions during one session; checkpoint-before-ack ordering proven by reading rows immediately after ack.
 
 ### Phase 4: diff3 Markdown Reconciliation and Adapters
 

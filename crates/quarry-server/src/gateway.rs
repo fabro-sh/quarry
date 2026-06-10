@@ -1789,10 +1789,7 @@ async fn apply_session_transaction(
     for _attempt in 0..COMMIT_RETRY_LIMIT {
         // 1. Force-checkpoint pending typing (no-op when clean).
         if session.is_dirty() {
-            match session
-                .commit_doc_state(&state.store, &awareness, None)
-                .await
-            {
+            match session.commit_doc_state(&state.store, &awareness).await {
                 Ok(_) => {}
                 Err(QuarryError::PreconditionFailed(_)) => continue,
                 Err(error) => return Err(error.into()),

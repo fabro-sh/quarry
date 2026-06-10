@@ -1,26 +1,44 @@
+// Live smoke: two humans and an agent collaborate on one document.
+//
+// Phase 3 of the session-scoped collaboration rewrite: the agent writes
+// through `POST .../transactions` (the semantic mutation gateway), which
+// applies into the live session as another collaborator and checkpoints
+// before acking. The legacy `/edit` and `/ops` facades are quarantined, and
+// review items persist as `block_review_items` rows (visible via
+// `GET .../review`) instead of CriticMarkup in the document Markdown — the
+// persistence assertions in this spec changed accordingly.
+
 import { expect, test, type APIRequestContext, type Browser, type Page } from 'playwright/test';
 
-interface AgentBlockRef {
-  ordinal: number;
-  contentHash: string;
+interface BlockNodePayload {
+  block_id: string;
+  text: string;
 }
 
-interface AgentSnapshotBlock {
-  ref: AgentBlockRef;
-  markdown: string;
+interface BlockTreeResponse {
+  document_id: string;
+  document_clock: string;
+  blocks: BlockNodePayload[];
 }
 
-interface AgentDocumentSnapshot {
-  documentId: string;
-  baseToken: string;
-  blocks: AgentSnapshotBlock[];
+interface BlockTransactionAck {
+  status: string;
+  document_clock: string;
+  transaction_id: string;
+  changed_block_ids: string[];
 }
 
-interface AgentMutationResponse {
-  dryRun: boolean;
-  injection?: string | null;
-  nextBaseToken?: string | null;
-  results?: Array<{ id?: string | null; op: string }>;
+interface ReviewItem {
+  id: string;
+  status: string;
+  body?: string;
+  content?: string;
+  quote: string;
+}
+
+interface ReviewResponse {
+  comments: ReviewItem[];
+  suggestions: ReviewItem[];
 }
 
 const API_ORIGIN = 'http://127.0.0.1:7832';
@@ -96,7 +114,12 @@ test('humans and an agent collaborate on one live document without conflicts', a
       suggestingReader.page.getByTestId('suggestion-card').filter({ hasText: 'User B suggestion' })
     ).toBeVisible();
     await expectSaved(suggestingWriter.page);
-    await waitForPersistedMarkdown(request, library, 'User B suggestion');
+    // Suggestions persist as review rows now, not as CriticMarkup in the
+    // Markdown: the checkpoint projects the typed insertion suggestion into
+    // `block_review_items`, visible through the review API.
+    await waitForReview(request, library, (review) =>
+      review.suggestions.some((suggestion) => suggestion.content === 'User B suggestion')
+    );
     await expectNoConflictUi(userA.page);
     await expectNoConflictUi(userB.page);
 
@@ -119,39 +142,48 @@ test('humans and an agent collaborate on one live document without conflicts', a
     await expectNoConflictUi(userA.page);
     await expectNoConflictUi(userB.page);
 
-    let snapshot = await getSnapshot(request, library);
-    const directBlock = blockContaining(snapshot, 'Agent direct block target.');
-    const edit = await postAgentEdit(request, library, {
-      baseToken: snapshot.baseToken,
-      operations: [
-        {
-          op: 'replace_block',
-          ref: directBlock.ref,
-          block: { markdown: 'Agent direct block target. Agent REST edit landed.\n\n' },
-        },
-      ],
-    });
-    expect(edit.injection).toBe('injected');
+    // The agent rewrites a block mid-session through the gateway: it lands
+    // in the live doc as a collaborator edit and is durable at ack time.
+    const directBlock = await blockContaining(request, library, 'Agent direct block target.');
+    const edit = await postTransaction(request, library, 'tx-smoke-edit', [
+      {
+        op: 'replace_block_content',
+        block_id: directBlock.block_id,
+        text: 'Agent direct block target. Agent REST edit landed.',
+      },
+    ]);
+    expect(edit.status).toBe('committed');
+    expect(edit.changed_block_ids).toContain(directBlock.block_id);
+    await waitForPersistedMarkdown(request, library, 'Agent REST edit landed');
 
     await expect(editorA).toContainText('Agent REST edit landed');
     await expect(editorB).toContainText('Agent REST edit landed');
     await expectNoConflictUi(userA.page);
     await expectNoConflictUi(userB.page);
 
-    const comment = await postAgentOpsFromSnapshot(request, library, 'Codex', (latest) => {
-      const commentBlock = blockContaining(latest, 'Agent comment target appears here.');
-      return [
-        {
-          op: 'comment.add',
-          id: 'agent-comment-smoke',
-          ref: commentBlock.ref,
-          quote: 'comment target',
-          body: 'Agent comment landed.',
-        },
-      ];
-    });
-    expect(comment.injection).toBe('injected');
-    expect(comment.results?.[0]?.id).toBe('agent-comment-smoke');
+    // Agent comment through the gateway: anchored review row + live marks.
+    const commentBlock = await blockContaining(
+      request,
+      library,
+      'Agent comment target appears here.'
+    );
+    const commentRange = rangeOf(commentBlock, 'comment target');
+    const comment = await postTransaction(request, library, 'tx-smoke-comment', [
+      {
+        op: 'comment.add',
+        block_id: commentBlock.block_id,
+        start: commentRange.start,
+        end: commentRange.end,
+        body: 'Agent comment landed.',
+        quote: 'comment target',
+      },
+    ]);
+    expect(comment.status).toBe('committed');
+    const commentId = (
+      await waitForReview(request, library, (review) =>
+        review.comments.some((item) => item.body === 'Agent comment landed.')
+      )
+    ).comments.find((item) => item.body === 'Agent comment landed.')!.id;
 
     await expect(
       userA.page.getByTestId('comment-card').filter({ hasText: 'Agent comment landed.' })
@@ -159,9 +191,8 @@ test('humans and an agent collaborate on one live document without conflicts', a
     await expect(
       userB.page.getByTestId('comment-card').filter({ hasText: 'Agent comment landed.' })
     ).toBeVisible();
-    await expect(editorA.locator('[data-comment-id="agent-comment-smoke"]')).toBeVisible();
-    await expect(editorB.locator('[data-comment-id="agent-comment-smoke"]')).toBeVisible();
-    await waitForStableSnapshot(request, library);
+    await expect(editorA.locator(`[data-comment-id="${commentId}"]`)).toBeVisible();
+    await expect(editorB.locator(`[data-comment-id="${commentId}"]`)).toBeVisible();
     await expectNoConflictUi(userA.page);
     await expectNoConflictUi(userB.page);
 
@@ -178,43 +209,58 @@ test('humans and an agent collaborate on one live document without conflicts', a
     await expect(
       userB.page.getByTestId('comment-card').filter({ hasText: 'Agent comment landed.' })
     ).toHaveCount(0);
-    await waitForPersistedMarkdown(request, library, 'status: resolved', 60_000);
+    // Resolution persists in the review rows (the session checkpoint), not
+    // in document endmatter.
+    await waitForReview(
+      request,
+      library,
+      (review) =>
+        review.comments.some((item) => item.id === commentId && item.status === 'resolved'),
+      true,
+      60_000
+    );
     await userA.context.close();
     await userB.context.close();
     userA = await openHumanDocument(browser, library, 'Avery');
     userB = await openHumanDocument(browser, library, 'Blair');
     editorA = userA.page.getByLabel('Plate markdown editor');
     editorB = userB.page.getByLabel('Plate markdown editor');
-    await expect(editorA.locator('[data-comment-id="agent-comment-smoke"]')).toBeVisible();
-    await expect(editorB.locator('[data-comment-id="agent-comment-smoke"]')).toBeVisible();
+    // A fresh session reseeds from rows: the resolved comment's marks are
+    // still anchored, while the card stays hidden.
+    await expect(editorA.locator(`[data-comment-id="${commentId}"]`)).toBeVisible();
+    await expect(editorB.locator(`[data-comment-id="${commentId}"]`)).toBeVisible();
     await expect(
       userA.page.getByTestId('comment-card').filter({ hasText: 'Agent comment landed.' })
     ).toHaveCount(0);
     await expect(
       userB.page.getByTestId('comment-card').filter({ hasText: 'Agent comment landed.' })
     ).toHaveCount(0);
-    await expect
-      .poll(async () => readPersistedMarkdown(request, library), { timeout: 60_000 })
-      .toContain('status: resolved');
     await expectNoConflictUi(userA.page);
     await expectNoConflictUi(userB.page);
 
-    const suggestion = await postAgentOpsFromSnapshot(request, library, 'Codex', (latest) => {
-      const suggestionBlock = blockContaining(latest, 'Review suggestion target here.');
-      return [
-        {
-          op: 'suggestion.add',
-          id: 'agent-suggestion-smoke',
-          kind: 'substitution',
-          ref: suggestionBlock.ref,
-          quote: 'suggestion target',
-          content: 'agent suggestion replacement',
-        },
-      ];
-    });
-    expect(suggestion.injection).toBe('injected');
-    expect(suggestion.results?.[0]?.id).toBe('agent-suggestion-smoke');
-    await waitForPersistedMarkdown(request, library, 'agent-suggestion-smoke');
+    // Agent suggestion through the gateway.
+    const suggestionBlock = await blockContaining(
+      request,
+      library,
+      'Review suggestion target here.'
+    );
+    const suggestionRange = rangeOf(suggestionBlock, 'suggestion target');
+    const suggestion = await postTransaction(request, library, 'tx-smoke-suggestion', [
+      {
+        op: 'suggestion.add',
+        block_id: suggestionBlock.block_id,
+        start: suggestionRange.start,
+        end: suggestionRange.end,
+        replacement: 'agent suggestion replacement',
+        quote: 'suggestion target',
+      },
+    ]);
+    expect(suggestion.status).toBe('committed');
+    const suggestionId = (
+      await waitForReview(request, library, (review) =>
+        review.suggestions.some((item) => item.content === 'agent suggestion replacement')
+      )
+    ).suggestions.find((item) => item.content === 'agent suggestion replacement')!.id;
     await userA.context.close();
     await userB.context.close();
     userA = await openHumanDocument(browser, library, 'Avery');
@@ -233,10 +279,10 @@ test('humans and an agent collaborate on one live document without conflicts', a
     await expect(agentSuggestionA).toBeVisible();
     await expect(agentSuggestionB).toBeVisible();
     await expect(
-      editorA.locator('[data-suggestion-id="agent-suggestion-smoke"]').first()
+      editorA.locator(`[data-suggestion-id="${suggestionId}"]`).first()
     ).toBeVisible();
     await expect(
-      editorB.locator('[data-suggestion-id="agent-suggestion-smoke"]').first()
+      editorB.locator(`[data-suggestion-id="${suggestionId}"]`).first()
     ).toBeVisible();
     await expectNoConflictUi(userA.page);
     await expectNoConflictUi(userB.page);
@@ -254,9 +300,14 @@ test('humans and an agent collaborate on one live document without conflicts', a
       'Review agent suggestion replacement here.',
       60_000
     );
-    await expect
-      .poll(async () => readPersistedMarkdown(request, library), { timeout: 60_000 })
-      .not.toContain('agent-suggestion-smoke');
+    // Accepting through the editor removes the suggestion row entirely.
+    await waitForReview(
+      request,
+      library,
+      (review) => !review.suggestions.some((item) => item.id === suggestionId),
+      true,
+      60_000
+    );
     await expectNoConflictUi(userA.page);
     await expectNoConflictUi(userB.page);
   } finally {
@@ -294,10 +345,79 @@ async function openHumanDocument(browser: Browser, library: string, author: stri
   return { context, page };
 }
 
-async function getSnapshot(request: APIRequestContext, library: string) {
-  const response = await request.get(`${documentApiUrl(library)}/snapshot`);
-  expect(response.ok()).toBeTruthy();
-  return (await response.json()) as AgentDocumentSnapshot;
+async function getBlocks(request: APIRequestContext, library: string): Promise<BlockTreeResponse> {
+  const response = await request.get(`${documentApiUrl(library)}/blocks`);
+  await expectOk(response, 'get blocks');
+  return (await response.json()) as BlockTreeResponse;
+}
+
+async function blockContaining(
+  request: APIRequestContext,
+  library: string,
+  text: string
+): Promise<BlockNodePayload> {
+  const tree = await getBlocks(request, library);
+  const block = tree.blocks.find((candidate) => candidate.text.includes(text));
+  if (!block) {
+    throw new Error(`Block not found for ${text}`);
+  }
+  return block;
+}
+
+function rangeOf(block: BlockNodePayload, quote: string): { start: number; end: number } {
+  const start = block.text.indexOf(quote);
+  if (start === -1) {
+    throw new Error(`Quote ${quote} not found in block ${block.block_id}`);
+  }
+  return { start, end: start + quote.length };
+}
+
+async function postTransaction(
+  request: APIRequestContext,
+  library: string,
+  clientTxId: string,
+  ops: Array<Record<string, unknown>>
+): Promise<BlockTransactionAck> {
+  const response = await request.post(`${documentApiUrl(library)}/transactions`, {
+    data: {
+      client_tx_id: clientTxId,
+      actor: { kind: 'agent', id: 'ai:codex:smoke', label: 'Codex' },
+      ops,
+    },
+  });
+  await expectOk(response, `transaction ${clientTxId}`);
+  return (await response.json()) as BlockTransactionAck;
+}
+
+async function getReview(
+  request: APIRequestContext,
+  library: string,
+  includeResolved = false
+): Promise<ReviewResponse> {
+  const query = includeResolved ? '?includeResolved=1' : '';
+  const response = await request.get(`${documentApiUrl(library)}/review${query}`);
+  await expectOk(response, 'get review');
+  return (await response.json()) as ReviewResponse;
+}
+
+async function waitForReview(
+  request: APIRequestContext,
+  library: string,
+  matches: (review: ReviewResponse) => boolean,
+  includeResolved = false,
+  timeout = 20_000
+): Promise<ReviewResponse> {
+  let latest: ReviewResponse = { comments: [], suggestions: [] };
+  await expect
+    .poll(
+      async () => {
+        latest = await getReview(request, library, includeResolved);
+        return matches(latest);
+      },
+      { timeout }
+    )
+    .toBe(true);
+  return latest;
 }
 
 async function waitForPersistedMarkdown(
@@ -315,76 +435,12 @@ async function waitForPersistedMarkdown(
     .toContain(text);
 }
 
-async function readPersistedMarkdown(request: APIRequestContext, library: string) {
-  const response = await request.get(documentApiUrl(library));
-  if (!response.ok()) return '';
-  return response.text();
-}
-
-async function waitForStableSnapshot(request: APIRequestContext, library: string) {
-  let previous = await getSnapshot(request, library);
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const next = await getSnapshot(request, library);
-    if (next.baseToken === previous.baseToken) return next;
-    previous = next;
-  }
-  throw new Error('Document snapshot did not stabilize');
-}
-
-async function postAgentEdit(
-  request: APIRequestContext,
-  library: string,
-  body: Record<string, unknown>
-) {
-  const response = await request.post(`${documentApiUrl(library)}/edit`, { data: body });
-  await expectOk(response, 'agent edit');
-  return (await response.json()) as AgentMutationResponse;
-}
-
-async function postAgentOpsFromSnapshot(
-  request: APIRequestContext,
-  library: string,
-  by: string,
-  buildOperations: (snapshot: AgentDocumentSnapshot) => Array<Record<string, unknown>>
-) {
-  let stale = '';
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const snapshot = await getSnapshot(request, library);
-    const operations = buildOperations(snapshot);
-    const response = await request.post(`${documentApiUrl(library)}/ops`, {
-      data: {
-        baseToken: snapshot.baseToken,
-        by,
-        operations,
-      },
-    });
-    if (response.ok()) return (await response.json()) as AgentMutationResponse;
-
-    const body = await response.text();
-    if (response.status() === 412 && body.includes('STALE_BASE')) {
-      stale = body;
-      continue;
-    }
-    throw new Error(`agent ops failed with ${response.status()}: ${body}`);
-  }
-  throw new Error(`agent ops stayed stale after retrying: ${stale}`);
-}
-
 async function expectOk(
   response: { ok(): boolean; status(): number; text(): Promise<string> },
   label: string
 ) {
   if (response.ok()) return;
   throw new Error(`${label} failed with ${response.status()}: ${await response.text()}`);
-}
-
-function blockContaining(snapshot: AgentDocumentSnapshot, text: string) {
-  const block = snapshot.blocks.find((candidate) => candidate.markdown.includes(text));
-  if (!block) {
-    throw new Error(`Snapshot block not found for ${text}`);
-  }
-  return block;
 }
 
 async function expectSaved(page: Page) {

@@ -179,9 +179,7 @@ impl SessionHub {
         // A clean session that has never committed: force one
         // identical-content checkpoint so the autosave acks a real version.
         let awareness = session.awareness().write().await;
-        let outcome = session
-            .commit_doc_state(&self.store, &awareness, None)
-            .await?;
+        let outcome = session.commit_doc_state(&self.store, &awareness).await?;
         Ok(Some(outcome))
     }
 
@@ -479,7 +477,7 @@ impl LiveSession {
         if !self.is_dirty() {
             return Ok(None);
         }
-        let outcome = self.commit_doc_state(store, &awareness, None).await?;
+        let outcome = self.commit_doc_state(store, &awareness).await?;
         Ok(Some(outcome))
     }
 
@@ -487,14 +485,14 @@ impl LiveSession {
         self.update_seq.load(Ordering::SeqCst) != self.checkpointed_seq.load(Ordering::SeqCst)
     }
 
-    /// Projects the locked doc and commits it as the new canonical state.
-    /// `transaction` carries the gateway's commit fields for session-mode
-    /// transactions; `None` commits a coalesced browser-session checkpoint.
+    /// Projects the locked doc and commits it as the new canonical state:
+    /// one version + one coalesced `browser_session` history row. (Gateway
+    /// session-mode transactions commit through their own
+    /// `BlockMutationCommit` and record themselves via [`Self::mark_committed`].)
     pub(crate) async fn commit_doc_state(
         &self,
         store: &QuarryStore,
         awareness: &Awareness,
-        transaction: Option<SessionTransactionCommit>,
     ) -> Result<WriteOutcome, QuarryError> {
         let seq = self.update_seq.load(Ordering::SeqCst);
         let (projection, meta) = self.project_locked(awareness)?;
@@ -524,55 +522,35 @@ impl LiveSession {
                 render_markdown_frontmatter(&head.metadata)?,
                 block_rows_to_markdown(&projection.rows)?
             );
-            let commit = match &transaction {
-                Some(tx) => BlockMutationCommit {
-                    document_id: self.document_id.clone(),
-                    expected_head_version_id: head.head_version_id.clone(),
-                    client_tx_id: tx.client_tx_id.clone(),
-                    actor_kind: tx.actor_kind.clone(),
-                    actor_id: tx.actor_id.clone(),
-                    transaction_actor: tx.transaction_actor.clone(),
-                    transaction_message: None,
-                    transaction_provenance: None,
-                    origin_id: Some(format!("agent-injected:tx:{}", tx.client_tx_id)),
-                    source: quarry_core::DocumentSource::Rest,
-                    recorded_ops: tx.recorded_ops.clone(),
-                    metadata: head.metadata.clone(),
-                    content_type: head.content_type.clone(),
-                    rows: projection.rows.clone(),
-                    review_items: sorted_items(&items),
-                    normalized_markdown: normalized,
-                },
-                None => BlockMutationCommit {
-                    document_id: self.document_id.clone(),
-                    expected_head_version_id: head.head_version_id.clone(),
-                    client_tx_id: format!("session-checkpoint-{}", Uuid::new_v4()),
-                    actor_kind: "browser_session".to_string(),
-                    actor_id: None,
-                    transaction_actor: Some("browser".to_string()),
-                    transaction_message: Some("Live session edits".to_string()),
-                    transaction_provenance: Some(json!({
-                        "history": {
-                            "kind": "autosave",
-                            "reason": "session_checkpoint",
-                        }
-                    })),
-                    origin_id: Some(format!(
-                        "agent-injected:session-checkpoint:{}",
-                        Uuid::new_v4()
-                    )),
-                    source: quarry_core::DocumentSource::Rest,
-                    recorded_ops: json!({
-                        "ops": [],
-                        "actor": { "kind": "browser_session" },
-                        "ack": { "status": "committed", "changed_block_ids": [] },
-                    }),
-                    metadata: head.metadata.clone(),
-                    content_type: head.content_type.clone(),
-                    rows: projection.rows.clone(),
-                    review_items: sorted_items(&items),
-                    normalized_markdown: normalized,
-                },
+            let commit = BlockMutationCommit {
+                document_id: self.document_id.clone(),
+                expected_head_version_id: head.head_version_id.clone(),
+                client_tx_id: format!("session-checkpoint-{}", Uuid::new_v4()),
+                actor_kind: "browser_session".to_string(),
+                actor_id: None,
+                transaction_actor: Some("browser".to_string()),
+                transaction_message: Some("Live session edits".to_string()),
+                transaction_provenance: Some(json!({
+                    "history": {
+                        "kind": "autosave",
+                        "reason": "session_checkpoint",
+                    }
+                })),
+                origin_id: Some(format!(
+                    "agent-injected:session-checkpoint:{}",
+                    Uuid::new_v4()
+                )),
+                source: quarry_core::DocumentSource::Rest,
+                recorded_ops: json!({
+                    "ops": [],
+                    "actor": { "kind": "browser_session" },
+                    "ack": { "status": "committed", "changed_block_ids": [] },
+                }),
+                metadata: head.metadata.clone(),
+                content_type: head.content_type.clone(),
+                rows: projection.rows.clone(),
+                review_items: sorted_items(&items),
+                normalized_markdown: normalized,
             };
             match store
                 .commit_block_mutation(&self.library_slug, commit)
@@ -664,15 +642,6 @@ impl LiveSession {
             .collect();
         *self.last_outcome.lock().unwrap() = Some(outcome.clone());
     }
-}
-
-/// Commit fields a session-mode gateway transaction supplies.
-pub(crate) struct SessionTransactionCommit {
-    pub client_tx_id: String,
-    pub actor_kind: String,
-    pub actor_id: Option<String>,
-    pub transaction_actor: Option<String>,
-    pub recorded_ops: serde_json::Value,
 }
 
 fn session_projection_error(error: Unsupported) -> QuarryError {
