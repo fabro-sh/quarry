@@ -3,7 +3,7 @@
 // Phase 3 of the session-scoped collaboration rewrite: the agent writes
 // through `POST .../transactions` (the semantic mutation gateway), which
 // applies into the live session as another collaborator and checkpoints
-// before acking. The legacy `/edit` and `/ops` facades are quarantined, and
+// before acking. The legacy `/edit` and `/ops` facades are deleted, and
 // review items persist as `block_review_items` rows (visible via
 // `GET .../review`) instead of CriticMarkup in the document Markdown — the
 // persistence assertions in this spec changed accordingly.
@@ -128,14 +128,15 @@ test('humans and an agent collaborate on one live document without conflicts', a
     await userA.page.getByRole('button', { name: 'Add agent' }).click();
     const addAgentDialog = userA.page.getByRole('dialog', { name: 'Add agent' });
     await expect(addAgentDialog).toContainText(`/lib/${library}/documents/${DOCUMENT_PATH}`);
-    for (const endpoint of ['/presence', '/snapshot', '/blocks', '/transactions', '/review']) {
+    for (const endpoint of ['/presence', '/blocks', '/transactions', '/review']) {
       await expect(addAgentDialog).toContainText(
         `/v1/libraries/${library}/documents/${DOCUMENT_PATH}${endpoint}`
       );
     }
-    // The quarantined legacy facades are no longer advertised.
+    // The deleted legacy facades and the ordinal snapshot are not advertised.
     await expect(addAgentDialog).not.toContainText(`${DOCUMENT_PATH}/edit`);
     await expect(addAgentDialog).not.toContainText(`${DOCUMENT_PATH}/ops`);
+    await expect(addAgentDialog).not.toContainText(`${DOCUMENT_PATH}/snapshot`);
     await userA.page.getByRole('button', { name: 'Close' }).click();
 
     const presence = await request.post(`${documentApiUrl(library)}/presence`, {
