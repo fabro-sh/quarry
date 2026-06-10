@@ -3,13 +3,13 @@ use git2::{
     FetchOptions, IndexAddOption, ObjectType, PushOptions, Repository, Signature,
 };
 use quarry_core::{
-    normalize_path, ConflictRecord, DocumentListEntry, DocumentSource, QuarryError, Result,
-    SyncStateEntry, GIT_BINARY_WARN_THRESHOLD,
+    normalize_path, render_markdown_frontmatter, ConflictRecord, DocumentListEntry, DocumentSource,
+    QuarryError, Result, SyncStateEntry, GIT_BINARY_WARN_THRESHOLD,
 };
 use quarry_storage::QuarryStore;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -648,22 +648,11 @@ fn ensure_content_type(metadata: &mut JsonValue, path: &str) {
 }
 
 fn markdown_with_frontmatter(metadata: &JsonValue, content: &[u8]) -> Result<Vec<u8>> {
-    let mut frontmatter = BTreeMap::new();
-    if let JsonValue::Object(object) = metadata {
-        for (key, value) in object {
-            if key != "content_type" {
-                frontmatter.insert(key.clone(), value.clone());
-            }
-        }
-    }
-    if frontmatter.is_empty() {
+    let header = render_markdown_frontmatter(metadata)?;
+    if header.is_empty() {
         return Ok(content.to_vec());
     }
-    let yaml = serde_yaml::to_string(&frontmatter)?;
-    let mut output = Vec::new();
-    output.extend_from_slice(b"---\n");
-    output.extend_from_slice(yaml.trim_end().as_bytes());
-    output.extend_from_slice(b"\n---\n");
+    let mut output = header.into_bytes();
     output.extend_from_slice(content);
     Ok(output)
 }

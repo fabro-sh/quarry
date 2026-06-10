@@ -366,6 +366,29 @@ pub fn now_timestamp() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+/// Renders document metadata as YAML frontmatter: `content_type` stays out
+/// (it is transport metadata, not a document attribute), keys sort for a
+/// stable export order, and an empty mapping renders nothing.
+///
+/// This is the single canonical rendering shared by block-document export
+/// (`quarry-storage`) and the Git adapter (`quarry-git`); the two must stay
+/// byte-identical for diff3 reconciliation to see clean bases.
+pub fn render_markdown_frontmatter(metadata: &JsonValue) -> Result<String> {
+    let mut frontmatter = std::collections::BTreeMap::new();
+    if let JsonValue::Object(object) = metadata {
+        for (key, value) in object {
+            if key != "content_type" {
+                frontmatter.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    if frontmatter.is_empty() {
+        return Ok(String::new());
+    }
+    let yaml = serde_yaml::to_string(&frontmatter)?;
+    Ok(format!("---\n{}\n---\n", yaml.trim_end()))
+}
+
 pub fn normalize_path(path: &str) -> Result<String> {
     let trimmed = path.trim_matches('/');
     if trimmed.is_empty() {

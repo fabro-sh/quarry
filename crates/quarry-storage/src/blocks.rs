@@ -19,7 +19,7 @@ use quarry_collab_codec::{
     block_rows_to_markdown, is_utf16_boundary, markdown_to_block_rows, utf16_len, BlockRow,
     LinkRange, MarkRun,
 };
-use std::collections::BTreeMap;
+use quarry_core::render_markdown_frontmatter;
 
 /// How a document participates in the block model. `BlockDocument`s are
 /// canonical in block rows; `RawDocument`s keep the untouched byte path.
@@ -225,7 +225,7 @@ impl QuarryStore {
         merge_json(&mut merged_metadata, metadata.clone());
         let normalized = format!(
             "{}{}",
-            render_frontmatter(&merged_metadata)?,
+            render_markdown_frontmatter(&merged_metadata)?,
             block_rows_to_markdown(&rows)?
         );
 
@@ -301,7 +301,7 @@ impl QuarryStore {
         let rows = load_block_tree_conn(&conn, document_id).await?;
         Ok(format!(
             "{}{}",
-            render_frontmatter(&head.metadata)?,
+            render_markdown_frontmatter(&head.metadata)?,
             block_rows_to_markdown(&rows)?
         ))
     }
@@ -778,24 +778,4 @@ async fn block_transaction_conn(
         })),
         None => Ok(None),
     }
-}
-
-/// Renders document metadata as YAML frontmatter for export, mirroring the
-/// Git adapter's convention: `content_type` stays out (it is transport
-/// metadata, not a document attribute), keys sort for a stable export order,
-/// and an empty mapping renders nothing.
-fn render_frontmatter(metadata: &JsonValue) -> Result<String> {
-    let mut frontmatter = BTreeMap::new();
-    if let JsonValue::Object(object) = metadata {
-        for (key, value) in object {
-            if key != "content_type" {
-                frontmatter.insert(key.clone(), value.clone());
-            }
-        }
-    }
-    if frontmatter.is_empty() {
-        return Ok(String::new());
-    }
-    let yaml = serde_yaml::to_string(&frontmatter)?;
-    Ok(format!("---\n{}\n---\n", yaml.trim_end()))
 }
