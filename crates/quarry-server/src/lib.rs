@@ -1441,6 +1441,8 @@ pub struct AgentReviewProcessResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub markdown: Option<String>,
     pub review: AgentReviewResponse,
+    /// Legacy field of the deleted injection gate; never emitted (the
+    /// endpoint is quarantined and live sessions are the write path).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub injection: Vec<String>,
 }
@@ -1491,9 +1493,8 @@ pub struct AgentEditResponse {
     pub outcome: Option<WriteOutcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub markdown: Option<String>,
-    /// Whether the edit was injected into a live collab room, or why it fell
-    /// back to a plain write: `injected` | `no_live_room` | `not_codec_eligible`
-    /// | `gate_rejected`. Absent for dry runs.
+    /// Legacy field of the deleted injection gate; never emitted (the
+    /// endpoint is quarantined and live sessions are the write path).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub injection: Option<String>,
 }
@@ -1581,10 +1582,8 @@ pub struct AgentOpsResponse {
     pub outcome: Option<WriteOutcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub markdown: Option<String>,
-    /// Whether the ops mutation reached a live collab room, or why it used the
-    /// non-live write path: `injected` | `metadata_only_injected` |
-    /// `no_live_room` | `gate_rejected` | `not_codec_eligible`. Absent for dry
-    /// runs.
+    /// Legacy field of the deleted injection gate; never emitted (the
+    /// endpoint is quarantined and live sessions are the write path).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub injection: Option<String>,
 }
@@ -2171,9 +2170,13 @@ async fn post_document_action(
 #[utoipa::path(
     post,
     path = "/v1/libraries/{library}/documents/{path}/edit",
-    params(("library" = String, Path), ("path" = String, Path), ("dryRun" = Option<DryRunValue>, Query)),
+    description = "Quarantined legacy endpoint: always responds 410 with the \
+        typed code `UNSUPPORTED_LEGACY_ENDPOINT`. Use \
+        `POST /v1/libraries/{library}/documents/{path}/transactions` for \
+        block edits. The route is deleted entirely in a later phase.",
+    params(("library" = String, Path), ("path" = String, Path)),
     request_body = AgentEditRequest,
-    responses((status = 200, body = AgentEditResponse), (status = 412, body = ErrorResponse))
+    responses((status = 410, body = gateway::BlockTransactionError))
 )]
 #[allow(dead_code)]
 async fn document_edit_openapi() {}
@@ -2200,9 +2203,14 @@ async fn agent_presence_openapi() {}
 #[utoipa::path(
     post,
     path = "/v1/libraries/{library}/documents/{path}/ops",
-    params(("library" = String, Path), ("path" = String, Path), ("dryRun" = Option<DryRunValue>, Query)),
+    description = "Quarantined legacy endpoint: always responds 410 with the \
+        typed code `UNSUPPORTED_LEGACY_ENDPOINT`. Use \
+        `POST /v1/libraries/{library}/documents/{path}/transactions` for \
+        review and block operations. The route is deleted entirely in a \
+        later phase.",
+    params(("library" = String, Path), ("path" = String, Path)),
     request_body = AgentOpsRequest,
-    responses((status = 200, body = AgentOpsResponse), (status = 409, body = ErrorResponse), (status = 412, body = ErrorResponse))
+    responses((status = 410, body = gateway::BlockTransactionError))
 )]
 #[allow(dead_code)]
 async fn document_ops_openapi() {}
@@ -2210,9 +2218,14 @@ async fn document_ops_openapi() {}
 #[utoipa::path(
     post,
     path = "/v1/libraries/{library}/documents/{path}/review",
-    params(("library" = String, Path), ("path" = String, Path), ("dryRun" = Option<DryRunValue>, Query)),
+    description = "Quarantined legacy endpoint: always responds 410 with the \
+        typed code `UNSUPPORTED_LEGACY_ENDPOINT`. Use \
+        `POST /v1/libraries/{library}/documents/{path}/transactions` for \
+        edits and review operations; `GET .../review` (the read projection) \
+        is unaffected. The route is deleted entirely in a later phase.",
+    params(("library" = String, Path), ("path" = String, Path)),
     request_body = AgentReviewProcessRequest,
-    responses((status = 200, body = AgentReviewProcessResponse), (status = 409, body = ErrorResponse), (status = 412, body = ErrorResponse))
+    responses((status = 410, body = gateway::BlockTransactionError))
 )]
 #[allow(dead_code)]
 async fn document_review_process_openapi() {}

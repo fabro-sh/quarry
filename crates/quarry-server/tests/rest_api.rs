@@ -1889,25 +1889,33 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
     );
     assert_path_parameter_enum_contains(
         &openapi,
-        "/v1/libraries/{library}/documents/{path}/edit",
-        "post",
-        "dryRun",
-        &["1", "true", "yes", "0", "false", "no"],
-    );
-    assert_path_parameter_enum_contains(
-        &openapi,
-        "/v1/libraries/{library}/documents/{path}/ops",
-        "post",
-        "dryRun",
-        &["1", "true", "yes", "0", "false", "no"],
-    );
-    assert_path_parameter_enum_contains(
-        &openapi,
         "/v1/libraries/{library}/documents/{path}/review",
         "get",
         "includeResolved",
         &["1", "true", "yes", "0", "false", "no"],
     );
+    // The quarantined legacy mutation facades document their 410 reality
+    // (the dryRun query parameter went with the deleted machinery).
+    for endpoint in ["edit", "ops", "review"] {
+        let operation = &openapi["paths"]
+            [format!("/v1/libraries/{{library}}/documents/{{path}}/{endpoint}")]["post"];
+        assert!(
+            operation["description"]
+                .as_str()
+                .is_some_and(|description| {
+                    description.contains("Quarantined legacy endpoint")
+                        && description.contains("UNSUPPORTED_LEGACY_ENDPOINT")
+                        && description.contains("/transactions")
+                }),
+            "{endpoint} should document the quarantine: {operation}"
+        );
+        assert!(operation["responses"]["410"].is_object());
+        assert!(operation["responses"]["200"].is_null());
+        let parameters = operation["parameters"].as_array().unwrap();
+        assert!(!parameters
+            .iter()
+            .any(|parameter| parameter["name"] == "dryRun"));
+    }
 }
 
 #[tokio::test]
@@ -4227,6 +4235,21 @@ async fn send_local_edit(
     doc: &Doc,
     edit: impl FnOnce(&mut yrs::TransactionMut<'_>, &XmlTextRef),
 ) {
+    send_local_edit_unechoed(socket, doc, edit).await;
+    // The session broadcasts every applied update, including back to its
+    // origin; the echo proves the server's doc has it.
+    wait_for_yjs_sync_update(socket, doc).await;
+}
+
+/// Like [`send_local_edit`] but without waiting for the server's echo:
+/// several updates can be packed back-to-back into one debounce window
+/// without round trips between them (a stalled echo wait would otherwise
+/// let the debounce fire early and split the checkpoint).
+async fn send_local_edit_unechoed(
+    socket: &mut WsSocket,
+    doc: &Doc,
+    edit: impl FnOnce(&mut yrs::TransactionMut<'_>, &XmlTextRef),
+) {
     let before = doc.transact().state_vector();
     {
         let mut txn = doc.transact_mut();
@@ -4244,9 +4267,6 @@ async fn send_local_edit(
         ))
         .await
         .unwrap();
-    // The session broadcasts every applied update, including back to its
-    // origin; the echo proves the server's doc has it.
-    wait_for_yjs_sync_update(socket, doc).await;
 }
 
 async fn document_id_of(store: &QuarryStore, path: &str) -> String {
@@ -4376,6 +4396,102 @@ fn nth_block_text_in(txn: &mut yrs::TransactionMut<'_>, index: usize) -> XmlText
     embeds[index].clone()
 }
 
+/// The reviewer's C1 probe: an unknown inline mark (a future Plate plugin,
+/// or arbitrary bytes on the unauthenticated socket) must never wedge the
+/// session into unpersistable state. The checkpoint drops the unknown mark
+/// and persists everything else.
+#[tokio::test]
+async fn checkpoint_succeeds_despite_unknown_inline_marks() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "Mark target text.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.insert(txn, 17, " Typed.");
+        block.format(
+            txn,
+            0,
+            4,
+            [("weird_mark".into(), yrs::Any::Bool(true))]
+                .into_iter()
+                .collect(),
+        );
+        block.format(
+            txn,
+            5,
+            6,
+            [("bold".into(), yrs::Any::Bool(true))]
+                .into_iter()
+                .collect(),
+        );
+    })
+    .await;
+
+    // Force the checkpoint (the autosave path): it must succeed, persist
+    // the typing and the known mark, and drop the unknown one.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/live.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header("X-Quarry-Origin-Id", "browser:flusher-1")
+                .body(Body::from(""))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    assert_eq!(
+        get_document_markdown(&app, "live.md").await,
+        "Mark **target** text. Typed.\n"
+    );
+    let tree = get_block_tree(&app, "live.md").await;
+    assert_eq!(tree["blocks"][0]["text"], "Mark target text. Typed.");
+    let marks = tree["blocks"][0]["marks"].as_array().unwrap();
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0]["marks"], serde_json::json!({"bold": true}));
+
+    socket.close(None).await.unwrap();
+    server.abort();
+}
+
+/// The discard variant of the C1 probe: previously the final checkpoint
+/// failed on the unknown mark and ALL un-checkpointed edits (including
+/// plain typing) were lost with only a warn log.
+#[tokio::test]
+async fn final_checkpoint_persists_typing_despite_unknown_inline_marks() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "Discard probe.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.insert(txn, 14, " Survives.");
+        block.format(
+            txn,
+            0,
+            7,
+            [("weird_mark".into(), yrs::Any::Bool(true))]
+                .into_iter()
+                .collect(),
+        );
+    })
+    .await;
+    socket.close(None).await.unwrap();
+
+    let markdown = wait_for_markdown_containing(&app, "live.md", "Survives.").await;
+    assert_eq!(markdown, "Discard probe. Survives.\n");
+    let tree = get_block_tree(&app, "live.md").await;
+    assert_eq!(tree["blocks"][0]["marks"], serde_json::json!([]));
+    server.abort();
+}
+
 #[tokio::test]
 async fn multiple_typed_updates_coalesce_into_one_debounced_checkpoint() {
     let (_root, addr, app, store, server) = spawn_session_server().await;
@@ -4384,17 +4500,19 @@ async fn multiple_typed_updates_coalesce_into_one_debounced_checkpoint() {
     let versions_before = raw_version_count(&app, "live.md").await;
 
     let (mut socket, doc) = connect_session(addr, &document_id).await;
-    send_local_edit(&mut socket, &doc, |txn, _root| {
+    // Packed back-to-back (no echo round trips) so all three land inside
+    // one debounce window even on a stalled CI runner.
+    send_local_edit_unechoed(&mut socket, &doc, |txn, _root| {
         let block = nth_block_text_in(txn, 0);
         block.insert(txn, 16, " one");
     })
     .await;
-    send_local_edit(&mut socket, &doc, |txn, _root| {
+    send_local_edit_unechoed(&mut socket, &doc, |txn, _root| {
         let block = nth_block_text_in(txn, 0);
         block.insert(txn, 20, " two");
     })
     .await;
-    send_local_edit(&mut socket, &doc, |txn, _root| {
+    send_local_edit_unechoed(&mut socket, &doc, |txn, _root| {
         let block = nth_block_text_in(txn, 0);
         block.insert(txn, 24, " three");
     })

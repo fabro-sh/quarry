@@ -1843,101 +1843,95 @@ async fn apply_session_transaction(
     request: &ParsedTransaction,
 ) -> Result<Response, GatewayFailure> {
     let awareness = session.awareness().clone().write_owned().await;
-    for _attempt in 0..COMMIT_RETRY_LIMIT {
-        // 1. Force-checkpoint pending typing (no-op when clean).
-        if session.is_dirty() {
-            match session.commit_doc_state(&state.store, &awareness).await {
-                Ok(_) => {}
-                Err(QuarryError::PreconditionFailed(_)) => continue,
-                Err(error) => return Err(error.into()),
-            }
-        }
-        let snapshot = state
-            .store
-            .block_mutation_state(library, path, &request.client_tx_id)
-            .await?;
-        if let Some(record) = &snapshot.replay {
-            return replay_response(record);
-        }
-        require_block_document(&snapshot.path, &snapshot.content_type)?;
-        let status = transaction_status(&request.base_clock, &snapshot)?;
-
-        // 2. Apply against the session's authoritative state. After the
-        //    flush, stored rows equal the session projection; review items
-        //    come from the session (the store snapshot agrees, but the
-        //    session is the source of truth while it lives).
-        let mut session_snapshot = snapshot.clone();
-        session_snapshot.review_items = session.items_snapshot();
-        let applied = apply_ops(
-            &session_snapshot,
-            &request.ops,
-            &request.actor,
-            &request.client_tx_id,
-        )?;
-
-        // 3. Write the change into the live doc as a collaborator.
-        let pre = crate::session::doc_image(&session_snapshot.rows, &session_snapshot.review_items)
-            .map_err(GatewayFailure::from)?;
-        let desired = crate::session::doc_image(&applied.rows, &applied.review_items)
-            .map_err(GatewayFailure::from)?;
+    // 1. Force-checkpoint pending typing (no-op when clean). Head races are
+    //    handled inside commit_doc_state (it retries and surfaces Busy).
+    if session.is_dirty() {
         session
-            .apply_desired_state(&awareness, &pre, &desired, &applied.review_items)
+            .commit_doc_state(&state.store, &awareness)
+            .await
             .map_err(GatewayFailure::from)?;
-
-        // 4. Checkpoint-before-ack: commit the applied state as this
-        //    transaction's version.
-        let commit = BlockMutationCommit {
-            document_id: session_snapshot.document_id.clone(),
-            expected_head_version_id: session_snapshot.head_version_id.clone(),
-            client_tx_id: request.client_tx_id.clone(),
-            actor_kind: request.actor.kind.clone(),
-            actor_id: request.actor.id.clone(),
-            transaction_actor: Some(request.actor.display()),
-            transaction_message: None,
-            transaction_provenance: None,
-            // In-session browsers classify this as a benign refresh
-            // (`session-events.ts`), exactly like checkpoint commits.
-            origin_id: Some(format!("agent-injected:tx:{}", request.client_tx_id)),
-            source: DocumentSource::Rest,
-            recorded_ops: recorded_ops(request, status, &applied.changed_block_ids),
-            metadata: session_snapshot.metadata.clone(),
-            content_type: session_snapshot.content_type.clone(),
-            rows: applied.rows.clone(),
-            review_items: applied.review_items.clone(),
-            normalized_markdown: normalized_markdown(&applied.rows, &session_snapshot.metadata)?,
-        };
-        match state.store.commit_block_mutation(library, commit).await {
-            Ok(BlockMutationOutcome::Applied { outcome, record }) => {
-                session.mark_committed(&outcome, &applied.review_items);
-                let ack = BlockTransactionAck {
-                    status: status.to_string(),
-                    document_clock: outcome.version.id.clone(),
-                    transaction_id: record.id,
-                    changed_block_ids: applied.changed_block_ids,
-                };
-                return Ok(json_with_etag(StatusCode::OK, &ack, &ack.document_clock)?);
-            }
-            Ok(BlockMutationOutcome::Replayed(record)) => return replay_response(&record),
-            // An external legacy write raced the session between the step-1
-            // flush and this commit. The live doc already carries this
-            // transaction's edits but nothing was committed (so there is no
-            // replay record yet). Surface Busy: a client retry re-runs the
-            // ops against the flushed state — idempotent for replaces, and
-            // safe for inserts because minted ids are deterministic per
-            // (client_tx_id, op): a re-insert collides with the first
-            // application's block and fails typed instead of duplicating.
-            // Phase 4 routes external whole-file writes through the gateway
-            // and removes the trigger.
-            Err(QuarryError::PreconditionFailed(detail)) => {
-                return Err(GatewayFailure::Api(QuarryError::Busy(detail).into()));
-            }
-            Err(error) => return Err(error.into()),
-        }
     }
-    Err(GatewayFailure::Api(
-        QuarryError::Busy("document head kept moving during the block transaction".to_string())
-            .into(),
-    ))
+    let snapshot = state
+        .store
+        .block_mutation_state(library, path, &request.client_tx_id)
+        .await?;
+    if let Some(record) = &snapshot.replay {
+        return replay_response(record);
+    }
+    require_block_document(&snapshot.path, &snapshot.content_type)?;
+    let status = transaction_status(&request.base_clock, &snapshot)?;
+
+    // 2. Apply against the session's authoritative state. After the
+    //    flush, stored rows equal the session projection; review items
+    //    come from the session (the store snapshot agrees, but the
+    //    session is the source of truth while it lives).
+    let mut session_snapshot = snapshot.clone();
+    session_snapshot.review_items = session.items_snapshot();
+    let applied = apply_ops(
+        &session_snapshot,
+        &request.ops,
+        &request.actor,
+        &request.client_tx_id,
+    )?;
+
+    // 3. Write the change into the live doc as a collaborator.
+    let pre = crate::session::doc_image(&session_snapshot.rows, &session_snapshot.review_items)
+        .map_err(GatewayFailure::from)?;
+    let desired = crate::session::doc_image(&applied.rows, &applied.review_items)
+        .map_err(GatewayFailure::from)?;
+    session
+        .apply_desired_state(&awareness, &pre, &desired, &applied.review_items)
+        .map_err(GatewayFailure::from)?;
+
+    // 4. Checkpoint-before-ack: commit the applied state as this
+    //    transaction's version.
+    let commit = BlockMutationCommit {
+        document_id: session_snapshot.document_id.clone(),
+        expected_head_version_id: session_snapshot.head_version_id.clone(),
+        client_tx_id: request.client_tx_id.clone(),
+        actor_kind: request.actor.kind.clone(),
+        actor_id: request.actor.id.clone(),
+        transaction_actor: Some(request.actor.display()),
+        transaction_message: None,
+        transaction_provenance: None,
+        // In-session browsers classify this as a benign refresh
+        // (`session-events.ts`), exactly like checkpoint commits.
+        origin_id: Some(format!("agent-injected:tx:{}", request.client_tx_id)),
+        source: DocumentSource::Rest,
+        recorded_ops: recorded_ops(request, status, &applied.changed_block_ids),
+        metadata: session_snapshot.metadata.clone(),
+        content_type: session_snapshot.content_type.clone(),
+        rows: applied.rows.clone(),
+        review_items: applied.review_items.clone(),
+        normalized_markdown: normalized_markdown(&applied.rows, &session_snapshot.metadata)?,
+    };
+    match state.store.commit_block_mutation(library, commit).await {
+        Ok(BlockMutationOutcome::Applied { outcome, record }) => {
+            session.mark_committed(&outcome, &applied.review_items);
+            let ack = BlockTransactionAck {
+                status: status.to_string(),
+                document_clock: outcome.version.id.clone(),
+                transaction_id: record.id,
+                changed_block_ids: applied.changed_block_ids,
+            };
+            Ok(json_with_etag(StatusCode::OK, &ack, &ack.document_clock)?)
+        }
+        Ok(BlockMutationOutcome::Replayed(record)) => replay_response(&record),
+        // An external legacy write raced the session between the step-1
+        // flush and this commit. The live doc already carries this
+        // transaction's edits but nothing was committed (so there is no
+        // replay record yet). Surface Busy: a client retry re-runs the
+        // ops against the flushed state — idempotent for replaces, and
+        // safe for inserts because minted ids are deterministic per
+        // (client_tx_id, op): a re-insert collides with the first
+        // application's block and fails typed instead of duplicating.
+        // Phase 4 routes external whole-file writes through the gateway
+        // and removes the trigger.
+        Err(QuarryError::PreconditionFailed(detail)) => {
+            Err(GatewayFailure::Api(QuarryError::Busy(detail).into()))
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn recorded_ops(
