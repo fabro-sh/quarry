@@ -82,6 +82,14 @@ test('disconnect goes read-only; reconnect reseeds a fresh doc from canonical st
   await expectSaved(user.page);
   await waitForPersistedMarkdown(request, library, 'Typed after reconnect.');
 
+  // A plain reload joins a fresh session seeded from canonical state and
+  // settles straight to Saved — nothing pending, nothing lost.
+  await user.page.reload();
+  await expect(user.page.getByLabel('Plate markdown editor')).toContainText(
+    'Typed after reconnect.'
+  );
+  await expectSaved(user.page);
+
   await user.context.close();
 });
 

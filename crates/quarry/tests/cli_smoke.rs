@@ -485,7 +485,29 @@ fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() {
     );
 
     // A second put merges the edit (two-way) instead of replacing the
-    // projection.
+    // projection: sibling block ids survive the whole-file write.
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let block_ids = |runtime: &tokio::runtime::Runtime| {
+        runtime.block_on(async {
+            let store = quarry_storage::QuarryStore::open(quarry_storage::StoreConfig {
+                db_path: root.join("quarry.db"),
+                cas_path: root.join("cas"),
+                lock_path: None,
+            })
+            .await
+            .unwrap();
+            let document = store.get_document("notes", "notes/doc.md").await.unwrap();
+            store
+                .load_block_tree(&document.id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|row| row.block_id)
+                .collect::<Vec<_>>()
+        })
+    };
+    let ids_before = block_ids(&runtime);
+    assert!(!ids_before.is_empty());
     std::fs::write(&markdown, "# Title\n\nAlpha, edited.\n").unwrap();
     run_quarry([
         "--root",
@@ -511,6 +533,9 @@ fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() {
         "# Title\n\nAlpha, edited.\n"
     );
 
+    let ids_after = block_ids(&runtime);
+    assert_eq!(ids_before, ids_after);
+
     // RawDocuments bypass the block model: exact bytes back.
     let blob = temp.path().join("blob.bin");
     std::fs::write(&blob, [0u8, 159, 146, 150]).unwrap();
@@ -523,7 +548,6 @@ fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() {
         blob.to_str().unwrap(),
     ]);
     // `get` prints lossily; verify raw byte fidelity at the store.
-    let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
         let store = quarry_storage::QuarryStore::open(quarry_storage::StoreConfig {
             db_path: root.join("quarry.db"),
