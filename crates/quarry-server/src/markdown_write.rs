@@ -292,7 +292,12 @@ async fn write_markdown_with(
         Err(error) => return Err(error.into()),
     };
 
-    // Byte-identical no-op: nothing to merge, nothing to commit.
+    // Byte-identical no-op: nothing to merge, nothing to commit. This check
+    // runs OUTSIDE the document mutex (taken later by the dispatch), which
+    // is benign: if a racing write changes the content between this read
+    // and the lock, answering "no change against the version we observed"
+    // is a legal serialization — identical to this write committing first
+    // and the racing write winning afterwards.
     if document.content == write.markdown.as_bytes() {
         let entry = state
             .store

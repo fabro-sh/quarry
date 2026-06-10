@@ -3260,3 +3260,54 @@ async fn block_mutation_commit_rejects_open_review_items_with_dead_anchors() {
         .unwrap_err();
     assert!(matches!(error, QuarryError::InvalidInput(_)));
 }
+
+/// `put_block_review_item` accepts the gateway's conflict shape (Phase 4):
+/// `block_id` holds the attachment point ("" = document start), the range is
+/// a collapsed open placement, and no text anchor exists to validate.
+#[tokio::test]
+async fn put_block_review_item_accepts_the_conflict_shape() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+    store.create_library("conflicts").await.unwrap();
+    let outcome = store
+        .import_block_document(
+            "conflicts",
+            "doc.md",
+            "Alpha.\n",
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    let stored = store
+        .put_block_review_item(NewBlockReviewItem {
+            document_id: outcome.document.id.clone(),
+            block_id: String::new(),
+            kind: BlockReviewKind::Conflict,
+            start_offset: 0,
+            end_offset: 0,
+            body: Some("Incoming hunk.\n".to_string()),
+            replacement: None,
+            author: Some("git".to_string()),
+            state: BlockReviewState::Open,
+            quote: Some("Canonical side.\n".to_string()),
+            context_before: Some("Base context.\n".to_string()),
+            context_after: None,
+            parent_item_id: None,
+        })
+        .await
+        .unwrap();
+
+    let items = store
+        .list_block_review_items(&outcome.document.id)
+        .await
+        .unwrap();
+    let kept = items.iter().find(|item| item.id == stored.id).unwrap();
+    assert_eq!(kept.kind, BlockReviewKind::Conflict);
+    assert_eq!(kept.block_id, "");
+    assert_eq!(kept.state, BlockReviewState::Open);
+    assert_eq!(kept.body.as_deref(), Some("Incoming hunk.\n"));
+}

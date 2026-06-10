@@ -587,8 +587,14 @@ impl QuarryStore {
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
-            let block_text = block_text_conn(&conn, &item.document_id, &item.block_id).await?;
-            validate_anchor_offsets(&item, &block_text)?;
+            if item.kind != BlockReviewKind::Conflict {
+                let block_text = block_text_conn(&conn, &item.document_id, &item.block_id).await?;
+                validate_anchor_offsets(&item, &block_text)?;
+            }
+            // Conflict items (Phase 4) anchor by `after_block_id` in
+            // `block_id` ("" = document start) with a collapsed placement
+            // range — no text anchor to validate (mirrors
+            // validate_review_items_against_rows).
             let id = Uuid::new_v4().to_string();
             let now = now_timestamp();
             conn.execute(

@@ -164,7 +164,7 @@ Do not delete remaining legacy paths until all pass:
 - [ ] Delete quarantined legacy code: autosave/draft endpoints and storage, injection gate remnants, `collab_recovery_states` table and its code, dead UI states.
 - [ ] Update `crates/quarry-server/resources/agent-docs.md` and `crates/quarry-server/resources/quarry.SKILL.md`: `GET /blocks`, `POST /transactions`, stable `block_id` addressing, typed retryable errors, no facades.
 - [ ] Update `README.md` architecture description and `docs/manual-test-plan.md`.
-- [ ] Record limitations: online-only browsers, checkpoint-window crash loss, single-server sessions, hunk-level (not character-level) merge for external file writes.
+- [ ] Record limitations: online-only browsers, checkpoint-window crash loss, single-server sessions, hunk-level (not character-level) merge for external file writes, per-document commit of Markdown files during `git import` (the staged rollback covers raw files only), and the session-mode commit-failure window (merged content can land via the next checkpoint without its review-item side effects — see `gateway::apply_session_transaction`).
 
 ## Test Plan Summary
 

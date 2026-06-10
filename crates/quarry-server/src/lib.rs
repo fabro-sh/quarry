@@ -354,13 +354,17 @@ pub async fn serve_with_shutdown<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    serve_state_with_shutdown(app_state(store), addr, shutdown).await
+    let state = app_state(store);
+    let _markdown_writer = install_markdown_writer(&state);
+    serve_state_with_shutdown(state, addr, shutdown).await
 }
 
 /// Serves an already-built [`AppState`] — the same-process embedding hook
 /// (`quarry mount --serve-addr` shares one state between the FUSE mount's
 /// store-installed writer and the HTTP server, so file writes reach the live
-/// sessions).
+/// sessions). The CALLER owns writer installation
+/// ([`install_markdown_writer`]) and must keep the returned handle alive for
+/// the serving lifetime.
 pub async fn serve_state_with_shutdown<F>(
     state: AppState,
     addr: SocketAddr,
@@ -377,9 +381,6 @@ where
         "quarry REST server listening"
     );
     let (shutdown_started_tx, shutdown_started_rx) = tokio::sync::oneshot::channel::<()>();
-    // Whole-file Git/FUSE/CLI writes in this process route through the
-    // gateway for as long as the server lives.
-    let _markdown_writer = install_markdown_writer(&state);
     let server = axum::serve(listener, router_with_state(state))
         .with_graceful_shutdown(async move {
             shutdown.await;

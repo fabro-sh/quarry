@@ -505,6 +505,14 @@ async fn sync_peer_inner(
     })
 }
 
+/// Imports a Git worktree into a library.
+///
+/// **Atomicity (changed in Phase 4):** Markdown files commit PER DOCUMENT
+/// through the reconciling writer (two-way merge against the current
+/// canonical state; byte-identical files are no-ops) and therefore escape
+/// the staged transaction — an import that fails midway leaves the markdown
+/// documents already imported in place. Raw files keep the staged
+/// multi-document transaction and roll back together on failure.
 pub async fn import_worktree(
     store: &QuarryStore,
     library: &str,

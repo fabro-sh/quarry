@@ -2157,8 +2157,21 @@ async fn apply_session_transaction(
         // safe for inserts because minted ids are deterministic per
         // (client_tx_id, op): a re-insert collides with the first
         // application's block and fails typed instead of duplicating.
-        // Phase 4 routes external whole-file writes through the gateway
-        // and removes the trigger.
+        //
+        // HONEST WINDOW (any commit failure below, not just this arm): the
+        // live doc was mutated in step 3 BEFORE the commit, so on failure
+        // the merged CONTENT survives in the session and lands via the next
+        // checkpoint — but the transaction's review-item side effects do
+        // not ride in the doc and are dropped with the failed commit. In
+        // particular, Phase 4 conflict artifacts (`conflict.add` is not
+        // doc-represented) can be lost while the merged content still
+        // arrives: content-without-its-conflicts if the caller does not
+        // retry. Phase 4 narrowed the trigger class to writers that still
+        // bypass this mutex — staged-transaction commits, version restores,
+        // and direct store callers (every Markdown PUT / Git / FUSE / CLI /
+        // metadata write now routes through the gateway). Phase 5 owns the
+        // real fix: delete the remaining legacy producers, or defer the doc
+        // mutation until after the commit succeeds.
         Err(QuarryError::PreconditionFailed(detail)) => {
             Err(GatewayFailure::Api(QuarryError::Busy(detail).into()))
         }
