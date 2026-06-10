@@ -41,32 +41,32 @@ Three spikes prove the load-bearing mechanics before any storage schema, public 
 
 The seed and checkpoint projections must be lossless inverses, including anchors.
 
-- [ ] Build a fixture block tree covering: paragraphs, headings, nested list items, code blocks, links, inline marks, `raw_markdown` blocks, and review anchors at block start/middle/end and spanning to block end.
-- [ ] Seed a Yjs document from the fixture using `crates/quarry-collab-codec/src/yjs_builder.rs`, converting anchor offsets to Yjs relative positions.
-- [ ] Project the Yjs document back to rows with no intervening edits; assert byte-equal block content, identical tree shape, identical `block_id`s, and identical anchor offsets.
-- [ ] Repeat with concurrent simulated edits (text inserts before/inside/after anchors, block insert, block move) applied to the Yjs document before checkpoint; assert anchors land at the CRDT-resolved offsets and `block_id`s are preserved.
-- [ ] Record the exact anchor conversion rules (UTF-16 offsets, boundary affinity at block start/end) in the findings doc.
+- [x] Build a fixture block tree covering: paragraphs, headings, nested list items, code blocks, links, inline marks, `raw_markdown` blocks, and review anchors at block start/middle/end and spanning to block end.
+- [x] Seed a Yjs document from the fixture using `crates/quarry-collab-codec/src/yjs_builder.rs`, converting anchor offsets to Yjs relative positions.
+- [x] Project the Yjs document back to rows with no intervening edits; assert byte-equal block content, identical tree shape, identical `block_id`s, and identical anchor offsets.
+- [x] Repeat with concurrent simulated edits (text inserts before/inside/after anchors, block insert, block move) applied to the Yjs document before checkpoint; assert anchors land at the CRDT-resolved offsets and `block_id`s are preserved.
+- [x] Record the exact anchor conversion rules (UTF-16 offsets, boundary affinity at block start/end) in the findings doc.
 
 ### Gate B: Server-as-Collaborator
 
 A semantic operation applied into a live session must behave exactly like another human's edit.
 
-- [ ] In a Playwright spike (extend `ui/tests/live-collab-agent-smoke.spec.ts` or add `ui/tests/session-collaborator-spike.spec.ts`): two Chromium browsers typing in the same paragraph while the server applies a `replace_block_content` to a different block as a distinct Yjs client ID.
-- [ ] Assert: both browsers converge; in-flight keystrokes are not lost or reordered; the receiving tabs are not marked dirty; no session reseed or state replacement occurs; undo in each browser undoes only that browser's edits.
-- [ ] Apply a semantic op to the same block a human is actively typing in; assert convergence without rejection (awkward merged text is acceptable and expected).
-- [ ] Assert awareness (cursors) stays anchored across the server-applied edit.
-- [ ] Record in the findings doc how the server constructs Yjs transactions (client ID allocation, origin tagging so checkpoint attribution can distinguish browser vs gateway edits).
+- [x] In a Playwright spike (extend `ui/tests/live-collab-agent-smoke.spec.ts` or add `ui/tests/session-collaborator-spike.spec.ts`): two Chromium browsers typing in the same paragraph while the server applies a `replace_block_content` to a different block as a distinct Yjs client ID.
+- [x] Assert: both browsers converge; in-flight keystrokes are not lost or reordered; the receiving tabs are not marked dirty; no session reseed or state replacement occurs; undo in each browser undoes only that browser's edits.
+- [x] Apply a semantic op to the same block a human is actively typing in; assert convergence without rejection (awkward merged text is acceptable and expected).
+- [x] Assert awareness (cursors) stays anchored across the server-applied edit.
+- [x] Record in the findings doc how the server constructs Yjs transactions (client ID allocation, origin tagging so checkpoint attribution can distinguish browser vs gateway edits).
 
 ### Gate C: diff3 Identity Mapping
 
 Base-mapped block identity must replace similarity guessing.
 
-- [ ] Codec-level spike: given (base export, incoming file, current canonical export), compute a three-way merge at block granularity.
-- [ ] Prove identity preservation for: unchanged blocks, edited blocks, inserted blocks, deleted blocks, reordered blocks — IDs flow through positional mapping against the base, with zero similarity scoring.
-- [ ] Prove a true conflict (same block edited in incoming and canonical since base) produces: the canonical side retained, plus a structured conflict artifact carrying the incoming hunk, block ref, and base context.
-- [ ] Prove anchors outside changed hunks are untouched; anchors inside genuinely changed hunks orphan (comments) or invalidate (suggestions) per existing review rules.
-- [ ] Prove the degenerate base cases: base == canonical (two-way import, IDs preserved for unchanged regions) and missing base (first import, fresh IDs).
-- [ ] Record hunk-to-operation mapping rules in the findings doc.
+- [x] Codec-level spike: given (base export, incoming file, current canonical export), compute a three-way merge at block granularity.
+- [x] Prove identity preservation for: unchanged blocks, edited blocks, inserted blocks, deleted blocks, reordered blocks — IDs flow through positional mapping against the base, with zero similarity scoring.
+- [x] Prove a true conflict (same block edited in incoming and canonical since base) produces: the canonical side retained, plus a structured conflict artifact carrying the incoming hunk, block ref, and base context.
+- [x] Prove anchors outside changed hunks are untouched; anchors inside genuinely changed hunks orphan (comments) or invalidate (suggestions) per existing review rules.
+- [x] Prove the degenerate base cases: base == canonical (two-way import, IDs preserved for unchanged regions) and missing base (first import, fresh IDs).
+- [x] Record hunk-to-operation mapping rules in the findings doc.
 
 ## Canonical Data Model
 
