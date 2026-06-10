@@ -601,6 +601,21 @@ enum AnchorFate {
 }
 
 fn adjust_anchor(diff: TextDiff, start: u32, end: u32) -> AnchorFate {
+    // A collapsed anchor (start == end, a dead orphaned/invalidated/resolved
+    // marker) is a single point: both ends move together so they can never
+    // cross. Without this, a pure insertion exactly at the point would shift
+    // the start (start-boundary inserts are excluded) but keep the end
+    // (end-boundary inserts are excluded too), inverting the range.
+    if start == end {
+        let point = if end <= diff.prefix {
+            end
+        } else if start >= diff.old_mid_end {
+            diff.shift_suffix(start)
+        } else {
+            diff.prefix
+        };
+        return AnchorFate::Keep(point, point);
+    }
     if diff.is_pure_insertion() {
         // Inserts exactly at the start boundary are excluded (the anchor
         // never grows leftward); at the end boundary likewise. Interior
@@ -2162,5 +2177,25 @@ mod tests {
         assert_eq!(unquote_clock("v1"), Some("v1".to_string()));
         assert_eq!(unquote_clock("\"unbalanced"), None);
         assert_eq!(unquote_clock(""), None);
+    }
+
+    #[test]
+    fn collapsed_anchor_stays_a_point_under_insertion_at_its_offset() {
+        // "prefix " is 7 units; the insertion lands exactly at offset 7 where
+        // a dead anchor collapsed. The point must move as one (never invert).
+        let diff = utf16_text_diff("prefix tail", "prefix X tail");
+        assert!(diff.is_pure_insertion());
+        assert_eq!(adjust_anchor(diff, 7, 7), AnchorFate::Keep(7, 7));
+        // A collapsed point strictly after the insertion shifts as one.
+        assert_eq!(adjust_anchor(diff, 9, 9), AnchorFate::Keep(11, 11));
+    }
+
+    #[test]
+    fn collapsed_anchor_inside_a_replaced_middle_moves_to_the_change_site() {
+        let diff = utf16_text_diff("aaa MIDDLE zzz", "aaa OTHER zzz");
+        assert_eq!(
+            adjust_anchor(diff, 6, 6),
+            AnchorFate::Keep(diff.prefix, diff.prefix)
+        );
     }
 }

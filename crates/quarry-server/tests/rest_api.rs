@@ -8358,3 +8358,71 @@ async fn block_transaction_multi_op_success_commits_one_version() {
         "Start.\n\nMiddle.\n\nEnd.\n"
     );
 }
+
+#[tokio::test]
+async fn orphaned_anchor_survives_a_later_insertion_at_the_orphan_seam() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "prefix MIDDLE suffix\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-comment",
+            serde_json::json!([{
+                "op": "comment.add",
+                "block_id": block_id,
+                "start": 7,
+                "end": 13,
+                "body": "doomed"
+            }]),
+        ),
+    )
+    .await;
+    // Rewriting the middle orphans the comment, collapsed at offset 7.
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-orphan",
+            serde_json::json!([{
+                "op": "replace_block_content",
+                "block_id": block_id,
+                "text": "prefix CHANGED suffix"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "doc.md", false).await;
+    assert_eq!(review["comments"][0]["status"], "orphaned");
+    assert_eq!(review["comments"][0]["anchor"]["startOffset"], 7);
+    assert_eq!(review["comments"][0]["anchor"]["endOffset"], 7);
+
+    // Regression: a pure insertion exactly at the orphan seam used to invert
+    // the collapsed anchor to [8, 7) and poison the document with an untyped
+    // 400. It must commit, and the dead anchor must stay a point.
+    let ack = commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-insert-at-seam",
+            serde_json::json!([{
+                "op": "replace_block_content",
+                "block_id": block_id,
+                "text": "prefix XCHANGED suffix"
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(ack["status"], "committed");
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "prefix XCHANGED suffix\n"
+    );
+    let review = get_block_review(&app, "doc.md", false).await;
+    assert_eq!(review["comments"][0]["status"], "orphaned");
+    assert_eq!(review["comments"][0]["anchor"]["startOffset"], 7);
+    assert_eq!(review["comments"][0]["anchor"]["endOffset"], 7);
+}
