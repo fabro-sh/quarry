@@ -124,8 +124,8 @@ test('agent collaborator edits a different block while two humans type; undo sta
     expect(blocksA[targetBlock]).toBe(AGENT_REWRITE);
     expect(blocksB[targetBlock]).toBe(AGENT_REWRITE);
 
-    // Receiving tabs settle to "Saved" — never dirty/failed/conflicted — and
-    // the flusher persists the agent's edit exactly like a human keystroke.
+    // Receiving tabs settle to "Saved" — never dirty/failed/conflicted — the
+    // checkpoint ack covers the agent's edit exactly like a human keystroke.
     await expectSaved(userA.page);
     await expectSaved(userB.page);
     await expectNoConflictUi(userA.page);
@@ -490,6 +490,11 @@ async function openHumanDocument(browser: Browser, library: string, author: stri
   await page.goto(
     `/lib/${encodeURIComponent(library)}/documents/${encodeURIComponent(DOCUMENT_PATH)}`
   );
+  // The editor is read-only until its session is live (connected + synced +
+  // seed ack received); wait before typing.
+  await expect(page.locator('[data-collab-save-state="saved"]')).toBeVisible({
+    timeout: 20_000,
+  });
   return { context, page, pageErrors };
 }
 

@@ -84,8 +84,10 @@ test('humans and an agent collaborate on one live document without conflicts', a
     await expectNoConflictUi(userA.page);
     await expectNoConflictUi(userB.page);
 
-    const directWriter = await flusherUser(userA, userB);
-    const directReader = directWriter === userA ? userB : userA;
+    // Phase 5: there is no flusher — every browser is an equal session
+    // participant whose typing persists through server checkpoints.
+    const directWriter = userA;
+    const directReader = userB;
     await setCaretAfterText(directWriter.page, 'Human direct block target.');
     await directWriter.page.keyboard.type(' from User A');
 
@@ -97,8 +99,8 @@ test('humans and an agent collaborate on one live document without conflicts', a
     await expectNoConflictUi(userA.page);
     await expectNoConflictUi(userB.page);
 
-    const suggestingWriter = await flusherUser(userA, userB);
-    const suggestingReader = suggestingWriter === userA ? userB : userA;
+    const suggestingWriter = userB;
+    const suggestingReader = userA;
     const mode = suggestingWriter.page.getByRole('button', { name: 'Document mode' });
     await mode.click();
     await suggestingWriter.page.getByRole('menuitem', { name: 'Suggesting' }).click();
@@ -126,11 +128,14 @@ test('humans and an agent collaborate on one live document without conflicts', a
     await userA.page.getByRole('button', { name: 'Add agent' }).click();
     const addAgentDialog = userA.page.getByRole('dialog', { name: 'Add agent' });
     await expect(addAgentDialog).toContainText(`/lib/${library}/documents/${DOCUMENT_PATH}`);
-    for (const endpoint of ['/presence', '/snapshot', '/edit', '/ops']) {
+    for (const endpoint of ['/presence', '/snapshot', '/blocks', '/transactions', '/review']) {
       await expect(addAgentDialog).toContainText(
         `/v1/libraries/${library}/documents/${DOCUMENT_PATH}${endpoint}`
       );
     }
+    // The quarantined legacy facades are no longer advertised.
+    await expect(addAgentDialog).not.toContainText(`${DOCUMENT_PATH}/edit`);
+    await expect(addAgentDialog).not.toContainText(`${DOCUMENT_PATH}/ops`);
     await userA.page.getByRole('button', { name: 'Close' }).click();
 
     const presence = await request.post(`${documentApiUrl(library)}/presence`, {
@@ -196,7 +201,7 @@ test('humans and an agent collaborate on one live document without conflicts', a
     await expectNoConflictUi(userA.page);
     await expectNoConflictUi(userB.page);
 
-    const resolver = await nonFlusherUser(userA, userB);
+    const resolver = userB;
     const resolvedComment = resolver.page
       .getByTestId('comment-card')
       .filter({ hasText: 'Agent comment landed.' });
@@ -342,6 +347,11 @@ async function openHumanDocument(browser: Browser, library: string, author: stri
   await page.goto(
     `/lib/${encodeURIComponent(library)}/documents/${encodeURIComponent(DOCUMENT_PATH)}`
   );
+  // The editor is read-only until its session is live (connected + synced +
+  // seed ack received); wait before typing.
+  await expect(page.locator('[data-collab-save-state="saved"]')).toBeVisible({
+    timeout: 20_000,
+  });
   return { context, page };
 }
 
@@ -453,47 +463,6 @@ async function expectNoConflictUi(page: Page) {
   await expect(page.getByText('External version available')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Local draft' })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Latest remote' })).toHaveCount(0);
-}
-
-async function nonFlusherUser(
-  userA: { page: Page },
-  userB: { page: Page }
-): Promise<{ page: Page }> {
-  await expect
-    .poll(
-      async () => {
-        const states = await Promise.all([isFlusher(userA.page), isFlusher(userB.page)]);
-        return states.filter(Boolean).length;
-      },
-      { timeout: 20_000 }
-    )
-    .toBe(1);
-
-  return (await isFlusher(userA.page)) ? userB : userA;
-}
-
-async function flusherUser(
-  userA: { page: Page },
-  userB: { page: Page }
-): Promise<{ page: Page }> {
-  await expect
-    .poll(
-      async () => {
-        const states = await Promise.all([isFlusher(userA.page), isFlusher(userB.page)]);
-        return states.filter(Boolean).length;
-      },
-      { timeout: 20_000 }
-    )
-    .toBe(1);
-
-  return (await isFlusher(userA.page)) ? userA : userB;
-}
-
-async function isFlusher(page: Page) {
-  return (
-    (await page.locator('[data-collab-flusher]').first().getAttribute('data-collab-flusher')) ===
-    'true'
-  );
 }
 
 async function setCaretAfterText(page: Page, text: string) {
