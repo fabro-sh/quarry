@@ -389,22 +389,19 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/snapshot"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"]["get"].is_object());
-    assert!(
-        openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"]["post"].is_object()
-    );
+    // The legacy mutation facades are deleted routes (404), absent from the
+    // OpenAPI document entirely; GET /review (read projection) remains.
+    assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"]["post"].is_null());
+    assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/edit"].is_null());
+    assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/ops"].is_null());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/share"].is_object());
     assert!(
         openapi["paths"]["/v1/libraries/{library}/documents/{path}/share/{token}/revoke"]
             .is_object()
     );
-    assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/edit"].is_object());
-    assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/ops"].is_object());
+    assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/blocks"].is_object());
     assert!(
-        openapi["components"]["schemas"]["AgentEditResponse"]["properties"]["nextBaseToken"]
-            .is_object()
-    );
-    assert!(
-        openapi["components"]["schemas"]["AgentOpsResponse"]["properties"]["nextBaseToken"]
+        openapi["paths"]["/v1/libraries/{library}/documents/{path}/transactions"]["post"]
             .is_object()
     );
     assert!(
@@ -882,20 +879,30 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
             .to_vec(),
     )
     .unwrap();
+    // The docs teach the session-scoped contract: stable block ids, the
+    // transaction envelope with typed retryable errors, and the rows-backed
+    // review projection (incl. conflict items).
+    assert!(docs.contains("$DOC/blocks"));
+    assert!(docs.contains("$DOC/transactions"));
+    assert!(docs.contains("client_tx_id"));
+    assert!(docs.contains("base_clock"));
+    assert!(docs.contains("changed_block_ids"));
+    assert!(docs.contains("committed_rebased"));
+    assert!(docs.contains("STALE_BASE"));
+    assert!(docs.contains("set_block_type"));
     assert!(docs.contains("comment.reply"));
-    assert!(docs.contains("comment.delete"));
+    assert!(docs.contains("suggestion.accept"));
+    assert!(docs.contains("conflict"));
     assert!(docs.contains("GET $DOC/review"));
-    assert!(docs.contains("POST $DOC/review"));
-    assert!(docs.contains("Processing Review Feedback"));
-    assert!(docs.contains("edit.replace_block"));
-    assert!(docs.contains("comments: []"));
-    assert!(docs.contains("suggestions: []"));
-    assert!(docs.contains("\"blocks\""));
-    assert!(docs.contains("replace_document"));
-    assert!(docs.contains("repeated `insert_after`"));
-    assert!(!docs.contains(
-        "does not currently support Proof operations such as `rewrite.apply` or `comment.reply`"
-    ));
+    // The legacy facade vocabulary is gone.
+    assert!(!docs.contains("/edit"));
+    assert!(!docs.contains("$DOC/ops"));
+    assert!(!docs.contains("POST $DOC/review"));
+    assert!(!docs.contains("ordinal"));
+    assert!(!docs.contains("contentHash"));
+    assert!(!docs.contains("baseToken\": \"version_123"));
+    assert!(!docs.contains("Idempotency-Key"));
+    assert!(!docs.contains("injection"));
 
     let response = app
         .oneshot(
@@ -915,13 +922,25 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
     assert_eq!(body["skill_url"], "http://127.0.0.1:7831/quarry.SKILL.md");
     assert_eq!(body["openapi_url"], "http://127.0.0.1:7831/v1/openapi.json");
     assert_eq!(
-        body["endpoints"]["review_process"]["method"],
+        body["endpoints"]["transactions"]["method"],
         serde_json::json!("POST")
     );
     assert_eq!(
-        body["route_hints"]["review_process"],
-        serde_json::json!("http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/review")
+        body["route_hints"]["transactions"],
+        serde_json::json!(
+            "http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/transactions"
+        )
     );
+    assert_eq!(
+        body["route_hints"]["blocks"],
+        serde_json::json!("http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/blocks")
+    );
+    // The legacy facades are gone from discovery entirely.
+    assert!(body["endpoints"]["edit"].is_null());
+    assert!(body["endpoints"]["ops"].is_null());
+    assert!(body["endpoints"]["review_process"].is_null());
+    assert!(body["route_hints"]["edit"].is_null());
+    assert!(body["route_hints"]["ops"].is_null());
     assert!(body["capabilities"]
         .as_array()
         .unwrap()
@@ -931,7 +950,7 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|capability| capability == "bulk_block_insert"));
+        .any(|capability| capability == "transactions"));
     assert!(body["capabilities"]
         .as_array()
         .unwrap()
@@ -943,31 +962,26 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
         .contains("trusted-localhost"));
     assert_eq!(body["auth"]["mode"], "trusted_localhost");
     assert!(body["presence_statuses"].as_array().unwrap().len() >= 6);
-    assert!(body["edit_operations"]
+    assert!(body["transaction_operations"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|operation| operation == "replace_block"));
-    assert!(body["edit_operations"]
+        .any(|operation| operation == "replace_block_content"));
+    assert!(body["transaction_operations"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|operation| operation == "replace_document"));
-    assert!(body["ops_operations"]
+        .any(|operation| operation == "set_block_type"));
+    assert!(body["transaction_operations"]
         .as_array()
         .unwrap()
         .iter()
         .any(|operation| operation == "comment.add"));
-    assert!(body["ops_operations"]
+    assert!(body["transaction_operations"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|operation| operation == "comment.reply"));
-    assert!(body["ops_operations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|operation| operation == "comment.delete"));
+        .any(|operation| operation == "suggestion.accept"));
     assert!(!body["limitations"]
         .as_array()
         .unwrap()
@@ -1791,30 +1805,9 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/versions/raw"].is_object());
     assert!(openapi["components"]["schemas"]["DocumentHistoryEntry"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"].is_object());
-    assert!(
-        openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"]["post"].is_object()
-    );
     assert!(openapi["paths"]["/v1/events"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/events/stream"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/events/pending"].is_object());
-    assert_schema_enum_contains(
-        &openapi,
-        &openapi["components"]["schemas"]["AgentBlockOperation"]["properties"]["op"],
-        &[
-            "replace_block",
-            "insert_before",
-            "insert_after",
-            "delete_block",
-            "replace_document",
-        ],
-    );
-    assert!(
-        openapi["components"]["schemas"]["AgentBlockOperation"]["properties"]["blocks"].is_object()
-    );
-    assert!(
-        openapi["components"]["schemas"]["AgentBlockOperation"]["properties"]["markdown"]
-            .is_object()
-    );
     assert!(
         openapi["components"]["schemas"]["AgentBlockRef"]["properties"]
             .get("baseToken")
@@ -1831,46 +1824,17 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
         &openapi["components"]["schemas"]["AgentBlockRef"]["properties"]["contentHash"];
     assert_schema_type_contains(content_hash_schema, "string");
     assert_schema_type_contains(content_hash_schema, "null");
+    // The single mutation contract: the transaction envelope and ack.
     assert!(
-        openapi["components"]["schemas"]["AgentOpsRequest"]["properties"]["operations"].is_object()
-    );
-    assert_schema_enum_contains(
-        &openapi,
-        &openapi["components"]["schemas"]["AgentOpsOperationRequest"]["properties"]["op"],
-        &[
-            "comment.add",
-            "comment.reply",
-            "comment.delete",
-            "suggestion.add",
-            "suggestion.accept",
-            "suggestion.reject",
-            "comment.resolve",
-            "accept",
-            "reject",
-        ],
-    );
-    assert_schema_enum_contains(
-        &openapi,
-        &openapi["components"]["schemas"]["AgentOpsOperationRequest"]["properties"]["kind"],
-        &["insert", "delete", "remove", "replace", "substitution"],
-    );
-    assert!(
-        openapi["components"]["schemas"]["AgentOpsOperationRequest"]["properties"]["parentId"]
+        openapi["components"]["schemas"]["BlockTransactionRequest"]["properties"]["ops"]
             .is_object()
     );
     assert!(
-        openapi["components"]["schemas"]["AgentOpsResponse"]["properties"]["results"].is_object()
-    );
-    assert!(
-        openapi["components"]["schemas"]["AgentReviewProcessRequest"]["properties"]["operations"]
+        openapi["components"]["schemas"]["BlockTransactionAck"]["properties"]["changed_block_ids"]
             .is_object()
     );
     assert!(
-        openapi["components"]["schemas"]["AgentReviewProcessOperation"]["properties"]["block"]
-            .is_object()
-    );
-    assert!(
-        openapi["components"]["schemas"]["AgentReviewProcessResponse"]["properties"]["review"]
+        openapi["components"]["schemas"]["BlockTransactionError"]["properties"]["retryable"]
             .is_object()
     );
     assert!(
@@ -1900,27 +1864,11 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
         "includeResolved",
         &["1", "true", "yes", "0", "false", "no"],
     );
-    // The quarantined legacy mutation facades document their 410 reality
-    // (the dryRun query parameter went with the deleted machinery).
+    // The legacy mutation facades are gone from the OpenAPI document.
     for endpoint in ["edit", "ops", "review"] {
         let operation = &openapi["paths"]
             [format!("/v1/libraries/{{library}}/documents/{{path}}/{endpoint}")]["post"];
-        assert!(
-            operation["description"]
-                .as_str()
-                .is_some_and(|description| {
-                    description.contains("Quarantined legacy endpoint")
-                        && description.contains("UNSUPPORTED_LEGACY_ENDPOINT")
-                        && description.contains("/transactions")
-                }),
-            "{endpoint} should document the quarantine: {operation}"
-        );
-        assert!(operation["responses"]["410"].is_object());
-        assert!(operation["responses"]["200"].is_null());
-        let parameters = operation["parameters"].as_array().unwrap();
-        assert!(!parameters
-            .iter()
-            .any(|parameter| parameter["name"] == "dryRun"));
+        assert!(operation.is_null(), "{endpoint} POST should be deleted");
     }
 }
 
@@ -4297,11 +4245,13 @@ async fn wait_for_markdown_containing(app: &axum::Router, path: &str, needle: &s
 }
 
 #[tokio::test]
-async fn legacy_edit_ops_and_review_process_endpoints_are_quarantined() {
+async fn legacy_edit_ops_and_review_process_endpoints_are_gone() {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Hello.\n").await;
 
-    async fn assert_quarantined(app: &axum::Router, endpoint: &str, body: Value) {
+    // The deleted facades 404 like any unknown route (the simplest honest
+    // end state); `POST .../transactions` is the single mutation contract.
+    async fn assert_not_found(app: &axum::Router, endpoint: &str, body: Value) {
         let response = app
             .clone()
             .oneshot(json_request(
@@ -4311,30 +4261,22 @@ async fn legacy_edit_ops_and_review_process_endpoints_are_quarantined() {
             ))
             .await
             .unwrap();
-        let status = response.status();
-        let body = response_json(response).await;
-        assert_eq!(status, StatusCode::GONE, "{endpoint}: {body}");
-        assert_eq!(body["code"], "UNSUPPORTED_LEGACY_ENDPOINT");
-        assert_eq!(body["retryable"], false);
-        assert!(body["message"]
-            .as_str()
-            .unwrap()
-            .contains("/v1/libraries/blocks/documents/doc.md/transactions"));
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{endpoint}");
     }
 
-    assert_quarantined(
+    assert_not_found(
         &app,
         "/edit",
         serde_json::json!({"baseToken": "x", "operations": []}),
     )
     .await;
-    assert_quarantined(
+    assert_not_found(
         &app,
         "/ops",
         ops_request("x", serde_json::json!({"op": "comment.add"})),
     )
     .await;
-    assert_quarantined(
+    assert_not_found(
         &app,
         "/review",
         serde_json::json!({
@@ -4344,7 +4286,7 @@ async fn legacy_edit_ops_and_review_process_endpoints_are_quarantined() {
     )
     .await;
 
-    // The read-side review projection is unaffected by the quarantine.
+    // The read-side review projection is unaffected by the deletion.
     let review = get_block_review(&app, "doc.md", false).await;
     assert_eq!(review["comments"], serde_json::json!([]));
 }

@@ -552,12 +552,10 @@ async fn browser_asset(uri: Uri) -> Response {
         document_share_openapi,
         document_share_create_openapi,
         document_share_revoke_openapi,
-        document_review_process_openapi,
         agent_presence_list_openapi,
         agent_presence_openapi,
         agent_events_pending,
         agent_events_ack,
-        document_ops_openapi,
         document_versions_openapi,
         document_versions_raw_openapi,
         document_version_openapi,
@@ -566,7 +564,6 @@ async fn browser_asset(uri: Uri) -> Response {
         head_document,
         put_document,
         post_document_action,
-        document_edit_openapi,
         patch_document_metadata,
         delete_document,
         begin_transaction,
@@ -608,16 +605,6 @@ async fn browser_asset(uri: Uri) -> Response {
         AgentReviewSuggestion,
         AgentReviewConflict,
         AgentSuggestionPreview,
-        AgentReviewProcessRequest,
-        AgentReviewProcessOperation,
-        AgentReviewProcessResponse,
-        AgentReviewProcessResultItem,
-        AgentEditRequest,
-        AgentEditResponse,
-        AgentBlockOperation,
-        AgentEditBlock,
-        AgentEditOperation,
-        AgentOpsOperation,
         AgentSuggestionKind,
         AgentPresenceStatus,
         AgentPresenceRequest,
@@ -628,10 +615,6 @@ async fn browser_asset(uri: Uri) -> Response {
         AgentEventRecord,
         AgentEventsAckRequest,
         AgentEventsAckResponse,
-        AgentOpsRequest,
-        AgentOpsOperationRequest,
-        AgentOpsResponse,
-        AgentOpsResultItem,
         gateway::BlockTreeResponse,
         gateway::BlockNodePayload,
         gateway::BlockMarkRunPayload,
@@ -681,8 +664,8 @@ struct AgentDiscovery {
     auth_note: &'static str,
     auth: AgentDiscoveryAuth,
     presence_statuses: Vec<&'static str>,
-    edit_operations: Vec<&'static str>,
-    ops_operations: Vec<&'static str>,
+    /// `POST /transactions` op vocabulary (see the agent docs for shapes).
+    transaction_operations: Vec<&'static str>,
     limitations: Vec<&'static str>,
     route_hints: AgentDiscoveryRouteHints,
     endpoints: BTreeMap<&'static str, AgentDiscoveryEndpoint>,
@@ -700,12 +683,11 @@ struct AgentDiscoveryAuth {
 struct AgentDiscoveryRouteHints {
     presence: String,
     snapshot: String,
+    blocks: String,
+    transactions: String,
     review: String,
-    review_process: String,
     events_stream: String,
     events_pending: String,
-    edit: String,
-    ops: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -753,17 +735,25 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
         ),
     );
     endpoints.insert(
-        "review",
+        "blocks",
         discovery_endpoint(
             "GET",
-            "/v1/libraries/{library}/documents/{path}/review",
+            "/v1/libraries/{library}/documents/{path}/blocks",
             &api_base,
         ),
     );
     endpoints.insert(
-        "review_process",
+        "transactions",
         discovery_endpoint(
             "POST",
+            "/v1/libraries/{library}/documents/{path}/transactions",
+            &api_base,
+        ),
+    );
+    endpoints.insert(
+        "review",
+        discovery_endpoint(
+            "GET",
             "/v1/libraries/{library}/documents/{path}/review",
             &api_base,
         ),
@@ -791,22 +781,6 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
     endpoints.insert(
         "events_ack",
         discovery_endpoint("POST", "/v1/libraries/{library}/events/ack", &api_base),
-    );
-    endpoints.insert(
-        "edit",
-        discovery_endpoint(
-            "POST",
-            "/v1/libraries/{library}/documents/{path}/edit",
-            &api_base,
-        ),
-    );
-    endpoints.insert(
-        "ops",
-        discovery_endpoint(
-            "POST",
-            "/v1/libraries/{library}/documents/{path}/ops",
-            &api_base,
-        ),
     );
     endpoints.insert(
         "openapi",
@@ -839,11 +813,10 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
             capabilities: vec![
                 "presence",
                 "snapshot",
+                "blocks",
+                "transactions",
                 "review",
-                "review_process",
                 "events",
-                "block_edit",
-                "bulk_block_insert",
                 "comments",
                 "suggestions",
             ],
@@ -863,41 +836,41 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
                 "completed",
                 "error",
             ],
-            edit_operations: vec![
-                "replace_block",
-                "insert_before",
-                "insert_after",
+            transaction_operations: vec![
+                "insert_block",
                 "delete_block",
-                "replace_document",
-            ],
-            ops_operations: vec![
+                "move_block",
+                "replace_block_content",
+                "set_block_type",
+                "set_block_attrs",
+                "add_mark",
+                "remove_mark",
+                "set_link",
                 "comment.add",
                 "comment.reply",
+                "comment.resolve",
                 "comment.delete",
                 "suggestion.add",
                 "suggestion.accept",
                 "suggestion.reject",
-                "comment.resolve",
             ],
             limitations: vec![
                 "REST agent endpoints trust localhost and do not currently enforce bearer-token auth.",
                 "Invite URL tokens identify browser/collab joins and are not REST bearer tokens.",
-                "Direct block edits operate on whole Markdown blocks.",
                 "Quarry does not currently support rewrite.apply.",
             ],
             route_hints: AgentDiscoveryRouteHints {
                 presence: format!("{api_base}/libraries/{{library}}/documents/{{path}}/presence"),
                 snapshot: format!("{api_base}/libraries/{{library}}/documents/{{path}}/snapshot"),
-                review: format!("{api_base}/libraries/{{library}}/documents/{{path}}/review"),
-                review_process: format!(
-                    "{api_base}/libraries/{{library}}/documents/{{path}}/review"
+                blocks: format!("{api_base}/libraries/{{library}}/documents/{{path}}/blocks"),
+                transactions: format!(
+                    "{api_base}/libraries/{{library}}/documents/{{path}}/transactions"
                 ),
+                review: format!("{api_base}/libraries/{{library}}/documents/{{path}}/review"),
                 events_stream: format!(
                     "{api_base}/libraries/{{library}}/documents/{{path}}/events/stream"
                 ),
                 events_pending: format!("{api_base}/libraries/{{library}}/events/pending?after={{last-seen-id}}"),
-                edit: format!("{api_base}/libraries/{{library}}/documents/{{path}}/edit"),
-                ops: format!("{api_base}/libraries/{{library}}/documents/{{path}}/ops"),
             },
             endpoints,
         },
@@ -1461,142 +1434,6 @@ pub struct AgentSuggestionPreview {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct AgentReviewProcessOperation {
-    pub op: String,
-    #[serde(default, rename = "ref")]
-    pub block_ref: Option<AgentBlockRef>,
-    #[serde(default)]
-    pub block: Option<AgentEditBlock>,
-    #[serde(default)]
-    pub blocks: Option<Vec<AgentEditBlock>>,
-    #[serde(default)]
-    pub markdown: Option<String>,
-    #[serde(default)]
-    pub quote: Option<String>,
-    #[serde(default)]
-    pub body: Option<String>,
-    #[serde(default, rename = "parentId")]
-    pub parent_id: Option<String>,
-    #[serde(default)]
-    pub content: Option<String>,
-    #[serde(default)]
-    pub id: Option<String>,
-    #[serde(default, alias = "suggestionType")]
-    #[schema(value_type = Option<AgentSuggestionKind>)]
-    pub kind: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct AgentReviewProcessRequest {
-    #[serde(rename = "baseToken")]
-    pub base_token: String,
-    #[serde(default)]
-    pub by: Option<String>,
-    pub operations: Vec<AgentReviewProcessOperation>,
-}
-
-#[derive(Clone, Debug, Serialize, ToSchema)]
-pub struct AgentReviewProcessResultItem {
-    pub op: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, ToSchema)]
-pub struct AgentReviewProcessResponse {
-    #[serde(rename = "dryRun")]
-    pub dry_run: bool,
-    #[serde(rename = "nextBaseToken", skip_serializing_if = "Option::is_none")]
-    pub next_base_token: Option<String>,
-    pub results: Vec<AgentReviewProcessResultItem>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub outcomes: Vec<WriteOutcome>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub markdown: Option<String>,
-    pub review: AgentReviewResponse,
-    /// Legacy field of the deleted injection gate; never emitted (the
-    /// endpoint is quarantined and live sessions are the write path).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub injection: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-pub struct AgentEditBlock {
-    pub markdown: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentEditOperation {
-    ReplaceBlock,
-    InsertBefore,
-    InsertAfter,
-    DeleteBlock,
-    ReplaceDocument,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-pub struct AgentBlockOperation {
-    #[schema(value_type = AgentEditOperation)]
-    pub op: String,
-    #[serde(default, rename = "ref")]
-    pub block_ref: Option<AgentBlockRef>,
-    #[serde(default)]
-    pub block: Option<AgentEditBlock>,
-    #[serde(default)]
-    pub blocks: Option<Vec<AgentEditBlock>>,
-    #[serde(default)]
-    pub markdown: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-pub struct AgentEditRequest {
-    #[serde(rename = "baseToken")]
-    pub base_token: String,
-    pub operations: Vec<AgentBlockOperation>,
-}
-
-#[derive(Clone, Debug, Serialize, ToSchema)]
-pub struct AgentEditResponse {
-    #[serde(rename = "dryRun")]
-    pub dry_run: bool,
-    #[serde(rename = "nextBaseToken", skip_serializing_if = "Option::is_none")]
-    pub next_base_token: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub outcome: Option<WriteOutcome>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub markdown: Option<String>,
-    /// Legacy field of the deleted injection gate; never emitted (the
-    /// endpoint is quarantined and live sessions are the write path).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub injection: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-pub enum AgentOpsOperation {
-    #[serde(rename = "comment.add")]
-    CommentAdd,
-    #[serde(rename = "comment.reply")]
-    CommentReply,
-    #[serde(rename = "comment.delete")]
-    CommentDelete,
-    #[serde(rename = "suggestion.add")]
-    SuggestionAdd,
-    #[serde(rename = "suggestion.accept")]
-    SuggestionAccept,
-    #[serde(rename = "suggestion.reject")]
-    SuggestionReject,
-    #[serde(rename = "comment.resolve")]
-    CommentResolve,
-    #[serde(rename = "accept")]
-    Accept,
-    #[serde(rename = "reject")]
-    Reject,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentSuggestionKind {
     Insert,
@@ -1604,63 +1441,6 @@ pub enum AgentSuggestionKind {
     Remove,
     Replace,
     Substitution,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct AgentOpsOperationRequest {
-    #[schema(value_type = AgentOpsOperation)]
-    pub op: String,
-    #[serde(default, rename = "ref")]
-    pub block_ref: Option<AgentBlockRef>,
-    #[serde(default)]
-    pub quote: Option<String>,
-    #[serde(default)]
-    pub body: Option<String>,
-    #[serde(default, rename = "parentId")]
-    pub parent_id: Option<String>,
-    #[serde(default)]
-    pub content: Option<String>,
-    #[serde(default)]
-    pub id: Option<String>,
-    #[serde(default, alias = "suggestionType")]
-    #[schema(value_type = Option<AgentSuggestionKind>)]
-    pub kind: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct AgentOpsRequest {
-    #[serde(rename = "baseToken")]
-    pub base_token: String,
-    #[serde(default)]
-    pub by: Option<String>,
-    pub operations: Vec<AgentOpsOperationRequest>,
-}
-
-#[derive(Clone, Debug, Serialize, ToSchema)]
-pub struct AgentOpsResultItem {
-    #[schema(value_type = AgentOpsOperation)]
-    pub op: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, ToSchema)]
-pub struct AgentOpsResponse {
-    #[serde(rename = "dryRun")]
-    pub dry_run: bool,
-    #[serde(rename = "nextBaseToken", skip_serializing_if = "Option::is_none")]
-    pub next_base_token: Option<String>,
-    pub results: Vec<AgentOpsResultItem>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub outcome: Option<WriteOutcome>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub markdown: Option<String>,
-    /// Legacy field of the deleted injection gate; never emitted (the
-    /// endpoint is quarantined and live sessions are the write path).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub injection: Option<String>,
 }
 
 #[utoipa::path(
@@ -2235,34 +2015,15 @@ async fn post_document_action(
         return json_response(StatusCode::CREATED, &token);
     }
 
-    // Phase 3 quarantine (with `/edit` and `/ops` below): the review-process
-    // facade forwarded the whole legacy mutation vocabulary; edits and
-    // review ops both live on `POST .../transactions` now. GET `/review`
-    // (the read projection) is unaffected.
-    if let Some(path) = path.strip_suffix("/review") {
-        return Ok(gateway::legacy_endpoint_quarantined(
-            &library, path, "/review",
-        ));
-    }
-
     if let Some((_, token_id)) = collab_invite_revoke_path(&path) {
         let token = state.store.revoke_collab_invite_token(token_id).await?;
         return json_response(StatusCode::OK, &token);
     }
 
-    // Phase 3 quarantine: the legacy `/edit` and `/ops` mutation facades are
-    // gone for block documents (every Markdown document). They rode the
-    // deleted injection gate; `POST .../transactions` is the single mutation
-    // contract. Full route deletion is Phase 7.
-    if let Some(path) = path.strip_suffix("/edit") {
-        return Ok(gateway::legacy_endpoint_quarantined(
-            &library, path, "/edit",
-        ));
-    }
-
-    if let Some(path) = path.strip_suffix("/ops") {
-        return Ok(gateway::legacy_endpoint_quarantined(&library, path, "/ops"));
-    }
+    // The legacy `/edit`, `/ops`, and `POST /review` mutation facades are
+    // deleted (Phase 7): they fall through to the 404 below like any unknown
+    // route. `POST .../transactions` is the single mutation contract;
+    // GET `/review` (the read projection) is unaffected.
 
     if let Some(path) = path.strip_suffix("/presence") {
         let request: AgentPresenceRequest = serde_json::from_value(request).map_err(|error| {
@@ -2278,20 +2039,6 @@ async fn post_document_action(
 
     Err(QuarryError::NotFound(path).into())
 }
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/documents/{path}/edit",
-    description = "Quarantined legacy endpoint: always responds 410 with the \
-        typed code `UNSUPPORTED_LEGACY_ENDPOINT`. Use \
-        `POST /v1/libraries/{library}/documents/{path}/transactions` for \
-        block edits. The route is deleted entirely in a later phase.",
-    params(("library" = String, Path), ("path" = String, Path)),
-    request_body = AgentEditRequest,
-    responses((status = 410, body = gateway::BlockTransactionError))
-)]
-#[allow(dead_code)]
-async fn document_edit_openapi() {}
 
 #[utoipa::path(
     get,
@@ -2311,68 +2058,6 @@ async fn agent_presence_list_openapi() {}
 )]
 #[allow(dead_code)]
 async fn agent_presence_openapi() {}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/documents/{path}/ops",
-    description = "Quarantined legacy endpoint: always responds 410 with the \
-        typed code `UNSUPPORTED_LEGACY_ENDPOINT`. Use \
-        `POST /v1/libraries/{library}/documents/{path}/transactions` for \
-        review and block operations. The route is deleted entirely in a \
-        later phase.",
-    params(("library" = String, Path), ("path" = String, Path)),
-    request_body = AgentOpsRequest,
-    responses((status = 410, body = gateway::BlockTransactionError))
-)]
-#[allow(dead_code)]
-async fn document_ops_openapi() {}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/documents/{path}/review",
-    description = "Quarantined legacy endpoint: always responds 410 with the \
-        typed code `UNSUPPORTED_LEGACY_ENDPOINT`. Use \
-        `POST /v1/libraries/{library}/documents/{path}/transactions` for \
-        edits and review operations; `GET .../review` (the read projection) \
-        is unaffected. The route is deleted entirely in a later phase.",
-    params(("library" = String, Path), ("path" = String, Path)),
-    request_body = AgentReviewProcessRequest,
-    responses((status = 410, body = gateway::BlockTransactionError))
-)]
-#[allow(dead_code)]
-async fn document_review_process_openapi() {}
-
-/// Legacy edit planning kept only for the review-process facade; the ops
-/// bookkeeping fed the deleted injection gate. Phase 7 deletes it wholesale.
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-struct AgentEditPlan {
-    markdown: String,
-    blocks: Vec<String>,
-    ops: Vec<PlannedAgentEditOp>,
-    original_blocks: Vec<String>,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-enum PlannedAgentEditOp {
-    ReplaceDocument,
-    ReplaceBlock {
-        ordinal: usize,
-        markdown: String,
-    },
-    InsertBefore {
-        ordinal: usize,
-        markdown_blocks: Vec<String>,
-    },
-    InsertAfter {
-        ordinal: usize,
-        markdown_blocks: Vec<String>,
-    },
-    DeleteBlock {
-        ordinal: usize,
-    },
-}
 
 // `ReviewMeta` / `ReviewMetaEntry` and the endmatter readers now live in
 // `quarry_collab_codec::review` (single-sourced with the slate conversion that

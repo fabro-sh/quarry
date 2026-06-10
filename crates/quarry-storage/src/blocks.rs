@@ -18,12 +18,16 @@
 //! re-imported. An imported empty body is canonicalized to one empty
 //! paragraph row so "zero rows" always means "no projection". Document moves
 //! keep the projection (rows are keyed by document id and content does not
-//! change). Since Phase 4, every Markdown writer (REST PUT, Git, FUSE, CLI)
-//! reconciles through [`BlockMarkdownWriter`] and metadata patches commit
-//! through the gateway with a metadata override — the clearing path remains
-//! for raw documents, staged-transaction commits, version restores, and any
-//! direct `put_document`/`patch_metadata` caller that bypasses the server
-//! routes.
+//! change). Since Phase 4, every Markdown writer (REST PUT, Git, FUSE, CLI,
+//! version restores, Git conflict siblings) reconciles through
+//! [`BlockMarkdownWriter`] and metadata patches commit through the gateway
+//! with a metadata override — the clearing path remains for raw documents,
+//! staged-transaction commits, and any direct `put_document`/`patch_metadata`
+//! caller that bypasses the server routes. Staged commits stay on the byte
+//! path deliberately: the explicit transaction API publishes pre-staged
+//! versions for MANY paths atomically in one SQL transaction, which cannot
+//! ride the per-document gateway dispatch — a recorded limitation (see the
+//! README), not an oversight.
 //!
 //! `block_shadow_bases` holds the Phase 4 diff3 bases (currently Git peer
 //! bases; FUSE bases are per-open-handle in memory, the CLI is two-way);

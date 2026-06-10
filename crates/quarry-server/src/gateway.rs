@@ -179,7 +179,6 @@ pub(crate) enum GatewayErrorCode {
     UnsupportedMarkdown,
     InvalidTransaction,
     UnsupportedBlockDocument,
-    UnsupportedLegacyEndpoint,
 }
 
 impl GatewayErrorCode {
@@ -194,7 +193,6 @@ impl GatewayErrorCode {
             Self::UnsupportedMarkdown => "UNSUPPORTED_MARKDOWN",
             Self::InvalidTransaction => "INVALID_TRANSACTION",
             Self::UnsupportedBlockDocument => "UNSUPPORTED_BLOCK_DOCUMENT",
-            Self::UnsupportedLegacyEndpoint => "UNSUPPORTED_LEGACY_ENDPOINT",
         }
     }
 
@@ -211,7 +209,6 @@ impl GatewayErrorCode {
             | Self::SuggestionAlreadyResolved
             | Self::UnsupportedMarkdown
             | Self::UnsupportedBlockDocument => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::UnsupportedLegacyEndpoint => StatusCode::GONE,
         }
     }
 }
@@ -303,20 +300,6 @@ pub(crate) fn gateway_reply(
         Err(GatewayFailure::Typed(error)) => Ok(error.into_response()),
         Err(GatewayFailure::Api(error)) => Err(error),
     }
-}
-
-/// The legacy `/edit` and `/ops` mutation facades are quarantined for block
-/// documents (Phase 3): they used the deleted injection gate and a second
-/// mutation vocabulary. Full route deletion is Phase 7.
-pub(crate) fn legacy_endpoint_quarantined(library: &str, path: &str, endpoint: &str) -> Response {
-    GatewayError::new(
-        GatewayErrorCode::UnsupportedLegacyEndpoint,
-        format!(
-            "the {endpoint} endpoint was removed; use \
-             POST /v1/libraries/{library}/documents/{path}/transactions"
-        ),
-    )
-    .into_response()
 }
 
 // ---------------------------------------------------------------------------

@@ -63,7 +63,7 @@ Document path: ${path}
    {"status":"reading","by":"<agent name>"}
 
 2. Read the current document.
-   Prefer GET ${documentApi}/snapshot
+   Prefer GET ${documentApi}/blocks (stable block_ids plus the current document_clock)
    Fallback GET ${documentApi}
 
 3. After reading, reply to the user with exactly this shape:
@@ -74,10 +74,9 @@ Document path: ${path}
 4. While working, monitor document activity.
    Prefer GET ${documentApi}/events/stream
    If you cannot keep a stream open, poll GET ${libraryApi}/events/pending?after=<last-seen-id>.
-   When an event arrives, refresh the snapshot before replying or editing.
+   When an event arrives, re-read the block tree before replying or editing.
 
 5. Do not edit until the user gives further instructions.
-   Read the canonical block tree first: GET ${documentApi}/blocks returns stable block_ids plus the current document_clock.
    For every edit and review operation, POST ${documentApi}/transactions with {"client_tx_id":"<unique-id>","base_clock":"<document_clock>","actor":{"kind":"agent","id":"<agent-id>"},"ops":[...]}.
    Ops: insert_block, delete_block, move_block, replace_block_content, set_block_attrs, mark/link ops, comment.add, comment.reply, comment.resolve, comment.delete, suggestion.add, suggestion.accept, suggestion.reject.
    To read existing comments, suggestions, and merge conflicts, GET ${documentApi}/review.

@@ -40,9 +40,7 @@ describe('agent invite helpers', () => {
     expect(prompt).toContain(
       'POST http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md/presence'
     );
-    expect(prompt).toContain(
-      'GET http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md/snapshot'
-    );
+    expect(prompt).not.toContain('/snapshot');
     expect(prompt).toContain(
       'Connected in Quarry and ready.\n   <one-sentence summary of the document>'
     );
