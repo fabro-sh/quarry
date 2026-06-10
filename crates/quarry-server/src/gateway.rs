@@ -851,12 +851,44 @@ struct ApplyContext {
     document_id: String,
     author: String,
     now: String,
+    minted: DeterministicIds,
+}
+
+/// Ids the apply engine mints (inserted blocks without a caller id, review
+/// items, the re-minted empty paragraph) derive deterministically from the
+/// transaction's `client_tx_id` plus a counter: re-running the SAME
+/// transaction's ops mints the SAME ids. This makes a session-mode retry
+/// after a failed commit unable to silently duplicate inserted content —
+/// the deterministic id collides with the first application and the op
+/// fails with a typed error instead.
+struct DeterministicIds {
+    seed: String,
+    next: u32,
+}
+
+impl DeterministicIds {
+    fn new(client_tx_id: &str) -> Self {
+        Self {
+            seed: client_tx_id.to_string(),
+            next: 0,
+        }
+    }
+
+    fn mint(&mut self) -> String {
+        let counter = self.next;
+        self.next += 1;
+        let hash = blake3::hash(format!("{}\0{counter}", self.seed).as_bytes());
+        Uuid::from_slice(&hash.as_bytes()[..16])
+            .expect("16 hash bytes always form a uuid")
+            .to_string()
+    }
 }
 
 fn apply_ops(
     state: &BlockMutationState,
     ops: &[BlockOp],
     actor: &BlockTransactionActor,
+    client_tx_id: &str,
 ) -> Result<ApplyResult, GatewayError> {
     let mut ctx = ApplyContext {
         model: DocModel::from_rows(&state.rows),
@@ -865,6 +897,7 @@ fn apply_ops(
         document_id: state.document_id.clone(),
         author: actor.display(),
         now: now_timestamp(),
+        minted: DeterministicIds::new(client_tx_id),
     };
     for op in ops {
         apply_op(&mut ctx, op)?;
@@ -877,7 +910,7 @@ fn apply_ops(
         .get(&None)
         .is_none_or(|top| top.is_empty())
     {
-        let block_id = Uuid::new_v4().to_string();
+        let block_id = ctx.minted.mint();
         ctx.model.blocks.insert(
             block_id.clone(),
             ModelBlock {
@@ -912,17 +945,21 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
             links,
         } => {
             let block_id = match block_id {
-                Some(id) if ctx.model.blocks.contains_key(id) => {
-                    return Err(GatewayError::invalid(format!(
-                        "block {id} already exists in this document"
-                    )));
-                }
                 Some(id) if id.trim().is_empty() => {
                     return Err(GatewayError::invalid("block_id must not be empty"));
                 }
                 Some(id) => id.clone(),
-                None => Uuid::new_v4().to_string(),
+                None => ctx.minted.mint(),
             };
+            // Caller-supplied AND minted ids collide here: minted ids are
+            // deterministic per (client_tx_id, op), so a retried transaction
+            // whose first application already reached the doc fails typed
+            // instead of silently duplicating the inserted block.
+            if ctx.model.blocks.contains_key(&block_id) {
+                return Err(GatewayError::invalid(format!(
+                    "block {block_id} already exists in this document"
+                )));
+            }
             if let Some(parent) = parent_block_id {
                 if !ctx.model.blocks.contains_key(parent) {
                     return Err(GatewayError::block_deleted(parent));
@@ -1149,8 +1186,10 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
                 .find(|item| item.id == root_id)
                 .ok_or_else(|| anchor_not_found(&root_id))?
                 .clone();
+            let reply_id = ctx.minted.mint();
+            require_unused_item_id(ctx, &reply_id)?;
             ctx.items.push(BlockReviewItem {
-                id: Uuid::new_v4().to_string(),
+                id: reply_id,
                 document_id: ctx.document_id.clone(),
                 block_id: root.block_id,
                 kind: BlockReviewKind::Comment,
@@ -1368,7 +1407,8 @@ fn add_review_item(
     }
     validate_span(&block.text, start, end)?;
     let quote = quote.unwrap_or_else(|| utf16_slice(&block.text, start, end));
-    let id = Uuid::new_v4().to_string();
+    let id = ctx.minted.mint();
+    require_unused_item_id(ctx, &id)?;
     ctx.items.push(BlockReviewItem {
         id: id.clone(),
         document_id: ctx.document_id.clone(),
@@ -1388,6 +1428,18 @@ fn add_review_item(
         updated_at: ctx.now.clone(),
     });
     Ok(id)
+}
+
+/// Minted review-item ids are deterministic per transaction (see
+/// [`DeterministicIds`]); a retried transaction whose first application
+/// already reached the doc collides here instead of duplicating the item.
+fn require_unused_item_id(ctx: &ApplyContext, id: &str) -> Result<(), GatewayError> {
+    if ctx.items.iter().any(|item| item.id == id) {
+        return Err(GatewayError::invalid(format!(
+            "review item {id} already exists in this document"
+        )));
+    }
+    Ok(())
 }
 
 fn require_block_mut<'a>(
@@ -1716,7 +1768,12 @@ async fn apply_rows_transaction(
         }
         require_block_document(&snapshot.path, &snapshot.content_type)?;
         let status = transaction_status(&request.base_clock, &snapshot)?;
-        let applied = apply_ops(&snapshot, &request.ops, &request.actor)?;
+        let applied = apply_ops(
+            &snapshot,
+            &request.ops,
+            &request.actor,
+            &request.client_tx_id,
+        )?;
         let commit = BlockMutationCommit {
             document_id: snapshot.document_id.clone(),
             expected_head_version_id: snapshot.head_version_id.clone(),
@@ -1811,7 +1868,12 @@ async fn apply_session_transaction(
         //    session is the source of truth while it lives).
         let mut session_snapshot = snapshot.clone();
         session_snapshot.review_items = session.items_snapshot();
-        let applied = apply_ops(&session_snapshot, &request.ops, &request.actor)?;
+        let applied = apply_ops(
+            &session_snapshot,
+            &request.ops,
+            &request.actor,
+            &request.client_tx_id,
+        )?;
 
         // 3. Write the change into the live doc as a collaborator.
         let pre = crate::session::doc_image(&session_snapshot.rows, &session_snapshot.review_items)
@@ -1856,11 +1918,16 @@ async fn apply_session_transaction(
                 return Ok(json_with_etag(StatusCode::OK, &ack, &ack.document_clock)?);
             }
             Ok(BlockMutationOutcome::Replayed(record)) => return replay_response(&record),
-            // An external legacy write raced the session; reload and retry.
-            // The doc already carries this transaction's edits, so the retry
-            // flushes them via the step-1 checkpoint and replays the ops...
-            // which would double-apply. Instead, surface busy: the client
-            // retries with a fresh clock and idempotency replays cleanly.
+            // An external legacy write raced the session between the step-1
+            // flush and this commit. The live doc already carries this
+            // transaction's edits but nothing was committed (so there is no
+            // replay record yet). Surface Busy: a client retry re-runs the
+            // ops against the flushed state — idempotent for replaces, and
+            // safe for inserts because minted ids are deterministic per
+            // (client_tx_id, op): a re-insert collides with the first
+            // application's block and fails typed instead of duplicating.
+            // Phase 4 routes external whole-file writes through the gateway
+            // and removes the trigger.
             Err(QuarryError::PreconditionFailed(detail)) => {
                 return Err(GatewayFailure::Api(QuarryError::Busy(detail).into()));
             }
@@ -2122,6 +2189,71 @@ mod tests {
         serde_json::from_value(value).expect("test op must parse")
     }
 
+    /// A session-mode retry after a failed commit re-runs the same ops; the
+    /// engine must mint the SAME ids so re-application cannot silently
+    /// duplicate inserted content (it collides and fails typed instead).
+    #[test]
+    fn minted_ids_are_deterministic_per_client_tx_id_so_retries_cannot_duplicate() {
+        let rows = vec![BlockRow {
+            block_id: "b1".to_string(),
+            parent_block_id: None,
+            position: 0,
+            block_type: "p".to_string(),
+            attrs: Attrs::new(),
+            text: "Existing.".to_string(),
+            marks: Vec::new(),
+            links: Vec::new(),
+        }];
+        let ops = [
+            op(json!({"op": "insert_block", "position": 1, "block_type": "p", "text": "New."})),
+            op(json!({"op": "comment.add", "block_id": "b1", "start": 0, "end": 8, "body": "hi"})),
+        ];
+        let state = state_with_rows(rows);
+
+        let first = apply_ops(&state, &ops, &actor(), "tx-deterministic").unwrap();
+        let second = apply_ops(&state, &ops, &actor(), "tx-deterministic").unwrap();
+        assert_eq!(first.rows, second.rows);
+        assert_eq!(first.review_items, second.review_items);
+
+        // A DIFFERENT transaction mints different ids.
+        let other = apply_ops(&state, &ops, &actor(), "tx-other").unwrap();
+        assert_ne!(first.changed_block_ids, other.changed_block_ids);
+
+        // Re-applying the same transaction against its own post-state (the
+        // failed-commit retry shape) collides instead of duplicating.
+        let mut post = state_with_rows(first.rows.clone());
+        post.review_items = first.review_items.clone();
+        let inserted_id = first
+            .rows
+            .iter()
+            .find(|row| row.text == "New.")
+            .unwrap()
+            .block_id
+            .clone();
+        let retry_ops = [op(json!({
+            "op": "insert_block",
+            "position": 1,
+            "block_type": "p",
+            "text": "New."
+        }))];
+        let error = apply_ops(&post, &retry_ops, &actor(), "tx-deterministic").unwrap_err();
+        assert_eq!(error.code, GatewayErrorCode::InvalidTransaction);
+        assert!(error.message.contains(&inserted_id));
+
+        // Review items collide the same way: a comment-only transaction
+        // retried against its own post-state re-mints the same item id.
+        let comment_ops = [op(json!({
+            "op": "comment.add", "block_id": "b1", "start": 0, "end": 8, "body": "hi"
+        }))];
+        let commented = apply_ops(&state, &comment_ops, &actor(), "tx-comment-only").unwrap();
+        let mut commented_post = state_with_rows(commented.rows.clone());
+        commented_post.review_items = commented.review_items.clone();
+        let error =
+            apply_ops(&commented_post, &comment_ops, &actor(), "tx-comment-only").unwrap_err();
+        assert_eq!(error.code, GatewayErrorCode::InvalidTransaction);
+        assert!(error.message.contains(&commented.review_items[0].id));
+    }
+
     #[test]
     fn diff_of_pure_insertion_is_collapsed_at_the_insertion_point() {
         let diff = utf16_text_diff("Hello world", "Hello brave world");
@@ -2266,6 +2398,7 @@ mod tests {
                 "position": 0
             }))],
             &actor(),
+            "test-tx",
         )
         .unwrap_err();
         assert_eq!(error.code, GatewayErrorCode::BlockMoveConflict);
@@ -2279,6 +2412,7 @@ mod tests {
             &state,
             &[op(json!({"op": "delete_block", "block_id": "only"}))],
             &actor(),
+            "test-tx",
         )
         .unwrap();
         assert_eq!(applied.rows.len(), 1);
@@ -2303,6 +2437,7 @@ mod tests {
                 "text": "again"
             }))],
             &actor(),
+            "test-tx",
         )
         .unwrap_err();
         assert_eq!(error.code, GatewayErrorCode::InvalidTransaction);
@@ -2332,6 +2467,7 @@ mod tests {
                 "text": "bold replaced-middle tail"
             }))],
             &actor(),
+            "test-tx",
         )
         .unwrap();
         let shape: Vec<(u32, u32)> = applied.rows[0]
@@ -2408,6 +2544,7 @@ mod tests {
                 "attrs": {"note": "markdown key missing"}
             }))],
             &actor(),
+            "test-tx",
         )
         .unwrap_err();
         assert_eq!(error.code, GatewayErrorCode::InvalidTransaction);
@@ -2425,6 +2562,7 @@ mod tests {
                 "attrs": {"markdown": ""}
             }))],
             &actor(),
+            "test-tx",
         )
         .unwrap_err();
         assert_eq!(error.code, GatewayErrorCode::InvalidTransaction);
@@ -2442,6 +2580,7 @@ mod tests {
                 "attrs": {"markdown": "<div>kept</div>"}
             }))],
             &actor(),
+            "test-tx",
         )
         .unwrap();
         assert_eq!(applied.rows[1].block_type, "raw_markdown");
