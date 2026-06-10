@@ -21,6 +21,21 @@
 //! - The LAST subscriber leaving runs a final checkpoint and discards the
 //!   doc. Nothing CRDT-shaped is ever stored.
 //!
+//! ## Checkpoint acks (the browser's save state)
+//!
+//! Every durable commit of the session doc — debounced checkpoint, final
+//! checkpoint, or session-mode gateway transaction — broadcasts a
+//! [`MSG_QUARRY_CHECKPOINT`] frame carrying the committed doc state as a
+//! v1-encoded Yjs snapshot, and each new subscriber receives the current one
+//! on join. The browser compares the acked snapshot against its local doc:
+//! equality means everything it displays is canonical (`Saved`); anything
+//! beyond the ack means a commit is still owed (`Saving…`). The snapshot is
+//! captured under the doc write lock at projection/commit time, so the ack
+//! can never claim coverage of state the commit did not contain — and a
+//! persistently failing checkpoint simply never acks, which the browser
+//! reports honestly instead of pretending the content is safe. The browser
+//! half lives in `ui/src/features/collab/rust-ws-provider.ts`.
+//!
 //! ## The mode switch
 //!
 //! [`SessionHub::lock_document`] hands out the per-document async mutex that
@@ -117,6 +132,14 @@ pub(crate) const CHECKPOINT_DEBOUNCE: Duration = Duration::from_millis(2_000);
 const CHECKPOINT_RETRY_LIMIT: usize = 5;
 /// The review-map root shared with the browser (`review-doc.ts`).
 pub(crate) const REVIEW_ROOT: &str = "review";
+
+/// Top-level websocket message type for checkpoint-ack frames, outside the
+/// y-protocols range (0–3). Payload: one var-length buffer carrying the
+/// committed doc state as a v1-encoded Yjs snapshot (state vector + delete
+/// set). Sent point-to-point to each new subscriber on join and broadcast
+/// after every durable commit; the browser's save state derives from
+/// comparing it against the local doc (`rust-ws-provider.ts`).
+pub const MSG_QUARRY_CHECKPOINT: u8 = 113;
 
 type AwarenessRef = Arc<RwLock<Awareness>>;
 
@@ -338,6 +361,9 @@ pub(crate) struct LiveSession {
     /// The head version the next checkpoint expects (last committed by this
     /// session, or the seed head).
     head_version_id: StdMutex<String>,
+    /// The committed doc state as a v1-encoded snapshot (seed or last
+    /// commit), served to new subscribers and broadcast on every commit.
+    committed_snapshot: StdMutex<Vec<u8>>,
     last_outcome: StdMutex<Option<WriteOutcome>>,
     /// The full review item set as of the last seed/checkpoint/transaction.
     items: StdMutex<HashMap<String, BlockReviewItem>>,
@@ -387,6 +413,7 @@ impl LiveSession {
             let review = txn.get_or_insert_map(REVIEW_ROOT);
             write_review_meta_to_map(&mut txn, &review, &meta);
         }
+        let committed_snapshot = doc.transact().snapshot().encode_v1();
 
         let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
         let (broadcast_tx, _broadcast_keepalive) = broadcast::channel(64);
@@ -445,6 +472,7 @@ impl LiveSession {
             update_seq,
             checkpointed_seq: AtomicU64::new(0),
             head_version_id: StdMutex::new(seed.head_version_id.clone()),
+            committed_snapshot: StdMutex::new(committed_snapshot),
             last_outcome: StdMutex::new(None),
             items: StdMutex::new(items),
             subscribers: AtomicUsize::new(0),
@@ -499,6 +527,20 @@ impl LiveSession {
         self.broadcast_tx.subscribe()
     }
 
+    /// The checkpoint-ack frame for the current committed state, sent to
+    /// each new subscriber on join.
+    pub(crate) fn committed_ack_frame(&self) -> Vec<u8> {
+        checkpoint_ack_frame(&self.committed_snapshot.lock().unwrap())
+    }
+
+    /// Records a durable commit's doc snapshot and broadcasts its ack frame
+    /// (after the commit's own doc updates, so clients apply state first).
+    fn record_committed_snapshot(&self, snapshot: Vec<u8>) {
+        let frame = checkpoint_ack_frame(&snapshot);
+        *self.committed_snapshot.lock().unwrap() = snapshot;
+        let _ = self.broadcast_tx.send(frame);
+    }
+
     pub(crate) fn last_outcome(&self) -> Option<WriteOutcome> {
         self.last_outcome.lock().unwrap().clone()
     }
@@ -539,6 +581,7 @@ impl LiveSession {
     ) -> Result<WriteOutcome, QuarryError> {
         let seq = self.update_seq.load(Ordering::SeqCst);
         let (projection, meta) = self.project_locked(awareness)?;
+        let snapshot = awareness.doc().transact().snapshot().encode_v1();
         let prior_items = self.items.lock().unwrap().clone();
         let now = now_timestamp();
         let items =
@@ -604,6 +647,7 @@ impl LiveSession {
                     *self.head_version_id.lock().unwrap() = outcome.version.id.clone();
                     *self.items.lock().unwrap() = items;
                     *self.last_outcome.lock().unwrap() = Some((*outcome).clone());
+                    self.record_committed_snapshot(snapshot);
                     tracing::debug!(
                         event = "collab.session.checkpointed",
                         document_id = %self.document_id,
@@ -683,8 +727,13 @@ impl LiveSession {
 
     /// Marks the current doc state as covered by `outcome` (used by the
     /// gateway after committing a session-mode transaction while holding the
-    /// awareness write lock).
-    pub(crate) fn mark_committed(&self, outcome: &WriteOutcome, items: &[BlockReviewItem]) {
+    /// awareness write lock) and broadcasts the covering checkpoint ack.
+    pub(crate) fn mark_committed(
+        &self,
+        awareness: &Awareness,
+        outcome: &WriteOutcome,
+        items: &[BlockReviewItem],
+    ) {
         self.checkpointed_seq
             .store(self.update_seq.load(Ordering::SeqCst), Ordering::SeqCst);
         *self.head_version_id.lock().unwrap() = outcome.version.id.clone();
@@ -693,7 +742,17 @@ impl LiveSession {
             .map(|item| (item.id.clone(), item.clone()))
             .collect();
         *self.last_outcome.lock().unwrap() = Some(outcome.clone());
+        self.record_committed_snapshot(awareness.doc().transact().snapshot().encode_v1());
     }
+}
+
+/// Encodes one checkpoint-ack frame: `MSG_QUARRY_CHECKPOINT` + the
+/// v1-encoded snapshot as a var-length buffer.
+fn checkpoint_ack_frame(snapshot: &[u8]) -> Vec<u8> {
+    let mut encoder = EncoderV1::new();
+    encoder.write_var(MSG_QUARRY_CHECKPOINT);
+    encoder.write_buf(snapshot);
+    encoder.to_vec()
 }
 
 fn session_projection_error(error: Unsupported) -> QuarryError {

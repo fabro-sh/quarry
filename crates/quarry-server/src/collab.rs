@@ -39,9 +39,18 @@ pub(crate) async fn serve_session_socket(
     let sink = Arc::new(Mutex::new(AxumSink::from(sink)));
     let stream = AxumStream::from(stream);
 
+    // Subscribe before sending the join-time checkpoint ack so no commit
+    // lands in the gap: the initial frame covers everything before the
+    // subscription, the broadcast covers everything after.
+    let receiver = session.subscribe_broadcast();
+    sink.lock()
+        .await
+        .send(session.committed_ack_frame())
+        .await?;
+
     let sink_task: JoinHandle<Result<(), Error>> = {
         let sink = sink.clone();
-        let mut receiver = session.subscribe_broadcast();
+        let mut receiver = receiver;
         let document_id = session.document_id.clone();
         let collab_session_id = collab_session_id.to_string();
         tokio::spawn(async move {

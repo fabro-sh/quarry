@@ -2140,7 +2140,7 @@ async fn apply_session_transaction(
     };
     match state.store.commit_block_mutation(library, commit).await {
         Ok(BlockMutationOutcome::Applied { outcome, record }) => {
-            session.mark_committed(&outcome, &applied.review_items);
+            session.mark_committed(&awareness, &outcome, &applied.review_items);
             Ok(TransactionReply::Committed(CommittedTransaction {
                 status,
                 outcome,

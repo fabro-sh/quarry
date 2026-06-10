@@ -4377,6 +4377,115 @@ async fn session_seeds_from_rows_and_final_checkpoint_persists_typing() {
     server.abort();
 }
 
+/// Phase 5 checkpoint-ack protocol: a custom `MSG_QUARRY_CHECKPOINT` frame
+/// carrying the committed doc snapshot is sent to each new subscriber on
+/// join and broadcast after every durable commit (debounced checkpoint or
+/// session-mode transaction). A client compares the acked snapshot against
+/// its own doc — equality means "everything I see is canonical" (`Saved`).
+#[tokio::test]
+async fn checkpoint_commits_broadcast_snapshot_ack_frames() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "Ack target.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+
+    // Join: the seed's committed snapshot arrives as the first ack frame and
+    // matches the synced client doc exactly (clean session = Saved).
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/{document_id}"))
+            .await
+            .unwrap();
+    let doc = empty_yjs_doc();
+    socket
+        .send(TungsteniteMessage::Binary(
+            YMessage::Sync(SyncMessage::SyncStep1(doc.transact().state_vector()))
+                .encode_v1()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let seed_ack = next_checkpoint_ack(&mut socket, &doc).await;
+    wait_for_yjs_plain_text(&mut socket, &doc, "Ack target.").await;
+    assert_eq!(
+        decode_snapshot(&seed_ack),
+        doc.transact().snapshot(),
+        "the join ack covers the seeded state"
+    );
+
+    // Typing makes the local doc run ahead of the last ack (Saving…); the
+    // debounced checkpoint commits and broadcasts a new ack that covers it.
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.insert(txn, 11, " Typed.");
+    })
+    .await;
+    assert_ne!(decode_snapshot(&seed_ack), doc.transact().snapshot());
+    let checkpoint_ack = next_checkpoint_ack(&mut socket, &doc).await;
+    assert_eq!(decode_snapshot(&checkpoint_ack), doc.transact().snapshot());
+    assert_eq!(
+        get_document_markdown(&app, "live.md").await,
+        "Ack target. Typed.\n"
+    );
+
+    // A session-mode transaction commits before acking and broadcasts the
+    // covering snapshot the same way (its doc update precedes the ack).
+    commit_block_transaction(
+        &app,
+        "live.md",
+        block_tx(
+            "tx-ack",
+            serde_json::json!([{
+                "op": "insert_block",
+                "position": 1,
+                "block_type": "p",
+                "text": "Agent block."
+            }]),
+        ),
+    )
+    .await;
+    let transaction_ack = next_checkpoint_ack(&mut socket, &doc).await;
+    assert_eq!(decode_snapshot(&transaction_ack), doc.transact().snapshot());
+    assert!(yjs_plain_text(&doc).contains("Agent block."));
+
+    socket.close(None).await.unwrap();
+    server.abort();
+}
+
+/// Waits for the next `MSG_QUARRY_CHECKPOINT` frame, applying interleaved
+/// y-sync messages to the local doc (updates broadcast before their ack).
+async fn next_checkpoint_ack<S>(socket: &mut S, doc: &Doc) -> Vec<u8>
+where
+    S: Stream<Item = Result<TungsteniteMessage, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let message = socket.next().await.unwrap().unwrap();
+            let TungsteniteMessage::Binary(bytes) = message else {
+                continue;
+            };
+            if let Some(snapshot) = decode_checkpoint_ack_frame(bytes.as_ref()) {
+                break snapshot;
+            }
+            apply_yjs_message(doc, bytes.as_ref());
+        }
+    })
+    .await
+    .expect("no checkpoint ack frame arrived")
+}
+
+fn decode_checkpoint_ack_frame(bytes: &[u8]) -> Option<Vec<u8>> {
+    use yrs::encoding::read::Read;
+    let mut cursor = yrs::encoding::read::Cursor::new(bytes);
+    let message_type: u8 = cursor.read_var().ok()?;
+    if message_type != quarry_server::MSG_QUARRY_CHECKPOINT {
+        return None;
+    }
+    Some(cursor.read_buf().ok()?.to_vec())
+}
+
+fn decode_snapshot(bytes: &[u8]) -> yrs::Snapshot {
+    yrs::Snapshot::decode_v1(bytes).expect("ack frames carry a v1-encoded snapshot")
+}
+
 /// Resolves the nth top-level block inside an open transaction (the client
 /// doc's root must be fetched through the same txn that edits it).
 fn nth_block_text_in(txn: &mut yrs::TransactionMut<'_>, index: usize) -> XmlTextRef {

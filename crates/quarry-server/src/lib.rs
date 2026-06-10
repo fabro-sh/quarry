@@ -3,6 +3,8 @@ mod gateway;
 mod markdown_write;
 mod session;
 
+pub use session::MSG_QUARRY_CHECKPOINT;
+
 #[cfg(feature = "bundle_ui")]
 use axum::body::Body;
 use axum::body::Bytes;
