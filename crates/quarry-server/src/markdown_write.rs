@@ -165,6 +165,14 @@ async fn write_markdown_with(
         .unwrap_or("text/markdown")
         .to_string();
     gateway::require_block_document(&write.path, &content_type)?;
+    tracing::debug!(
+        event = "document.block_write.started",
+        library = %write.library,
+        path = %write.path,
+        surface = %write.surface,
+        content_bytes = write.markdown.len(),
+        "reconciled markdown write started"
+    );
 
     // First import: the document does not exist yet — every block takes a
     // fresh id through the Phase 1 import path.

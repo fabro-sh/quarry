@@ -5,8 +5,8 @@ use quarry_fuse::mount_library_with_shutdown;
 use quarry_git::{
     export_worktree, import_worktree, pull_peer, push_peer, sync_peer, GitExportOptions,
 };
-use quarry_server::{serve, serve_with_shutdown, shutdown_signal};
-use quarry_storage::{QuarryStore, StoreConfig};
+use quarry_server::{serve, serve_state_with_shutdown, shutdown_signal};
+use quarry_storage::{BlockMarkdownWrite, BlockWriteBase, DocumentKind, QuarryStore, StoreConfig};
 use serde_json::json;
 use std::fs;
 use std::net::SocketAddr;
@@ -298,6 +298,11 @@ pub async fn run() -> Result<()> {
         }
         Command::Mount(command) => {
             let store = open_at(&cli.root, None, None).await?;
+            // ONE state for the mount and the optional embedded server, so
+            // FUSE markdown writes reconcile through the same SessionHub the
+            // browsers connect to (Phase 4 mode switch).
+            let state = quarry_server::app_state(store.clone());
+            let _markdown_writer = quarry_server::install_markdown_writer(&state);
             if let Some(addr) = command.serve_addr {
                 let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
                 tokio::spawn(async move {
@@ -320,7 +325,7 @@ pub async fn run() -> Result<()> {
                         .map_err(anyhow::Error::from)
                     },
                     async {
-                        serve_with_shutdown(store, addr, server_shutdown)
+                        serve_state_with_shutdown(state.clone(), addr, server_shutdown)
                             .await
                             .map_err(anyhow::Error::from)
                     },
@@ -352,17 +357,49 @@ pub async fn run() -> Result<()> {
                 .first_or_octet_stream()
                 .essence_str()
                 .to_string();
-            let outcome = store
-                .put_document(
-                    &command.library,
-                    &command.path,
-                    bytes,
-                    json!({"content_type": content_type}),
-                    &content_type,
-                    DocumentSource::Cli,
-                    WritePrecondition::None,
-                )
-                .await?;
+            let outcome = if quarry_storage::document_kind(&command.path, &content_type)
+                == DocumentKind::BlockDocument
+            {
+                // Phase 4: markdown puts reconcile via diff3. The CLI is the
+                // two-way degenerate case — the base IS the current
+                // canonical state, so the file content applies with block
+                // ids preserved and can never conflict. The CLI process owns
+                // the database exclusively, so no live session can exist;
+                // the writer trivially runs rows-mode.
+                let state = quarry_server::app_state(store.clone());
+                let _markdown_writer = quarry_server::install_markdown_writer(&state);
+                let markdown = String::from_utf8(bytes).map_err(|_| {
+                    anyhow::anyhow!(
+                        "{} is a markdown document; put requires UTF-8 content",
+                        command.path
+                    )
+                })?;
+                store
+                    .write_block_markdown(BlockMarkdownWrite {
+                        library: command.library.clone(),
+                        path: command.path.clone(),
+                        markdown,
+                        metadata: json!({"content_type": content_type}),
+                        base: BlockWriteBase::CurrentCanonical,
+                        source: DocumentSource::Cli,
+                        surface: "cli".to_string(),
+                        actor_label: None,
+                    })
+                    .await?
+                    .outcome
+            } else {
+                store
+                    .put_document(
+                        &command.library,
+                        &command.path,
+                        bytes,
+                        json!({"content_type": content_type}),
+                        &content_type,
+                        DocumentSource::Cli,
+                        WritePrecondition::None,
+                    )
+                    .await?
+            };
             println!("{}", serde_json::to_string_pretty(&outcome)?);
             Ok(())
         }
@@ -478,6 +515,11 @@ async fn run_tx(root: &Path, command: TxCommand) -> Result<()> {
 
 async fn run_git(root: &Path, command: GitCommand) -> Result<()> {
     let store = open_at(root, None, None).await?;
+    // Markdown sync/import writes reconcile through the gateway writer
+    // (Phase 4); the CLI owns the database exclusively, so rows-mode always
+    // applies.
+    let state = quarry_server::app_state(store.clone());
+    let _markdown_writer = quarry_server::install_markdown_writer(&state);
     match command.command {
         GitSubcommand::Peer(command) => run_git_peer(&store, command).await?,
         GitSubcommand::Import { library, repo } => {

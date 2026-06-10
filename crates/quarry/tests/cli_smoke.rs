@@ -32,7 +32,8 @@ fn cli_default_debug_logs_stay_on_stderr_and_stdout_stays_payload_only() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("document.put.started"));
+    // Markdown puts route through the Phase 4 reconciled write path.
+    assert!(String::from_utf8_lossy(&output.stderr).contains("document.block_write.started"));
     let written: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(written["document"]["path"], "notes/hello.md");
 
@@ -446,4 +447,99 @@ fn wait_for_tcp(addr: std::net::SocketAddr, timeout: Duration) {
         std::thread::sleep(Duration::from_millis(20));
     }
     panic!("timed out waiting for {addr}");
+}
+
+/// Phase 4: `quarry put` for Markdown reconciles via diff3 (two-way: the CLI
+/// process owns the database, so the base is the current canonical state).
+/// Content normalizes once and round-trips; raw files keep exact bytes.
+#[test]
+fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    run_quarry(["init", root.to_str().unwrap()]);
+
+    let markdown = temp.path().join("doc.md");
+    std::fs::write(&markdown, "# Title\n\nAlpha.\n").unwrap();
+    run_quarry([
+        "--root",
+        root.to_str().unwrap(),
+        "put",
+        "notes",
+        "notes/doc.md",
+        markdown.to_str().unwrap(),
+    ]);
+    let output = quarry_command()
+        .args([
+            "--root",
+            root.to_str().unwrap(),
+            "get",
+            "notes",
+            "notes/doc.md",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "# Title\n\nAlpha.\n"
+    );
+
+    // A second put merges the edit (two-way) instead of replacing the
+    // projection.
+    std::fs::write(&markdown, "# Title\n\nAlpha, edited.\n").unwrap();
+    run_quarry([
+        "--root",
+        root.to_str().unwrap(),
+        "put",
+        "notes",
+        "notes/doc.md",
+        markdown.to_str().unwrap(),
+    ]);
+    let output = quarry_command()
+        .args([
+            "--root",
+            root.to_str().unwrap(),
+            "get",
+            "notes",
+            "notes/doc.md",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "# Title\n\nAlpha, edited.\n"
+    );
+
+    // RawDocuments bypass the block model: exact bytes back.
+    let blob = temp.path().join("blob.bin");
+    std::fs::write(&blob, [0u8, 159, 146, 150]).unwrap();
+    run_quarry([
+        "--root",
+        root.to_str().unwrap(),
+        "put",
+        "notes",
+        "assets/blob.bin",
+        blob.to_str().unwrap(),
+    ]);
+    // `get` prints lossily; verify raw byte fidelity at the store.
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let store = quarry_storage::QuarryStore::open(quarry_storage::StoreConfig {
+            db_path: root.join("quarry.db"),
+            cas_path: root.join("cas"),
+            lock_path: None,
+        })
+        .await
+        .unwrap();
+        let document = store
+            .get_document("notes", "assets/blob.bin")
+            .await
+            .unwrap();
+        assert_eq!(document.content, vec![0u8, 159, 146, 150]);
+        assert_eq!(
+            store.load_block_tree(&document.id).await.unwrap(),
+            Vec::<quarry_storage::BlockRow>::new()
+        );
+    });
 }
