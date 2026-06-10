@@ -63,7 +63,10 @@
 //! - `raw_markdown` blocks carry their source in `attrs.markdown` and have no
 //!   flat text, so text/mark/link/anchor ops against them — and
 //!   `set_block_type` to or from `raw_markdown` — are `INVALID_TRANSACTION`.
-//!   Edit raw blocks with `set_block_attrs` or replace them wholesale.
+//!   Edit raw blocks with `set_block_attrs` or replace them wholesale;
+//!   `insert_block` and `set_block_attrs` require raw_markdown attrs to
+//!   carry a non-empty string `markdown` key (attrs replace wholesale, so a
+//!   missing key would silently erase the block's content).
 //! - `set_link` replaces every link range that intersects `[start, end)`;
 //!   `url: null` just removes them. Partial overlaps are not trimmed.
 //! - `suggestion.accept` applies the stored replacement to the anchored range
@@ -902,12 +905,13 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
             }
             validate_block_type(block_type)?;
             validate_attrs(attrs)?;
-            if block_type == "raw_markdown"
-                && (!text.is_empty() || !marks.is_empty() || !links.is_empty())
-            {
-                return Err(GatewayError::invalid(
-                    "raw_markdown blocks carry no flat text, marks, or links",
-                ));
+            if block_type == "raw_markdown" {
+                if !text.is_empty() || !marks.is_empty() || !links.is_empty() {
+                    return Err(GatewayError::invalid(
+                        "raw_markdown blocks carry no flat text, marks, or links",
+                    ));
+                }
+                validate_raw_markdown_attrs(attrs)?;
             }
             validate_inline_ranges(text, marks, links)?;
             ctx.model.blocks.insert(
@@ -996,6 +1000,11 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
         BlockOp::SetBlockAttrs { block_id, attrs } => {
             validate_attrs(attrs)?;
             let block = require_block_mut(&mut ctx.model, block_id)?;
+            if block.block_type == "raw_markdown" {
+                // Attrs replace wholesale: dropping or blanking the markdown
+                // attribute would silently erase the block's content.
+                validate_raw_markdown_attrs(attrs)?;
+            }
             block.attrs = attrs.clone();
             ctx.changed.insert(block_id.clone());
             Ok(())
@@ -1433,6 +1442,18 @@ fn validate_attrs(attrs: &Attrs) -> Result<(), GatewayError> {
     if attrs.contains_key("id") {
         return Err(GatewayError::invalid(
             "attrs must not contain the reserved key \"id\"",
+        ));
+    }
+    Ok(())
+}
+
+/// A raw_markdown block's whole content lives in its `markdown` attribute;
+/// the Markdown writer emits an empty block if it is missing or blank.
+fn validate_raw_markdown_attrs(attrs: &Attrs) -> Result<(), GatewayError> {
+    let markdown = attrs.get("markdown").and_then(JsonValue::as_str);
+    if markdown.is_none_or(str::is_empty) {
+        return Err(GatewayError::invalid(
+            "raw_markdown blocks require a non-empty string markdown attribute",
         ));
     }
     Ok(())
@@ -2197,5 +2218,60 @@ mod tests {
             adjust_anchor(diff, 6, 6),
             AnchorFate::Keep(diff.prefix, diff.prefix)
         );
+    }
+
+    #[test]
+    fn set_block_attrs_on_raw_markdown_requires_the_markdown_attribute() {
+        let mut raw = paragraph("raw", 0, "");
+        raw.block_type = "raw_markdown".to_string();
+        raw.attrs
+            .insert("markdown".to_string(), json!("<div>x</div>"));
+        let state = state_with_rows(vec![raw]);
+        let error = apply_ops(
+            &state,
+            &[op(json!({
+                "op": "set_block_attrs",
+                "block_id": "raw",
+                "attrs": {"note": "markdown key missing"}
+            }))],
+            &actor(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, GatewayErrorCode::InvalidTransaction);
+    }
+
+    #[test]
+    fn insert_block_raw_markdown_requires_the_markdown_attribute() {
+        let state = state_with_rows(vec![paragraph("p1", 0, "Text")]);
+        let error = apply_ops(
+            &state,
+            &[op(json!({
+                "op": "insert_block",
+                "position": 1,
+                "block_type": "raw_markdown",
+                "attrs": {"markdown": ""}
+            }))],
+            &actor(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, GatewayErrorCode::InvalidTransaction);
+    }
+
+    #[test]
+    fn insert_block_raw_markdown_with_markdown_attr_commits() {
+        let state = state_with_rows(vec![paragraph("p1", 0, "Text")]);
+        let applied = apply_ops(
+            &state,
+            &[op(json!({
+                "op": "insert_block",
+                "position": 1,
+                "block_type": "raw_markdown",
+                "attrs": {"markdown": "<div>kept</div>"}
+            }))],
+            &actor(),
+        )
+        .unwrap();
+        assert_eq!(applied.rows[1].block_type, "raw_markdown");
+        assert_eq!(applied.rows[1].attrs["markdown"], json!("<div>kept</div>"));
     }
 }

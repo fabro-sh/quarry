@@ -8426,3 +8426,68 @@ async fn orphaned_anchor_survives_a_later_insertion_at_the_orphan_seam() {
     assert_eq!(review["comments"][0]["anchor"]["startOffset"], 7);
     assert_eq!(review["comments"][0]["anchor"]["endOffset"], 7);
 }
+
+#[tokio::test]
+async fn raw_markdown_attrs_must_keep_the_markdown_key() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "<div>\nopaque\n</div>\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    // Wholesale attrs replacement without the markdown key would silently
+    // erase the block's content; it must be rejected instead.
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-erase",
+            serde_json::json!([{
+                "op": "set_block_attrs",
+                "block_id": block_id,
+                "attrs": {"note": "markdown key missing"}
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "<div>\nopaque\n</div>\n"
+    );
+
+    // Inserting a raw block without (or with a blank) markdown attribute is
+    // rejected the same way; a valid raw insert commits with its content.
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-empty-raw",
+            serde_json::json!([{
+                "op": "insert_block",
+                "position": 1,
+                "block_type": "raw_markdown",
+                "attrs": {}
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-valid-raw",
+            serde_json::json!([{
+                "op": "insert_block",
+                "position": 1,
+                "block_type": "raw_markdown",
+                "attrs": {"markdown": "<span>kept</span>"}
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "<div>\nopaque\n</div>\n\n<span>kept</span>\n"
+    );
+}
