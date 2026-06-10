@@ -12,7 +12,7 @@ describe('Quarry Browser workspace', () => {
     window.history.pushState({}, '', '/');
   });
 
-  it('shows the autosave header for a loaded document with no manual Save button', async () => {
+  it('shows no save status or manual Save button without a live collab session', async () => {
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/v1/libraries') {

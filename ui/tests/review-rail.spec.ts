@@ -17,8 +17,14 @@ interface MockDocument {
   // Selection-driven UI (dblclick + the floating-toolbar Comment control) is
   // currently broken inside live-session editors (pre-existing slate-yjs
   // selection-sync bug, present since Phase 3 — see the Phase 5 report).
-  // Draft-comment tests opt out of collab to keep the flow covered on the
-  // same editor component minus the Yjs binding.
+  // Keyboard selection (Shift+Home) fails the same way (probed 2026-06-10),
+  // so there is no working entry point to assert in-session persistence of a
+  // human-CREATED comment thread directly. Draft-comment tests opt out of
+  // collab to keep the flow covered on the same editor component minus the
+  // Yjs binding; in-session persistence of NEW review entries is covered by
+  // the reply test (new meta entry) and the suggesting-mode typing test (new
+  // doc marks), which exercise the same store→review-map write path a
+  // created comment would take.
   collab?: boolean;
   content: string;
   id: string;

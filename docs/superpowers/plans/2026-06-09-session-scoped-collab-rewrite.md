@@ -140,12 +140,12 @@ Envelope: `{client_tx_id, base_clock?, actor{kind,id,label}, ops[]}`. Response: 
 
 **Files:** `ui/src/app/App.tsx`, `ui/src/features/editor/PlateMarkdownEditor.tsx`, `ui/src/features/collab/rust-ws-provider.ts`, `ui/src/features/collab/session-events.ts`, `ui/src/api/client.ts`, tests alongside each; delete `ui/src/features/collab/flusher-lease.ts` and its test.
 
-- [ ] Save state reduces to two inputs: websocket connection state and checkpoint ack (server confirms last checkpoint covers the client's latest update). UI states: `Saved`, `Saving…`, `Reconnecting (read-only)`.
-- [ ] Disconnect → editor read-only with indicator; reconnect → reseed from canonical state via a fresh session; no local persistence of pending updates.
-- [ ] Delete: autosave timers and draft `PUT`s, local draft storage/recovery, dirty/draft tracking, "External version available" classification in `session-events.ts`, flusher-lease machinery.
-- [ ] Remote session updates (human or gateway-collaborator) render without marking the document dirty.
-- [ ] Review UI reads anchors/states from `GET /review` rows projection, including the new conflict review items; orphaned/invalidated badges retained.
-- [ ] Update `ui/src/app/workspace.test.tsx` and editor tests for the new save-state model; delete draft-recovery tests.
+- [x] Save state reduces to two inputs: websocket connection state and checkpoint ack (server confirms last checkpoint covers the client's latest update). UI states: `Saved`, `Saving…`, `Reconnecting (read-only)`.
+- [x] Disconnect → editor read-only with indicator; reconnect → reseed from canonical state via a fresh session; no local persistence of pending updates. (Established-then-dropped AND never-opened connections both halt — the single-attempt halt hangs off `connection-close`, which fires for every close, and editor teardown destroys never-connected providers the plugin's destroy() skips. The last-known content stays visible read-only across the outage; a reachability probe remounts a fresh doc only once a connection actually establishes. Pinned by `collab-reconnect.test.tsx` and both `live-reconnect-reseed` specs.)
+- [x] Delete: autosave timers and draft `PUT`s, local draft storage/recovery, dirty/draft tracking, "External version available" classification in `session-events.ts`, flusher-lease machinery.
+- [x] Remote session updates (human or gateway-collaborator) render without marking the document dirty.
+- [x] Review UI reads anchors/states from `GET /review` rows projection, including the new conflict review items; orphaned/invalidated badges retained.
+- [x] Update `ui/src/app/workspace.test.tsx` and editor tests for the new save-state model; delete draft-recovery tests.
 
 ### Phase 6: Vertical Slice Gate
 
