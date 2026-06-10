@@ -77,10 +77,15 @@
 //!   `SUGGESTION_INVALIDATED`.
 //! - Deleting the last block re-mints the canonical empty-paragraph row (the
 //!   editor's empty-document shape); its id is listed in `changed_block_ids`.
-//! - `changed_block_ids` lists every block whose content, attrs, type, or
-//!   placement changed, plus every deleted block (including descendants) and
-//!   the block rewritten by `suggestion.accept`. Review-metadata-only ops do
-//!   not touch blocks. The list is sorted and deduplicated.
+//! - Ops apply sequentially: each op's offsets, positions, and block
+//!   references are interpreted against the document as left by the previous
+//!   ops in the same transaction, not against the pre-transaction state.
+//! - `changed_block_ids` lists every block an op directly targeted: content,
+//!   attrs, or type changes, the moved block of `move_block`, every deleted
+//!   block (including descendants), inserted blocks, and the block rewritten
+//!   by `suggestion.accept`. Siblings displaced by an insert/move/delete
+//!   (position renumbering) are NOT listed; review-metadata-only ops touch
+//!   no blocks. The list is sorted and deduplicated.
 //!
 //! ## Idempotency
 //!

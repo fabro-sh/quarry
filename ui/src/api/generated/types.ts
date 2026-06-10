@@ -309,6 +309,11 @@ export interface AgentOpsResponse {
 
 // ---------------------------------------------------------------------------
 // Block API (Phase 2 semantic mutation gateway)
+//
+// HAND-MAINTAINED: `bun run generate:api` only rewrites openapi.json; the
+// types below (including the BlockTransactionOp union, which the OpenAPI
+// schema models as an untyped object array) mirror the server payloads in
+// crates/quarry-server/src/gateway.rs and must be kept in sync by hand.
 // ---------------------------------------------------------------------------
 
 /** UTF-16 offsets into a block's flat text; `end` is exclusive. */

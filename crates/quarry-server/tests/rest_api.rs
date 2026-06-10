@@ -8491,3 +8491,183 @@ async fn raw_markdown_attrs_must_keep_the_markdown_key() {
         "<div>\nopaque\n</div>\n\n<span>kept</span>\n"
     );
 }
+
+#[tokio::test]
+async fn ops_against_raw_markdown_blocks_are_invalid_transactions() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Para.\n\n<div>\nopaque\n</div>\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    assert_eq!(tree["blocks"][1]["block_type"], "raw_markdown");
+    let para = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+    let raw = tree["blocks"][1]["block_id"].as_str().unwrap().to_string();
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-raw-text",
+            serde_json::json!([{ "op": "replace_block_content", "block_id": raw, "text": "x" }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-raw-add-mark",
+            serde_json::json!([{
+                "op": "add_mark", "block_id": raw, "start": 0, "end": 1, "marks": {"bold": true}
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-raw-remove-mark",
+            serde_json::json!([{
+                "op": "remove_mark", "block_id": raw, "start": 0, "end": 1, "marks": ["bold"]
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-raw-link",
+            serde_json::json!([{
+                "op": "set_link", "block_id": raw, "start": 0, "end": 1, "url": "https://example.com"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-raw-comment",
+            serde_json::json!([{
+                "op": "comment.add", "block_id": raw, "start": 0, "end": 1, "body": "?"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-raw-suggest",
+            serde_json::json!([{
+                "op": "suggestion.add", "block_id": raw, "start": 0, "end": 1, "replacement": "y"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    // Type changes to or from raw_markdown lose the content model; both
+    // directions are rejected.
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-from-raw",
+            serde_json::json!([{ "op": "set_block_type", "block_id": raw, "block_type": "p" }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-to-raw",
+            serde_json::json!([{
+                "op": "set_block_type", "block_id": para, "block_type": "raw_markdown"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "Para.\n\n<div>\nopaque\n</div>\n"
+    );
+}
+
+#[tokio::test]
+async fn move_block_preserves_children_and_review_anchors() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "```rust\nline one\n```\n\nAfter.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    assert_eq!(tree["blocks"][0]["block_type"], "code_block");
+    assert_eq!(tree["blocks"][1]["block_type"], "code_line");
+    let code_block = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+    let code_line = tree["blocks"][1]["block_id"].as_str().unwrap().to_string();
+    assert_eq!(tree["blocks"][1]["parent_block_id"], code_block.as_str());
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-anchor",
+            serde_json::json!([{
+                "op": "comment.add",
+                "block_id": code_line,
+                "start": 0,
+                "end": 4,
+                "body": "on the moved subtree"
+            }]),
+        ),
+    )
+    .await;
+    let ack = commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-move",
+            serde_json::json!([{
+                "op": "move_block",
+                "block_id": code_block,
+                "position": 1
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(
+        ack["changed_block_ids"],
+        serde_json::json!([code_block.as_str()])
+    );
+
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "After.\n\n```rust\nline one\n```\n"
+    );
+    let after = get_block_tree(&app, "doc.md").await;
+    assert_eq!(after["blocks"][1]["block_id"], code_block.as_str());
+    assert_eq!(after["blocks"][2]["block_id"], code_line.as_str());
+    assert_eq!(after["blocks"][2]["parent_block_id"], code_block.as_str());
+    assert_eq!(after["blocks"][2]["text"], "line one");
+
+    let review = get_block_review(&app, "doc.md", false).await;
+    let comment = &review["comments"][0];
+    assert_eq!(comment["status"], "open");
+    assert_eq!(comment["quote"], "line");
+    assert_eq!(comment["anchor"]["blockId"], code_line.as_str());
+    assert_eq!(comment["anchor"]["startOffset"], 0);
+    assert_eq!(comment["anchor"]["endOffset"], 4);
+}
