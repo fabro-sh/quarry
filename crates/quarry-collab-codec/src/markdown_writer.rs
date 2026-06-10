@@ -569,7 +569,15 @@ fn span_marks(span: &Node) -> Attrs {
                         .collect(),
                 });
             }
-            common.unwrap_or_default()
+            let mut common = common.unwrap_or_default();
+            // `code` never promotes onto a link group: a code span cannot
+            // wrap a non-text span, but CommonMark renders code spans inside
+            // link text, so the mark stays on the children and the link
+            // exports as [`docs`](url). Live sessions can produce this shape
+            // (CodePlugin + LinkPlugin); promotion used to wedge every
+            // checkpoint with "code mark on a non-text span".
+            common.shift_remove("code");
+            common
         }
         Node::Element { .. } => Attrs::new(),
     }

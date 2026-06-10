@@ -284,6 +284,66 @@ raw block
 }
 
 #[test]
+fn code_marks_spanning_link_text_export_as_code_spans_inside_the_link() {
+    // A live session can produce this shape (CodePlugin + LinkPlugin both
+    // enabled); import never does, so round-trips alone don't cover it. The
+    // writer must keep `code` on the link's inner text — CommonMark renders
+    // code spans inside link text — rather than promoting it onto the link
+    // element, where a code span cannot wrap a non-text span.
+    let rows = vec![BlockRow {
+        block_id: "b1".to_string(),
+        parent_block_id: None,
+        position: 0,
+        block_type: "p".to_string(),
+        attrs: Default::default(),
+        text: "See docs now.".to_string(),
+        marks: vec![MarkRun {
+            start: 4,
+            end: 8,
+            marks: attrs([("code", json!(true))]),
+        }],
+        links: vec![LinkRange {
+            start: 4,
+            end: 8,
+            url: "https://example.test".to_string(),
+        }],
+    }];
+
+    let markdown = export(&rows);
+    assert_eq!(markdown, "See [`docs`](https://example.test) now.\n");
+    // Importing valid CommonMark code-in-link produces this row shape too
+    // (the wedge was reachable from plain Markdown); the round trip is
+    // exact and idempotent now.
+    assert_eq!(reexport(&markdown), markdown);
+}
+
+#[test]
+fn shared_non_code_marks_still_promote_around_links_with_code_inside() {
+    // Bold spanning the whole run still groups around the link; only `code`
+    // is pinned to the inner text.
+    let rows = vec![BlockRow {
+        block_id: "b1".to_string(),
+        parent_block_id: None,
+        position: 0,
+        block_type: "p".to_string(),
+        attrs: Default::default(),
+        text: "docs".to_string(),
+        marks: vec![MarkRun {
+            start: 0,
+            end: 4,
+            marks: attrs([("bold", json!(true)), ("code", json!(true))]),
+        }],
+        links: vec![LinkRange {
+            start: 0,
+            end: 4,
+            url: "https://example.test".to_string(),
+        }],
+    }];
+
+    assert_eq!(export(&rows), "**[`docs`](https://example.test)**\n");
+}
+
+#[test]
 fn export_escapes_text_that_would_reparse_as_syntax() {
     // Mid-line "1." cannot form a list marker, so only structural characters
     // get escaped; the line-start digit case is covered separately below.

@@ -4460,6 +4460,84 @@ async fn checkpoint_succeeds_despite_unknown_inline_marks() {
     server.abort();
 }
 
+/// The R1 probe: a KNOWN `code` mark spanning a link's inner text (the
+/// editor's CodePlugin + LinkPlugin shape). Drop-containment does not apply
+/// (`code` is renderable), so the writer must render the code span INSIDE
+/// the link text instead of wedging every checkpoint with
+/// "code mark on a non-text span".
+#[tokio::test]
+async fn checkpoint_succeeds_with_code_marks_inside_link_text() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "See [docs](https://example.test) now.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        let link = first_embed_in(txn, &block);
+        link.format(
+            txn,
+            0,
+            4,
+            [("code".into(), yrs::Any::Bool(true))]
+                .into_iter()
+                .collect(),
+        );
+        // Block-local indices: "See " (4) + link embed (1) + " now." — type
+        // at the end of the block alongside the formatting change.
+        block.insert(txn, 10, " Typed.");
+    })
+    .await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/live.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header("X-Quarry-Origin-Id", "browser:flusher-1")
+                .body(Body::from(""))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    assert_eq!(
+        get_document_markdown(&app, "live.md").await,
+        "See [`docs`](https://example.test) now. Typed.\n"
+    );
+    let tree = get_block_tree(&app, "live.md").await;
+    assert_eq!(tree["blocks"][0]["text"], "See docs now. Typed.");
+    assert_eq!(
+        tree["blocks"][0]["marks"],
+        serde_json::json!([{"start": 4, "end": 8, "marks": {"code": true}}])
+    );
+    assert_eq!(tree["blocks"][0]["links"][0]["start"], 4);
+    assert_eq!(tree["blocks"][0]["links"][0]["end"], 8);
+
+    socket.close(None).await.unwrap();
+    server.abort();
+}
+
+/// Resolves the first inline embed (a link) inside an open transaction.
+fn first_embed_in(txn: &mut yrs::TransactionMut<'_>, block: &XmlTextRef) -> XmlTextRef {
+    use yrs::types::text::YChange;
+    block
+        .diff(txn, YChange::identity)
+        .into_iter()
+        .find_map(|diff| match diff.insert {
+            Out::YXmlText(child) => Some(child),
+            Out::YText(child) => {
+                let child: &XmlTextRef = child.as_ref();
+                Some(child.clone())
+            }
+            _ => None,
+        })
+        .expect("block contains an inline embed")
+}
+
 /// The discard variant of the C1 probe: previously the final checkpoint
 /// failed on the unknown mark and ALL un-checkpointed edits (including
 /// plain typing) were lost with only a warn log.
