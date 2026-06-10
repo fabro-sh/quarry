@@ -1333,6 +1333,35 @@ pub struct AgentReviewResponse {
     pub base_token: String,
     pub comments: Vec<AgentReviewComment>,
     pub suggestions: Vec<AgentReviewSuggestion>,
+    /// diff3 conflict review items (Phase 4): unresolved whole-file merge
+    /// conflicts, present only for documents with canonical block rows.
+    pub conflicts: Vec<AgentReviewConflict>,
+}
+
+/// A `kind = conflict` review item: a diff3 merge kept the canonical side and
+/// recorded the losing incoming hunk here. Resolves and deletes through
+/// `POST .../transactions` with `comment.resolve` / `comment.delete`;
+/// resolution never mutates the document.
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AgentReviewConflict {
+    pub id: String,
+    pub status: String,
+    pub by: String,
+    pub at: String,
+    /// The surviving block the conflict region attaches after; `null` means
+    /// the document start.
+    #[serde(rename = "afterBlockId")]
+    pub after_block_id: Option<String>,
+    /// The base (shadow) context the merge diffed against.
+    #[serde(rename = "baseMarkdown")]
+    pub base_markdown: String,
+    /// The losing incoming hunk (empty = the write deleted this region).
+    #[serde(rename = "incomingMarkdown")]
+    pub incoming_markdown: String,
+    /// The canonical side that was retained (empty = canonical had deleted
+    /// the region).
+    #[serde(rename = "canonicalMarkdown")]
+    pub canonical_markdown: String,
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
@@ -2351,6 +2380,9 @@ fn agent_review_response_from_markdown(
         base_token,
         comments,
         suggestions,
+        // Conflict items exist only for documents with block rows (the
+        // Phase 4 reconciler); the legacy projection has none.
+        conflicts: Vec::new(),
     }
 }
 

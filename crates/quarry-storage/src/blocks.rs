@@ -1288,6 +1288,13 @@ fn validate_review_items_against_rows(rows: &[BlockRow], items: &[BlockReviewIte
         .map(|row| (row.block_id.as_str(), row.text.as_str()))
         .collect();
     for item in items {
+        if item.kind == BlockReviewKind::Conflict {
+            // Conflict items (Phase 4) anchor by `after_block_id` in
+            // `block_id` ("" = document start) with a collapsed placement
+            // range; they carry Markdown payloads, not text anchors, so
+            // row-anchored offset validation does not apply.
+            continue;
+        }
         let Some(text) = texts.get(item.block_id.as_str()) else {
             if item.state == BlockReviewState::Open {
                 return Err(QuarryError::InvalidInput(format!(

@@ -77,6 +77,15 @@
 //!   without changing text; rejecting an invalidated/orphaned suggestion is
 //!   allowed (it dismisses the dead item), while accepting one fails with
 //!   `SUGGESTION_INVALIDATED`.
+//! - `conflict.add` (Phase 4) persists a diff3 conflict artifact as a
+//!   `kind = conflict` review item without mutating the document: the
+//!   attachment point rides in the item's `block_id` (`""` = document start,
+//!   from `after_block_id`), the losing incoming hunk in `body`, the base
+//!   context in `context_before`, and the retained canonical side in
+//!   `quote`. Conflict items resolve and delete with `comment.resolve` /
+//!   `comment.delete` (resolution never mutates the document); replies stay
+//!   comment-only. Deleting a conflict's attachment block orphans the item
+//!   like any other anchored item.
 //! - Deleting the last block re-mints the canonical empty-paragraph row (the
 //!   editor's empty-document shape); its id is listed in `changed_block_ids`.
 //! - Ops apply sequentially: each op's offsets, positions, and block
@@ -113,8 +122,10 @@
 //! `contentHash` is omitted, and each item additionally carries
 //! `anchor: {blockId, startOffset, endOffset}`. Resolved items are filtered
 //! unless `includeResolved`; orphaned and invalidated items always show.
-//! `conflict`-kind rows (Phase 4) are not yet projected. Documents without
-//! rows keep the legacy CriticMarkup/endmatter projection untouched.
+//! `conflict`-kind rows (Phase 4) project as `conflicts[]` with
+//! `afterBlockId` (`null` = document start) and the base/incoming/canonical
+//! Markdown payloads. Documents without rows keep the legacy
+//! CriticMarkup/endmatter projection untouched (`conflicts` empty).
 //!
 //! ## Transitional caveats (until Phases 4/5 replace the legacy paths)
 //!
@@ -403,9 +414,9 @@ pub struct BlockReviewAnchor {
 // Op vocabulary
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
-enum BlockOp {
+pub(crate) enum BlockOp {
     InsertBlock {
         #[serde(default)]
         block_id: Option<String>,
@@ -508,6 +519,22 @@ enum BlockOp {
     #[serde(rename = "suggestion.reject")]
     SuggestionReject {
         item_id: String,
+    },
+    /// Conflict-as-data (Phase 4): a diff3 conflict artifact persisted as a
+    /// `kind = conflict` review item. `after_block_id` is the surviving block
+    /// the conflict region attaches after (`None` = document start);
+    /// `incoming_markdown` is the losing hunk, `base_markdown` the base
+    /// context, `canonical_markdown` the retained canonical side. The
+    /// document itself is never mutated by this op.
+    #[serde(rename = "conflict.add")]
+    ConflictAdd {
+        #[serde(default)]
+        after_block_id: Option<String>,
+        #[serde(default)]
+        base_markdown: String,
+        incoming_markdown: String,
+        #[serde(default)]
+        canonical_markdown: String,
     },
 }
 
@@ -1209,7 +1236,7 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
             Ok(())
         }
         BlockOp::CommentResolve { item_id } => {
-            let _ = require_comment(ctx, item_id)?;
+            let _ = require_resolvable(ctx, item_id)?;
             let now = ctx.now.clone();
             for item in &mut ctx.items {
                 if item.id == *item_id {
@@ -1220,7 +1247,7 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
             Ok(())
         }
         BlockOp::CommentDelete { item_id } => {
-            let _ = require_comment(ctx, item_id)?;
+            let _ = require_resolvable(ctx, item_id)?;
             ctx.items.retain(|item| {
                 item.id != *item_id && item.parent_item_id.as_deref() != Some(item_id)
             });
@@ -1301,6 +1328,40 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
                     item.updated_at = now.clone();
                 }
             }
+            Ok(())
+        }
+        BlockOp::ConflictAdd {
+            after_block_id,
+            base_markdown,
+            incoming_markdown,
+            canonical_markdown,
+        } => {
+            if let Some(after) = after_block_id {
+                if !ctx.model.blocks.contains_key(after) {
+                    return Err(GatewayError::block_deleted(after));
+                }
+            }
+            let id = ctx.minted.mint();
+            require_unused_item_id(ctx, &id)?;
+            ctx.items.push(BlockReviewItem {
+                id,
+                document_id: ctx.document_id.clone(),
+                // `block_id` holds the attachment point; "" = document start.
+                block_id: after_block_id.clone().unwrap_or_default(),
+                kind: BlockReviewKind::Conflict,
+                start_offset: 0,
+                end_offset: 0,
+                body: Some(incoming_markdown.clone()),
+                replacement: None,
+                author: Some(ctx.author.clone()),
+                state: BlockReviewState::Open,
+                quote: Some(canonical_markdown.clone()),
+                context_before: Some(base_markdown.clone()),
+                context_after: None,
+                parent_item_id: None,
+                created_at: ctx.now.clone(),
+                updated_at: ctx.now.clone(),
+            });
             Ok(())
         }
     }
@@ -1479,6 +1540,25 @@ fn require_comment<'a>(
     ctx.items
         .iter()
         .find(|item| item.id == item_id && item.kind == BlockReviewKind::Comment)
+        .ok_or_else(|| anchor_not_found(item_id))
+}
+
+/// Conflict review items resolve and delete with the comment vocabulary
+/// (`comment.resolve` / `comment.delete`) — resolution never mutates the
+/// document. Replies stay comment-only.
+fn require_resolvable<'a>(
+    ctx: &'a ApplyContext,
+    item_id: &str,
+) -> Result<&'a BlockReviewItem, GatewayError> {
+    ctx.items
+        .iter()
+        .find(|item| {
+            item.id == item_id
+                && matches!(
+                    item.kind,
+                    BlockReviewKind::Comment | BlockReviewKind::Conflict
+                )
+        })
         .ok_or_else(|| anchor_not_found(item_id))
 }
 
@@ -1722,6 +1802,60 @@ fn block_payload(row: BlockRow) -> BlockNodePayload {
     }
 }
 
+/// Per-call write options for [`execute_block_transaction`]: the REST route
+/// uses the defaults; whole-file reconciled writes (Phase 4) carry their
+/// surface's source, an origin id for event classification, and the merged
+/// frontmatter metadata.
+pub(crate) struct TransactionSettings {
+    pub source: DocumentSource,
+    pub origin_id: Option<String>,
+    /// Replaces the document metadata at commit (whole-file writes carry
+    /// incoming frontmatter); `None` keeps the snapshot metadata.
+    pub metadata: Option<JsonValue>,
+}
+
+impl Default for TransactionSettings {
+    fn default() -> Self {
+        Self {
+            source: DocumentSource::Rest,
+            origin_id: None,
+            metadata: None,
+        }
+    }
+}
+
+/// The transaction envelope minus the ops (those come from the plan
+/// provider, recomputed per snapshot).
+pub(crate) struct TransactionContext {
+    pub client_tx_id: String,
+    pub base_clock: Option<String>,
+    pub actor: BlockTransactionActor,
+}
+
+/// One application's ops, computed against a specific snapshot. The provider
+/// is re-invoked when a commit retry reloads the snapshot, so plans derived
+/// from the snapshot (the diff3 reconcile) never go stale.
+pub(crate) struct TransactionPlan {
+    pub ops: Vec<BlockOp>,
+    /// Recorded verbatim in `block_transactions.ops` history.
+    pub ops_json: JsonValue,
+}
+
+type PlanProvider<'a> =
+    &'a mut (dyn FnMut(&BlockMutationState) -> Result<TransactionPlan, GatewayFailure> + Send);
+
+pub(crate) struct CommittedTransaction {
+    pub status: &'static str,
+    pub outcome: Box<quarry_core::WriteOutcome>,
+    pub transaction_id: String,
+    pub changed_block_ids: Vec<String>,
+}
+
+pub(crate) enum TransactionReply {
+    Committed(CommittedTransaction),
+    Replayed(BlockTransactionRecord),
+}
+
 pub(crate) async fn document_block_transactions(
     state: &AppState,
     library: &str,
@@ -1738,15 +1872,64 @@ async fn document_block_transactions_inner(
     payload: JsonValue,
 ) -> Result<Response, GatewayFailure> {
     let request = parse_transaction(payload)?;
-    // The mode switch: resolve the document, take its per-document mutex
-    // (serializing against session seed/checkpoint/discard), and dispatch on
-    // whether a live session exists. A transaction racing a transition waits
-    // here; it is never rejected because a session exists.
+    let ctx = TransactionContext {
+        client_tx_id: request.client_tx_id,
+        base_clock: request.base_clock,
+        actor: request.actor,
+    };
+    let (ops, ops_json) = (request.ops, request.ops_json);
+    let mut plan = move |_snapshot: &BlockMutationState| {
+        Ok(TransactionPlan {
+            ops: ops.clone(),
+            ops_json: ops_json.clone(),
+        })
+    };
+    let reply = execute_block_transaction(
+        state,
+        library,
+        path,
+        &ctx,
+        &TransactionSettings::default(),
+        &mut plan,
+    )
+    .await?;
+    transaction_reply_response(reply)
+}
+
+fn transaction_reply_response(reply: TransactionReply) -> Result<Response, GatewayFailure> {
+    match reply {
+        TransactionReply::Committed(committed) => {
+            let ack = BlockTransactionAck {
+                status: committed.status.to_string(),
+                document_clock: committed.outcome.version.id.clone(),
+                transaction_id: committed.transaction_id,
+                changed_block_ids: committed.changed_block_ids,
+            };
+            Ok(json_with_etag(StatusCode::OK, &ack, &ack.document_clock)?)
+        }
+        TransactionReply::Replayed(record) => replay_response(&record),
+    }
+}
+
+/// The mode switch: resolve the document, take its per-document mutex
+/// (serializing against session seed/checkpoint/discard), and dispatch on
+/// whether a live session exists. A transaction racing a transition waits
+/// here; it is never rejected because a session exists.
+pub(crate) async fn execute_block_transaction(
+    state: &AppState,
+    library: &str,
+    path: &str,
+    ctx: &TransactionContext,
+    settings: &TransactionSettings,
+    plan: PlanProvider<'_>,
+) -> Result<TransactionReply, GatewayFailure> {
     let document = state.store.head_document(library, path).await?;
     let guard = state.sessions.lock_document(&document.id).await;
     match guard.session() {
-        Some(session) => apply_session_transaction(state, &session, library, path, &request).await,
-        None => apply_rows_transaction(state, library, path, &request).await,
+        Some(session) => {
+            apply_session_transaction(state, &session, library, path, ctx, settings, plan).await
+        }
+        None => apply_rows_transaction(state, library, path, ctx, settings, plan).await,
     }
 }
 
@@ -1756,53 +1939,61 @@ async fn apply_rows_transaction(
     state: &AppState,
     library: &str,
     path: &str,
-    request: &ParsedTransaction,
-) -> Result<Response, GatewayFailure> {
+    ctx: &TransactionContext,
+    settings: &TransactionSettings,
+    plan: PlanProvider<'_>,
+) -> Result<TransactionReply, GatewayFailure> {
     for _attempt in 0..COMMIT_RETRY_LIMIT {
         let snapshot = state
             .store
-            .block_mutation_state(library, path, &request.client_tx_id)
+            .block_mutation_state(library, path, &ctx.client_tx_id)
             .await?;
         if let Some(record) = &snapshot.replay {
-            return replay_response(record);
+            return Ok(TransactionReply::Replayed(record.clone()));
         }
         require_block_document(&snapshot.path, &snapshot.content_type)?;
-        let status = transaction_status(&request.base_clock, &snapshot)?;
-        let applied = apply_ops(
-            &snapshot,
-            &request.ops,
-            &request.actor,
-            &request.client_tx_id,
-        )?;
+        let status = transaction_status(&ctx.base_clock, &snapshot)?;
+        let planned = plan(&snapshot)?;
+        let applied = apply_ops(&snapshot, &planned.ops, &ctx.actor, &ctx.client_tx_id)?;
+        let metadata = settings
+            .metadata
+            .clone()
+            .unwrap_or_else(|| snapshot.metadata.clone());
         let commit = BlockMutationCommit {
             document_id: snapshot.document_id.clone(),
             expected_head_version_id: snapshot.head_version_id.clone(),
-            client_tx_id: request.client_tx_id.clone(),
-            actor_kind: request.actor.kind.clone(),
-            actor_id: request.actor.id.clone(),
-            transaction_actor: Some(request.actor.display()),
+            client_tx_id: ctx.client_tx_id.clone(),
+            actor_kind: ctx.actor.kind.clone(),
+            actor_id: ctx.actor.id.clone(),
+            transaction_actor: Some(ctx.actor.display()),
             transaction_message: None,
             transaction_provenance: None,
-            origin_id: None,
-            source: DocumentSource::Rest,
-            recorded_ops: recorded_ops(request, status, &applied.changed_block_ids),
-            metadata: snapshot.metadata.clone(),
+            origin_id: settings.origin_id.clone(),
+            source: settings.source.clone(),
+            recorded_ops: recorded_ops(
+                &planned.ops_json,
+                &ctx.actor,
+                status,
+                &applied.changed_block_ids,
+            ),
+            metadata: metadata.clone(),
             content_type: snapshot.content_type.clone(),
             rows: applied.rows.clone(),
             review_items: applied.review_items,
-            normalized_markdown: normalized_markdown(&applied.rows, &snapshot.metadata)?,
+            normalized_markdown: normalized_markdown(&applied.rows, &metadata)?,
         };
         match state.store.commit_block_mutation(library, commit).await {
             Ok(BlockMutationOutcome::Applied { outcome, record }) => {
-                let ack = BlockTransactionAck {
-                    status: status.to_string(),
-                    document_clock: outcome.version.id.clone(),
+                return Ok(TransactionReply::Committed(CommittedTransaction {
+                    status,
+                    outcome,
                     transaction_id: record.id,
                     changed_block_ids: applied.changed_block_ids,
-                };
-                return Ok(json_with_etag(StatusCode::OK, &ack, &ack.document_clock)?);
+                }));
             }
-            Ok(BlockMutationOutcome::Replayed(record)) => return replay_response(&record),
+            Ok(BlockMutationOutcome::Replayed(record)) => {
+                return Ok(TransactionReply::Replayed(record))
+            }
             // Another write moved the head between load and commit: reload
             // the state and recompute against the new rows.
             Err(QuarryError::PreconditionFailed(_)) => continue,
@@ -1835,13 +2026,16 @@ async fn apply_rows_transaction(
 /// right after — they land in the NEXT checkpoint. No op needs the
 /// reseed/state-replacement fallback: every gateway op is expressible as an
 /// in-place doc reconciliation.
+#[allow(clippy::too_many_arguments)]
 async fn apply_session_transaction(
     state: &AppState,
     session: &crate::session::LiveSession,
     library: &str,
     path: &str,
-    request: &ParsedTransaction,
-) -> Result<Response, GatewayFailure> {
+    ctx: &TransactionContext,
+    settings: &TransactionSettings,
+    plan: PlanProvider<'_>,
+) -> Result<TransactionReply, GatewayFailure> {
     let awareness = session.awareness().clone().write_owned().await;
     // 1. Force-checkpoint pending typing (no-op when clean). Head races are
     //    handled inside commit_doc_state (it retries and surfaces Busy).
@@ -1853,13 +2047,13 @@ async fn apply_session_transaction(
     }
     let snapshot = state
         .store
-        .block_mutation_state(library, path, &request.client_tx_id)
+        .block_mutation_state(library, path, &ctx.client_tx_id)
         .await?;
     if let Some(record) = &snapshot.replay {
-        return replay_response(record);
+        return Ok(TransactionReply::Replayed(record.clone()));
     }
     require_block_document(&snapshot.path, &snapshot.content_type)?;
-    let status = transaction_status(&request.base_clock, &snapshot)?;
+    let status = transaction_status(&ctx.base_clock, &snapshot)?;
 
     // 2. Apply against the session's authoritative state. After the
     //    flush, stored rows equal the session projection; review items
@@ -1867,11 +2061,12 @@ async fn apply_session_transaction(
     //    session is the source of truth while it lives).
     let mut session_snapshot = snapshot.clone();
     session_snapshot.review_items = session.items_snapshot();
+    let planned = plan(&session_snapshot)?;
     let applied = apply_ops(
         &session_snapshot,
-        &request.ops,
-        &request.actor,
-        &request.client_tx_id,
+        &planned.ops,
+        &ctx.actor,
+        &ctx.client_tx_id,
     )?;
 
     // 3. Write the change into the live doc as a collaborator.
@@ -1885,38 +2080,48 @@ async fn apply_session_transaction(
 
     // 4. Checkpoint-before-ack: commit the applied state as this
     //    transaction's version.
+    let metadata = settings
+        .metadata
+        .clone()
+        .unwrap_or_else(|| session_snapshot.metadata.clone());
     let commit = BlockMutationCommit {
         document_id: session_snapshot.document_id.clone(),
         expected_head_version_id: session_snapshot.head_version_id.clone(),
-        client_tx_id: request.client_tx_id.clone(),
-        actor_kind: request.actor.kind.clone(),
-        actor_id: request.actor.id.clone(),
-        transaction_actor: Some(request.actor.display()),
+        client_tx_id: ctx.client_tx_id.clone(),
+        actor_kind: ctx.actor.kind.clone(),
+        actor_id: ctx.actor.id.clone(),
+        transaction_actor: Some(ctx.actor.display()),
         transaction_message: None,
         transaction_provenance: None,
         // In-session browsers classify this as a benign refresh
-        // (`session-events.ts`), exactly like checkpoint commits.
-        origin_id: Some(format!("agent-injected:tx:{}", request.client_tx_id)),
-        source: DocumentSource::Rest,
-        recorded_ops: recorded_ops(request, status, &applied.changed_block_ids),
-        metadata: session_snapshot.metadata.clone(),
+        // (`session-events.ts`), exactly like checkpoint commits — for
+        // whole-file writes too, since the session doc already carries the
+        // merged state when the event fires.
+        origin_id: Some(format!("agent-injected:tx:{}", ctx.client_tx_id)),
+        source: settings.source.clone(),
+        recorded_ops: recorded_ops(
+            &planned.ops_json,
+            &ctx.actor,
+            status,
+            &applied.changed_block_ids,
+        ),
+        metadata: metadata.clone(),
         content_type: session_snapshot.content_type.clone(),
         rows: applied.rows.clone(),
         review_items: applied.review_items.clone(),
-        normalized_markdown: normalized_markdown(&applied.rows, &session_snapshot.metadata)?,
+        normalized_markdown: normalized_markdown(&applied.rows, &metadata)?,
     };
     match state.store.commit_block_mutation(library, commit).await {
         Ok(BlockMutationOutcome::Applied { outcome, record }) => {
             session.mark_committed(&outcome, &applied.review_items);
-            let ack = BlockTransactionAck {
-                status: status.to_string(),
-                document_clock: outcome.version.id.clone(),
+            Ok(TransactionReply::Committed(CommittedTransaction {
+                status,
+                outcome,
                 transaction_id: record.id,
                 changed_block_ids: applied.changed_block_ids,
-            };
-            Ok(json_with_etag(StatusCode::OK, &ack, &ack.document_clock)?)
+            }))
         }
-        Ok(BlockMutationOutcome::Replayed(record)) => replay_response(&record),
+        Ok(BlockMutationOutcome::Replayed(record)) => Ok(TransactionReply::Replayed(record)),
         // An external legacy write raced the session between the step-1
         // flush and this commit. The live doc already carries this
         // transaction's edits but nothing was committed (so there is no
@@ -1935,13 +2140,14 @@ async fn apply_session_transaction(
 }
 
 fn recorded_ops(
-    request: &ParsedTransaction,
+    ops_json: &JsonValue,
+    actor: &BlockTransactionActor,
     status: &str,
     changed_block_ids: &[String],
 ) -> JsonValue {
     json!({
-        "ops": request.ops_json,
-        "actor": request.actor,
+        "ops": ops_json,
+        "actor": actor,
         "ack": {
             "status": status,
             "changed_block_ids": changed_block_ids,
@@ -2131,11 +2337,31 @@ pub(crate) fn review_response_from_rows(
         })
         .collect();
 
+    // Conflict items store the attachment point in `block_id` ("" = document
+    // start), the incoming hunk in `body`, the base context in
+    // `context_before`, and the retained canonical side in `quote`.
+    let conflicts = items
+        .iter()
+        .filter(|item| item.kind == BlockReviewKind::Conflict)
+        .filter(|item| include_resolved || item.state != BlockReviewState::Resolved)
+        .map(|item| crate::AgentReviewConflict {
+            id: item.id.clone(),
+            status: item.state.as_str().to_string(),
+            by: by(item),
+            at: item.created_at.clone(),
+            after_block_id: Some(item.block_id.clone()).filter(|id| !id.is_empty()),
+            base_markdown: item.context_before.clone().unwrap_or_default(),
+            incoming_markdown: item.body.clone().unwrap_or_default(),
+            canonical_markdown: item.quote.clone().unwrap_or_default(),
+        })
+        .collect();
+
     AgentReviewResponse {
         document_id,
         base_token,
         comments,
         suggestions,
+        conflicts,
     }
 }
 
