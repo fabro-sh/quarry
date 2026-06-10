@@ -6,6 +6,8 @@ pub use blocks::{
     BlockReviewKind, BlockReviewState, BlockShadowBase, BlockTransactionRecord, BlockWriteBase,
     DocumentKind, NewBlockReviewItem, SessionSeedState,
 };
+/// Re-exported because the store's block APIs speak it.
+pub use quarry_collab_codec::BlockRow;
 
 use chrono::{DateTime, Utc};
 use fs2::FileExt;

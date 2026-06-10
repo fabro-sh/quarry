@@ -1,7 +1,7 @@
 use quarry_core::{
     normalize_path, parent_dirs, DocumentSource, QuarryError, Result, WritePrecondition,
 };
-use quarry_storage::QuarryStore;
+use quarry_storage::{BlockMarkdownWrite, BlockWriteBase, DocumentKind, QuarryStore};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::path::Path;
@@ -49,6 +49,11 @@ struct OpenHandle {
     path: String,
     content: Vec<u8>,
     base_version_id: Option<String>,
+    /// diff3 shadow base for Markdown documents, captured at `open()` (Phase
+    /// 4): the document text this handle last saw (or last wrote). `None`
+    /// for raw documents and non-UTF-8 content — those writes degrade to the
+    /// two-way merge.
+    base_markdown: Option<String>,
     created: bool,
     dirty: bool,
 }
@@ -217,23 +222,36 @@ impl FuseProjection {
             return Err(QuarryError::Conflict(format!("{path} already exists")));
         }
         let content_type = content_type_for_path(&path);
-        let outcome = self
-            .store
-            .put_document(
-                &self.library,
-                &path,
-                Vec::new(),
-                serde_json::json!({ "content_type": content_type }),
-                &content_type,
-                DocumentSource::Fuse,
-                WritePrecondition::IfNoneMatch,
-            )
-            .await?;
+        let version_id = if is_block_document(&path, &content_type) {
+            // Markdown creation routes through the Phase 4 reconciled write
+            // (first import), so the block projection exists from byte one.
+            self.store
+                .write_block_markdown(self.block_write(&path, String::new(), None, None))
+                .await?
+                .outcome
+                .version
+                .id
+        } else {
+            self.store
+                .put_document(
+                    &self.library,
+                    &path,
+                    Vec::new(),
+                    serde_json::json!({ "content_type": content_type }),
+                    &content_type,
+                    DocumentSource::Fuse,
+                    WritePrecondition::IfNoneMatch,
+                )
+                .await?
+                .version
+                .id
+        };
         self.remember_parent_dirs(&path).await;
         self.insert_handle(OpenHandle {
             path,
             content: Vec::new(),
-            base_version_id: Some(outcome.version.id),
+            base_version_id: Some(version_id),
+            base_markdown: Some(String::new()),
             created: false,
             dirty: false,
         })
@@ -244,10 +262,12 @@ impl FuseProjection {
         self.ensure_writable()?;
         let path = normalize_mount_path(path)?;
         let document = self.store.get_document(&self.library, &path).await?;
+        let base_markdown = String::from_utf8(document.content.clone()).ok();
         self.insert_handle(OpenHandle {
             path,
             content: document.content,
             base_version_id: Some(document.version.id),
+            base_markdown,
             created: false,
             dirty: false,
         })
@@ -258,10 +278,14 @@ impl FuseProjection {
         self.ensure_writable()?;
         let path = normalize_mount_path(path)?;
         let document = self.store.get_document(&self.library, &path).await?;
+        // The base is what the writer last SAW (the pre-truncation content),
+        // even though the handle starts empty.
+        let base_markdown = String::from_utf8(document.content).ok();
         self.insert_handle(OpenHandle {
             path,
             content: Vec::new(),
             base_version_id: Some(document.version.id),
+            base_markdown,
             created: false,
             dirty: true,
         })
@@ -326,6 +350,9 @@ impl FuseProjection {
         let mut handles = self.handles.lock().await;
         if let Some(handle) = handles.get_mut(&handle_id) {
             handle.base_version_id = Some(outcome.version.id);
+            // The next diff3 base is what this handle just wrote (its own
+            // view); canonical-side divergence stays mergeable.
+            handle.base_markdown = String::from_utf8(snapshot.content.clone()).ok();
             handle.created = false;
             handle.dirty = false;
         }
@@ -535,23 +562,41 @@ impl FuseProjection {
         self.ensure_writable()?;
         let path = normalize_mount_path(path)?;
         let mut document = self.store.get_document(&self.library, &path).await?;
+        let base_markdown = String::from_utf8(document.content.clone()).ok();
         document.content.resize(
             usize::try_from(size)
                 .map_err(|_| QuarryError::InvalidPath("file size too large".to_string()))?,
             0,
         );
-        self.store
-            .put_document(
-                &self.library,
-                &path,
-                document.content,
-                document.metadata,
-                &document.version.content_type,
-                DocumentSource::Fuse,
-                WritePrecondition::IfMatch(document.version.id),
-            )
-            .await
-            .map(|_| ())
+        if is_block_document(&path, &document.version.content_type) {
+            // A path-level truncate is a whole-file write of the resized
+            // text; a cut landing inside a UTF-8 sequence is a content error.
+            let markdown = String::from_utf8(document.content).map_err(|_| {
+                QuarryError::InvalidInput(format!("truncating {path} would split a UTF-8 sequence"))
+            })?;
+            self.store
+                .write_block_markdown(self.block_write(
+                    &path,
+                    markdown,
+                    base_markdown,
+                    Some(document.version.id),
+                ))
+                .await
+                .map(|_| ())
+        } else {
+            self.store
+                .put_document(
+                    &self.library,
+                    &path,
+                    document.content,
+                    document.metadata,
+                    &document.version.content_type,
+                    DocumentSource::Fuse,
+                    WritePrecondition::IfMatch(document.version.id),
+                )
+                .await
+                .map(|_| ())
+        }
     }
 
     async fn insert_handle(&self, handle: OpenHandle) -> Result<u64> {
@@ -565,15 +610,35 @@ impl FuseProjection {
         dirs.extend(parent_dirs(path));
     }
 
+    /// Builds the Phase 4 reconciled-write request for a Markdown path.
+    fn block_write(
+        &self,
+        path: &str,
+        markdown: String,
+        base_markdown: Option<String>,
+        base_version_id: Option<String>,
+    ) -> BlockMarkdownWrite {
+        let content_type = content_type_for_path(path);
+        BlockMarkdownWrite {
+            library: self.library.clone(),
+            path: path.to_string(),
+            markdown,
+            metadata: serde_json::json!({ "content_type": content_type }),
+            base: match base_markdown {
+                Some(markdown) => BlockWriteBase::Markdown {
+                    markdown,
+                    version_id: base_version_id,
+                },
+                None => BlockWriteBase::CurrentCanonical,
+            },
+            source: DocumentSource::Fuse,
+            surface: "fuse".to_string(),
+            actor_label: Some("FUSE write".to_string()),
+        }
+    }
+
     async fn commit_handle(&self, handle: &OpenHandle) -> Result<quarry_core::WriteOutcome> {
         let content_type = content_type_for_path(&handle.path);
-        let precondition = if handle.created {
-            WritePrecondition::IfNoneMatch
-        } else if let Some(version_id) = &handle.base_version_id {
-            WritePrecondition::IfMatch(version_id.clone())
-        } else {
-            WritePrecondition::None
-        };
         let started = Instant::now();
         tracing::debug!(
             event = "fuse.write.started",
@@ -584,18 +649,45 @@ impl FuseProjection {
             created = handle.created,
             "FUSE write started"
         );
-        let outcome = self
-            .store
-            .put_document(
-                &self.library,
-                &handle.path,
-                handle.content.clone(),
-                serde_json::json!({ "content_type": content_type }),
-                &content_type,
-                DocumentSource::Fuse,
-                precondition,
-            )
-            .await?;
+        let outcome = if is_block_document(&handle.path, &content_type) {
+            // Markdown flushes reconcile via diff3 against the handle's base
+            // (Phase 4): merges never fail; non-UTF-8 bytes or CriticMarkup
+            // are content errors that surface as an errno.
+            let markdown = String::from_utf8(handle.content.clone()).map_err(|_| {
+                QuarryError::InvalidInput(format!(
+                    "{} is a markdown document; FUSE writes must be valid UTF-8",
+                    handle.path
+                ))
+            })?;
+            self.store
+                .write_block_markdown(self.block_write(
+                    &handle.path,
+                    markdown,
+                    handle.base_markdown.clone(),
+                    handle.base_version_id.clone(),
+                ))
+                .await?
+                .outcome
+        } else {
+            let precondition = if handle.created {
+                WritePrecondition::IfNoneMatch
+            } else if let Some(version_id) = &handle.base_version_id {
+                WritePrecondition::IfMatch(version_id.clone())
+            } else {
+                WritePrecondition::None
+            };
+            self.store
+                .put_document(
+                    &self.library,
+                    &handle.path,
+                    handle.content.clone(),
+                    serde_json::json!({ "content_type": content_type }),
+                    &content_type,
+                    DocumentSource::Fuse,
+                    precondition,
+                )
+                .await?
+        };
         self.remember_parent_dirs(&handle.path).await;
         tracing::debug!(
             event = "fuse.write.published",
@@ -781,6 +873,10 @@ fn read_slice(content: &[u8], offset: u64, size: u32) -> Vec<u8> {
     }
     let end = offset.saturating_add(size as usize).min(content.len());
     content[offset..end].to_vec()
+}
+
+fn is_block_document(path: &str, content_type: &str) -> bool {
+    quarry_storage::document_kind(path, content_type) == DocumentKind::BlockDocument
 }
 
 fn content_type_for_path(path: &str) -> String {
@@ -1352,6 +1448,12 @@ mod linux_mount {
                 Errno::from(libc::EROFS)
             }
             QuarryError::Unsupported(_) => Errno::from(libc::ENOTSUP),
+            // Content errors from the Phase 4 reconciled markdown write
+            // (CriticMarkup, invalid frontmatter): the CONTENT is wrong, the
+            // write can never succeed as stated. Never used for merge
+            // outcomes — those become conflict review items and succeed.
+            QuarryError::UnsupportedMarkdown(_) => Errno::from(libc::EIO),
+            QuarryError::InvalidInput(_) => Errno::from(libc::EINVAL),
             QuarryError::Io(error) => Errno::from(error),
             QuarryError::Json(_)
             | QuarryError::Yaml(_)

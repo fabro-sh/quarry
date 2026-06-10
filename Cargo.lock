@@ -1940,6 +1940,7 @@ dependencies = [
 name = "quarry-fuse"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "bytes",
  "chrono",
  "fuse3",
@@ -1947,10 +1948,12 @@ dependencies = [
  "libc",
  "mime_guess",
  "quarry-core",
+ "quarry-server",
  "quarry-storage",
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
 ]
 

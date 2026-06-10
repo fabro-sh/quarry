@@ -1,8 +1,18 @@
-use quarry_core::{DocumentSource, WritePrecondition};
+use quarry_core::{DocumentSource, QuarryError, WritePrecondition};
 use quarry_fuse::{FuseNodeKind, FuseProjection};
 use quarry_storage::{QuarryStore, StoreConfig};
 
 async fn test_store() -> QuarryStore {
+    let store = bare_store().await;
+    // Phase 4: Markdown writes route through the reconciling writer the
+    // owning (serving) process installs; these tests play that process and
+    // leak the keepalive handle for the test's lifetime.
+    let state = quarry_server::app_state(store.clone());
+    std::mem::forget(quarry_server::install_markdown_writer(&state));
+    store
+}
+
+async fn bare_store() -> QuarryStore {
     let root = tempfile::tempdir().unwrap().keep();
     QuarryStore::open(StoreConfig {
         db_path: root.join("quarry.db"),
@@ -161,7 +171,9 @@ async fn projection_truncate_open_replaces_existing_content_on_release() {
         .get_document(&library.slug, "drafts/existing.md")
         .await
         .unwrap();
-    assert_eq!(document.content, b"new");
+    // Markdown lands via the Phase 4 reconciled write: deterministic
+    // normalized export (trailing newline), not raw bytes.
+    assert_eq!(document.content, b"new\n");
 }
 
 #[tokio::test]
@@ -511,4 +523,322 @@ async fn projection_preserves_tree_inodes_across_directory_rename_and_reopen() {
         reopened.attr("archive/one.md").await.unwrap().inode,
         file_inode
     );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: whole-file Markdown writes reconcile via diff3.
+// ---------------------------------------------------------------------------
+
+async fn import_markdown(store: &QuarryStore, library: &str, path: &str, markdown: &str) -> String {
+    let outcome = store
+        .import_block_document(
+            library,
+            path,
+            markdown,
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    outcome.document.id
+}
+
+async fn overwrite_through_handle(
+    projection: &FuseProjection,
+    path: &str,
+    content: &str,
+) -> quarry_core::Result<()> {
+    let handle = projection.open_file_for_write(path).await?;
+    projection.set_handle_len(handle, 0).await?;
+    projection
+        .write_handle(handle, 0, content.as_bytes())
+        .await?;
+    projection.release_handle(handle).await
+}
+
+fn top_level_ids(rows: &[quarry_storage::BlockRow]) -> Vec<String> {
+    rows.iter()
+        .filter(|row| row.parent_block_id.is_none())
+        .map(|row| row.block_id.clone())
+        .collect()
+}
+
+/// Editing one block through a FUSE handle preserves the sibling block ids
+/// and live review anchors — the file write reconciles instead of replacing
+/// the projection.
+#[tokio::test]
+async fn markdown_write_preserves_sibling_block_ids_and_live_anchors() {
+    let store = test_store().await;
+    let library = store.create_library("notes").await.unwrap();
+    let document_id = import_markdown(
+        &store,
+        &library.slug,
+        "doc.md",
+        "# Title\n\nAlpha.\n\nBravo.\n",
+    )
+    .await;
+    let ids_before = top_level_ids(&store.load_block_tree(&document_id).await.unwrap());
+    let anchor = store
+        .put_block_review_item(quarry_storage::NewBlockReviewItem {
+            document_id: document_id.clone(),
+            block_id: ids_before[0].clone(),
+            kind: quarry_storage::BlockReviewKind::Comment,
+            start_offset: 0,
+            end_offset: 5,
+            body: Some("anchored on the title".to_string()),
+            replacement: None,
+            author: Some("Avery".to_string()),
+            state: quarry_storage::BlockReviewState::Open,
+            quote: None,
+            context_before: None,
+            context_after: None,
+            parent_item_id: None,
+        })
+        .await
+        .unwrap();
+
+    let projection = FuseProjection::open(store.clone(), &library.slug, false)
+        .await
+        .unwrap();
+    let current = store
+        .get_document(&library.slug, "doc.md")
+        .await
+        .unwrap()
+        .content;
+    let edited = String::from_utf8(current)
+        .unwrap()
+        .replace("Bravo.", "Bravo, edited over FUSE.");
+    overwrite_through_handle(&projection, "doc.md", &edited)
+        .await
+        .unwrap();
+
+    let rows = store.load_block_tree(&document_id).await.unwrap();
+    assert_eq!(top_level_ids(&rows), ids_before, "sibling ids survive");
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.block_id == ids_before[2])
+            .unwrap()
+            .text,
+        "Bravo, edited over FUSE."
+    );
+    let items = store.list_block_review_items(&document_id).await.unwrap();
+    let kept = items.iter().find(|item| item.id == anchor.id).unwrap();
+    assert_eq!(kept.state, quarry_storage::BlockReviewState::Open);
+    assert_eq!(kept.block_id, ids_before[0]);
+    assert_eq!((kept.start_offset, kept.end_offset), (0, 5));
+}
+
+/// A canonical edit lands between `open()` and the flush: the handle's base
+/// makes it a three-way merge — non-overlapping hunks both apply, the
+/// overlapping hunk keeps the canonical side and surfaces as a conflict
+/// review item. The flush itself NEVER fails.
+#[tokio::test]
+async fn concurrent_canonical_edit_and_fuse_write_converge_with_conflict_items() {
+    let store = test_store().await;
+    let library = store.create_library("notes").await.unwrap();
+    let document_id = import_markdown(
+        &store,
+        &library.slug,
+        "doc.md",
+        "# Title\n\nAlpha.\n\nSeparator.\n\nBravo.\n",
+    )
+    .await;
+    let base_export = String::from_utf8(
+        store
+            .get_document(&library.slug, "doc.md")
+            .await
+            .unwrap()
+            .content,
+    )
+    .unwrap();
+
+    let projection = FuseProjection::open(store.clone(), &library.slug, false)
+        .await
+        .unwrap();
+    // The handle opens BEFORE the canonical edit: its base is the old text.
+    let handle = projection.open_file_for_write("doc.md").await.unwrap();
+
+    // Canonical edits Alpha (e.g. a browser/agent write).
+    let head = store.head_document(&library.slug, "doc.md").await.unwrap();
+    store
+        .write_block_markdown(quarry_storage::BlockMarkdownWrite {
+            library: library.slug.clone(),
+            path: "doc.md".to_string(),
+            markdown: base_export.replace("Alpha.", "Alpha, canonical."),
+            metadata: serde_json::json!({"content_type": "text/markdown"}),
+            base: quarry_storage::BlockWriteBase::Markdown {
+                markdown: base_export.clone(),
+                version_id: Some(head.head_version_id.clone()),
+            },
+            source: DocumentSource::Rest,
+            surface: "rest".to_string(),
+            actor_label: None,
+        })
+        .await
+        .unwrap();
+
+    // The FUSE writer edits Alpha DIFFERENTLY and Bravo (stably separated).
+    let incoming = base_export
+        .replace("Alpha.", "Alpha, from FUSE.")
+        .replace("Bravo.", "Bravo, from FUSE.");
+    projection.set_handle_len(handle, 0).await.unwrap();
+    projection
+        .write_handle(handle, 0, incoming.as_bytes())
+        .await
+        .unwrap();
+    projection.release_handle(handle).await.unwrap();
+
+    let merged = String::from_utf8(
+        store
+            .get_document(&library.slug, "doc.md")
+            .await
+            .unwrap()
+            .content,
+    )
+    .unwrap();
+    assert_eq!(
+        merged,
+        "# Title\n\nAlpha, canonical.\n\nSeparator.\n\nBravo, from FUSE.\n"
+    );
+    let items = store.list_block_review_items(&document_id).await.unwrap();
+    let conflicts: Vec<_> = items
+        .iter()
+        .filter(|item| item.kind == quarry_storage::BlockReviewKind::Conflict)
+        .collect();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].state, quarry_storage::BlockReviewState::Open);
+    assert_eq!(conflicts[0].body.as_deref(), Some("Alpha, from FUSE.\n"));
+    assert_eq!(conflicts[0].quote.as_deref(), Some("Alpha, canonical.\n"));
+}
+
+/// RawDocument bypass: bytes round-trip exactly and no block tables are
+/// touched.
+#[tokio::test]
+async fn raw_document_writes_bypass_the_block_model() {
+    let store = test_store().await;
+    let library = store.create_library("notes").await.unwrap();
+    let projection = FuseProjection::open(store.clone(), &library.slug, false)
+        .await
+        .unwrap();
+
+    let bytes: Vec<u8> = vec![0, 159, 146, 150, 13, 10, 0];
+    let handle = projection.create_file("data.bin").await.unwrap();
+    projection.write_handle(handle, 0, &bytes).await.unwrap();
+    projection.release_handle(handle).await.unwrap();
+
+    let document = store.get_document(&library.slug, "data.bin").await.unwrap();
+    assert_eq!(document.content, bytes);
+    assert_eq!(
+        store.load_block_tree(&document.id).await.unwrap(),
+        Vec::<quarry_storage::BlockRow>::new()
+    );
+}
+
+/// CriticMarkup is a CONTENT error (the codec rejects it outright), not a
+/// reconciliation outcome: the flush fails with a typed error (errno-land
+/// maps it to EIO). Merge conflicts, by contrast, never fail (see above).
+#[tokio::test]
+async fn critic_markup_content_is_a_write_error_not_a_silent_byte_write() {
+    let store = test_store().await;
+    let library = store.create_library("notes").await.unwrap();
+    import_markdown(&store, &library.slug, "doc.md", "Alpha.\n").await;
+    let projection = FuseProjection::open(store.clone(), &library.slug, false)
+        .await
+        .unwrap();
+
+    let error = overwrite_through_handle(&projection, "doc.md", "Some {++inserted++} text.\n")
+        .await
+        .unwrap_err();
+    assert!(matches!(error, QuarryError::UnsupportedMarkdown(_)));
+    // The canonical content is untouched.
+    let document = store.get_document(&library.slug, "doc.md").await.unwrap();
+    assert_eq!(document.content, b"Alpha.\n");
+}
+
+/// A FUSE flush while a browser session is active converges THROUGH the
+/// session: the write succeeds (no errno), the merge is durable
+/// (checkpoint-before-ack), and the live doc broadcasts the change to the
+/// connected client like any collaborator edit.
+#[tokio::test]
+async fn fuse_flush_during_an_active_session_converges_through_the_session() {
+    use futures_util::StreamExt;
+
+    let store = bare_store().await;
+    let state = quarry_server::app_state(store.clone());
+    let _writer = quarry_server::install_markdown_writer(&state);
+    let library = store.create_library("notes").await.unwrap();
+    let document_id = import_markdown(
+        &store,
+        &library.slug,
+        "live.md",
+        "# Title\n\nAlpha.\n\nBravo.\n",
+    )
+    .await;
+    let ids_before = top_level_ids(&store.load_block_tree(&document_id).await.unwrap());
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = quarry_server::router_with_state(state);
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    // A connected browser opens the live session.
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/{document_id}"))
+            .await
+            .unwrap();
+    // Drain the seed/sync frames until the line goes quiet.
+    while let Ok(Some(_)) =
+        tokio::time::timeout(std::time::Duration::from_millis(300), socket.next()).await
+    {}
+
+    let projection = FuseProjection::open(store.clone(), &library.slug, false)
+        .await
+        .unwrap();
+    let current = String::from_utf8(
+        store
+            .get_document(&library.slug, "live.md")
+            .await
+            .unwrap()
+            .content,
+    )
+    .unwrap();
+    overwrite_through_handle(
+        &projection,
+        "live.md",
+        &current.replace("Bravo.", "Bravo, via FUSE during the session."),
+    )
+    .await
+    .expect("a flush during a session must not fail");
+
+    // Durable immediately (the session-mode write checkpoints before ack)…
+    let merged = String::from_utf8(
+        store
+            .get_document(&library.slug, "live.md")
+            .await
+            .unwrap()
+            .content,
+    )
+    .unwrap();
+    assert_eq!(
+        merged,
+        "# Title\n\nAlpha.\n\nBravo, via FUSE during the session.\n"
+    );
+    assert_eq!(
+        top_level_ids(&store.load_block_tree(&document_id).await.unwrap()),
+        ids_before
+    );
+    // …and the live doc broadcast the merge to the connected browser.
+    let frame = tokio::time::timeout(std::time::Duration::from_secs(2), socket.next())
+        .await
+        .expect("the session must broadcast the FUSE merge to subscribers")
+        .expect("socket open")
+        .unwrap();
+    assert!(frame.is_binary());
+
+    socket.close(None).await.ok();
+    server.abort();
 }
