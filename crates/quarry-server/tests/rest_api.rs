@@ -4314,12 +4314,6 @@ async fn session_seeds_from_rows_and_final_checkpoint_persists_typing() {
     let tree = get_block_tree(&app, "live.md").await;
     assert_eq!(tree["blocks"][0]["text"], "Hello session. Typed live.");
 
-    // No CRDT recovery state is ever written by the session path.
-    assert!(store
-        .collab_recovery_state(&document_id)
-        .await
-        .unwrap()
-        .is_none());
     server.abort();
 }
 

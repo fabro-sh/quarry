@@ -66,15 +66,6 @@ pub struct DirectoryMetadata {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CollabRecoveryState {
-    pub document_id: String,
-    pub base_version_id: Option<String>,
-    pub update_v1: Vec<u8>,
-    pub dirty: bool,
-    pub updated_at: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CollabDocumentSeed {
     pub document_id: String,
     pub head_version_id: String,
@@ -959,104 +950,12 @@ impl QuarryStore {
         self.document_conn(&conn, &library.id, &path).await
     }
 
-    pub async fn collab_recovery_state(
-        &self,
-        document_id: &str,
-    ) -> Result<Option<CollabRecoveryState>> {
-        let conn = self.conn()?;
-        self.collab_recovery_state_conn(&conn, document_id).await
-    }
-
     pub async fn collab_document_seed(
         &self,
         document_id: &str,
     ) -> Result<Option<CollabDocumentSeed>> {
         let conn = self.conn()?;
         self.collab_document_seed_conn(&conn, document_id).await
-    }
-
-    pub async fn put_collab_recovery_state(
-        &self,
-        document_id: &str,
-        base_version_id: Option<String>,
-        update_v1: Vec<u8>,
-        dirty: bool,
-    ) -> Result<CollabRecoveryState> {
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let existing = self.collab_recovery_state_conn(&conn, document_id).await?;
-            let current_head = self
-                .document_head_version_id_by_id_conn(&conn, document_id)
-                .await?;
-            if existing.is_none() && current_head.is_none() {
-                return Err(QuarryError::NotFound(format!("document {document_id}")));
-            }
-            let base_version_id = base_version_id
-                .or_else(|| existing.and_then(|state| state.base_version_id))
-                .or(current_head);
-            let updated_at = now_timestamp();
-            conn.execute(
-                "INSERT INTO collab_recovery_states
-                 (document_id, base_version_id, update_v1, dirty, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(document_id) DO UPDATE SET
-                   base_version_id = excluded.base_version_id,
-                   update_v1 = excluded.update_v1,
-                   dirty = excluded.dirty,
-                   updated_at = excluded.updated_at",
-                vec![
-                    Value::Text(document_id.to_string()),
-                    opt_value(base_version_id),
-                    Value::Blob(update_v1),
-                    Value::Integer(i64::from(dirty)),
-                    Value::Text(updated_at),
-                ],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            self.collab_recovery_state_conn(&conn, document_id)
-                .await?
-                .ok_or_else(|| {
-                    QuarryError::Storage(format!(
-                        "collab recovery state missing after write for document {document_id}"
-                    ))
-                })
-        }
-        .await;
-        finish_tx(&conn, result).await
-    }
-
-    pub async fn mark_collab_recovery_state_clean(
-        &self,
-        document_id: &str,
-        base_version_id: Option<String>,
-    ) -> Result<Option<CollabRecoveryState>> {
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let Some(existing) = self.collab_recovery_state_conn(&conn, document_id).await? else {
-                return Ok(None);
-            };
-            let base_version_id = base_version_id.or(existing.base_version_id);
-            conn.execute(
-                "UPDATE collab_recovery_states
-                 SET base_version_id = ?2, dirty = 0, updated_at = ?3
-                 WHERE document_id = ?1",
-                vec![
-                    Value::Text(document_id.to_string()),
-                    opt_value(base_version_id),
-                    Value::Text(now_timestamp()),
-                ],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            self.collab_recovery_state_conn(&conn, document_id).await
-        }
-        .await;
-        finish_tx(&conn, result).await
     }
 
     pub async fn create_collab_invite_token(
@@ -2783,6 +2682,11 @@ impl QuarryStore {
         migrate_documents_active_path_uniqueness(&conn).await?;
         ensure_document_indexes_conn(&conn).await?;
         ensure_links_resolution_status_column(&conn).await?;
+        // Sessions are discardable (recovery is reseed-from-rows); the legacy
+        // CRDT recovery-state table is dropped wholesale.
+        conn.execute("DROP TABLE IF EXISTS collab_recovery_states", ())
+            .await
+            .map_err(map_turso_error)?;
         Ok(())
     }
 
@@ -3023,47 +2927,6 @@ impl QuarryStore {
         } else {
             Ok(None)
         }
-    }
-
-    async fn document_head_version_id_by_id_conn(
-        &self,
-        conn: &Connection,
-        document_id: &str,
-    ) -> Result<Option<String>> {
-        let mut rows = conn
-            .query(
-                "SELECT head_version_id FROM documents WHERE id = ?1 LIMIT 1",
-                params![document_id.to_string()],
-            )
-            .await
-            .map_err(map_turso_error)?;
-        Ok(rows
-            .next()
-            .await
-            .map_err(map_turso_error)?
-            .map(|row| opt_text(&row, 0))
-            .transpose()?
-            .flatten())
-    }
-
-    async fn collab_recovery_state_conn(
-        &self,
-        conn: &Connection,
-        document_id: &str,
-    ) -> Result<Option<CollabRecoveryState>> {
-        let mut rows = conn
-            .query(
-                "SELECT document_id, base_version_id, update_v1, dirty, updated_at
-                 FROM collab_recovery_states WHERE document_id = ?1 LIMIT 1",
-                params![document_id.to_string()],
-            )
-            .await
-            .map_err(map_turso_error)?;
-        rows.next()
-            .await
-            .map_err(map_turso_error)?
-            .map(|row| collab_recovery_state_from_row(&row))
-            .transpose()
     }
 
     async fn collab_document_seed_conn(
@@ -3678,14 +3541,6 @@ CREATE TABLE IF NOT EXISTS links(
   alias TEXT,
   resolution_status TEXT NOT NULL DEFAULT 'unresolved',
   PRIMARY KEY(library_id, src_doc_id, src_version_id, start_offset, end_offset, target_kind, target_text)
-);
-
-CREATE TABLE IF NOT EXISTS collab_recovery_states(
-  document_id TEXT PRIMARY KEY,
-  base_version_id TEXT,
-  update_v1 BLOB NOT NULL,
-  dirty INTEGER NOT NULL,
-  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS collab_invite_tokens(
@@ -4969,16 +4824,6 @@ fn sync_state_from_row(row: &Row) -> Result<SyncStateEntry> {
         path: text(row, 1)?,
         last_synced_doc_version_id: opt_text(row, 2)?,
         last_synced_git_oid: opt_text(row, 3)?,
-    })
-}
-
-fn collab_recovery_state_from_row(row: &Row) -> Result<CollabRecoveryState> {
-    Ok(CollabRecoveryState {
-        document_id: text(row, 0)?,
-        base_version_id: opt_text(row, 1)?,
-        update_v1: row.get::<Vec<u8>>(2).map_err(map_turso_error)?,
-        dirty: int(row, 3)? != 0,
-        updated_at: text(row, 4)?,
     })
 }
 
