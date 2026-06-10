@@ -367,24 +367,41 @@ async fn sync_peer_inner(
             }
             (None, Some(git), true, true) if last_doc.is_some() => {
                 let conflict_path = conflict_sibling_path(&path);
-                let outcome = store
-                    .put_document(
+                // Delete-vs-create: Quarry deleted the path, Git changed it.
+                // The Git side is preserved as a sibling document; Markdown
+                // siblings import through the block writer (a first import —
+                // fresh ids, no base) so they are ordinary BlockDocuments,
+                // not raw bytes with a cleared projection.
+                let sibling_version_id = if is_block_file(&path, &git.content_type) {
+                    write_markdown_file(
+                        store,
                         &library_record.slug,
+                        Some(peer_id),
                         &conflict_path,
-                        git.content.clone(),
-                        git.metadata.clone(),
-                        &git.content_type,
-                        DocumentSource::Git,
-                        quarry_core::WritePrecondition::None,
+                        git,
+                        BlockWriteBase::CurrentCanonical,
                     )
-                    .await?;
+                    .await?
+                    .outcome
+                    .version
+                    .id
+                } else {
+                    store
+                        .put_document(
+                            &library_record.slug,
+                            &conflict_path,
+                            git.content.clone(),
+                            git.metadata.clone(),
+                            &git.content_type,
+                            DocumentSource::Git,
+                            quarry_core::WritePrecondition::None,
+                        )
+                        .await?
+                        .version
+                        .id
+                };
                 let conflict = store
-                    .record_conflict(
-                        &library_record.slug,
-                        &path,
-                        None,
-                        Some(outcome.version.id.clone()),
-                    )
+                    .record_conflict(&library_record.slug, &path, None, Some(sibling_version_id))
                     .await?;
                 log_git_conflict_recorded(
                     &library_record,

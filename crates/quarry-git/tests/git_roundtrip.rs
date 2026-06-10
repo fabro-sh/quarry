@@ -1023,13 +1023,16 @@ async fn sync_records_conflict_when_quarry_deletes_and_git_changes() {
         .is_err());
     let conflict_path = result.conflict_paths[0].clone();
     assert!(conflict_path.starts_with("notes/plan.md.conflict-git-"));
-    assert_eq!(
-        store
-            .get_document(&library.slug, &conflict_path)
-            .await
-            .unwrap()
-            .content,
-        b"theirs\n"
+    let sibling = store
+        .get_document(&library.slug, &conflict_path)
+        .await
+        .unwrap();
+    assert_eq!(sibling.content, b"theirs\n");
+    // Markdown siblings import through the block writer (Phase 7): they are
+    // ordinary BlockDocuments with a projection, not raw bytes.
+    assert!(
+        !store.load_block_tree(&sibling.id).await.unwrap().is_empty(),
+        "markdown conflict sibling carries block rows"
     );
     assert!(!repo.path().join("notes/plan.md").exists());
     assert_eq!(
