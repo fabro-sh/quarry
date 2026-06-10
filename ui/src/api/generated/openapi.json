@@ -590,6 +590,7 @@
     "/v1/libraries/{library}/documents/{path}/edit": {
       "post": {
         "tags": [],
+        "description": "Quarantined legacy endpoint: always responds 410 with the typed code `UNSUPPORTED_LEGACY_ENDPOINT`. Use `POST /v1/libraries/{library}/documents/{path}/transactions` for block edits. The route is deleted entirely in a later phase.",
         "operationId": "document_edit_openapi",
         "parameters": [
           {
@@ -607,14 +608,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "dryRun",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/DryRunValue"
-            }
           }
         ],
         "requestBody": {
@@ -628,22 +621,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "410": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AgentEditResponse"
-                }
-              }
-            }
-          },
-          "412": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/BlockTransactionError"
                 }
               }
             }
@@ -785,6 +768,7 @@
     "/v1/libraries/{library}/documents/{path}/ops": {
       "post": {
         "tags": [],
+        "description": "Quarantined legacy endpoint: always responds 410 with the typed code `UNSUPPORTED_LEGACY_ENDPOINT`. Use `POST /v1/libraries/{library}/documents/{path}/transactions` for review and block operations. The route is deleted entirely in a later phase.",
         "operationId": "document_ops_openapi",
         "parameters": [
           {
@@ -802,14 +786,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "dryRun",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/DryRunValue"
-            }
           }
         ],
         "requestBody": {
@@ -823,32 +799,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "410": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AgentOpsResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "412": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/BlockTransactionError"
                 }
               }
             }
@@ -1057,6 +1013,7 @@
       },
       "post": {
         "tags": [],
+        "description": "Quarantined legacy endpoint: always responds 410 with the typed code `UNSUPPORTED_LEGACY_ENDPOINT`. Use `POST /v1/libraries/{library}/documents/{path}/transactions` for edits and review operations; `GET .../review` (the read projection) is unaffected. The route is deleted entirely in a later phase.",
         "operationId": "document_review_process_openapi",
         "parameters": [
           {
@@ -1074,14 +1031,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "dryRun",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/DryRunValue"
-            }
           }
         ],
         "requestBody": {
@@ -1095,32 +1044,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "410": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AgentReviewProcessResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "412": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/BlockTransactionError"
                 }
               }
             }
@@ -2735,7 +2664,7 @@
               "string",
               "null"
             ],
-            "description": "Whether the edit was injected into a live collab room, or why it fell\nback to a plain write: `injected` | `no_live_room` | `not_codec_eligible`\n| `gate_rejected`. Absent for dry runs."
+            "description": "Legacy field of the deleted injection gate; never emitted (the\nendpoint is quarantined and live sessions are the write path)."
           },
           "markdown": {
             "type": [
@@ -2938,7 +2867,7 @@
               "string",
               "null"
             ],
-            "description": "Whether the ops mutation reached a live collab room, or why it used the\nnon-live write path: `injected` | `metadata_only_injected` |\n`no_live_room` | `gate_rejected` | `not_codec_eligible`. Absent for dry\nruns."
+            "description": "Legacy field of the deleted injection gate; never emitted (the\nendpoint is quarantined and live sessions are the write path)."
           },
           "markdown": {
             "type": [
@@ -3163,6 +3092,52 @@
           }
         }
       },
+      "AgentReviewConflict": {
+        "type": "object",
+        "description": "A `kind = conflict` review item: a diff3 merge kept the canonical side and\nrecorded the losing incoming hunk here. Resolves and deletes through\n`POST .../transactions` with `comment.resolve` / `comment.delete`;\nresolution never mutates the document.",
+        "required": [
+          "id",
+          "status",
+          "by",
+          "at",
+          "baseMarkdown",
+          "incomingMarkdown",
+          "canonicalMarkdown"
+        ],
+        "properties": {
+          "afterBlockId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The surviving block the conflict region attaches after; `null` means\nthe document start."
+          },
+          "at": {
+            "type": "string"
+          },
+          "baseMarkdown": {
+            "type": "string",
+            "description": "The base (shadow) context the merge diffed against."
+          },
+          "by": {
+            "type": "string"
+          },
+          "canonicalMarkdown": {
+            "type": "string",
+            "description": "The canonical side that was retained (empty = canonical had deleted\nthe region)."
+          },
+          "id": {
+            "type": "string"
+          },
+          "incomingMarkdown": {
+            "type": "string",
+            "description": "The losing incoming hunk (empty = the write deleted this region)."
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
       "AgentReviewProcessOperation": {
         "type": "object",
         "required": [
@@ -3290,7 +3265,8 @@
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "description": "Legacy field of the deleted injection gate; never emitted (the\nendpoint is quarantined and live sessions are the write path)."
           },
           "markdown": {
             "type": [
@@ -3371,7 +3347,8 @@
           "documentId",
           "baseToken",
           "comments",
-          "suggestions"
+          "suggestions",
+          "conflicts"
         ],
         "properties": {
           "baseToken": {
@@ -3382,6 +3359,13 @@
             "items": {
               "$ref": "#/components/schemas/AgentReviewComment"
             }
+          },
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentReviewConflict"
+            },
+            "description": "diff3 conflict review items (Phase 4): unresolved whole-file merge\nconflicts, present only for documents with canonical block rows."
           },
           "documentId": {
             "type": "string"

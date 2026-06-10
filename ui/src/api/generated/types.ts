@@ -270,11 +270,31 @@ export interface AgentReviewSuggestion {
   anchor?: BlockReviewAnchor | null;
 }
 
+/**
+ * A `kind = conflict` review item: a diff3 whole-file merge kept the
+ * canonical side and recorded the losing incoming hunk here. Resolve or
+ * delete through `POST .../transactions` with `comment.resolve` /
+ * `comment.delete`; resolution never mutates the document.
+ */
+export interface AgentReviewConflict {
+  id: string;
+  status: string;
+  by: string;
+  at: string;
+  /** The surviving block the conflict attaches after; null = document start. */
+  afterBlockId: string | null;
+  baseMarkdown: string;
+  incomingMarkdown: string;
+  canonicalMarkdown: string;
+}
+
 export interface AgentReviewResponse {
   documentId: string;
   baseToken: string;
   comments: AgentReviewComment[];
   suggestions: AgentReviewSuggestion[];
+  /** diff3 conflict review items; present for documents with block rows. */
+  conflicts: AgentReviewConflict[];
 }
 
 export interface AgentOpsOperationRequest {

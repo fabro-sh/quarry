@@ -603,6 +603,7 @@ async fn browser_asset(uri: Uri) -> Response {
         AgentReviewComment,
         AgentReviewReply,
         AgentReviewSuggestion,
+        AgentReviewConflict,
         AgentSuggestionPreview,
         AgentReviewProcessRequest,
         AgentReviewProcessOperation,
