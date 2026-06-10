@@ -3,11 +3,21 @@ import {
   type ProviderConstructorProps,
   type UnifiedProvider,
 } from '@platejs/yjs';
+import * as decoding from 'lib0/decoding';
 import { Awareness } from 'y-protocols/awareness';
 import { WebsocketProvider } from 'y-websocket';
 import * as Y from 'yjs';
 
 export const RUST_WS_PROVIDER_TYPE = 'rust-ws';
+
+// Checkpoint-ack frames (Phase 5 save state). The server broadcasts this
+// custom top-level message type — outside the y-protocols range 0–3 — after
+// every durable commit of the session doc, and sends the current one to each
+// subscriber on join. Payload: one var-length buffer carrying the committed
+// doc state as a v1-encoded Yjs snapshot. The save state compares it against
+// the local doc (see save-state.ts); the server half lives in
+// `crates/quarry-server/src/session.rs`.
+export const MSG_QUARRY_CHECKPOINT = 113;
 
 export interface RustWsProviderOptions {
   roomName: string;
@@ -28,6 +38,7 @@ export interface WebsocketProviderLike {
   connect: () => void;
   destroy: () => void;
   disconnect: () => void;
+  messageHandlers?: WebsocketProvider['messageHandlers'];
   on: WebsocketProvider['on'];
   synced: boolean;
   wsconnected: boolean;
@@ -56,6 +67,8 @@ export function collabWebSocketBaseUrl(location: Pick<Location, 'host' | 'protoc
 export class RustWsProviderWrapper implements UnifiedProvider {
   private _isConnected = false;
   private _isSynced = false;
+  private _lastCheckpoint: Uint8Array | null = null;
+  private readonly checkpointListeners = new Set<(snapshot: Uint8Array) => void>();
   private readonly onConnect?: () => void;
   private readonly onDisconnect?: () => void;
   private readonly onError?: (error: Error) => void;
@@ -95,9 +108,23 @@ export class RustWsProviderWrapper implements UnifiedProvider {
       WebSocketPolyfill: options.WebSocketPolyfill,
     });
 
+    if (this.provider.messageHandlers) {
+      this.provider.messageHandlers[MSG_QUARRY_CHECKPOINT] = (_encoder, decoder) => {
+        this.receiveCheckpoint(decoding.readVarUint8Array(decoder));
+      };
+    }
+
     this.provider.on('status', ({ status }) => {
       const wasConnected = this._isConnected;
       this._isConnected = status === 'connected';
+      if (status === 'disconnected') {
+        // One connection attempt per provider: sessions are server-seeded
+        // and a Y.Doc that has fallen out of one must never sync back into
+        // a freshly seeded room (it would merge stale content in as
+        // duplicates). The editor reconnects by mounting a fresh
+        // doc + provider instead (PlateMarkdownEditor).
+        this.provider.disconnect();
+      }
       if (this._isConnected && !wasConnected) {
         this.onConnect?.();
       } else if (!this._isConnected && wasConnected) {
@@ -130,6 +157,26 @@ export class RustWsProviderWrapper implements UnifiedProvider {
     return this._isSynced || this.provider.synced;
   }
 
+  /** The last checkpoint-ack snapshot received on this connection. */
+  get lastCheckpoint(): Uint8Array | null {
+    return this._lastCheckpoint;
+  }
+
+  /** Subscribes to checkpoint-ack frames; returns the unsubscribe. */
+  onCheckpoint(listener: (snapshot: Uint8Array) => void): () => void {
+    this.checkpointListeners.add(listener);
+    return () => {
+      this.checkpointListeners.delete(listener);
+    };
+  }
+
+  private receiveCheckpoint(snapshot: Uint8Array) {
+    this._lastCheckpoint = snapshot;
+    for (const listener of this.checkpointListeners) {
+      listener(snapshot);
+    }
+  }
+
   connect() {
     this.provider.connect();
   }
@@ -148,6 +195,7 @@ export class RustWsProviderWrapper implements UnifiedProvider {
     this.provider.destroy();
     this._isConnected = false;
     this._isSynced = false;
+    this.checkpointListeners.clear();
   }
 }
 

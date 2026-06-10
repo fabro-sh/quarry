@@ -1,8 +1,11 @@
+import * as decoding from 'lib0/decoding';
+import * as encoding from 'lib0/encoding';
 import { describe, expect, it, vi } from 'vitest';
 import { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 
 import {
+  MSG_QUARRY_CHECKPOINT,
   RustWsProviderWrapper,
   collabWebSocketBaseUrl,
   type WebsocketProviderFactory,
@@ -73,7 +76,58 @@ describe('RustWsProviderWrapper', () => {
     expect(onDisconnect).toHaveBeenCalledOnce();
     expect(onSyncChange).toHaveBeenLastCalledWith(false);
   });
+
+  it('decodes checkpoint-ack frames and notifies subscribers', () => {
+    const doc = new Y.Doc();
+    const awareness = new Awareness(doc);
+    const fakeProvider = new FakeProvider(awareness, doc);
+    const wrapper = new RustWsProviderWrapper({
+      awareness,
+      doc,
+      options: { providerFactory: () => fakeProvider, roomName: 'doc-1' },
+    });
+
+    const received: Uint8Array[] = [];
+    const unsubscribe = wrapper.onCheckpoint((snapshot) => received.push(snapshot));
+    expect(wrapper.lastCheckpoint).toBeNull();
+
+    const snapshot = Y.encodeSnapshot(Y.snapshot(doc));
+    fakeProvider.receiveFrame(checkpointFrame(snapshot));
+    expect(wrapper.lastCheckpoint).toEqual(snapshot);
+    expect(received).toEqual([snapshot]);
+
+    unsubscribe();
+    fakeProvider.receiveFrame(checkpointFrame(snapshot));
+    expect(received).toHaveLength(1);
+  });
+
+  it('stops the underlying provider on disconnect instead of letting it rejoin with a stale doc', () => {
+    const doc = new Y.Doc();
+    const awareness = new Awareness(doc);
+    const fakeProvider = new FakeProvider(awareness, doc);
+    const onDisconnect = vi.fn();
+    new RustWsProviderWrapper({
+      awareness,
+      doc,
+      onDisconnect,
+      options: { providerFactory: () => fakeProvider, roomName: 'doc-1' },
+    });
+
+    fakeProvider.emitStatus('connected');
+    fakeProvider.emitStatus('disconnected');
+    // y-websocket retries closed sockets with the SAME Y.Doc; the wrapper
+    // must halt that (reconnects mount a fresh doc + provider instead).
+    expect(fakeProvider.disconnect).toHaveBeenCalledOnce();
+    expect(onDisconnect).toHaveBeenCalledOnce();
+  });
 });
+
+function checkpointFrame(snapshot: Uint8Array): Uint8Array {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, MSG_QUARRY_CHECKPOINT);
+  encoding.writeVarUint8Array(encoder, snapshot);
+  return encoding.toUint8Array(encoder);
+}
 
 class FakeProvider implements WebsocketProviderLike {
   connect = vi.fn();
@@ -82,6 +136,7 @@ class FakeProvider implements WebsocketProviderLike {
     this.synced = false;
     this.wsconnected = false;
   });
+  messageHandlers: NonNullable<WebsocketProviderLike['messageHandlers']> = [];
   synced = false;
   wsconnected = false;
 
@@ -91,6 +146,15 @@ class FakeProvider implements WebsocketProviderLike {
     readonly awareness: Awareness,
     readonly doc: Y.Doc
   ) {}
+
+  /** Mirrors y-websocket's readMessage dispatch for an inbound frame. */
+  receiveFrame(frame: Uint8Array) {
+    const decoder = decoding.createDecoder(frame);
+    const messageType = decoding.readVarUint(decoder);
+    const handler = this.messageHandlers[messageType];
+    if (!handler) throw new Error(`no handler for message type ${messageType}`);
+    handler(encoding.createEncoder(), decoder, this as never, false, messageType);
+  }
 
   on = ((event: string, handler: (...args: never[]) => void) => {
     const handlers = this.handlers.get(event) ?? [];
