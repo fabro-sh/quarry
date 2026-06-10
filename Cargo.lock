@@ -1965,6 +1965,7 @@ dependencies = [
  "git2",
  "mime_guess",
  "quarry-core",
+ "quarry-server",
  "quarry-storage",
  "serde",
  "serde_json",

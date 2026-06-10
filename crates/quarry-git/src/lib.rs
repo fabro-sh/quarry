@@ -6,7 +6,10 @@ use quarry_core::{
     normalize_path, render_markdown_frontmatter, ConflictRecord, DocumentListEntry, DocumentSource,
     QuarryError, Result, SyncStateEntry, GIT_BINARY_WARN_THRESHOLD,
 };
-use quarry_storage::QuarryStore;
+use quarry_storage::{
+    split_markdown_frontmatter, BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockWriteBase,
+    DocumentKind, QuarryStore,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeSet, HashMap};
@@ -275,6 +278,43 @@ async fn sync_peer_inner(
                 if current.content == git.content {
                     continue;
                 }
+                if is_block_file(&path, &git.content_type) {
+                    // Phase 4: both sides changed a Markdown document —
+                    // diff3 against the peer's shadow base. Without one, the
+                    // last-synced version's content is the common ancestor;
+                    // without even that (both sides created the path
+                    // independently) an EMPTY base keeps it conservative:
+                    // differences conflict instead of silently overwriting.
+                    // Non-conflicting hunks from both sides land; true
+                    // conflicts become review items, never sibling files or
+                    // sync failures.
+                    let ancestor = match last_doc {
+                        Some(version_id) => {
+                            let version = store
+                                .document_version(&library_record.slug, &path, version_id)
+                                .await?;
+                            BlockWriteBase::Markdown {
+                                markdown: version.content,
+                                version_id: Some(version_id.to_string()),
+                            }
+                        }
+                        None => BlockWriteBase::Markdown {
+                            markdown: String::new(),
+                            version_id: None,
+                        },
+                    };
+                    write_markdown_file(
+                        store,
+                        &library_record.slug,
+                        Some(peer_id),
+                        &path,
+                        git,
+                        ancestor,
+                    )
+                    .await?;
+                    imported_paths.push(path);
+                    continue;
+                }
 
                 let conflict_path = conflict_sibling_path(&path);
                 let outcome = store
@@ -364,34 +404,60 @@ async fn sync_peer_inner(
                 deleted_sync_paths.insert(path.clone());
             }
             (None, Some(git), _, true) | (None, Some(git), _, false) => {
-                store
-                    .put_document(
+                if is_block_file(&path, &git.content_type) {
+                    write_markdown_file(
+                        store,
                         &library_record.slug,
+                        Some(peer_id),
                         &path,
-                        git.content.clone(),
-                        git.metadata.clone(),
-                        &git.content_type,
-                        DocumentSource::Git,
-                        quarry_core::WritePrecondition::None,
+                        git,
+                        BlockWriteBase::CurrentCanonical,
                     )
                     .await?;
+                } else {
+                    store
+                        .put_document(
+                            &library_record.slug,
+                            &path,
+                            git.content.clone(),
+                            git.metadata.clone(),
+                            &git.content_type,
+                            DocumentSource::Git,
+                            quarry_core::WritePrecondition::None,
+                        )
+                        .await?;
+                }
                 imported_paths.push(path);
             }
             (Some(_), None, true, _) => {
                 // Quarry changed or created the path; export publishes it below.
             }
             (Some(doc), Some(git), false, true) => {
-                store
-                    .put_document(
+                if is_block_file(&path, &git.content_type) {
+                    // The document is unchanged since the last sync, so the
+                    // current canonical state IS the common ancestor.
+                    write_markdown_file(
+                        store,
                         &library_record.slug,
+                        Some(peer_id),
                         &path,
-                        git.content.clone(),
-                        git.metadata.clone(),
-                        &git.content_type,
-                        DocumentSource::Git,
-                        quarry_core::WritePrecondition::IfMatch(doc.head_version_id.clone()),
+                        git,
+                        BlockWriteBase::CurrentCanonical,
                     )
                     .await?;
+                } else {
+                    store
+                        .put_document(
+                            &library_record.slug,
+                            &path,
+                            git.content.clone(),
+                            git.metadata.clone(),
+                            &git.content_type,
+                            DocumentSource::Git,
+                            quarry_core::WritePrecondition::IfMatch(doc.head_version_id.clone()),
+                        )
+                        .await?;
+                }
                 imported_paths.push(path);
             }
             _ => {}
@@ -458,7 +524,7 @@ pub async fn import_worktree(
         )
         .await?;
 
-    let result = import_worktree_transaction(store, repo_dir, &tx.id).await;
+    let result = import_worktree_transaction(store, &library_record.slug, repo_dir, &tx.id).await;
     if result.is_err() {
         let _ = store.rollback_transaction(&tx.id).await;
     }
@@ -467,6 +533,7 @@ pub async fn import_worktree(
 
 async fn import_worktree_transaction(
     store: &QuarryStore,
+    library: &str,
     repo_dir: &Path,
     tx_id: &str,
 ) -> Result<GitImportResult> {
@@ -489,7 +556,8 @@ async fn import_worktree_transaction(
         let path = normalize_path(&relative.to_string_lossy())?;
         let bytes = fs::read(entry.path())?;
         let (content, mut metadata) = if path.ends_with(".md") {
-            split_frontmatter(&bytes)?
+            let (_, metadata) = split_frontmatter(&bytes)?;
+            (bytes, metadata)
         } else {
             (bytes, serde_json::json!({}))
         };
@@ -500,9 +568,32 @@ async fn import_worktree_transaction(
             .and_then(JsonValue::as_str)
             .unwrap_or("application/octet-stream")
             .to_string();
-        store
-            .stage_put(tx_id, &path, content, metadata, &content_type)
+        if is_block_file(&path, &content_type) {
+            // Phase 4: Markdown imports reconcile per document (two-way —
+            // plain `git import` has no peer scope, so the base is the
+            // current canonical state). Byte-identical files are no-ops, so
+            // re-imports do not churn versions. Raw files keep the staged
+            // multi-document transaction below.
+            let file = GitFile {
+                content,
+                metadata,
+                content_type,
+                oid: String::new(),
+            };
+            write_markdown_file(
+                store,
+                library,
+                None,
+                &path,
+                &file,
+                BlockWriteBase::CurrentCanonical,
+            )
             .await?;
+        } else {
+            store
+                .stage_put(tx_id, &path, content, metadata, &content_type)
+                .await?;
+        }
         imported_paths.push(path);
     }
 
@@ -648,6 +739,11 @@ fn ensure_content_type(metadata: &mut JsonValue, path: &str) {
 }
 
 fn markdown_with_frontmatter(metadata: &JsonValue, content: &[u8]) -> Result<Vec<u8>> {
+    // Documents written through the block gateway store their normalized
+    // text WITH frontmatter already; exporting must not double it.
+    if content.starts_with(b"---\n") || content.starts_with(b"---\r\n") {
+        return Ok(content.to_vec());
+    }
     let header = render_markdown_frontmatter(metadata)?;
     if header.is_empty() {
         return Ok(content.to_vec());
@@ -970,6 +1066,27 @@ async fn record_exported_sync_state(
     let git = worktree_snapshot(repo_dir)?;
     for doc in docs {
         let git_oid = git.get(&doc.path).map(|file| file.oid.clone());
+        // Phase 4 shadow-base bookkeeping: what this peer just saw (the
+        // exported canonical body) is the diff3 base for its next write.
+        let content_type = git
+            .get(&doc.path)
+            .map(|file| file.content_type.clone())
+            .unwrap_or_default();
+        if is_block_file(&doc.path, &content_type) {
+            let document = store.get_document(library, &doc.path).await?;
+            if let Ok(text) = String::from_utf8(document.content) {
+                let (_, body) = split_markdown_frontmatter(&text)?;
+                store
+                    .put_block_shadow_base(
+                        "git",
+                        peer_id,
+                        &document.id,
+                        body,
+                        Some(doc.head_version_id.clone()),
+                    )
+                    .await?;
+            }
+        }
         store
             .upsert_sync_state(peer_id, &doc.path, Some(doc.head_version_id), git_oid)
             .await?;
@@ -1002,8 +1119,14 @@ fn worktree_snapshot(repo_dir: &Path) -> Result<HashMap<String, GitFile>> {
         let oid = git2::Oid::hash_object(ObjectType::Blob, &raw)
             .map_err(map_git)?
             .to_string();
+        // Markdown keeps its raw text (frontmatter included): the Phase 4
+        // reconciled writer splits the frontmatter itself, and byte
+        // comparisons against stored content (which carries frontmatter)
+        // stay like-for-like. The parsed metadata still feeds sidecar
+        // merging and content-type detection.
         let (content, mut metadata) = if path.ends_with(".md") {
-            split_frontmatter(&raw)?
+            let (_, metadata) = split_frontmatter(&raw)?;
+            (raw, metadata)
         } else {
             (raw, serde_json::json!({}))
         };
@@ -1025,6 +1148,79 @@ fn worktree_snapshot(repo_dir: &Path) -> Result<HashMap<String, GitFile>> {
         );
     }
     Ok(files)
+}
+
+/// Whether a worktree file participates in the block model (Phase 4
+/// reconciled writes) or stays on the raw byte path.
+fn is_block_file(path: &str, content_type: &str) -> bool {
+    quarry_storage::document_kind(path, content_type) == DocumentKind::BlockDocument
+}
+
+/// One reconciled Markdown write from a Git worktree file, with per-peer
+/// shadow-base bookkeeping: the diff3 base is the canonical text this peer
+/// last synced (recorded at export/import); a missing base degrades to the
+/// two-way merge. After the write the peer's base advances to the new
+/// canonical text. Merge conflicts never fail the sync — they surface as
+/// conflict review items on the document. CriticMarkup (content the codec
+/// rejects outright) DOES fail the file's import with the typed
+/// unsupported-markdown error.
+async fn write_markdown_file(
+    store: &QuarryStore,
+    library: &str,
+    peer_id: Option<&str>,
+    path: &str,
+    file: &GitFile,
+    fallback_base: BlockWriteBase,
+) -> Result<BlockMarkdownWriteOutcome> {
+    let markdown = String::from_utf8(file.content.clone())
+        .map_err(|_| QuarryError::InvalidInput(format!("{path} is not valid UTF-8 markdown")))?;
+    let base = match peer_id {
+        Some(peer) => match store.head_document(library, path).await {
+            Ok(head) => match store.block_shadow_base("git", peer, &head.id).await? {
+                Some(shadow) => BlockWriteBase::Markdown {
+                    markdown: shadow.base_markdown,
+                    version_id: shadow.base_version_id,
+                },
+                None => fallback_base,
+            },
+            Err(QuarryError::NotFound(_)) => fallback_base,
+            Err(error) => return Err(error),
+        },
+        None => fallback_base,
+    };
+    let outcome = store
+        .write_block_markdown(BlockMarkdownWrite {
+            library: library.to_string(),
+            path: path.to_string(),
+            markdown,
+            metadata: file.metadata.clone(),
+            base,
+            source: DocumentSource::Git,
+            surface: "git".to_string(),
+            actor_label: peer_id.map(|peer| format!("Git sync ({peer})")),
+        })
+        .await?;
+    if outcome.conflicts > 0 {
+        tracing::info!(
+            event = "git.sync.merge_conflicts_recorded",
+            library,
+            path,
+            conflicts = outcome.conflicts,
+            "git import merged with conflict review items"
+        );
+    }
+    if let Some(peer) = peer_id {
+        store
+            .put_block_shadow_base(
+                "git",
+                peer,
+                &outcome.outcome.document.id,
+                &outcome.canonical_body,
+                Some(outcome.outcome.version.id.clone()),
+            )
+            .await?;
+    }
+    Ok(outcome)
 }
 
 fn conflict_sibling_path(path: &str) -> String {

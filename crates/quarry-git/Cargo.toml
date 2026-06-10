@@ -20,4 +20,8 @@ uuid.workspace = true
 walkdir.workspace = true
 
 [dev-dependencies]
+# Test-only (cargo-sanctioned dev cycle): the Phase 4 reconciled markdown
+# writer is implemented by quarry-server; git round-trip tests play the
+# owning process and install it.
+quarry-server.workspace = true
 tempfile.workspace = true

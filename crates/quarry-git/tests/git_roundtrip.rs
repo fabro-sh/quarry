@@ -3,16 +3,26 @@ use quarry_git::{export_worktree, import_worktree, push_peer, sync_peer, GitExpo
 use quarry_storage::{QuarryStore, StoreConfig};
 use std::path::Path;
 
-#[tokio::test]
-async fn import_export_roundtrip_preserves_bytes_metadata_and_marker_safety() {
-    let root = tempfile::tempdir().unwrap();
+/// Opens a store with the Phase 4 reconciling markdown writer installed
+/// (these tests play the owning process; the keepalive leaks for the test's
+/// lifetime). Markdown writes would otherwise refuse to bypass the gateway.
+async fn open_store(root: &Path) -> QuarryStore {
     let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
+        db_path: root.join("quarry.db"),
+        cas_path: root.join("cas"),
         lock_path: None,
     })
     .await
     .unwrap();
+    let state = quarry_server::app_state(store.clone());
+    std::mem::forget(quarry_server::install_markdown_writer(&state));
+    store
+}
+
+#[tokio::test]
+async fn import_export_roundtrip_preserves_bytes_metadata_and_marker_safety() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("docs").await.unwrap();
 
     let source = tempfile::tempdir().unwrap();
@@ -38,7 +48,9 @@ async fn import_export_roundtrip_preserves_bytes_metadata_and_marker_safety() {
         .get_document(&library.slug, "notes/plan.md")
         .await
         .unwrap();
-    assert_eq!(plan.content, b"# Plan\n");
+    // Markdown imports land via the Phase 4 reconciled write: the stored
+    // content is the normalized text WITH frontmatter.
+    assert_eq!(plan.content, b"---\nrank: 1\ntitle: Plan\n---\n# Plan\n");
     assert_eq!(plan.metadata["title"], "Plan");
     assert_eq!(plan.metadata["rank"], 1);
     let blob = store
@@ -97,13 +109,7 @@ async fn import_export_roundtrip_preserves_bytes_metadata_and_marker_safety() {
 #[tokio::test]
 async fn export_refuses_document_paths_reserved_for_git_sidecars() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("reservedgit").await.unwrap();
     store
         .put_document(
@@ -138,13 +144,7 @@ async fn export_refuses_document_paths_reserved_for_git_sidecars() {
 #[tokio::test]
 async fn import_ignores_quarry_metadata_directory_and_orphan_sidecars() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("reservedimport").await.unwrap();
 
     let source = tempfile::tempdir().unwrap();
@@ -188,13 +188,7 @@ async fn import_preserves_case_distinct_git_paths_when_supported_by_filesystem()
     }
 
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("casepaths").await.unwrap();
 
     std::fs::create_dir_all(source.path().join("Notes")).unwrap();
@@ -231,40 +225,34 @@ async fn import_preserves_case_distinct_git_paths_when_supported_by_filesystem()
 #[tokio::test]
 async fn failed_import_rolls_back_transaction_instead_of_leaving_it_open() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("failedimport").await.unwrap();
 
     let source = tempfile::tempdir().unwrap();
-    std::fs::write(source.path().join("valid.md"), b"valid\n").unwrap();
-    std::fs::write(source.path().join("bad\\path.md"), b"bad\n").unwrap();
+    // Raw files ride the staged multi-document transaction (markdown files
+    // commit per document through the reconciled write and are NOT covered
+    // by this rollback — a documented Phase 4 atomicity change).
+    std::fs::write(source.path().join("valid.bin"), b"valid\n").unwrap();
+    std::fs::write(source.path().join("bad\\path.bin"), b"bad\n").unwrap();
 
     let error = import_worktree(&store, &library.slug, source.path())
         .await
         .unwrap_err();
 
-    assert!(error.to_string().contains("bad\\path.md"));
+    assert!(error.to_string().contains("bad\\path.bin"));
     let transactions = store.list_transactions(&library.slug).await.unwrap();
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].state, TransactionState::RolledBack);
-    assert!(store.get_document(&library.slug, "valid.md").await.is_err());
+    assert!(store
+        .get_document(&library.slug, "valid.bin")
+        .await
+        .is_err());
 }
 
 #[tokio::test]
 async fn sync_refuses_missing_or_mismatched_worktree_marker() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("markers").await.unwrap();
 
     let missing_marker_repo = tempfile::tempdir().unwrap();
@@ -303,13 +291,7 @@ async fn sync_refuses_missing_or_mismatched_worktree_marker() {
 #[tokio::test]
 async fn import_parses_bom_and_crlf_markdown_frontmatter() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("windows").await.unwrap();
 
     let source = tempfile::tempdir().unwrap();
@@ -329,19 +311,15 @@ async fn import_parses_bom_and_crlf_markdown_frontmatter() {
         .await
         .unwrap();
     assert_eq!(document.metadata["title"], "Windows");
-    assert_eq!(document.content, b"Body\r\n");
+    // Normalized by the reconciled write: BOM and CRLF gone, frontmatter
+    // embedded in the stored text.
+    assert_eq!(document.content, b"---\ntitle: Windows\n---\nBody\n");
 }
 
 #[tokio::test]
 async fn export_refuses_large_git_blobs_unless_forced() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("largegit").await.unwrap();
     store
         .put_document(
@@ -389,13 +367,7 @@ async fn export_refuses_large_git_blobs_unless_forced() {
 #[tokio::test]
 async fn sync_preserves_both_sides_when_quarry_and_git_change_same_path() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("syncdocs").await.unwrap();
     let baseline = store
         .put_document(
@@ -445,39 +417,38 @@ async fn sync_preserves_both_sides_when_quarry_and_git_change_same_path() {
     std::fs::write(repo.path().join("notes/plan.md"), "theirs\n").unwrap();
 
     let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
-    assert_eq!(result.conflicts.len(), 1);
-    assert_eq!(result.conflicts[0].path, "notes/plan.md");
-    assert_eq!(
-        result.conflicts[0].ours_version_id,
-        Some(ours.version.id.clone())
-    );
+    // Phase 4: markdown documents MERGE via diff3 against the peer's shadow
+    // base — no sibling files, no legacy conflict records. The same block
+    // changed on both sides, so the canonical side is retained and the
+    // losing hunk becomes a conflict review item.
+    let _ = ours;
+    assert_eq!(result.conflicts.len(), 0);
+    assert_eq!(result.conflict_paths.len(), 0);
 
-    assert_eq!(
-        store
-            .get_document(&library.slug, "notes/plan.md")
-            .await
-            .unwrap()
-            .content,
-        b"ours\n"
-    );
-    let conflict_path = result.conflict_paths[0].clone();
-    assert!(conflict_path.starts_with("notes/plan.md.conflict-git-"));
-    assert_eq!(
-        store
-            .get_document(&library.slug, &conflict_path)
-            .await
-            .unwrap()
-            .content,
-        b"theirs\n"
-    );
+    let document = store
+        .get_document(&library.slug, "notes/plan.md")
+        .await
+        .unwrap();
+    assert_eq!(document.content, b"ours\n");
+    let items = store.list_block_review_items(&document.id).await.unwrap();
+    let conflicts: Vec<_> = items
+        .iter()
+        .filter(|item| item.kind == quarry_storage::BlockReviewKind::Conflict)
+        .collect();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].state, quarry_storage::BlockReviewState::Open);
+    assert_eq!(conflicts[0].body.as_deref(), Some("theirs\n"));
+    assert_eq!(conflicts[0].quote.as_deref(), Some("ours\n"));
+    assert_eq!(conflicts[0].context_before.as_deref(), Some("base\n"));
     assert_eq!(
         std::fs::read_to_string(repo.path().join("notes/plan.md")).unwrap(),
         "ours\n"
     );
-    assert_eq!(
-        std::fs::read_to_string(repo.path().join(&conflict_path)).unwrap(),
-        "theirs\n"
-    );
+    let merged_head = store
+        .head_document(&library.slug, "notes/plan.md")
+        .await
+        .unwrap()
+        .head_version_id;
     assert_eq!(
         store
             .sync_state(&peer.id, "notes/plan.md")
@@ -485,20 +456,14 @@ async fn sync_preserves_both_sides_when_quarry_and_git_change_same_path() {
             .unwrap()
             .unwrap()
             .last_synced_doc_version_id,
-        Some(ours.version.id)
+        Some(merged_head)
     );
 }
 
 #[tokio::test]
 async fn sync_with_both_sides_unchanged_does_not_create_new_git_commit() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("unchanged").await.unwrap();
     store
         .put_document(
@@ -545,13 +510,7 @@ async fn sync_with_both_sides_unchanged_does_not_create_new_git_commit() {
 #[tokio::test]
 async fn sync_exports_quarry_only_content_change_to_git() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("quarrychange").await.unwrap();
     let baseline = store
         .put_document(
@@ -610,13 +569,7 @@ async fn sync_exports_quarry_only_content_change_to_git() {
 #[tokio::test]
 async fn sync_imports_git_only_content_change_to_quarry() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("gitchange").await.unwrap();
     store
         .put_document(
@@ -662,13 +615,7 @@ async fn sync_imports_git_only_content_change_to_quarry() {
 #[tokio::test]
 async fn sync_does_not_advance_sync_state_when_export_fails() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("failedsync").await.unwrap();
     let baseline = store
         .put_document(
@@ -724,13 +671,7 @@ async fn sync_does_not_advance_sync_state_when_export_fails() {
 #[tokio::test]
 async fn sync_accepts_both_changed_to_same_content_without_conflict() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("samechange").await.unwrap();
     let baseline = store
         .put_document(
@@ -789,13 +730,7 @@ async fn sync_accepts_both_changed_to_same_content_without_conflict() {
 #[tokio::test]
 async fn sync_preserves_both_sides_when_both_create_same_path_differently() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("bothcreate").await.unwrap();
     let repo = tempfile::tempdir().unwrap();
     let peer = store
@@ -823,41 +758,33 @@ async fn sync_preserves_both_sides_when_both_create_same_path_differently() {
 
     let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
 
-    assert_eq!(result.conflicts.len(), 1);
-    assert_eq!(result.conflicts[0].path, "notes/new.md");
-    assert_eq!(
-        result.conflicts[0].ours_version_id,
-        Some(ours.version.id.clone())
-    );
-    assert_eq!(
-        store
-            .get_document(&library.slug, "notes/new.md")
-            .await
-            .unwrap()
-            .content,
-        b"ours\n"
-    );
-    let conflict_path = result.conflict_paths[0].clone();
-    assert_eq!(
-        store
-            .get_document(&library.slug, &conflict_path)
-            .await
-            .unwrap()
-            .content,
-        b"theirs\n"
-    );
+    // Phase 4: with no common ancestor (both sides created the path
+    // independently), the merge uses an EMPTY base — every difference is a
+    // conservative conflict review item, never a silent overwrite or a
+    // sibling file.
+    let _ = ours;
+    assert_eq!(result.conflicts.len(), 0);
+    assert_eq!(result.conflict_paths.len(), 0);
+    let document = store
+        .get_document(&library.slug, "notes/new.md")
+        .await
+        .unwrap();
+    assert_eq!(document.content, b"ours\n");
+    let items = store.list_block_review_items(&document.id).await.unwrap();
+    let conflicts: Vec<_> = items
+        .iter()
+        .filter(|item| item.kind == quarry_storage::BlockReviewKind::Conflict)
+        .collect();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].body.as_deref(), Some("theirs\n"));
+    assert_eq!(conflicts[0].quote.as_deref(), Some("ours\n"));
+    assert_eq!(conflicts[0].context_before.as_deref(), Some(""));
 }
 
 #[tokio::test]
 async fn sync_records_both_deleted_as_clean_state() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("bothdeleted").await.unwrap();
     store
         .put_document(
@@ -906,13 +833,7 @@ async fn sync_records_both_deleted_as_clean_state() {
 #[tokio::test]
 async fn sync_applies_git_only_delete_to_quarry() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("gitdelete").await.unwrap();
     store
         .put_document(
@@ -957,13 +878,7 @@ async fn sync_applies_git_only_delete_to_quarry() {
 #[tokio::test]
 async fn sync_applies_quarry_only_delete_to_git() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("quarrydelete").await.unwrap();
     store
         .put_document(
@@ -1007,13 +922,7 @@ async fn sync_applies_quarry_only_delete_to_git() {
 #[tokio::test]
 async fn sync_records_conflict_when_quarry_changes_and_git_deletes() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("changeddelete").await.unwrap();
     let baseline = store
         .put_document(
@@ -1073,13 +982,7 @@ async fn sync_records_conflict_when_quarry_changes_and_git_deletes() {
 #[tokio::test]
 async fn sync_records_conflict_when_quarry_deletes_and_git_changes() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("deletedchange").await.unwrap();
     store
         .put_document(
@@ -1138,13 +1041,7 @@ async fn sync_records_conflict_when_quarry_deletes_and_git_changes() {
 #[tokio::test]
 async fn sync_aborts_when_git_delete_batch_exceeds_configured_safety_limit() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("safety").await.unwrap();
     for index in 0..5 {
         store
@@ -1197,13 +1094,7 @@ async fn sync_aborts_when_git_delete_batch_exceeds_configured_safety_limit() {
 #[tokio::test]
 async fn push_peer_updates_configured_remote_branch() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("pushremote").await.unwrap();
     store
         .put_document(
@@ -1252,13 +1143,7 @@ async fn push_peer_updates_configured_remote_branch() {
 #[tokio::test]
 async fn push_peer_does_not_advance_sync_state_when_remote_push_fails() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("pushfailure").await.unwrap();
     store
         .put_document(
@@ -1300,13 +1185,7 @@ async fn push_peer_does_not_advance_sync_state_when_remote_push_fails() {
 #[tokio::test]
 async fn pull_peer_fetches_configured_remote_branch_before_importing() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("pullremote").await.unwrap();
     let remote = tempfile::tempdir().unwrap();
     git2::Repository::init_bare(remote.path()).unwrap();
@@ -1361,13 +1240,7 @@ async fn pull_peer_fetches_configured_remote_branch_before_importing() {
 #[tokio::test]
 async fn sync_peer_fetches_remote_branch_and_pushes_merged_tree() {
     let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let store = open_store(root.path()).await;
     let library = store.create_library("syncremote").await.unwrap();
     store
         .put_document(
@@ -1484,4 +1357,141 @@ fn filesystem_supports_case_distinct_paths(root: &Path) -> bool {
     std::fs::write(&upper, b"upper").unwrap();
     std::fs::write(&lower, b"lower").unwrap();
     std::fs::read(&upper).unwrap() == b"upper" && std::fs::read(&lower).unwrap() == b"lower"
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: git markdown sync reconciles via diff3 with per-peer shadow bases.
+// ---------------------------------------------------------------------------
+
+/// Editing one block in the worktree preserves the sibling `block_id`s and
+/// live review anchors: the sync reconciles instead of replacing the
+/// projection.
+#[tokio::test]
+async fn git_sync_edit_preserves_sibling_block_ids_and_live_anchors() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_store(root.path()).await;
+    let library = store.create_library("gitblocks").await.unwrap();
+    let outcome = store
+        .import_block_document(
+            &library.slug,
+            "notes/doc.md",
+            "# Title\n\nAlpha.\n\nBravo.\n",
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let document_id = outcome.document.id.clone();
+    let ids_before: Vec<String> = store
+        .load_block_tree(&document_id)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|row| row.parent_block_id.is_none())
+        .map(|row| row.block_id.clone())
+        .collect();
+    let anchor = store
+        .put_block_review_item(quarry_storage::NewBlockReviewItem {
+            document_id: document_id.clone(),
+            block_id: ids_before[1].clone(),
+            kind: quarry_storage::BlockReviewKind::Comment,
+            start_offset: 0,
+            end_offset: 5,
+            body: Some("anchored on alpha".to_string()),
+            replacement: None,
+            author: Some("Avery".to_string()),
+            state: quarry_storage::BlockReviewState::Open,
+            quote: None,
+            context_before: None,
+            context_after: None,
+            parent_item_id: None,
+        })
+        .await
+        .unwrap();
+
+    let repo = tempfile::tempdir().unwrap();
+    let peer = store
+        .create_git_peer(
+            &library.slug,
+            serde_json::json!({"repo": repo.path(), "branch": "main"}),
+        )
+        .await
+        .unwrap();
+    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+
+    // The push recorded this peer's diff3 shadow base.
+    let shadow = store
+        .block_shadow_base("git", &peer.id, &document_id)
+        .await
+        .unwrap()
+        .expect("export records the peer's shadow base");
+    assert_eq!(shadow.base_markdown, "# Title\n\nAlpha.\n\nBravo.\n");
+
+    let file = repo.path().join("notes/doc.md");
+    let text = std::fs::read_to_string(&file).unwrap();
+    std::fs::write(&file, text.replace("Bravo.", "Bravo, from git.")).unwrap();
+    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    assert!(result.conflicts.is_empty());
+
+    let rows = store.load_block_tree(&document_id).await.unwrap();
+    let ids_after: Vec<String> = rows
+        .iter()
+        .filter(|row| row.parent_block_id.is_none())
+        .map(|row| row.block_id.clone())
+        .collect();
+    assert_eq!(ids_after, ids_before, "sibling ids survive the git sync");
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.block_id == ids_before[2])
+            .unwrap()
+            .text,
+        "Bravo, from git."
+    );
+    let items = store.list_block_review_items(&document_id).await.unwrap();
+    let kept = items.iter().find(|item| item.id == anchor.id).unwrap();
+    assert_eq!(kept.state, quarry_storage::BlockReviewState::Open);
+    assert_eq!(kept.block_id, ids_before[1]);
+    assert_eq!((kept.start_offset, kept.end_offset), (0, 5));
+
+    // …and the sync advanced the shadow base to the merged canonical text.
+    let shadow = store
+        .block_shadow_base("git", &peer.id, &document_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        shadow.base_markdown,
+        "# Title\n\nAlpha.\n\nBravo, from git.\n"
+    );
+}
+
+/// RawDocument bypass: binary files round-trip exactly through sync and
+/// never touch the block tables.
+#[tokio::test]
+async fn git_sync_raw_documents_bypass_the_block_model() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_store(root.path()).await;
+    let library = store.create_library("gitraw").await.unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let peer = store
+        .create_git_peer(
+            &library.slug,
+            serde_json::json!({"repo": repo.path(), "branch": "main"}),
+        )
+        .await
+        .unwrap();
+    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+
+    let bytes: Vec<u8> = vec![0, 159, 146, 150, 13, 10, 0];
+    std::fs::write(repo.path().join("blob.bin"), &bytes).unwrap();
+    sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+
+    let document = store.get_document(&library.slug, "blob.bin").await.unwrap();
+    assert_eq!(document.content, bytes);
+    assert_eq!(
+        store.load_block_tree(&document.id).await.unwrap(),
+        Vec::<quarry_storage::BlockRow>::new()
+    );
 }
