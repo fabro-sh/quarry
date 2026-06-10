@@ -101,16 +101,16 @@ Document kinds: `.md`/`.markdown`/`text/markdown` → `BlockDocument`; everythin
 
 Envelope: `{client_tx_id, base_clock?, actor{kind,id,label}, ops[]}`. Response: `{status: committed|committed_rebased, document_clock, transaction_id, changed_block_ids[]}`.
 
-- [ ] Implement ops applied to rows inside one SQL transaction: `insert_block`, `delete_block`, `move_block` (placement-only; preserves `block_id`, content, children, anchors), `replace_block_content` (minimal prefix/suffix text diff; anchors outside the changed span untouched), `set_block_attrs`.
-- [ ] Implement inline formatting ops against the `marks` ranges on `blocks`: `add_mark`, `remove_mark`, `set_link`.
-- [ ] Implement review ops: `comment.add`, `comment.reply`, `comment.resolve`, `comment.delete`, `suggestion.add`, `suggestion.accept`, `suggestion.reject` against `block_review_items`.
-- [ ] Idempotency: duplicate `client_tx_id` returns the original ack without re-applying.
-- [ ] Clock handling: matching `base_clock` applies; stale-but-valid applies as `committed_rebased`; invalid returns typed retryable errors. No generic 409s.
-- [ ] Typed error payloads `{code, retryable, message}`: `STALE_BASE`, `BLOCK_DELETED`, `ANCHOR_NOT_FOUND`, `BLOCK_MOVE_CONFLICT`, `SUGGESTION_INVALIDATED`, `SUGGESTION_ALREADY_RESOLVED`, `UNSUPPORTED_MARKDOWN`, `INVALID_TRANSACTION`, `UNSUPPORTED_BLOCK_DOCUMENT` (RawDocument target).
-- [ ] Routes: `GET .../documents/{path}/blocks`, `POST .../documents/{path}/transactions`, `GET .../documents/{path}/review` projecting from rows; document events emitted for commits.
-- [ ] Multi-op transactions commit atomically as one version and one history row.
-- [ ] Regenerate OpenAPI JSON and TypeScript types; add `ui/src/api/client.ts` helpers with tests in `ui/src/api/client.test.ts`.
-- [ ] REST coverage in `rest_api.rs` for every op, every typed error, idempotency, and rebase acks.
+- [x] Implement ops applied to rows inside one SQL transaction: `insert_block`, `delete_block`, `move_block` (placement-only; preserves `block_id`, content, children, anchors), `replace_block_content` (minimal prefix/suffix text diff; anchors outside the changed span untouched), `set_block_attrs`.
+- [x] Implement inline formatting ops against the `marks` ranges on `blocks`: `add_mark`, `remove_mark`, `set_link`.
+- [x] Implement review ops: `comment.add`, `comment.reply`, `comment.resolve`, `comment.delete`, `suggestion.add`, `suggestion.accept`, `suggestion.reject` against `block_review_items`.
+- [x] Idempotency: duplicate `client_tx_id` returns the original ack without re-applying.
+- [x] Clock handling: matching `base_clock` applies; stale-but-valid applies as `committed_rebased`; invalid returns typed retryable errors. No generic 409s.
+- [x] Typed error payloads `{code, retryable, message}`: `STALE_BASE`, `BLOCK_DELETED`, `ANCHOR_NOT_FOUND`, `BLOCK_MOVE_CONFLICT`, `SUGGESTION_INVALIDATED`, `SUGGESTION_ALREADY_RESOLVED`, `UNSUPPORTED_MARKDOWN`, `INVALID_TRANSACTION`, `UNSUPPORTED_BLOCK_DOCUMENT` (RawDocument target).
+- [x] Routes: `GET .../documents/{path}/blocks`, `POST .../documents/{path}/transactions`, `GET .../documents/{path}/review` projecting from rows; document events emitted for commits.
+- [x] Multi-op transactions commit atomically as one version and one history row.
+- [x] Regenerate OpenAPI JSON and TypeScript types; add `ui/src/api/client.ts` helpers with tests in `ui/src/api/client.test.ts`.
+- [x] REST coverage in `rest_api.rs` for every op, every typed error, idempotency, and rebase acks.
 
 ### Phase 3: Ephemeral Sessions and the Mode Switch
 
