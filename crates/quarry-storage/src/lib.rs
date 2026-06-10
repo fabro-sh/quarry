@@ -1,3 +1,10 @@
+mod blocks;
+
+pub use blocks::{
+    document_kind, BlockReviewItem, BlockReviewKind, BlockReviewState, BlockShadowBase,
+    BlockTransactionRecord, DocumentKind, NewBlockReviewItem,
+};
+
 use chrono::{DateTime, Utc};
 use fs2::FileExt;
 use quarry_cas::DiskCas;
@@ -3683,6 +3690,58 @@ CREATE TABLE IF NOT EXISTS aliases(
   PRIMARY KEY(library_id, alias, doc_id)
 );
 
+CREATE TABLE IF NOT EXISTS blocks(
+  block_id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL,
+  parent_block_id TEXT,
+  position INTEGER NOT NULL,
+  block_type TEXT NOT NULL,
+  attrs TEXT NOT NULL,
+  text TEXT NOT NULL,
+  marks TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS block_review_items(
+  id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL,
+  block_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  start_offset INTEGER NOT NULL,
+  end_offset INTEGER NOT NULL,
+  body TEXT,
+  replacement TEXT,
+  author TEXT,
+  state TEXT NOT NULL,
+  quote TEXT,
+  context_before TEXT,
+  context_after TEXT,
+  parent_item_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS block_shadow_bases(
+  surface TEXT NOT NULL,
+  scope_key TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  base_markdown TEXT NOT NULL,
+  base_version_id TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(surface, scope_key, document_id)
+);
+
+CREATE TABLE IF NOT EXISTS block_transactions(
+  id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL,
+  client_tx_id TEXT NOT NULL,
+  actor_kind TEXT NOT NULL,
+  actor_id TEXT,
+  ops TEXT NOT NULL,
+  resulting_version_id TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(document_id, client_tx_id)
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_active_library_path
   ON documents(library_id, path)
   WHERE deleted_at IS NULL AND head_version_id IS NOT NULL;
@@ -3697,6 +3756,9 @@ CREATE INDEX IF NOT EXISTS idx_links_src ON links(library_id, src_doc_id, src_ve
 CREATE INDEX IF NOT EXISTS idx_links_target ON links(library_id, target_doc_id);
 CREATE INDEX IF NOT EXISTS idx_aliases_lookup ON aliases(library_id, alias);
 CREATE INDEX IF NOT EXISTS idx_collab_invite_tokens_document ON collab_invite_tokens(document_id);
+CREATE INDEX IF NOT EXISTS idx_blocks_document ON blocks(document_id, parent_block_id, position);
+CREATE INDEX IF NOT EXISTS idx_block_review_items_document ON block_review_items(document_id);
+CREATE INDEX IF NOT EXISTS idx_block_review_items_block ON block_review_items(block_id);
 "#;
 
 fn title_for_entry(entry: &DocumentListEntry) -> String {
@@ -5122,18 +5184,23 @@ fn markdown_frontmatter_metadata(content: &[u8]) -> Result<JsonValue> {
     let Ok(text) = std::str::from_utf8(content) else {
         return Ok(serde_json::json!({}));
     };
+    Ok(split_markdown_frontmatter(text)?.0)
+}
+
+/// Splits leading YAML frontmatter from a Markdown document: the parsed
+/// frontmatter (an empty object when absent) and the body after it.
+fn split_markdown_frontmatter(text: &str) -> Result<(JsonValue, &str)> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let Some(open_len) = markdown_frontmatter_open_len(text) else {
-        return Ok(serde_json::json!({}));
+        return Ok((serde_json::json!({}), text));
     };
-    let body = &text[open_len..];
-    let Some((end, _close_len)) = markdown_frontmatter_close(body) else {
-        return Ok(serde_json::json!({}));
+    let rest = &text[open_len..];
+    let Some((end, close_len)) = markdown_frontmatter_close(rest) else {
+        return Ok((serde_json::json!({}), text));
     };
-    let yaml = &body[..end];
-    Ok(serde_json::to_value(serde_yaml::from_str::<
-        serde_yaml::Value,
-    >(yaml)?)?)
+    let yaml = &rest[..end];
+    let frontmatter = serde_json::to_value(serde_yaml::from_str::<serde_yaml::Value>(yaml)?)?;
+    Ok((frontmatter, &rest[end + close_len..]))
 }
 
 fn markdown_frontmatter_open_len(text: &str) -> Option<usize> {

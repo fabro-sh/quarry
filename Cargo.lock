@@ -1927,6 +1927,7 @@ name = "quarry-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "quarry-collab-codec",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2012,6 +2013,7 @@ dependencies = [
  "chrono",
  "fs2",
  "quarry-cas",
+ "quarry-collab-codec",
  "quarry-core",
  "serde",
  "serde_json",

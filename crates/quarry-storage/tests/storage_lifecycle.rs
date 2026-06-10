@@ -2,7 +2,8 @@ use quarry_core::{
     DocumentSource, DocumentVersion, QuarryError, WritePrecondition, INLINE_CONTENT_THRESHOLD,
 };
 use quarry_storage::{
-    group_version_history, QuarryStore, StoreConfig, StoreEventKind, TransactionMetadata,
+    group_version_history, BlockReviewKind, BlockReviewState, NewBlockReviewItem, QuarryStore,
+    StoreConfig, StoreEventKind, TransactionMetadata,
 };
 use std::time::Duration;
 
@@ -2327,4 +2328,480 @@ async fn index_names(conn: &turso::Connection, table: &str) -> std::collections:
         names.insert(row.get::<String>(1).unwrap());
     }
     names
+}
+
+// ---------------------------------------------------------------------------
+// Canonical block rows (Phase 1 of the session-scoped collaboration rewrite).
+// ---------------------------------------------------------------------------
+
+async fn open_block_store(root: &std::path::Path) -> QuarryStore {
+    QuarryStore::open(StoreConfig {
+        db_path: root.join("quarry.db"),
+        cas_path: root.join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap()
+}
+
+const BLOCK_FIXTURE: &str = "\
+---
+title: Plan
+tags:
+  - alpha
+  - beta
+---
+# Heading
+
+Body with **bold** text and a [link](https://example.test/docs).
+
+- item one
+    - nested item
+
+```rust
+fn main() {}
+```
+
+<div>
+opaque html
+</div>
+";
+
+const NORMALIZED_BLOCK_FIXTURE: &str = "\
+---
+tags:
+- alpha
+- beta
+title: Plan
+---
+# Heading
+
+Body with **bold** text and a [link](https://example.test/docs).
+
+- item one
+    - nested item
+
+```rust
+fn main() {}
+```
+
+<div>
+opaque html
+</div>
+";
+
+#[tokio::test]
+async fn imports_block_document_and_exports_stably_across_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+    let library = store.create_library("blocks").await.unwrap();
+
+    let outcome = store
+        .import_block_document(
+            &library.slug,
+            "notes/plan.md",
+            BLOCK_FIXTURE,
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    // Frontmatter lands in document metadata (the existing mechanism)...
+    assert_eq!(
+        outcome.version.metadata,
+        serde_json::json!({"title": "Plan", "tags": ["alpha", "beta"]})
+    );
+    // ...and the normalized export is the stored version content.
+    let stored = String::from_utf8(outcome.version.inline_content.clone().unwrap()).unwrap();
+    assert_eq!(stored, NORMALIZED_BLOCK_FIXTURE);
+    let exported = store
+        .export_block_document(&outcome.document.id)
+        .await
+        .unwrap();
+    assert_eq!(exported, NORMALIZED_BLOCK_FIXTURE);
+
+    let tree = store.load_block_tree(&outcome.document.id).await.unwrap();
+    let shape: Vec<(&str, bool)> = tree
+        .iter()
+        .map(|row| (row.block_type.as_str(), row.parent_block_id.is_some()))
+        .collect();
+    assert_eq!(
+        shape,
+        vec![
+            ("h1", false),
+            ("p", false),
+            ("p", false),
+            ("p", false),
+            ("code_block", false),
+            ("code_line", true),
+            ("raw_markdown", false),
+        ]
+    );
+
+    // Re-importing the export is byte-stable (one-time normalization done).
+    let reimported = store
+        .import_block_document(
+            &library.slug,
+            "notes/plan.md",
+            &exported,
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::IfMatch(outcome.version.id.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(reimported.version.inline_content.clone().unwrap()).unwrap(),
+        NORMALIZED_BLOCK_FIXTURE
+    );
+
+    drop(store);
+
+    let reopened = open_block_store(root.path()).await;
+    let restarted_tree = reopened
+        .load_block_tree(&outcome.document.id)
+        .await
+        .unwrap();
+    assert_eq!(restarted_tree.len(), tree.len());
+    assert_eq!(
+        reopened
+            .export_block_document(&outcome.document.id)
+            .await
+            .unwrap(),
+        NORMALIZED_BLOCK_FIXTURE
+    );
+    assert_eq!(
+        reopened
+            .get_document(&library.slug, "notes/plan.md")
+            .await
+            .unwrap()
+            .content,
+        NORMALIZED_BLOCK_FIXTURE.as_bytes()
+    );
+}
+
+#[tokio::test]
+async fn replace_block_tree_swaps_the_whole_row_set_transactionally() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+    let library = store.create_library("blocks").await.unwrap();
+    let outcome = store
+        .import_block_document(
+            &library.slug,
+            "swap.md",
+            "Original paragraph.\n",
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    let mut next = 0u32;
+    let replacement = quarry_collab_codec::markdown_to_block_rows("# New\n\nReplaced.\n", || {
+        next += 1;
+        format!("swap-{next}")
+    })
+    .unwrap();
+    store
+        .replace_block_tree(&outcome.document.id, &replacement)
+        .await
+        .unwrap();
+
+    let tree = store.load_block_tree(&outcome.document.id).await.unwrap();
+    assert_eq!(tree, replacement);
+    assert_eq!(
+        store
+            .export_block_document(&outcome.document.id)
+            .await
+            .unwrap(),
+        "# New\n\nReplaced.\n"
+    );
+
+    let missing = store
+        .replace_block_tree("not-a-document", &replacement)
+        .await
+        .unwrap_err();
+    assert!(matches!(missing, QuarryError::NotFound(_)));
+}
+
+#[tokio::test]
+async fn block_review_anchors_validate_utf16_boundaries_and_survive_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+    let library = store.create_library("anchors").await.unwrap();
+    let outcome = store
+        .import_block_document(
+            &library.slug,
+            "anchors.md",
+            "Anchor target 👍 emoji.\n",
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let tree = store.load_block_tree(&outcome.document.id).await.unwrap();
+    let block_id = tree[0].block_id.clone();
+    // "Anchor target " (14) + 👍 (2, surrogate pair) + " emoji." (7) = 23.
+    assert_eq!(tree[0].text, "Anchor target 👍 emoji.");
+    let item = |start, end, state| NewBlockReviewItem {
+        document_id: outcome.document.id.clone(),
+        block_id: block_id.clone(),
+        kind: BlockReviewKind::Comment,
+        start_offset: start,
+        end_offset: end,
+        body: Some("note".to_string()),
+        replacement: None,
+        author: Some("user".to_string()),
+        state,
+        quote: None,
+        context_before: None,
+        context_after: None,
+        parent_item_id: None,
+    };
+
+    // Anchors at the exact block boundaries are valid.
+    let full = store
+        .put_block_review_item(item(0, 23, BlockReviewState::Open))
+        .await
+        .unwrap();
+    // The emoji's surrogate pair is two UTF-16 units: [14, 16) is exact...
+    let emoji = store
+        .put_block_review_item(item(14, 16, BlockReviewState::Open))
+        .await
+        .unwrap();
+    // ...and an offset inside the pair is rejected.
+    let split_pair = store
+        .put_block_review_item(item(14, 15, BlockReviewState::Open))
+        .await
+        .unwrap_err();
+    assert!(matches!(split_pair, QuarryError::InvalidPath(_)));
+    let past_end = store
+        .put_block_review_item(item(0, 24, BlockReviewState::Open))
+        .await
+        .unwrap_err();
+    assert!(matches!(past_end, QuarryError::InvalidPath(_)));
+    let inverted = store
+        .put_block_review_item(item(9, 4, BlockReviewState::Open))
+        .await
+        .unwrap_err();
+    assert!(matches!(inverted, QuarryError::InvalidPath(_)));
+    // A collapsed range means orphaned at the row layer: open is rejected,
+    // orphaned is stored.
+    let collapsed_open = store
+        .put_block_review_item(item(5, 5, BlockReviewState::Open))
+        .await
+        .unwrap_err();
+    assert!(matches!(collapsed_open, QuarryError::InvalidPath(_)));
+    let collapsed_orphaned = store
+        .put_block_review_item(item(5, 5, BlockReviewState::Orphaned))
+        .await
+        .unwrap();
+    let unknown_block = store
+        .put_block_review_item(NewBlockReviewItem {
+            block_id: "missing-block".to_string(),
+            ..item(0, 1, BlockReviewState::Open)
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(unknown_block, QuarryError::NotFound(_)));
+
+    drop(store);
+
+    let reopened = open_block_store(root.path()).await;
+    let items = reopened
+        .list_block_review_items(&outcome.document.id)
+        .await
+        .unwrap();
+    assert_eq!(items.len(), 3);
+    assert!(items.contains(&full));
+    assert!(items.contains(&emoji));
+    assert!(items.contains(&collapsed_orphaned));
+}
+
+#[tokio::test]
+async fn raw_documents_keep_the_byte_path_untouched() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+    let library = store.create_library("raw").await.unwrap();
+    let bytes = vec![0u8, 159, 146, 150, 255, 0, 13, 10];
+    let outcome = store
+        .put_document(
+            &library.slug,
+            "assets/data.bin",
+            bytes.clone(),
+            serde_json::json!({"content_type": "application/octet-stream"}),
+            "application/octet-stream",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        quarry_storage::document_kind("assets/data.bin", "application/octet-stream"),
+        quarry_storage::DocumentKind::RawDocument
+    );
+    assert_eq!(
+        quarry_storage::document_kind("notes/plan.md", "text/markdown"),
+        quarry_storage::DocumentKind::BlockDocument
+    );
+    assert_eq!(
+        quarry_storage::document_kind("upper/CASE.MD", "application/octet-stream"),
+        quarry_storage::DocumentKind::BlockDocument
+    );
+
+    let refused = store
+        .import_block_document(
+            &library.slug,
+            "assets/data.bin",
+            "# not markdown\n",
+            serde_json::json!({}),
+            "application/octet-stream",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(refused, QuarryError::Unsupported(_)));
+
+    assert!(store
+        .load_block_tree(&outcome.document.id)
+        .await
+        .unwrap()
+        .is_empty());
+
+    drop(store);
+
+    let reopened = open_block_store(root.path()).await;
+    assert_eq!(
+        reopened
+            .get_document(&library.slug, "assets/data.bin")
+            .await
+            .unwrap()
+            .content,
+        bytes
+    );
+    assert!(reopened
+        .load_block_tree(&outcome.document.id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn import_surfaces_the_codecs_typed_unsupported_error() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+    let library = store.create_library("typed").await.unwrap();
+
+    let error = store
+        .import_block_document(
+            &library.slug,
+            "critic.md",
+            "Edited {==this==}{>>why<<} text.\n",
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap_err();
+
+    let QuarryError::UnsupportedMarkdown(inner) = error else {
+        panic!("expected the codec's typed Unsupported error, got {error:?}");
+    };
+    assert_eq!(
+        inner,
+        quarry_collab_codec::Unsupported::new("critic markup")
+    );
+    // The rejected import left no document behind.
+    assert!(store
+        .get_document(&library.slug, "critic.md")
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn block_shadow_bases_and_block_transactions_roundtrip() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+    let library = store.create_library("bases").await.unwrap();
+    let outcome = store
+        .import_block_document(
+            &library.slug,
+            "doc.md",
+            "Shadow me.\n",
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let document_id = outcome.document.id.clone();
+
+    let base = store
+        .put_block_shadow_base(
+            "git",
+            "peer-1:doc.md",
+            &document_id,
+            "Shadow me.\n",
+            Some(outcome.version.id.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .block_shadow_base("git", "peer-1:doc.md", &document_id)
+            .await
+            .unwrap(),
+        Some(base)
+    );
+    // Upsert replaces the base for the same scope.
+    store
+        .put_block_shadow_base("git", "peer-1:doc.md", &document_id, "Updated.\n", None)
+        .await
+        .unwrap();
+    let updated = store
+        .block_shadow_base("git", "peer-1:doc.md", &document_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.base_markdown, "Updated.\n");
+    assert_eq!(updated.base_version_id, None);
+    assert_eq!(
+        store
+            .block_shadow_base("fuse", "peer-1:doc.md", &document_id)
+            .await
+            .unwrap(),
+        None
+    );
+
+    let ops = serde_json::json!([{"op": "replace_block_content", "block_id": "b1"}]);
+    let recorded = store
+        .record_block_transaction(&document_id, "ctx-1", "agent", None, ops.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .block_transaction(&document_id, "ctx-1")
+            .await
+            .unwrap(),
+        Some(recorded)
+    );
+    // client_tx_id is unique per document: duplicates conflict (idempotent
+    // replay answers from the stored record in Phase 2).
+    let duplicate = store
+        .record_block_transaction(&document_id, "ctx-1", "agent", None, ops, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(duplicate, QuarryError::Conflict(_)));
 }
