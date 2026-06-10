@@ -291,11 +291,17 @@ impl QuarryStore {
     /// from document metadata plus the deterministic Markdown body.
     pub async fn export_block_document(&self, document_id: &str) -> Result<String> {
         let conn = self.conn()?;
-        let metadata = head_version_metadata_conn(&conn, document_id).await?;
+        let head = head_version_head_conn(&conn, document_id).await?;
+        if document_kind(&head.path, &head.content_type) == DocumentKind::RawDocument {
+            return Err(QuarryError::Unsupported(format!(
+                "cannot export {} ({}) as a block document",
+                head.path, head.content_type
+            )));
+        }
         let rows = load_block_tree_conn(&conn, document_id).await?;
         Ok(format!(
             "{}{}",
-            render_frontmatter(&metadata)?,
+            render_frontmatter(&head.metadata)?,
             block_rows_to_markdown(&rows)?
         ))
     }
@@ -586,10 +592,16 @@ async fn require_document_conn(conn: &Connection, document_id: &str) -> Result<(
     Ok(())
 }
 
-async fn head_version_metadata_conn(conn: &Connection, document_id: &str) -> Result<JsonValue> {
+struct BlockDocumentHead {
+    path: String,
+    content_type: String,
+    metadata: JsonValue,
+}
+
+async fn head_version_head_conn(conn: &Connection, document_id: &str) -> Result<BlockDocumentHead> {
     let mut rows = conn
         .query(
-            "SELECT v.metadata_json
+            "SELECT d.path, v.content_type, v.metadata_json
              FROM documents d
              JOIN document_versions v ON v.id = d.head_version_id
              WHERE d.id = ?1
@@ -599,7 +611,11 @@ async fn head_version_metadata_conn(conn: &Connection, document_id: &str) -> Res
         .await
         .map_err(map_turso_error)?;
     match rows.next().await.map_err(map_turso_error)? {
-        Some(row) => Ok(serde_json::from_str(&text(&row, 0)?)?),
+        Some(row) => Ok(BlockDocumentHead {
+            path: text(&row, 0)?,
+            content_type: text(&row, 1)?,
+            metadata: serde_json::from_str(&text(&row, 2)?)?,
+        }),
         None => Err(QuarryError::NotFound(format!("document {document_id}"))),
     }
 }

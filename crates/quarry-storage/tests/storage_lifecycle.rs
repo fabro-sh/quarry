@@ -2671,6 +2671,11 @@ async fn raw_documents_keep_the_byte_path_untouched() {
         .await
         .unwrap_err();
     assert!(matches!(refused, QuarryError::Unsupported(_)));
+    let export_refused = store
+        .export_block_document(&outcome.document.id)
+        .await
+        .unwrap_err();
+    assert!(matches!(export_refused, QuarryError::Unsupported(_)));
 
     assert!(store
         .load_block_tree(&outcome.document.id)
