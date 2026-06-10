@@ -252,6 +252,8 @@ export interface AgentReviewComment {
   quote: string;
   body: string;
   replies: AgentReviewReply[];
+  /** Row-anchored position; present when the document has canonical block rows. */
+  anchor?: BlockReviewAnchor | null;
 }
 
 export interface AgentReviewSuggestion {
@@ -264,6 +266,8 @@ export interface AgentReviewSuggestion {
   quote: string;
   content: string;
   preview: AgentSuggestionPreview;
+  /** Row-anchored position; present when the document has canonical block rows. */
+  anchor?: BlockReviewAnchor | null;
 }
 
 export interface AgentReviewResponse {
@@ -301,4 +305,125 @@ export interface AgentOpsResponse {
   outcome?: WriteOutcome | null;
   markdown?: string | null;
   injection?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Block API (Phase 2 semantic mutation gateway)
+// ---------------------------------------------------------------------------
+
+/** UTF-16 offsets into a block's flat text; `end` is exclusive. */
+export interface BlockMarkRun {
+  start: number;
+  end: number;
+  marks: Record<string, unknown>;
+}
+
+export interface BlockLinkRange {
+  start: number;
+  end: number;
+  url: string;
+}
+
+export interface BlockNode {
+  block_id: string;
+  parent_block_id: string | null;
+  position: number;
+  block_type: string;
+  attrs: Record<string, unknown>;
+  text: string;
+  marks: BlockMarkRun[];
+  links: BlockLinkRange[];
+}
+
+export interface BlockTreeResponse {
+  document_id: string;
+  /** The document clock (head version id) the rows correspond to. */
+  document_clock: string;
+  blocks: BlockNode[];
+}
+
+export interface BlockReviewAnchor {
+  blockId: string;
+  startOffset: number;
+  endOffset: number;
+}
+
+export interface BlockTransactionActor {
+  kind: string;
+  id?: string | null;
+  label?: string | null;
+}
+
+export type BlockTransactionOp =
+  | {
+      op: 'insert_block';
+      block_id?: string;
+      parent_block_id?: string | null;
+      position: number;
+      block_type: string;
+      attrs?: Record<string, unknown>;
+      text?: string;
+      marks?: BlockMarkRun[];
+      links?: BlockLinkRange[];
+    }
+  | { op: 'delete_block'; block_id: string }
+  | { op: 'move_block'; block_id: string; parent_block_id?: string | null; position: number }
+  | {
+      op: 'replace_block_content';
+      block_id: string;
+      text: string;
+      marks?: BlockMarkRun[];
+      links?: BlockLinkRange[];
+    }
+  | { op: 'set_block_attrs'; block_id: string; attrs: Record<string, unknown> }
+  | { op: 'set_block_type'; block_id: string; block_type: string; attrs?: Record<string, unknown> }
+  | { op: 'add_mark'; block_id: string; start: number; end: number; marks: Record<string, unknown> }
+  | { op: 'remove_mark'; block_id: string; start: number; end: number; marks: string[] }
+  | { op: 'set_link'; block_id: string; start: number; end: number; url: string | null }
+  | { op: 'comment.add'; block_id: string; start: number; end: number; body: string; quote?: string }
+  | { op: 'comment.reply'; item_id: string; body: string }
+  | { op: 'comment.resolve'; item_id: string }
+  | { op: 'comment.delete'; item_id: string }
+  | {
+      op: 'suggestion.add';
+      block_id: string;
+      start: number;
+      end: number;
+      replacement: string;
+      body?: string;
+      quote?: string;
+    }
+  | { op: 'suggestion.accept'; item_id: string }
+  | { op: 'suggestion.reject'; item_id: string };
+
+export interface BlockTransactionRequest {
+  client_tx_id: string;
+  /** Document clock the ops were computed against; ETag-quoted tokens are tolerated. */
+  base_clock?: string;
+  actor: BlockTransactionActor;
+  ops: BlockTransactionOp[];
+}
+
+export interface BlockTransactionAck {
+  status: 'committed' | 'committed_rebased';
+  document_clock: string;
+  transaction_id: string;
+  changed_block_ids: string[];
+}
+
+export type BlockTransactionErrorCode =
+  | 'STALE_BASE'
+  | 'BLOCK_DELETED'
+  | 'ANCHOR_NOT_FOUND'
+  | 'BLOCK_MOVE_CONFLICT'
+  | 'SUGGESTION_INVALIDATED'
+  | 'SUGGESTION_ALREADY_RESOLVED'
+  | 'UNSUPPORTED_MARKDOWN'
+  | 'INVALID_TRANSACTION'
+  | 'UNSUPPORTED_BLOCK_DOCUMENT';
+
+export interface BlockTransactionErrorPayload {
+  code: BlockTransactionErrorCode;
+  retryable: boolean;
+  message: string;
 }

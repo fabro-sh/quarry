@@ -1,4 +1,8 @@
 import type {
+  BlockTransactionAck,
+  BlockTransactionErrorCode,
+  BlockTransactionRequest,
+  BlockTreeResponse,
   ConflictRecord,
   CollabInviteToken,
   DocumentListEntry,
@@ -87,6 +91,24 @@ export class ApiPreconditionError extends ApiError {
   constructor(message: string, payload: unknown = null) {
     super(message, 412, payload);
     this.name = 'ApiPreconditionError';
+  }
+}
+
+/**
+ * A typed `{code, retryable, message}` failure from the block transaction
+ * gateway. `retryable: true` means "refetch blocks and resubmit with a fresh
+ * clock"; `retryable: false` means the ops as stated can never succeed.
+ */
+export class BlockTransactionError extends ApiError {
+  constructor(
+    message: string,
+    status: number,
+    public readonly code: BlockTransactionErrorCode,
+    public readonly retryable: boolean,
+    payload: unknown = null
+  ) {
+    super(message, status, payload);
+    this.name = 'BlockTransactionError';
   }
 }
 
@@ -269,6 +291,65 @@ export async function restoreVersion(
     outcome: (await response.json()) as WriteOutcome,
     etag: response.headers.get('etag') ?? '',
   };
+}
+
+// Canonical block rows plus the current document clock. Reading a markdown
+// document that has no stored projection materializes one server-side, so the
+// returned block ids are durable and addressable by transactions.
+export const getDocumentBlocks = (library: string, path: string) =>
+  jsonRequest<BlockTreeResponse>(
+    `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/blocks`
+  );
+
+// Submits one semantic block transaction. Non-2xx responses with the gateway's
+// typed `{code, retryable, message}` body throw BlockTransactionError; other
+// failures fall back to the generic ApiError mapping.
+export async function postBlockTransaction(
+  library: string,
+  path: string,
+  request: BlockTransactionRequest
+): Promise<BlockTransactionAck> {
+  const response = await fetch(
+    `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/transactions`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(request),
+    }
+  );
+  if (!response.ok) {
+    const payload = await readErrorPayload(response);
+    if (isBlockTransactionFailure(payload)) {
+      throw new BlockTransactionError(
+        payload.message,
+        response.status,
+        payload.code,
+        payload.retryable,
+        payload
+      );
+    }
+    const message =
+      payload && typeof payload === 'object' && 'error' in payload
+        ? String(payload.error)
+        : response.statusText;
+    throw new ApiError(message, response.status, payload);
+  }
+  return (await response.json()) as BlockTransactionAck;
+}
+
+function isBlockTransactionFailure(
+  payload: unknown
+): payload is { code: BlockTransactionErrorCode; retryable: boolean; message: string } {
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    'code' in payload &&
+    typeof payload.code === 'string' &&
+    'retryable' in payload &&
+    typeof payload.retryable === 'boolean' &&
+    'message' in payload &&
+    typeof payload.message === 'string'
+  );
 }
 
 export const listGitPeers = (library: string) =>

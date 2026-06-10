@@ -1,12 +1,17 @@
+import type { BlockTransactionRequest } from './generated/types';
 import {
+  ApiError,
   ApiPreconditionError,
+  BlockTransactionError,
   createCollabInvite,
   createDocument,
   deleteDocument,
   getDocument,
+  getDocumentBlocks,
   isTextContentType,
   moveDocument,
   listAgentPresence,
+  postBlockTransaction,
   putDocument,
   restoreVersion,
 } from './client';
@@ -272,5 +277,138 @@ describe('Quarry API client', () => {
 
   it('does not classify XML-based image formats as editable text', () => {
     expect(isTextContentType('image/svg+xml')).toBe(false);
+  });
+
+  it('reads canonical block trees from the blocks route', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          document_id: 'doc-1',
+          document_clock: 'v2',
+          blocks: [
+            {
+              block_id: 'b1',
+              parent_block_id: null,
+              position: 0,
+              block_type: 'p',
+              attrs: {},
+              text: 'Hello',
+              marks: [],
+              links: [],
+            },
+          ],
+        }),
+        { headers: { 'content-type': 'application/json' } }
+      )
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(getDocumentBlocks('notes', 'folder/doc.md')).resolves.toMatchObject({
+      document_clock: 'v2',
+      blocks: [{ block_id: 'b1', text: 'Hello' }],
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/v1/libraries/notes/documents/folder/doc.md/blocks',
+      undefined
+    );
+  });
+
+  it('posts block transactions and returns the ack', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          status: 'committed',
+          document_clock: 'v3',
+          transaction_id: 'btx-1',
+          changed_block_ids: ['b1'],
+        }),
+        { headers: { 'content-type': 'application/json' } }
+      )
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    const request: BlockTransactionRequest = {
+      client_tx_id: 'tx-1',
+      base_clock: 'v2',
+      actor: { kind: 'agent', id: 'agent-1' },
+      ops: [{ op: 'replace_block_content', block_id: 'b1', text: 'Updated' }],
+    };
+    await expect(postBlockTransaction('notes', 'doc.md', request)).resolves.toMatchObject({
+      status: 'committed',
+      document_clock: 'v3',
+      changed_block_ids: ['b1'],
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/v1/libraries/notes/documents/doc.md/transactions',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(request),
+      })
+    );
+  });
+
+  it('raises typed block transaction errors with code and retryability', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            code: 'STALE_BASE',
+            retryable: true,
+            message: 'base_clock does not name a known version',
+          }),
+          { status: 412, headers: { 'content-type': 'application/json' } }
+        )
+      )
+    );
+
+    const failure = await postBlockTransaction('notes', 'doc.md', {
+      client_tx_id: 'tx-1',
+      actor: { kind: 'agent' },
+      ops: [{ op: 'delete_block', block_id: 'b1' }],
+    }).then(
+      () => {
+        throw new Error('expected a typed failure');
+      },
+      (error: unknown) => error
+    );
+    expect(failure).toBeInstanceOf(BlockTransactionError);
+    if (failure instanceof BlockTransactionError) {
+      expect(failure.code).toBe('STALE_BASE');
+      expect(failure.retryable).toBe(true);
+      expect(failure.status).toBe(412);
+    }
+  });
+
+  it('falls back to the generic error mapping for untyped transaction failures', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ error: 'not found: doc.md' }), {
+          status: 404,
+          headers: { 'content-type': 'application/json' },
+        })
+      )
+    );
+
+    const failure = await postBlockTransaction('notes', 'doc.md', {
+      client_tx_id: 'tx-1',
+      actor: { kind: 'agent' },
+      ops: [{ op: 'delete_block', block_id: 'b1' }],
+    }).then(
+      () => {
+        throw new Error('expected a generic failure');
+      },
+      (error: unknown) => error
+    );
+    expect(failure).toBeInstanceOf(ApiError);
+    expect(failure).not.toBeInstanceOf(BlockTransactionError);
+    if (failure instanceof ApiError) {
+      expect(failure.message).toBe('not found: doc.md');
+      expect(failure.status).toBe(404);
+    }
   });
 });

@@ -531,6 +531,62 @@
         }
       }
     },
+    "/v1/libraries/{library}/documents/{path}/blocks": {
+      "get": {
+        "tags": [],
+        "operationId": "document_blocks_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockTreeResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockTransactionError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/libraries/{library}/documents/{path}/edit": {
       "post": {
         "tags": [],
@@ -1268,6 +1324,92 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/transactions": {
+      "post": {
+        "tags": [],
+        "operationId": "document_block_transactions_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockTransactionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockTransactionAck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockTransactionError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockTransactionError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockTransactionError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockTransactionError"
                 }
               }
             }
@@ -2981,6 +3123,17 @@
           "replies"
         ],
         "properties": {
+          "anchor": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BlockReviewAnchor",
+                "description": "Row-anchored position; present only when the document has canonical\nblock rows (the Phase 2 review projection)."
+              }
+            ]
+          },
           "at": {
             "type": "string"
           },
@@ -3255,6 +3408,17 @@
           "preview"
         ],
         "properties": {
+          "anchor": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BlockReviewAnchor",
+                "description": "Row-anchored position; present only when the document has canonical\nblock rows (the Phase 2 review projection)."
+              }
+            ]
+          },
           "at": {
             "type": "string"
           },
@@ -3348,6 +3512,252 @@
                 "$ref": "#/components/schemas/Value"
               }
             ]
+          }
+        }
+      },
+      "BlockLinkRangePayload": {
+        "type": "object",
+        "required": [
+          "start",
+          "end",
+          "url"
+        ],
+        "properties": {
+          "end": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "start": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "BlockMarkRunPayload": {
+        "type": "object",
+        "required": [
+          "start",
+          "end",
+          "marks"
+        ],
+        "properties": {
+          "end": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "marks": {
+            "type": "object"
+          },
+          "start": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "BlockNodePayload": {
+        "type": "object",
+        "required": [
+          "block_id",
+          "position",
+          "block_type",
+          "attrs",
+          "text",
+          "marks",
+          "links"
+        ],
+        "properties": {
+          "attrs": {
+            "type": "object"
+          },
+          "block_id": {
+            "type": "string"
+          },
+          "block_type": {
+            "type": "string"
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockLinkRangePayload"
+            }
+          },
+          "marks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockMarkRunPayload"
+            }
+          },
+          "parent_block_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "text": {
+            "type": "string",
+            "description": "Flat block text; all offsets into it are UTF-16 code units."
+          }
+        }
+      },
+      "BlockReviewAnchor": {
+        "type": "object",
+        "description": "Row-anchored review position, attached to review items projected from\nblock rows. Offsets are UTF-16 code units; `end_offset` is exclusive.",
+        "required": [
+          "blockId",
+          "startOffset",
+          "endOffset"
+        ],
+        "properties": {
+          "blockId": {
+            "type": "string"
+          },
+          "endOffset": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "startOffset": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "BlockTransactionAck": {
+        "type": "object",
+        "required": [
+          "status",
+          "document_clock",
+          "transaction_id",
+          "changed_block_ids"
+        ],
+        "properties": {
+          "changed_block_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "document_clock": {
+            "type": "string",
+            "description": "The new document clock: the head version id after the commit."
+          },
+          "status": {
+            "type": "string",
+            "description": "`committed` (clock matched the head or was omitted) or\n`committed_rebased` (stale-but-valid clock; ops validated against the\ncurrent rows)."
+          },
+          "transaction_id": {
+            "type": "string",
+            "description": "The recorded `block_transactions` history row id."
+          }
+        }
+      },
+      "BlockTransactionActor": {
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlockTransactionError": {
+        "type": "object",
+        "description": "Typed error payload returned by the gateway routes.",
+        "required": [
+          "code",
+          "retryable",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BlockTransactionRequest": {
+        "type": "object",
+        "required": [
+          "client_tx_id",
+          "actor",
+          "ops"
+        ],
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/BlockTransactionActor"
+          },
+          "base_clock": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client_tx_id": {
+            "type": "string"
+          },
+          "ops": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Semantic operations; see the module docs for the vocabulary."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlockTreeResponse": {
+        "type": "object",
+        "required": [
+          "document_id",
+          "document_clock",
+          "blocks"
+        ],
+        "properties": {
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockNodePayload"
+            }
+          },
+          "document_clock": {
+            "type": "string",
+            "description": "The current document clock (head version id) the rows correspond to."
+          },
+          "document_id": {
+            "type": "string"
           }
         }
       },
