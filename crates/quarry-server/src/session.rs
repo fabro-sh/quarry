@@ -495,9 +495,14 @@ impl LiveSession {
         checkpoint_ack_frame(&self.committed_snapshot.lock().unwrap())
     }
 
-    /// Records a durable commit's doc snapshot and broadcasts its ack frame
-    /// (after the commit's own doc updates, so clients apply state first).
-    fn record_committed_snapshot(&self, snapshot: Vec<u8>) {
+    /// Captures the committed doc state under the doc write lock, records it,
+    /// and broadcasts its ack frame (after the commit's own doc updates, so
+    /// clients apply state first). The `&mut Awareness` is the type-level
+    /// proof of exclusivity: the session's awareness only lives inside its
+    /// `RwLock`, so a mutable borrow can only come from the held write guard
+    /// — the snapshot can never cover state a concurrent writer is mutating.
+    fn record_committed_snapshot(&self, awareness: &mut Awareness) {
+        let snapshot = awareness.doc().transact().snapshot().encode_v1();
         let frame = checkpoint_ack_frame(&snapshot);
         *self.committed_snapshot.lock().unwrap() = snapshot;
         let _ = self.broadcast_tx.send(frame);
@@ -516,11 +521,11 @@ impl LiveSession {
         &self,
         store: &QuarryStore,
     ) -> Result<Option<WriteOutcome>, QuarryError> {
-        let awareness = self.awareness.write().await;
+        let mut awareness = self.awareness.write().await;
         if !self.is_dirty() {
             return Ok(None);
         }
-        let outcome = self.commit_doc_state(store, &awareness).await?;
+        let outcome = self.commit_doc_state(store, &mut awareness).await?;
         Ok(Some(outcome))
     }
 
@@ -535,11 +540,10 @@ impl LiveSession {
     pub(crate) async fn commit_doc_state(
         &self,
         store: &QuarryStore,
-        awareness: &Awareness,
+        awareness: &mut Awareness,
     ) -> Result<WriteOutcome, QuarryError> {
         let seq = self.update_seq.load(Ordering::SeqCst);
         let (projection, meta) = self.project_locked(awareness)?;
-        let snapshot = awareness.doc().transact().snapshot().encode_v1();
         let prior_items = self.items.lock().unwrap().clone();
         let now = now_timestamp();
         let items =
@@ -604,7 +608,7 @@ impl LiveSession {
                     self.checkpointed_seq.store(seq, Ordering::SeqCst);
                     *self.head_version_id.lock().unwrap() = outcome.version.id.clone();
                     *self.items.lock().unwrap() = items;
-                    self.record_committed_snapshot(snapshot);
+                    self.record_committed_snapshot(awareness);
                     tracing::debug!(
                         event = "collab.session.checkpointed",
                         document_id = %self.document_id,
@@ -687,7 +691,7 @@ impl LiveSession {
     /// awareness write lock) and broadcasts the covering checkpoint ack.
     pub(crate) fn mark_committed(
         &self,
-        awareness: &Awareness,
+        awareness: &mut Awareness,
         outcome: &WriteOutcome,
         items: &[BlockReviewItem],
     ) {
@@ -698,7 +702,7 @@ impl LiveSession {
             .iter()
             .map(|item| (item.id.clone(), item.clone()))
             .collect();
-        self.record_committed_snapshot(awareness.doc().transact().snapshot().encode_v1());
+        self.record_committed_snapshot(awareness);
     }
 }
 

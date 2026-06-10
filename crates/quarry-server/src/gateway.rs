@@ -2059,12 +2059,12 @@ async fn apply_session_transaction(
     settings: &TransactionSettings,
     plan: PlanProvider<'_>,
 ) -> Result<TransactionReply, GatewayFailure> {
-    let awareness = session.awareness().clone().write_owned().await;
+    let mut awareness = session.awareness().clone().write_owned().await;
     // 1. Force-checkpoint pending typing (no-op when clean). Head races are
     //    handled inside commit_doc_state (it retries and surfaces Busy).
     if session.is_dirty() {
         session
-            .commit_doc_state(&state.store, &awareness)
+            .commit_doc_state(&state.store, &mut awareness)
             .await
             .map_err(GatewayFailure::from)?;
     }
@@ -2141,7 +2141,7 @@ async fn apply_session_transaction(
     };
     match state.store.commit_block_mutation(library, commit).await {
         Ok(BlockMutationOutcome::Applied { outcome, record }) => {
-            session.mark_committed(&awareness, &outcome, &applied.review_items);
+            session.mark_committed(&mut awareness, &outcome, &applied.review_items);
             Ok(TransactionReply::Committed(CommittedTransaction {
                 status,
                 outcome,
