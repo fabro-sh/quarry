@@ -53,6 +53,13 @@ test('disconnect goes read-only; reconnect reseeds a fresh doc from canonical st
   await expect(
     user.page.locator('[aria-label="Plate markdown editor"][contenteditable="false"]')
   ).toBeVisible();
+  // The last-known content stays visible read-only across the whole outage —
+  // the surface never blanks between reconnect attempts.
+  await user.page.waitForTimeout(5_000);
+  await expect(editor).toContainText('Reconnect target paragraph. Typed before drop.');
+  await expect(
+    user.page.locator('[aria-label="Plate markdown editor"][contenteditable="false"]')
+  ).toBeVisible();
 
   // Reconnect: a fresh doc reseeds from the canonical session. Content is
   // exactly the checkpointed state — present once, never duplicated by a
@@ -76,6 +83,77 @@ test('disconnect goes read-only; reconnect reseeds a fresh doc from canonical st
   await waitForPersistedMarkdown(request, library, 'Typed after reconnect.');
 
   await user.context.close();
+});
+
+test('a connect-time outage never merges a stale bootstrap doc into the recovered session', async ({
+  browser,
+  request,
+}, testInfo) => {
+  const library = `live-refused-${Date.now().toString(36)}-${testInfo.workerIndex}`;
+  await seedDocument(request, library, 'Recovery target paragraph.\n');
+
+  // Collab connections are refused from the FIRST attempt (rewritten to a
+  // dead port — the never-opened case, where y-websocket emits no
+  // status:'disconnected'). The editor must bootstrap read-only, never leak
+  // retrying providers, and adopt the server-seeded session cleanly on
+  // recovery instead of merging its bootstrap-seeded doc in as duplicates.
+  const context = await browser.newContext();
+  await context.addInitScript(() => {
+    const flagged = window as Window & { __refuseCollab?: boolean };
+    flagged.__refuseCollab = true;
+    const NativeWebSocket = window.WebSocket;
+    window.WebSocket = class extends NativeWebSocket {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        const original = String(url);
+        const target =
+          flagged.__refuseCollab && original.includes('/v1/collab/')
+            ? original.replace(/^(wss?:\/\/)[^/]+/, '$1127.0.0.1:9')
+            : original;
+        super(target, protocols);
+      }
+    } as typeof WebSocket;
+  });
+  const page = await context.newPage();
+  await page.goto(
+    `/lib/${encodeURIComponent(library)}/documents/${encodeURIComponent(DOCUMENT_PATH)}`
+  );
+
+  const editor = page.getByLabel('Plate markdown editor');
+  // Bootstrap content shows read-only with the indicator while unreachable.
+  await expect(page.locator('[data-collab-save-state="reconnecting"]')).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(editor).toContainText('Recovery target paragraph.');
+  await expect(
+    page.locator('[aria-label="Plate markdown editor"][contenteditable="false"]')
+  ).toBeVisible();
+
+  // Sit through several failed reconnect cycles (the zombie window), with
+  // the content staying visible throughout.
+  await page.waitForTimeout(6_000);
+  await expect(editor).toContainText('Recovery target paragraph.');
+
+  // Recovery: the fresh session is adopted with the paragraph present
+  // exactly once — no stale bootstrap doc merged in.
+  await page.evaluate(() => {
+    (window as Window & { __refuseCollab?: boolean }).__refuseCollab = false;
+  });
+  await expect(page.locator('[data-collab-save-state="saved"]')).toBeVisible({
+    timeout: 30_000,
+  });
+  const occurrences = await page.evaluate(() => {
+    const text =
+      document.querySelector('[aria-label="Plate markdown editor"]')?.textContent ?? '';
+    return text.split('Recovery target paragraph.').length - 1;
+  });
+  expect(occurrences).toBe(1);
+
+  await setCaretAfterText(page, 'Recovery target paragraph.');
+  await page.keyboard.type(' Typed after recovery.');
+  await expectSaved(page);
+  await waitForPersistedMarkdown(request, library, 'Typed after recovery.');
+
+  await context.close();
 });
 
 test('raw_markdown blocks render their source and survive checkpoints', async ({

@@ -162,6 +162,7 @@ import { RemoteCursorOverlay } from '../collab/RemoteCursorOverlay';
 import {
   RUST_WS_PROVIDER_TYPE,
   RustWsProviderWrapper,
+  collabWebSocketBaseUrl,
   registerRustWsProviderType,
 } from '../collab/rust-ws-provider';
 import {
@@ -502,25 +503,73 @@ export function PlateMarkdownEditor({
     return () => {
       disposed = true;
       window.clearTimeout(initTimer);
-      if (initStarted) yjs.destroy();
+      if (initStarted) {
+        yjs.destroy();
+        // The plugin's destroy() skips providers that never connected, and
+        // a never-opened y-websocket would otherwise keep retrying forever
+        // with this editor's (stale, possibly bootstrap-seeded) doc — and
+        // merge it into a freshly seeded session on recovery. Sweep every
+        // provider explicitly, connected or not.
+        for (const provider of editor.getOption(YjsPlugin, '_providers') ?? []) {
+          provider.destroy();
+        }
+      }
     };
     // `content` is deliberately NOT a dependency: it is only the bootstrap
     // value for an empty room; once live, the session doc is authoritative.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collabDocumentId, collabEnabled, collabEpoch, editor, storeHydrate]);
 
-  // Reconnect loop: while collab is wanted but not live, mount a fresh
-  // attempt every RECONNECT_RETRY_MS once the current attempt has finished
-  // initializing (sync or timeout). The provider itself never retries — a
-  // stale Y.Doc must not merge back into a freshly seeded session.
+  // Reconnect probe: while collab is wanted but not live, poll the collab
+  // endpoint with a bare WebSocket and remount a fresh editor + doc only
+  // once a connection actually establishes. The visible (stale) editor
+  // stays mounted read-only across the whole outage — the surface never
+  // blanks between retries — and only a born-fresh doc ever joins the
+  // recovered session. (Providers themselves never retry; see
+  // rust-ws-provider.ts.)
   useEffect(() => {
     if (!collabEnabled || collabLive || !collabInitCompleted) return;
-    const timer = window.setTimeout(() => {
-      collabDebug('reconnect.retry', { epoch: collabEpoch + 1 });
-      setCollabEpoch((epoch) => epoch + 1);
-    }, RECONNECT_RETRY_MS);
-    return () => window.clearTimeout(timer);
-  }, [collabEnabled, collabEpoch, collabInitCompleted, collabLive]);
+    let disposed = false;
+    let probe: WebSocket | null = null;
+    let timer: number | null = null;
+
+    const schedule = () => {
+      if (disposed) return;
+      timer = window.setTimeout(attempt, RECONNECT_RETRY_MS);
+    };
+    const attempt = () => {
+      if (disposed) return;
+      try {
+        probe = new WebSocket(`${collabWebSocketBaseUrl()}/${collabDocumentId}`);
+      } catch {
+        schedule();
+        return;
+      }
+      const socket = probe;
+      socket.onopen = () => {
+        socket.onclose = null;
+        socket.close();
+        probe = null;
+        if (disposed) return;
+        collabDebug('reconnect.probe_succeeded', {});
+        setCollabEpoch((epoch) => epoch + 1);
+      };
+      socket.onclose = () => {
+        probe = null;
+        schedule();
+      };
+    };
+    attempt();
+
+    return () => {
+      disposed = true;
+      if (timer !== null) window.clearTimeout(timer);
+      if (probe) {
+        probe.onclose = null;
+        probe.close();
+      }
+    };
+  }, [collabDocumentId, collabEnabled, collabInitCompleted, collabLive]);
 
   useEffect(() => {
     if (collabEnabled) return;

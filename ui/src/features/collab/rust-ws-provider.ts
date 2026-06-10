@@ -114,17 +114,23 @@ export class RustWsProviderWrapper implements UnifiedProvider {
       };
     }
 
+    // One connection attempt per provider: sessions are server-seeded and a
+    // Y.Doc that has fallen out of one (or bootstrapped locally while the
+    // server was unreachable) must never sync back into a freshly seeded
+    // room — it would merge stale content in as duplicates. The editor
+    // reconnects by mounting a fresh doc + provider instead
+    // (PlateMarkdownEditor). The halt hangs off 'connection-close' because
+    // y-websocket emits NO status:'disconnected' for an attempt that never
+    // opened — only 'connection-close' fires for every socket close, opened
+    // or not. Deferred one microtask: the event fires while the provider
+    // still references the closing socket, and disconnecting synchronously
+    // would recurse into the same close path.
+    this.provider.on('connection-close', () => {
+      queueMicrotask(() => this.provider.disconnect());
+    });
     this.provider.on('status', ({ status }) => {
       const wasConnected = this._isConnected;
       this._isConnected = status === 'connected';
-      if (status === 'disconnected') {
-        // One connection attempt per provider: sessions are server-seeded
-        // and a Y.Doc that has fallen out of one must never sync back into
-        // a freshly seeded room (it would merge stale content in as
-        // duplicates). The editor reconnects by mounting a fresh
-        // doc + provider instead (PlateMarkdownEditor).
-        this.provider.disconnect();
-      }
       if (this._isConnected && !wasConnected) {
         this.onConnect?.();
       } else if (!this._isConnected && wasConnected) {

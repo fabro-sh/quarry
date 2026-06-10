@@ -101,7 +101,7 @@ describe('RustWsProviderWrapper', () => {
     expect(received).toHaveLength(1);
   });
 
-  it('stops the underlying provider on disconnect instead of letting it rejoin with a stale doc', () => {
+  it('stops the underlying provider on disconnect instead of letting it rejoin with a stale doc', async () => {
     const doc = new Y.Doc();
     const awareness = new Awareness(doc);
     const fakeProvider = new FakeProvider(awareness, doc);
@@ -114,11 +114,32 @@ describe('RustWsProviderWrapper', () => {
     });
 
     fakeProvider.emitStatus('connected');
+    fakeProvider.emitConnectionClose();
     fakeProvider.emitStatus('disconnected');
+    await Promise.resolve();
     // y-websocket retries closed sockets with the SAME Y.Doc; the wrapper
     // must halt that (reconnects mount a fresh doc + provider instead).
     expect(fakeProvider.disconnect).toHaveBeenCalledOnce();
     expect(onDisconnect).toHaveBeenCalledOnce();
+  });
+
+  it('halts retries for a connection attempt that never opened', async () => {
+    const doc = new Y.Doc();
+    const awareness = new Awareness(doc);
+    const fakeProvider = new FakeProvider(awareness, doc);
+    new RustWsProviderWrapper({
+      awareness,
+      doc,
+      options: { providerFactory: () => fakeProvider, roomName: 'doc-1' },
+    });
+
+    // y-websocket emits NO status:'disconnected' when the socket never
+    // opened — only 'connection-close'. Without halting here, a refused
+    // connect retries forever with a stale bootstrap-seeded doc and merges
+    // it into the recovered session as duplicated content.
+    fakeProvider.emitConnectionClose();
+    await Promise.resolve();
+    expect(fakeProvider.disconnect).toHaveBeenCalledOnce();
   });
 });
 
@@ -165,6 +186,11 @@ class FakeProvider implements WebsocketProviderLike {
   emitStatus(status: 'connected' | 'disconnected' | 'connecting') {
     this.wsconnected = status === 'connected';
     this.emit('status', { status });
+  }
+
+  /** Fires for every socket close, opened or not (unlike status). */
+  emitConnectionClose() {
+    this.emit('connection-close', null, this as never);
   }
 
   emitSync(isSynced: boolean) {
