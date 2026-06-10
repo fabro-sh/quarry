@@ -710,204 +710,6 @@ async fn agent_review_matches_snapshot_errors_for_missing_and_non_markdown() {
 }
 
 #[tokio::test]
-async fn agent_review_post_processes_mixed_review_and_edit_operations() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
-    let library = store.create_library("agentreviewpost").await.unwrap();
-    store
-        .put_document(
-            &library.slug,
-            "notes/review.md",
-            b"Keep {++good++}{#s1}. {==Needs text==}{>>Expand this.<<}{#c1}\n\n---\ncomments:\n  c1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user\nsuggestions:\n  s1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: AI\n"
-                .to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
-        .await
-        .unwrap();
-    let app = router(store);
-
-    let snapshot = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/agentreviewpost/documents/notes/review.md/snapshot")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(snapshot.status(), StatusCode::OK);
-    let snapshot: Value = response_json(snapshot).await;
-    let base_token = snapshot["baseToken"].as_str().unwrap();
-    let first_ref = snapshot["blocks"][0]["ref"].clone();
-
-    let response = app
-        .clone()
-        .oneshot(json_request(
-            Method::POST,
-            "/v1/libraries/agentreviewpost/documents/notes/review.md/review",
-            serde_json::json!({
-                "baseToken": base_token,
-                "by": "Codex",
-                "operations": [
-                    { "op": "suggestion.accept", "id": "s1" },
-                    {
-                        "op": "edit.replace_block",
-                        "ref": first_ref,
-                        "block": { "markdown": "Keep good. Expanded text.\n" }
-                    },
-                    { "op": "comment.resolve", "id": "c1" }
-                ]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body: Value = response_json(response).await;
-    assert_eq!(body["dryRun"], false);
-    assert_eq!(body["results"].as_array().unwrap().len(), 3);
-    assert_eq!(body["review"]["comments"], serde_json::json!([]));
-    assert_eq!(body["review"]["suggestions"], serde_json::json!([]));
-
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/agentreviewpost/documents/notes/review.md")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let markdown = String::from_utf8(
-        to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap()
-            .to_vec(),
-    )
-    .unwrap();
-    assert!(markdown.contains("Keep good. Expanded text."));
-    assert!(!markdown.contains("{++good++}{#s1}"));
-    assert!(!markdown.contains("{==Needs text==}"));
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/agentreviewpost/documents/notes/review.md/review")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let review: Value = response_json(response).await;
-    assert_eq!(review["comments"], serde_json::json!([]));
-    assert_eq!(review["suggestions"], serde_json::json!([]));
-}
-
-#[tokio::test]
-async fn agent_ops_comment_reply_validates_parent_and_body() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
-    let library = store.create_library("agentreplyvalidation").await.unwrap();
-    let markdown = "See {==this==}{>>Check it<<}{#c1}.\n\n---\ncomments:\n  c1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user\n  r1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    body: Existing reply.\n    by: user\n    re: c1\n";
-    let written = store
-        .put_document(
-            &library.slug,
-            "notes/review.md",
-            markdown.as_bytes().to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
-        .await
-        .unwrap();
-    let app = router(store);
-    let base_token = format!("\"{}\"", written.version.id);
-
-    for request in [
-        ops_request(
-            &base_token,
-            serde_json::json!({
-                "op": "comment.reply",
-                "id": "r2",
-                "body": "Missing parent."
-            }),
-        ),
-        ops_request(
-            &base_token,
-            serde_json::json!({
-                "op": "comment.reply",
-                "id": "r2",
-                "parentId": "missing",
-                "body": "Missing parent."
-            }),
-        ),
-        ops_request(
-            &base_token,
-            serde_json::json!({
-                "op": "comment.reply",
-                "id": "r2",
-                "parentId": "r1",
-                "body": "Reply to a reply."
-            }),
-        ),
-        ops_request(
-            &base_token,
-            serde_json::json!({
-                "op": "comment.reply",
-                "id": "r1",
-                "parentId": "c1",
-                "body": "Duplicate id."
-            }),
-        ),
-        ops_request(
-            &base_token,
-            serde_json::json!({
-                "op": "comment.reply",
-                "id": "r2",
-                "parentId": "c1"
-            }),
-        ),
-    ] {
-        let response = app
-            .clone()
-            .oneshot(json_request(
-                Method::POST,
-                "/v1/libraries/agentreplyvalidation/documents/notes/review.md/ops",
-                request,
-            ))
-            .await
-            .unwrap();
-        assert!(
-            response.status().is_client_error(),
-            "expected client error, got {}",
-            response.status()
-        );
-    }
-}
-
-#[tokio::test]
 async fn agent_presence_records_status_by_document() {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {
@@ -3155,21 +2957,7 @@ async fn get_block_review(app: &axum::Router, path: &str, include_resolved: bool
 }
 
 async fn raw_version_count(app: &axum::Router, path: &str) -> usize {
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!(
-                    "/v1/libraries/blocks/documents/{path}/versions/raw"
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    response_json(response).await.as_array().unwrap().len()
+    raw_versions(app, path).await.as_array().unwrap().len()
 }
 
 fn assert_typed_error(status: StatusCode, body: &Value, code: &str, retryable: bool) {
@@ -3935,6 +3723,21 @@ async fn block_transaction_typed_reference_errors() {
     .await;
     assert_typed_error(status, &body, "ANCHOR_NOT_FOUND", false);
 
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-reply-missing-parent",
+            serde_json::json!([{
+                "op": "comment.reply",
+                "item_id": "no-such-parent",
+                "body": "orphan reply"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "ANCHOR_NOT_FOUND", false);
+
     let tree = get_block_tree(&app, "doc.md").await;
     let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
     let (status, body) = post_block_transaction(
@@ -4467,47 +4270,56 @@ async fn wait_for_markdown_containing(app: &axum::Router, path: &str, needle: &s
 }
 
 #[tokio::test]
-async fn legacy_edit_and_ops_endpoints_are_quarantined() {
+async fn legacy_edit_ops_and_review_process_endpoints_are_quarantined() {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Hello.\n").await;
 
-    let edit = app
-        .clone()
-        .oneshot(json_request(
-            Method::POST,
-            "/v1/libraries/blocks/documents/doc.md/edit",
-            serde_json::json!({"baseToken": "x", "operations": []}),
-        ))
-        .await
-        .unwrap();
-    let edit_status = edit.status();
-    let edit_body = response_json(edit).await;
-    assert_eq!(edit_status, StatusCode::GONE);
-    assert_eq!(edit_body["code"], "UNSUPPORTED_LEGACY_ENDPOINT");
-    assert_eq!(edit_body["retryable"], false);
-    assert!(edit_body["message"]
-        .as_str()
-        .unwrap()
-        .contains("/v1/libraries/blocks/documents/doc.md/transactions"));
+    async fn assert_quarantined(app: &axum::Router, endpoint: &str, body: Value) {
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                Method::POST,
+                &format!("/v1/libraries/blocks/documents/doc.md{endpoint}"),
+                body,
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = response_json(response).await;
+        assert_eq!(status, StatusCode::GONE, "{endpoint}: {body}");
+        assert_eq!(body["code"], "UNSUPPORTED_LEGACY_ENDPOINT");
+        assert_eq!(body["retryable"], false);
+        assert!(body["message"]
+            .as_str()
+            .unwrap()
+            .contains("/v1/libraries/blocks/documents/doc.md/transactions"));
+    }
 
-    let ops = app
-        .clone()
-        .oneshot(json_request(
-            Method::POST,
-            "/v1/libraries/blocks/documents/doc.md/ops",
-            ops_request("x", serde_json::json!({"op": "comment.add"})),
-        ))
-        .await
-        .unwrap();
-    let ops_status = ops.status();
-    let ops_body = response_json(ops).await;
-    assert_eq!(ops_status, StatusCode::GONE);
-    assert_eq!(ops_body["code"], "UNSUPPORTED_LEGACY_ENDPOINT");
-    assert_eq!(ops_body["retryable"], false);
-    assert!(ops_body["message"]
-        .as_str()
-        .unwrap()
-        .contains("/transactions"));
+    assert_quarantined(
+        &app,
+        "/edit",
+        serde_json::json!({"baseToken": "x", "operations": []}),
+    )
+    .await;
+    assert_quarantined(
+        &app,
+        "/ops",
+        ops_request("x", serde_json::json!({"op": "comment.add"})),
+    )
+    .await;
+    assert_quarantined(
+        &app,
+        "/review",
+        serde_json::json!({
+            "baseToken": "x",
+            "operations": [{ "op": "comment.resolve", "id": "c1" }]
+        }),
+    )
+    .await;
+
+    // The read-side review projection is unaffected by the quarantine.
+    let review = get_block_review(&app, "doc.md", false).await;
+    assert_eq!(review["comments"], serde_json::json!([]));
 }
 
 #[tokio::test]
@@ -4562,6 +4374,77 @@ fn nth_block_text_in(txn: &mut yrs::TransactionMut<'_>, index: usize) -> XmlText
         })
         .collect();
     embeds[index].clone()
+}
+
+#[tokio::test]
+async fn multiple_typed_updates_coalesce_into_one_debounced_checkpoint() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "Coalesce target.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+    let versions_before = raw_version_count(&app, "live.md").await;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.insert(txn, 16, " one");
+    })
+    .await;
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.insert(txn, 20, " two");
+    })
+    .await;
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.insert(txn, 24, " three");
+    })
+    .await;
+
+    // All three updates land within one debounce window: exactly ONE new
+    // version, whose history row is the coalesced browser_session commit.
+    let markdown = wait_for_markdown_containing(&app, "live.md", "three").await;
+    assert_eq!(markdown, "Coalesce target. one two three\n");
+    let versions = raw_versions(&app, "live.md").await;
+    let versions = versions.as_array().unwrap();
+    assert_eq!(versions.len(), versions_before + 1);
+    let checkpoint = &versions[0];
+    assert_eq!(checkpoint["transaction_actor"], "browser");
+    assert_eq!(checkpoint["transaction_message"], "Live session edits");
+    assert_eq!(
+        checkpoint["transaction_provenance"]["history"]["kind"],
+        "autosave"
+    );
+    assert_eq!(
+        checkpoint["transaction_provenance"]["history"]["reason"],
+        "session_checkpoint"
+    );
+
+    // Leaving with nothing new to persist adds no further version.
+    socket.close(None).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        raw_version_count(&app, "live.md").await,
+        versions_before + 1
+    );
+    server.abort();
+}
+
+async fn raw_versions(app: &axum::Router, path: &str) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v1/libraries/blocks/documents/{path}/versions/raw"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response_json(response).await
 }
 
 #[tokio::test]
