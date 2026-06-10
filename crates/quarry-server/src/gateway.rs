@@ -135,10 +135,11 @@
 //! ordinary transactions here: rows-mode or session-mode per the switch,
 //! identity-preserving, conflicts as `conflict.add` ops.
 //!
-//! ## Transitional caveats (until Phase 5 replaces the legacy browser)
+//! ## Known limitation (assessed by Phase 5, recorded for Phase 7)
 //!
-//! - A PUT from a session PARTICIPANT is a checkpoint trigger, not a write
-//!   (see the `session` module docs).
+//! Session-mode commit failure can land merged content without its
+//! review-item side effects when the caller ignores the typed retryable
+//! error — see the HONEST WINDOW note in [`apply_session_transaction`].
 
 use crate::{
     json_response, json_with_etag, AgentBlockRef, AgentReviewComment, AgentReviewReply,
@@ -2169,9 +2170,19 @@ async fn apply_session_transaction(
         // retry. Phase 4 narrowed the trigger class to writers that still
         // bypass this mutex — staged-transaction commits, version restores,
         // and direct store callers (every Markdown PUT / Git / FUSE / CLI /
-        // metadata write now routes through the gateway). Phase 5 owns the
-        // real fix: delete the remaining legacy producers, or defer the doc
-        // mutation until after the commit succeeds.
+        // metadata write now routes through the gateway).
+        //
+        // Phase 5 assessed the two candidate fixes and re-scoped the window
+        // to a recorded limitation (Phase 7) instead of fixing it here:
+        // committing BEFORE the doc mutation trades this window for a worse
+        // one (a commit whose doc apply then fails is silently REVERTED by
+        // the next checkpoint — an acked transaction lost, instead of a
+        // retryable error), and the real fix — persisting non-doc side
+        // effects in a pending queue keyed by client_tx_id, replayed on the
+        // next successful commit — is new durable machinery that none of
+        // the in-tree callers need: every gateway caller (markdown_write,
+        // Git, FUSE, CLI, REST agents) surfaces or retries the typed
+        // retryable Busy error.
         Err(QuarryError::PreconditionFailed(detail)) => {
             Err(GatewayFailure::Api(QuarryError::Busy(detail).into()))
         }
