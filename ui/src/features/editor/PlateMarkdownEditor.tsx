@@ -463,6 +463,7 @@ export function PlateMarkdownEditor({
     editor.setOption(SuggestionPlugin, 'currentUserId', author);
   }, [author, editor]);
 
+
   // The mode selector is the single source of truth for Suggesting: only that
   // mode tracks edits as suggestion marks (via withSuggestion).
   useEffect(() => {
@@ -619,13 +620,19 @@ export function PlateMarkdownEditor({
 
     const publishFromSharedDoc = () => {
       if (disposed) return;
+      // Bump the value revision synchronously: the deferred timer below can
+      // be cancelled by an effect re-run racing this update (the remote
+      // change itself re-renders the app), and a missed bump leaves
+      // version-keyed selectors (the review rail) stale.
+      setExternalValueRevision((revision) => revision + 1);
       if (yjsChangeFallbackTimerRef.current !== null) {
         window.clearTimeout(yjsChangeFallbackTimerRef.current);
       }
+      // Serialize on a 0ms timer: the doc 'update' event fires before
+      // slate-yjs has applied the change to the editor children.
       yjsChangeFallbackTimerRef.current = window.setTimeout(() => {
         yjsChangeFallbackTimerRef.current = null;
         if (disposed) return;
-        setExternalValueRevision((revision) => revision + 1);
         publishSerializedValue(editor.children as PlateValue, {
           guardUnhydratedBlank: true,
         });

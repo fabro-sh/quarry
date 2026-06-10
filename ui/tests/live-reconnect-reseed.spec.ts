@@ -32,7 +32,18 @@ test('disconnect goes read-only; reconnect reseeds a fresh doc from canonical st
   await waitForPersistedMarkdown(request, library, 'Typed before drop.');
 
   // Sever the connection: the editor must become read-only and say so.
+  // Offline emulation blocks the retry attempts; closing the established
+  // socket forces the actual disconnect.
   await user.context.setOffline(true);
+  await user.page.evaluate(() => {
+    const sockets =
+      (window as Window & { __quarrySockets?: WebSocket[] }).__quarrySockets ?? [];
+    for (const socket of sockets) {
+      // Only the collab socket: killing Vite's HMR socket makes the dev
+      // client reload the page into an offline error page.
+      if (socket.url.includes('/v1/collab/')) socket.close();
+    }
+  });
   await expect(user.page.locator('[data-collab-save-state="reconnecting"]')).toBeVisible({
     timeout: 20_000,
   });
@@ -115,6 +126,17 @@ async function openDocument(browser: Browser, library: string) {
   await context.addInitScript(() => {
     window.localStorage.setItem('quarry:author', 'Avery');
     window.localStorage.setItem('quarry:theme', 'light');
+    // Track sockets so the test can sever an ESTABLISHED collab connection
+    // (offline emulation alone does not kill open websockets).
+    const sockets: WebSocket[] = [];
+    (window as Window & { __quarrySockets?: WebSocket[] }).__quarrySockets = sockets;
+    const NativeWebSocket = window.WebSocket;
+    window.WebSocket = class extends NativeWebSocket {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols);
+        sockets.push(this);
+      }
+    } as typeof WebSocket;
   });
   const page = await context.newPage();
   await page.goto(

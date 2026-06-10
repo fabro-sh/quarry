@@ -11,6 +11,8 @@ export default defineConfig({
     },
   ],
   testDir: './tests',
+  // live-*.spec.ts run against a real quarry server via playwright.live.config.ts.
+  testIgnore: /live-.*\.spec\.ts/,
   use: {
     baseURL: 'http://127.0.0.1:5173',
     trace: 'retain-on-failure',
