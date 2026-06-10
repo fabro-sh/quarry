@@ -459,12 +459,41 @@ impl FuseProjection {
             if self.directory_exists(&to_path).await? {
                 return Err(QuarryError::Conflict(format!("{to_path} is a directory")));
             }
-            if self
+            let target_exists = self
                 .store
                 .head_document(&self.library, &to_path)
                 .await
-                .is_ok()
-            {
+                .is_ok();
+            if target_exists && is_block_document(&to_path, &content_type_for_path(&to_path)) {
+                // The atomic-save pattern (vim/sed -i/emacs: write a temp
+                // file, rename it over the document) is a WHOLE-FILE WRITE
+                // to the TARGET document, not a replacement: the temp file's
+                // content reconciles through the Phase 4 writer, preserving
+                // the target's document id, block ids, review anchors, and
+                // any live session; then the temp document is removed.
+                // There is no open handle on the target, so no captured
+                // base: the merge is the two-way degenerate case (base =
+                // current canonical), the same contract as the CLI. A temp
+                // file that is not UTF-8 is a content error (the target is
+                // a markdown document), surfaced as an errno — never a
+                // silent byte replacement that would destroy the projection.
+                let source = self.store.get_document(&self.library, &from_path).await?;
+                let markdown = String::from_utf8(source.content).map_err(|_| {
+                    QuarryError::InvalidInput(format!(
+                        "{to_path} is a markdown document; renaming {from_path} over it \
+                         requires valid UTF-8 content"
+                    ))
+                })?;
+                self.store
+                    .write_block_markdown(self.block_write(&to_path, markdown, None, None))
+                    .await?;
+                return self
+                    .store
+                    .delete_document(&self.library, &from_path, DocumentSource::Fuse)
+                    .await
+                    .map(|_| ());
+            }
+            if target_exists {
                 return self
                     .store
                     .replace_document(&self.library, &from_path, &to_path, DocumentSource::Fuse)

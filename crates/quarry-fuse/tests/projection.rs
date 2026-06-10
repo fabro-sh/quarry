@@ -294,25 +294,30 @@ async fn projection_rename_file_over_existing_file_replaces_target() {
     let projection = FuseProjection::open(store.clone(), &library.slug, false)
         .await
         .unwrap();
-    let source_inode = projection
-        .attr("drafts/.current.md.tmp")
+    let target_id = store
+        .head_document(&library.slug, "drafts/current.md")
         .await
         .unwrap()
-        .inode;
+        .id;
+    let target_inode = projection.attr("drafts/current.md").await.unwrap().inode;
 
     projection
         .rename("drafts/.current.md.tmp", "drafts/current.md")
         .await
         .unwrap();
 
+    // Phase 4: renaming over a markdown document is a whole-file write to
+    // the TARGET — its identity (document id, inode) survives and the temp
+    // file's content lands through the reconciler.
     let document = store
         .get_document(&library.slug, "drafts/current.md")
         .await
         .unwrap();
     assert_eq!(document.content, b"new\n");
+    assert_eq!(document.id, target_id);
     assert_eq!(
         projection.attr("drafts/current.md").await.unwrap().inode,
-        source_inode
+        target_inode
     );
     assert!(projection.attr("drafts/.current.md.tmp").await.is_err());
 }
@@ -841,4 +846,91 @@ async fn fuse_flush_during_an_active_session_converges_through_the_session() {
 
     socket.close(None).await.ok();
     server.abort();
+}
+
+/// The editor atomic-save pattern (vim: write the buffer to a temp file,
+/// rename it over the document) routes through the reconciler: the target
+/// document id survives, sibling block ids and live anchors are preserved,
+/// and the temp file's edit merges instead of replacing the projection.
+#[tokio::test]
+async fn atomic_save_rename_preserves_target_identity_block_ids_and_anchors() {
+    let store = test_store().await;
+    let library = store.create_library("notes").await.unwrap();
+    let document_id = import_markdown(
+        &store,
+        &library.slug,
+        "doc.md",
+        "# Title\n\nAlpha.\n\nBravo.\n",
+    )
+    .await;
+    let ids_before = top_level_ids(&store.load_block_tree(&document_id).await.unwrap());
+    let anchor = store
+        .put_block_review_item(quarry_storage::NewBlockReviewItem {
+            document_id: document_id.clone(),
+            block_id: ids_before[1].clone(),
+            kind: quarry_storage::BlockReviewKind::Comment,
+            start_offset: 0,
+            end_offset: 5,
+            body: Some("anchored on alpha".to_string()),
+            replacement: None,
+            author: Some("Avery".to_string()),
+            state: quarry_storage::BlockReviewState::Open,
+            quote: None,
+            context_before: None,
+            context_after: None,
+            parent_item_id: None,
+        })
+        .await
+        .unwrap();
+
+    let projection = FuseProjection::open(store.clone(), &library.slug, false)
+        .await
+        .unwrap();
+    // vim reads the document, edits one block, writes the buffer to a temp
+    // file in the same directory…
+    let current = String::from_utf8(
+        store
+            .get_document(&library.slug, "doc.md")
+            .await
+            .unwrap()
+            .content,
+    )
+    .unwrap();
+    let edited = current.replace("Bravo.", "Bravo, atomically saved.");
+    let handle = projection.create_file("doc.md.tmp").await.unwrap();
+    projection
+        .write_handle(handle, 0, edited.as_bytes())
+        .await
+        .unwrap();
+    projection.release_handle(handle).await.unwrap();
+    // …then renames it over the original.
+    projection.rename("doc.md.tmp", "doc.md").await.unwrap();
+
+    // The target document survived with its identity and projection intact.
+    assert_eq!(
+        store
+            .head_document(&library.slug, "doc.md")
+            .await
+            .unwrap()
+            .id,
+        document_id
+    );
+    let rows = store.load_block_tree(&document_id).await.unwrap();
+    assert_eq!(top_level_ids(&rows), ids_before, "sibling ids survive");
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.block_id == ids_before[2])
+            .unwrap()
+            .text,
+        "Bravo, atomically saved."
+    );
+    let items = store.list_block_review_items(&document_id).await.unwrap();
+    let kept = items.iter().find(|item| item.id == anchor.id).unwrap();
+    assert_eq!(kept.state, quarry_storage::BlockReviewState::Open);
+    assert_eq!(kept.block_id, ids_before[1]);
+    // The temp document is gone.
+    assert!(store
+        .head_document(&library.slug, "doc.md.tmp")
+        .await
+        .is_err());
 }
