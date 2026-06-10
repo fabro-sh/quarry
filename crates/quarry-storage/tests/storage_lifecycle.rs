@@ -2,8 +2,9 @@ use quarry_core::{
     DocumentSource, DocumentVersion, QuarryError, WritePrecondition, INLINE_CONTENT_THRESHOLD,
 };
 use quarry_storage::{
-    group_version_history, BlockReviewKind, BlockReviewState, NewBlockReviewItem, QuarryStore,
-    StoreConfig, StoreEventKind, TransactionMetadata,
+    group_version_history, BlockMutationCommit, BlockMutationOutcome, BlockReviewKind,
+    BlockReviewState, NewBlockReviewItem, QuarryStore, StoreConfig, StoreEventKind,
+    TransactionMetadata,
 };
 use std::time::Duration;
 
@@ -2995,4 +2996,258 @@ async fn empty_body_import_canonicalizes_to_one_empty_paragraph_row() {
             .unwrap(),
         "---\ntitle: Stub\n---\n"
     );
+}
+
+#[tokio::test]
+async fn block_mutation_commit_applies_rows_version_history_and_replays_duplicates() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+    let library = store.create_library("mutate").await.unwrap();
+    let imported = store
+        .import_block_document(
+            &library.slug,
+            "doc.md",
+            "First paragraph.\n",
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    let state = store
+        .block_mutation_state(&library.slug, "doc.md", "ctx-1")
+        .await
+        .unwrap();
+    assert_eq!(state.document_id, imported.document.id);
+    assert_eq!(state.head_version_id, imported.version.id);
+    assert!(!state.projection_missing);
+    assert!(state.replay.is_none());
+    assert!(state.version_ids.contains(&imported.version.id));
+
+    let mut rows = state.rows.clone();
+    rows[0].text = "Rewritten paragraph.".to_string();
+    let commit = BlockMutationCommit {
+        document_id: state.document_id.clone(),
+        expected_head_version_id: state.head_version_id.clone(),
+        client_tx_id: "ctx-1".to_string(),
+        actor_kind: "agent".to_string(),
+        actor_id: Some("agent-7".to_string()),
+        transaction_actor: Some("Agent Seven".to_string()),
+        source: DocumentSource::Rest,
+        recorded_ops: serde_json::json!({"ops": [], "ack": {"status": "committed"}}),
+        metadata: state.metadata.clone(),
+        content_type: state.content_type.clone(),
+        rows: rows.clone(),
+        review_items: state.review_items.clone(),
+        normalized_markdown: "Rewritten paragraph.\n".to_string(),
+    };
+    let BlockMutationOutcome::Applied { outcome, record } = store
+        .commit_block_mutation(&library.slug, commit.clone())
+        .await
+        .unwrap()
+    else {
+        panic!("first commit must apply");
+    };
+    assert_eq!(
+        record.resulting_version_id,
+        Some(outcome.version.id.clone())
+    );
+    assert_eq!(
+        store
+            .export_block_document(&state.document_id)
+            .await
+            .unwrap(),
+        "Rewritten paragraph.\n"
+    );
+    let document = store.get_document(&library.slug, "doc.md").await.unwrap();
+    assert_eq!(document.version.id, outcome.version.id);
+    assert_eq!(
+        String::from_utf8(document.content).unwrap(),
+        "Rewritten paragraph.\n"
+    );
+
+    // Duplicate client_tx_id replays the stored record without re-applying.
+    let BlockMutationOutcome::Replayed(replayed) = store
+        .commit_block_mutation(&library.slug, commit)
+        .await
+        .unwrap()
+    else {
+        panic!("duplicate commit must replay");
+    };
+    assert_eq!(replayed, record);
+    let after_replay = store.get_document(&library.slug, "doc.md").await.unwrap();
+    assert_eq!(after_replay.version.id, outcome.version.id);
+}
+
+#[tokio::test]
+async fn block_mutation_commit_rejects_a_moved_head() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+    let library = store.create_library("stale").await.unwrap();
+    let imported = store
+        .import_block_document(
+            &library.slug,
+            "doc.md",
+            "Original.\n",
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let state = store
+        .block_mutation_state(&library.slug, "doc.md", "ctx-1")
+        .await
+        .unwrap();
+    // Another write moves the head between load and commit.
+    store
+        .import_block_document(
+            &library.slug,
+            "doc.md",
+            "Moved on.\n",
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    let error = store
+        .commit_block_mutation(
+            &library.slug,
+            BlockMutationCommit {
+                document_id: state.document_id.clone(),
+                expected_head_version_id: state.head_version_id.clone(),
+                client_tx_id: "ctx-1".to_string(),
+                actor_kind: "agent".to_string(),
+                actor_id: None,
+                transaction_actor: None,
+                source: DocumentSource::Rest,
+                recorded_ops: serde_json::json!({}),
+                metadata: state.metadata.clone(),
+                content_type: state.content_type.clone(),
+                rows: state.rows.clone(),
+                review_items: vec![],
+                normalized_markdown: "Original.\n".to_string(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, QuarryError::PreconditionFailed(_)));
+    let _ = imported;
+}
+
+#[tokio::test]
+async fn block_mutation_state_materializes_rows_for_legacy_written_documents() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+    let library = store.create_library("legacy-state").await.unwrap();
+    // A legacy put creates a markdown document with no block projection.
+    store
+        .put_document(
+            &library.slug,
+            "legacy.md",
+            b"# Title\n\nBody text.\n".to_vec(),
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    let state = store
+        .block_mutation_state(&library.slug, "legacy.md", "ctx-1")
+        .await
+        .unwrap();
+    assert!(state.projection_missing);
+    let shape: Vec<&str> = state
+        .rows
+        .iter()
+        .map(|row| row.block_type.as_str())
+        .collect();
+    assert_eq!(shape, vec!["h1", "p"]);
+    assert_eq!(state.rows[1].text, "Body text.");
+    // Nothing was persisted by the read.
+    assert!(store
+        .load_block_tree(&state.document_id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn block_mutation_commit_rejects_open_review_items_with_dead_anchors() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+    let library = store.create_library("anchors-guard").await.unwrap();
+    store
+        .import_block_document(
+            &library.slug,
+            "doc.md",
+            "Anchored text.\n",
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let state = store
+        .block_mutation_state(&library.slug, "doc.md", "ctx-1")
+        .await
+        .unwrap();
+    store
+        .put_block_review_item(NewBlockReviewItem {
+            document_id: state.document_id.clone(),
+            block_id: state.rows[0].block_id.clone(),
+            kind: BlockReviewKind::Comment,
+            start_offset: 0,
+            end_offset: 8,
+            body: Some("note".to_string()),
+            replacement: None,
+            author: None,
+            state: BlockReviewState::Open,
+            quote: None,
+            context_before: None,
+            context_after: None,
+            parent_item_id: None,
+        })
+        .await
+        .unwrap();
+    let state = store
+        .block_mutation_state(&library.slug, "doc.md", "ctx-1")
+        .await
+        .unwrap();
+
+    // Shrinking the text below the anchor without adjusting the open anchor
+    // must be rejected: the commit validates the final review set.
+    let mut rows = state.rows.clone();
+    rows[0].text = "Tiny".to_string();
+    let error = store
+        .commit_block_mutation(
+            &library.slug,
+            BlockMutationCommit {
+                document_id: state.document_id.clone(),
+                expected_head_version_id: state.head_version_id.clone(),
+                client_tx_id: "ctx-2".to_string(),
+                actor_kind: "agent".to_string(),
+                actor_id: None,
+                transaction_actor: None,
+                source: DocumentSource::Rest,
+                recorded_ops: serde_json::json!({}),
+                metadata: state.metadata.clone(),
+                content_type: state.content_type.clone(),
+                rows,
+                review_items: state.review_items.clone(),
+                normalized_markdown: "Tiny\n".to_string(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, QuarryError::InvalidInput(_)));
 }

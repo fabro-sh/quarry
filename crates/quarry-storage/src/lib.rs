@@ -1,8 +1,9 @@
 mod blocks;
 
 pub use blocks::{
-    document_kind, BlockReviewItem, BlockReviewKind, BlockReviewState, BlockShadowBase,
-    BlockTransactionRecord, DocumentKind, NewBlockReviewItem,
+    document_kind, BlockMutationCommit, BlockMutationOutcome, BlockMutationState, BlockReviewItem,
+    BlockReviewKind, BlockReviewState, BlockShadowBase, BlockTransactionRecord, DocumentKind,
+    NewBlockReviewItem,
 };
 
 use chrono::{DateTime, Utc};
