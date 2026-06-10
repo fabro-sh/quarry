@@ -135,7 +135,7 @@
 //! ordinary transactions here: rows-mode or session-mode per the switch,
 //! identity-preserving, conflicts as `conflict.add` ops.
 //!
-//! ## Known limitation (assessed by Phase 5, recorded for Phase 7)
+//! ## Known limitation (recorded in the README limitations)
 //!
 //! Session-mode commit failure can land merged content without its
 //! review-item side effects when the caller ignores the typed retryable
@@ -2150,10 +2150,10 @@ async fn apply_session_transaction(
         // particular, Phase 4 conflict artifacts (`conflict.add` is not
         // doc-represented) can be lost while the merged content still
         // arrives: content-without-its-conflicts if the caller does not
-        // retry. Phase 4 narrowed the trigger class to writers that still
-        // bypass this mutex — staged-transaction commits, version restores,
-        // and direct store callers (every Markdown PUT / Git / FUSE / CLI /
-        // metadata write now routes through the gateway).
+        // retry. The remaining writers that bypass this mutex are
+        // staged-transaction commits and direct store callers (every
+        // Markdown PUT / Git / FUSE / CLI / metadata write / version
+        // restore now routes through the gateway).
         //
         // Phase 5 assessed the two candidate fixes and re-scoped the window
         // to a recorded limitation (Phase 7) instead of fixing it here:

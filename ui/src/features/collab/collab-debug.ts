@@ -1,5 +1,5 @@
 // Toggleable collaboration-lifecycle logging. The collab path (SSE event
-// classification → editor mirroring → reconnect epochs) is hard to observe
+// classification → session updates → reconnect probes) is hard to observe
 // after the fact, so this channel emits structured `[collab]` console debug
 // lines at each decision point. It is a no-op unless explicitly enabled:
 //

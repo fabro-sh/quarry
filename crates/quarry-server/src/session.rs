@@ -59,11 +59,12 @@
 //!
 //! ## Known hazards (accepted)
 //!
-//! - Whole-file writes (Markdown PUT, Git, FUSE, CLI) do not race sessions:
-//!   Phase 4 routes them through the gateway dispatch, where they take this
-//!   module's document mutex and merge into the live doc as collaborator
-//!   edits. Only the legacy non-Markdown byte path and staged transaction
-//!   commits remain outside (they clear the projection fail-closed).
+//! - Whole-file writes (Markdown PUT, Git, FUSE, CLI, version restores) do
+//!   not race sessions: they route through the gateway dispatch, where they
+//!   take this module's document mutex and merge into the live doc as
+//!   collaborator edits. Only the legacy non-Markdown byte path and staged
+//!   transaction commits remain outside (they clear the projection
+//!   fail-closed) — a recorded limitation (see the README).
 //! - The collab websocket remains unauthenticated (phase-one loopback
 //!   posture, design delta 2); sessions do not widen exposure.
 //! - **Persistent checkpoint failure loses the session at discard.** When
