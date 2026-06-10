@@ -104,17 +104,25 @@ pub fn markdown_to_block_rows(
 
     let mut rows = Vec::new();
     let mut position = 0u32;
-    for segment in top_level_segments(markdown) {
-        match segment_rows(&segment, position, &mut mint_block_id) {
-            Ok(segment_rows) => {
-                position += segment_rows
-                    .iter()
-                    .filter(|row| row.parent_block_id.is_none())
-                    .count() as u32;
-                rows.extend(segment_rows);
-            }
-            Err(_) => {
-                let source = markdown[segment.range.clone()].trim_end_matches('\n');
+    for item in top_level_items(markdown) {
+        match item {
+            TopLevel::Parsed(segment) => match segment_rows(&segment, position, &mut mint_block_id)
+            {
+                Ok(segment_rows) => {
+                    position += segment_rows
+                        .iter()
+                        .filter(|row| row.parent_block_id.is_none())
+                        .count() as u32;
+                    rows.extend(segment_rows);
+                }
+                Err(_) => {
+                    let source = markdown[segment.range.clone()].trim_end_matches('\n');
+                    rows.push(raw_markdown_row(mint_block_id(), position, source));
+                    position += 1;
+                }
+            },
+            TopLevel::RawSlice(range) => {
+                let source = markdown[range].trim_end_matches('\n');
                 rows.push(raw_markdown_row(mint_block_id(), position, source));
                 position += 1;
             }
@@ -146,11 +154,7 @@ fn count_nodes(nodes: &[Node]) -> usize {
     nodes
         .iter()
         .map(|node| match node {
-            Node::Element { ty, children, .. }
-                if children
-                    .iter()
-                    .any(|child| is_block_element(ty.as_str(), child)) =>
-            {
+            Node::Element { children, .. } if children.iter().any(is_block_element) => {
                 1 + count_nodes(children)
             }
             _ => 1,
@@ -158,7 +162,7 @@ fn count_nodes(nodes: &[Node]) -> usize {
         .sum()
 }
 
-fn is_block_element(_parent_ty: &str, child: &Node) -> bool {
+fn is_block_element(child: &Node) -> bool {
     matches!(child, Node::Element { ty, .. }
         if ty != INLINE_LINK_TYPE && !INLINE_VOID_TYPES.contains(&ty.as_str()))
 }
@@ -259,12 +263,57 @@ struct Segment {
     range: Range<usize>,
 }
 
-fn top_level_segments(markdown: &str) -> Vec<Segment> {
+/// One top-level chunk of the document, in source order.
+enum TopLevel {
+    /// A run of pulldown events forming one top-level block.
+    Parsed(Segment),
+    /// A source slice with no event representation: a link reference
+    /// definition. Pulldown consumes definitions during parsing (used ones
+    /// are inlined into their links), so without this they would vanish from
+    /// the canonical rows. They become `raw_markdown` rows.
+    RawSlice(Range<usize>),
+}
+
+impl TopLevel {
+    fn start(&self) -> usize {
+        match self {
+            Self::Parsed(segment) => segment.range.start,
+            Self::RawSlice(range) => range.start,
+        }
+    }
+}
+
+fn top_level_items(markdown: &str) -> Vec<TopLevel> {
+    let parser = Parser::new_ext(markdown, browser_compatible_markdown_options());
+    let definitions: Vec<Range<usize>> = parser
+        .reference_definitions()
+        .iter()
+        .map(|(_, definition)| definition.span.clone())
+        .collect();
+    let mut items: Vec<TopLevel> = top_level_segments(parser)
+        .into_iter()
+        .map(TopLevel::Parsed)
+        .collect();
+    for span in definitions {
+        // A definition nested inside another block (e.g. a blockquote) is
+        // already covered by that block's source range; only standalone
+        // definitions become their own raw rows.
+        let nested = items.iter().any(|item| {
+            matches!(item, TopLevel::Parsed(segment)
+                if segment.range.start <= span.start && span.start < segment.range.end)
+        });
+        if !nested {
+            items.push(TopLevel::RawSlice(span));
+        }
+    }
+    items.sort_by_key(TopLevel::start);
+    items
+}
+
+fn top_level_segments(parser: Parser<'_>) -> Vec<Segment> {
     let mut segments: Vec<Segment> = Vec::new();
     let mut depth = 0usize;
-    for (event, range) in
-        Parser::new_ext(markdown, browser_compatible_markdown_options()).into_offset_iter()
-    {
+    for (event, range) in parser.into_offset_iter() {
         let event = event.into_static();
         match (&event, depth) {
             (Event::Start(_), 0) => {
@@ -343,9 +392,7 @@ fn collect_rows(
         return Err(Unsupported::new("bare text node at block level"));
     };
     let block_id = mint_block_id();
-    let is_container = children
-        .iter()
-        .any(|child| is_block_element(ty.as_str(), child));
+    let is_container = children.iter().any(is_block_element);
     let mut row = BlockRow {
         block_id: block_id.clone(),
         parent_block_id: parent.map(str::to_string),
@@ -359,7 +406,7 @@ fn collect_rows(
     if is_container {
         out.push(row);
         for (child_position, child) in children.iter().enumerate() {
-            if !is_block_element(ty.as_str(), child) {
+            if !is_block_element(child) {
                 return Err(Unsupported::new(format!(
                     "block <{ty}> mixes inline and block children"
                 )));

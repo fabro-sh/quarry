@@ -372,3 +372,111 @@ fn bold_link_groups_share_the_surrounding_mark_delimiters() {
     assert_eq!(children.len(), 5);
     assert_eq!(reexport(markdown), markdown);
 }
+
+#[test]
+fn multi_line_setext_heading_joins_with_spaces_and_stays_idempotent() {
+    let once = reexport("alpha\nbeta\n===\n");
+
+    assert_eq!(once, "# alpha beta\n");
+    assert_eq!(reexport(&once), once);
+}
+
+#[test]
+fn empty_heading_exports_without_a_trailing_space() {
+    let once = reexport("##\n");
+
+    assert_eq!(once, "##\n");
+    assert_eq!(reexport(&once), once);
+}
+
+#[test]
+fn all_space_code_span_does_not_grow_on_round_trip() {
+    let once = reexport("a ` ` b\n");
+
+    assert_eq!(once, "a ` ` b\n");
+    assert_eq!(reexport(&once), once);
+}
+
+#[test]
+fn link_reference_definitions_are_preserved_as_raw_rows() {
+    let markdown =
+        "See [docs][ref].\n\n[ref]: https://example.test\n\n[unused]: https://y.test \"Title\"\n";
+
+    let rows = import(markdown);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].block_type, "p");
+    assert_eq!(rows[0].links[0].url, "https://example.test");
+    assert_eq!(rows[1].block_type, "raw_markdown");
+    assert_eq!(
+        rows[1].attrs.get("markdown"),
+        Some(&json!("[ref]: https://example.test"))
+    );
+    assert_eq!(rows[2].block_type, "raw_markdown");
+    assert_eq!(
+        rows[2].attrs.get("markdown"),
+        Some(&json!("[unused]: https://y.test \"Title\""))
+    );
+
+    // The used reference inlines into its link; both definition lines stay.
+    let once = export(&rows);
+    assert_eq!(
+        once,
+        "See [docs](https://example.test).\n\n[ref]: https://example.test\n\n[unused]: https://y.test \"Title\"\n"
+    );
+    assert_eq!(reexport(&once), once);
+}
+
+#[test]
+fn unused_link_reference_definition_alone_survives_round_trip() {
+    let markdown = "para\n\n[unused]: https://x.test\n\nafter\n";
+
+    let once = reexport(markdown);
+    assert_eq!(once, markdown);
+    assert_eq!(reexport(&once), once);
+}
+
+#[test]
+fn mark_runs_with_edge_whitespace_hoist_the_whitespace_outside_delimiters() {
+    // Import can never produce this shape (CommonMark flanking rules), but
+    // Phase 2 mark ops will: a bold range covering a trailing space.
+    let row = BlockRow {
+        block_id: "b1".to_string(),
+        parent_block_id: None,
+        position: 0,
+        block_type: "p".to_string(),
+        attrs: attrs([] as [(&str, serde_json::Value); 0]),
+        text: "bold text".to_string(),
+        marks: vec![MarkRun {
+            start: 0,
+            end: 5,
+            marks: attrs([("bold", json!(true))]),
+        }],
+        links: vec![],
+    };
+
+    let once = export(std::slice::from_ref(&row));
+    assert_eq!(once, "**bold** text\n");
+    assert_eq!(reexport(&once), once);
+}
+
+#[test]
+fn whitespace_only_mark_run_drops_the_meaningless_delimiters() {
+    let row = BlockRow {
+        block_id: "b1".to_string(),
+        parent_block_id: None,
+        position: 0,
+        block_type: "p".to_string(),
+        attrs: attrs([] as [(&str, serde_json::Value); 0]),
+        text: "a b".to_string(),
+        marks: vec![MarkRun {
+            start: 1,
+            end: 2,
+            marks: attrs([("bold", json!(true))]),
+        }],
+        links: vec![],
+    };
+
+    let once = export(std::slice::from_ref(&row));
+    assert_eq!(once, "a b\n");
+    assert_eq!(reexport(&once), once);
+}

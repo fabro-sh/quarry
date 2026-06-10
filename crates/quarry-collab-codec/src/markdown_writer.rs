@@ -163,8 +163,14 @@ fn render_block(node: &Node) -> Result<String, Unsupported> {
         "p" => Ok(tidy_lines(&render_inline(children, true)?)),
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
             let level = ty[1..].parse::<usize>().expect("heading level digit");
-            let inline = tidy_lines(&render_inline(children, false)?);
-            Ok(format!("{} {inline}", "#".repeat(level)))
+            // ATX headings are single-line: a multi-line setext heading joins
+            // with spaces (anything else demotes the extra lines on re-parse).
+            let inline = tidy_lines(&render_inline(children, false)?).replace('\n', " ");
+            if inline.is_empty() {
+                Ok("#".repeat(level))
+            } else {
+                Ok(format!("{} {inline}", "#".repeat(level)))
+            }
         }
         "blockquote" => render_blockquote(children),
         "code_block" => render_code_block(attrs, children),
@@ -386,18 +392,64 @@ fn render_spans(
             .position(|span| !span_marks(span).contains_key(mark))
             .map(|offset| index + offset)
             .unwrap_or(spans.len());
-        let inner: Vec<Node> = spans[index..group_end]
+        let mut inner: Vec<Node> = spans[index..group_end]
             .iter()
             .map(|span| without_mark(span, mark))
             .collect();
-        let (open, close) = mark_delimiters(mark)?;
-        out.push_str(open);
-        *line_start = false;
-        render_spans(&inner, out, line_start)?;
-        out.push_str(close);
+        // Emphasis delimiters are not left/right flanking next to whitespace
+        // ("**bold **" re-parses as literal stars), so a run's edge
+        // whitespace is hoisted outside the delimiters.
+        let leading = hoist_leading_whitespace(&mut inner);
+        let trailing = hoist_trailing_whitespace(&mut inner);
+        push_escaped(&leading, out, line_start);
+        if !inner.is_empty() {
+            let (open, close) = mark_delimiters(mark)?;
+            out.push_str(open);
+            *line_start = false;
+            render_spans(&inner, out, line_start)?;
+            out.push_str(close);
+        }
+        push_escaped(&trailing, out, line_start);
         index = group_end;
     }
     Ok(())
+}
+
+fn hoist_leading_whitespace(spans: &mut Vec<Node>) -> String {
+    let mut hoisted = String::new();
+    while let Some(Node::Text { text, .. }) = spans.first_mut() {
+        let kept = text.trim_start_matches([' ', '\t', '\n']).len();
+        let split = text.len() - kept;
+        if split == 0 {
+            break;
+        }
+        hoisted.push_str(&text[..split]);
+        text.replace_range(..split, "");
+        if text.is_empty() {
+            spans.remove(0);
+        } else {
+            break;
+        }
+    }
+    hoisted
+}
+
+fn hoist_trailing_whitespace(spans: &mut Vec<Node>) -> String {
+    let mut hoisted = String::new();
+    while let Some(Node::Text { text, .. }) = spans.last_mut() {
+        let kept = text.trim_end_matches([' ', '\t', '\n']).len();
+        if kept == text.len() {
+            break;
+        }
+        hoisted.insert_str(0, &text[kept..]);
+        text.truncate(kept);
+        if text.is_empty() {
+            spans.pop();
+        } else {
+            break;
+        }
+    }
+    hoisted
 }
 
 fn render_atom(span: &Node, out: &mut String, line_start: &mut bool) -> Result<(), Unsupported> {
@@ -471,10 +523,15 @@ fn render_code_span(
     };
     let longest_run = text.split(|ch| ch != '`').map(str::len).max().unwrap_or(0);
     let fence = "`".repeat((longest_run + 1).max(1));
-    let needs_padding = text.starts_with('`')
-        || text.ends_with('`')
-        || text.starts_with(' ')
-        || text.ends_with(' ');
+    // CommonMark strips one space of padding only when the content is not
+    // entirely spaces, so all-space content must stay unpadded or it grows
+    // on every round trip.
+    let all_spaces = !text.is_empty() && text.chars().all(|ch| ch == ' ');
+    let needs_padding = !all_spaces
+        && (text.starts_with('`')
+            || text.ends_with('`')
+            || text.starts_with(' ')
+            || text.ends_with(' '));
     if needs_padding {
         out.push_str(&format!("{fence} {text} {fence}"));
     } else {
