@@ -882,6 +882,10 @@ impl QuarryStore {
             )
             .await?;
             publish_put_conn(&conn, &doc_id, &version.id).await?;
+            // A legacy put bypasses the block import path, so any block
+            // projection for this document is now stale: drop it fail-closed
+            // (see the `blocks` module docs).
+            blocks::clear_block_state_conn(&conn, &doc_id).await?;
             ensure_path_inodes_conn(&conn, &library.id, &path).await?;
             self.reindex_links_conn(&conn, &library.id).await?;
             commit_transaction_record_conn(&conn, &tx.id).await?;
@@ -1816,6 +1820,7 @@ impl QuarryStore {
             )
             .await
             .map_err(map_turso_error)?;
+            blocks::clear_block_state_conn(&conn, &doc_id).await?;
             delete_path_inode_conn(&conn, &library.id, &path).await?;
             self.reindex_links_conn(&conn, &library.id).await?;
             commit_transaction_record_conn(&conn, &tx.id).await?;
@@ -2333,6 +2338,7 @@ impl QuarryStore {
                         })?;
                         let doc_id = self.document_id_for_version_conn(&conn, &version_id).await?;
                         publish_put_conn(&conn, &doc_id, &version_id).await?;
+                        blocks::clear_block_state_conn(&conn, &doc_id).await?;
                         ensure_path_inodes_conn(&conn, &tx.library_id, &change.path).await?;
                         events.push(StoreEvent {
                             kind: StoreEventKind::DocumentPut,
@@ -2357,10 +2363,11 @@ impl QuarryStore {
                         {
                             conn.execute(
                                 "UPDATE documents SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
-                                params![now_timestamp(), doc_id],
+                                params![now_timestamp(), doc_id.clone()],
                             )
                             .await
                             .map_err(map_turso_error)?;
+                            blocks::clear_block_state_conn(&conn, &doc_id).await?;
                             delete_path_inode_conn(&conn, &tx.library_id, &change.path).await?;
                         }
                         events.push(StoreEvent {

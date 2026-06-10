@@ -12,6 +12,8 @@ pub type Result<T> = std::result::Result<T, QuarryError>;
 pub enum QuarryError {
     #[error("invalid path: {0}")]
     InvalidPath(String),
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
     #[error("not found: {0}")]
     NotFound(String),
     #[error("precondition failed: {0}")]

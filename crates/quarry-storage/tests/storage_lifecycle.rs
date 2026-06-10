@@ -2582,24 +2582,24 @@ async fn block_review_anchors_validate_utf16_boundaries_and_survive_restart() {
         .put_block_review_item(item(14, 15, BlockReviewState::Open))
         .await
         .unwrap_err();
-    assert!(matches!(split_pair, QuarryError::InvalidPath(_)));
+    assert!(matches!(split_pair, QuarryError::InvalidInput(_)));
     let past_end = store
         .put_block_review_item(item(0, 24, BlockReviewState::Open))
         .await
         .unwrap_err();
-    assert!(matches!(past_end, QuarryError::InvalidPath(_)));
+    assert!(matches!(past_end, QuarryError::InvalidInput(_)));
     let inverted = store
         .put_block_review_item(item(9, 4, BlockReviewState::Open))
         .await
         .unwrap_err();
-    assert!(matches!(inverted, QuarryError::InvalidPath(_)));
+    assert!(matches!(inverted, QuarryError::InvalidInput(_)));
     // A collapsed range means orphaned at the row layer: open is rejected,
     // orphaned is stored.
     let collapsed_open = store
         .put_block_review_item(item(5, 5, BlockReviewState::Open))
         .await
         .unwrap_err();
-    assert!(matches!(collapsed_open, QuarryError::InvalidPath(_)));
+    assert!(matches!(collapsed_open, QuarryError::InvalidInput(_)));
     let collapsed_orphaned = store
         .put_block_review_item(item(5, 5, BlockReviewState::Orphaned))
         .await
@@ -2809,4 +2809,190 @@ async fn block_shadow_bases_and_block_transactions_roundtrip() {
         .await
         .unwrap_err();
     assert!(matches!(duplicate, QuarryError::Conflict(_)));
+}
+
+#[tokio::test]
+async fn legacy_put_clears_the_block_projection_fail_closed() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+    let library = store.create_library("legacy").await.unwrap();
+    let outcome = store
+        .import_block_document(
+            &library.slug,
+            "doc.md",
+            "Imported paragraph.\n",
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let document_id = outcome.document.id.clone();
+    let block_id = store.load_block_tree(&document_id).await.unwrap()[0]
+        .block_id
+        .clone();
+    store
+        .put_block_review_item(NewBlockReviewItem {
+            document_id: document_id.clone(),
+            block_id,
+            kind: BlockReviewKind::Comment,
+            start_offset: 0,
+            end_offset: 8,
+            body: Some("note".to_string()),
+            replacement: None,
+            author: None,
+            state: BlockReviewState::Open,
+            quote: None,
+            context_before: None,
+            context_after: None,
+            parent_item_id: None,
+        })
+        .await
+        .unwrap();
+
+    // A legacy put bypasses the import path...
+    store
+        .put_document(
+            &library.slug,
+            "doc.md",
+            b"Rewritten outside the block path.\n".to_vec(),
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    // ...so the block projection is dropped rather than serving stale rows.
+    assert!(store
+        .load_block_tree(&document_id)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(store
+        .list_block_review_items(&document_id)
+        .await
+        .unwrap()
+        .is_empty());
+    let stale = store.export_block_document(&document_id).await.unwrap_err();
+    assert!(matches!(stale, QuarryError::NotFound(_)));
+    // The byte path still serves the legacy write.
+    assert_eq!(
+        store
+            .get_document(&library.slug, "doc.md")
+            .await
+            .unwrap()
+            .content,
+        b"Rewritten outside the block path.\n"
+    );
+
+    // Re-importing restores the projection.
+    store
+        .import_block_document(
+            &library.slug,
+            "doc.md",
+            "Imported again.\n",
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.export_block_document(&document_id).await.unwrap(),
+        "Imported again.\n"
+    );
+}
+
+#[tokio::test]
+async fn delete_document_removes_the_block_projection() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+    let library = store.create_library("deleting").await.unwrap();
+    let outcome = store
+        .import_block_document(
+            &library.slug,
+            "gone.md",
+            "Doomed paragraph.\n",
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let document_id = outcome.document.id.clone();
+    let block_id = store.load_block_tree(&document_id).await.unwrap()[0]
+        .block_id
+        .clone();
+    store
+        .put_block_review_item(NewBlockReviewItem {
+            document_id: document_id.clone(),
+            block_id,
+            kind: BlockReviewKind::Suggestion,
+            start_offset: 0,
+            end_offset: 6,
+            body: None,
+            replacement: Some("Saved".to_string()),
+            author: None,
+            state: BlockReviewState::Open,
+            quote: None,
+            context_before: None,
+            context_after: None,
+            parent_item_id: None,
+        })
+        .await
+        .unwrap();
+
+    store
+        .delete_document(&library.slug, "gone.md", DocumentSource::Rest)
+        .await
+        .unwrap();
+
+    assert!(store
+        .load_block_tree(&document_id)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(store
+        .list_block_review_items(&document_id)
+        .await
+        .unwrap()
+        .is_empty());
+    let exported = store.export_block_document(&document_id).await.unwrap_err();
+    assert!(matches!(exported, QuarryError::NotFound(_)));
+}
+
+#[tokio::test]
+async fn empty_body_import_canonicalizes_to_one_empty_paragraph_row() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+    let library = store.create_library("empty").await.unwrap();
+    let outcome = store
+        .import_block_document(
+            &library.slug,
+            "stub.md",
+            "---\ntitle: Stub\n---\n",
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+
+    let tree = store.load_block_tree(&outcome.document.id).await.unwrap();
+    assert_eq!(tree.len(), 1);
+    assert_eq!(tree[0].block_type, "p");
+    assert_eq!(tree[0].text, "");
+    assert_eq!(
+        store
+            .export_block_document(&outcome.document.id)
+            .await
+            .unwrap(),
+        "---\ntitle: Stub\n---\n"
+    );
 }

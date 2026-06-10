@@ -10,6 +10,17 @@
 //! end_offset}` in UTF-16 code units (matching Yjs); a collapsed range
 //! (`start == end`) means orphaned at the row layer.
 //!
+//! Legacy writes and the projection: a version published outside the import
+//! path (`put_document`, staged-transaction commits) or a document delete
+//! drops the block projection — rows and review anchors — fail-closed via
+//! [`clear_block_state_conn`], because the rows would otherwise serve stale
+//! content. `export_block_document` returns `NotFound` until the document is
+//! re-imported. An imported empty body is canonicalized to one empty
+//! paragraph row so "zero rows" always means "no projection". Document moves
+//! keep the projection (rows are keyed by document id and content does not
+//! change). Phase 4's diff3 reconciliation replaces clearing with
+//! identity-preserving merges.
+//!
 //! `block_shadow_bases` (diff3 bases, Phase 4) and `block_transactions`
 //! (semantic mutation history, Phase 2) get schema plus minimal read/write
 //! helpers only; their real consumers arrive in later phases.
@@ -220,7 +231,7 @@ impl QuarryStore {
             )));
         }
         let (frontmatter, body) = split_markdown_frontmatter(markdown)?;
-        let rows = markdown_to_block_rows(body, || Uuid::new_v4().to_string())?;
+        let rows = canonical_rows(markdown_to_block_rows(body, || Uuid::new_v4().to_string())?);
         let mut merged_metadata = frontmatter;
         merge_json(&mut merged_metadata, metadata.clone());
         let normalized = format!(
@@ -248,6 +259,11 @@ impl QuarryStore {
             .await?;
             let (doc_id, old_version_id) =
                 ensure_document_conn(&conn, &library.id, &path, &now_timestamp()).await?;
+            // insert_version_conn re-parses the frontmatter rendered into
+            // `normalized` and re-merges the caller metadata over it; both
+            // were derived from `merged_metadata`, so the stored metadata
+            // round-trips to exactly `merged_metadata` (modulo content_type,
+            // which the renderer excludes).
             let version = self
                 .insert_version_conn(
                     &conn,
@@ -289,21 +305,37 @@ impl QuarryStore {
 
     /// Exports a BlockDocument from its canonical rows: frontmatter rendered
     /// from document metadata plus the deterministic Markdown body.
+    ///
+    /// A document without rows has no block projection (it was never
+    /// imported, or a legacy write cleared it) and returns `NotFound` rather
+    /// than serving stale or fabricated content.
     pub async fn export_block_document(&self, document_id: &str) -> Result<String> {
         let conn = self.conn()?;
-        let head = head_version_head_conn(&conn, document_id).await?;
-        if document_kind(&head.path, &head.content_type) == DocumentKind::RawDocument {
-            return Err(QuarryError::Unsupported(format!(
-                "cannot export {} ({}) as a block document",
-                head.path, head.content_type
-            )));
+        // One read transaction so the head metadata and the rows cannot tear
+        // against a concurrent import.
+        conn.execute("BEGIN", ()).await.map_err(map_turso_error)?;
+        let result = async {
+            let head = head_version_head_conn(&conn, document_id).await?;
+            if document_kind(&head.path, &head.content_type) == DocumentKind::RawDocument {
+                return Err(QuarryError::Unsupported(format!(
+                    "cannot export {} ({}) as a block document",
+                    head.path, head.content_type
+                )));
+            }
+            let rows = load_block_tree_conn(&conn, document_id).await?;
+            if rows.is_empty() {
+                return Err(QuarryError::NotFound(format!(
+                    "block rows for document {document_id} (re-import required)"
+                )));
+            }
+            Ok(format!(
+                "{}{}",
+                render_markdown_frontmatter(&head.metadata)?,
+                block_rows_to_markdown(&rows)?
+            ))
         }
-        let rows = load_block_tree_conn(&conn, document_id).await?;
-        Ok(format!(
-            "{}{}",
-            render_markdown_frontmatter(&head.metadata)?,
-            block_rows_to_markdown(&rows)?
-        ))
+        .await;
+        finish_tx(&conn, result).await
     }
 
     /// Stores a review anchor after validating its offsets against the
@@ -535,13 +567,13 @@ impl QuarryStore {
 fn validate_anchor_offsets(item: &NewBlockReviewItem, block_text: &str) -> Result<()> {
     let length = utf16_len(block_text);
     if item.start_offset > item.end_offset {
-        return Err(QuarryError::InvalidPath(format!(
+        return Err(QuarryError::InvalidInput(format!(
             "anchor start {} is after end {}",
             item.start_offset, item.end_offset
         )));
     }
     if item.end_offset > length {
-        return Err(QuarryError::InvalidPath(format!(
+        return Err(QuarryError::InvalidInput(format!(
             "anchor end {} is past the block text (UTF-16 length {length})",
             item.end_offset
         )));
@@ -549,13 +581,13 @@ fn validate_anchor_offsets(item: &NewBlockReviewItem, block_text: &str) -> Resul
     if !is_utf16_boundary(block_text, item.start_offset)
         || !is_utf16_boundary(block_text, item.end_offset)
     {
-        return Err(QuarryError::InvalidPath(format!(
+        return Err(QuarryError::InvalidInput(format!(
             "anchor offsets [{}, {}) split a surrogate pair",
             item.start_offset, item.end_offset
         )));
     }
     if item.start_offset == item.end_offset && item.state != BlockReviewState::Orphaned {
-        return Err(QuarryError::InvalidPath(
+        return Err(QuarryError::InvalidInput(
             "a collapsed anchor range means orphaned at the row layer".to_string(),
         ));
     }
@@ -618,6 +650,49 @@ async fn head_version_head_conn(conn: &Connection, document_id: &str) -> Result<
         }),
         None => Err(QuarryError::NotFound(format!("document {document_id}"))),
     }
+}
+
+/// Canonical row shape for an imported body: an empty body becomes one empty
+/// paragraph row (matching the editor's empty-document shape), so "zero rows"
+/// always means "no block projection" rather than "empty document".
+fn canonical_rows(rows: Vec<BlockRow>) -> Vec<BlockRow> {
+    if !rows.is_empty() {
+        return rows;
+    }
+    vec![BlockRow {
+        block_id: Uuid::new_v4().to_string(),
+        parent_block_id: None,
+        position: 0,
+        block_type: "p".to_string(),
+        attrs: quarry_collab_codec::Attrs::new(),
+        text: String::new(),
+        marks: Vec::new(),
+        links: Vec::new(),
+    }]
+}
+
+/// Drops a document's block projection (rows and review anchors).
+///
+/// Called by the legacy write paths (`put_document`, staged-transaction
+/// commits, `delete_document`): a version published outside the import path
+/// would leave the rows serving stale content, and a delete would orphan
+/// them. The projection is removed fail-closed; `export_block_document`
+/// returns `NotFound` until the document is re-imported. Phase 4's diff3
+/// reconciliation replaces this with identity-preserving merges.
+pub(crate) async fn clear_block_state_conn(conn: &Connection, document_id: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM blocks WHERE document_id = ?1",
+        params![document_id.to_string()],
+    )
+    .await
+    .map_err(map_turso_error)?;
+    conn.execute(
+        "DELETE FROM block_review_items WHERE document_id = ?1",
+        params![document_id.to_string()],
+    )
+    .await
+    .map_err(map_turso_error)?;
+    Ok(())
 }
 
 pub(crate) async fn replace_block_rows_conn(

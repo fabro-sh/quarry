@@ -5289,6 +5289,7 @@ impl From<QuarryError> for ApiError {
             QuarryError::Conflict(_) => StatusCode::CONFLICT,
             QuarryError::Busy(_) => StatusCode::SERVICE_UNAVAILABLE,
             QuarryError::InvalidPath(_) => StatusCode::BAD_REQUEST,
+            QuarryError::InvalidInput(_) => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         Self {
