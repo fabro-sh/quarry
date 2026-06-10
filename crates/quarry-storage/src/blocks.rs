@@ -221,6 +221,13 @@ pub struct BlockMutationCommit {
     pub actor_id: Option<String>,
     /// Display actor recorded on the legacy `transactions` history row.
     pub transaction_actor: Option<String>,
+    /// Optional message/provenance for the legacy `transactions` history row
+    /// (session checkpoints mark themselves as coalesced autosave history).
+    pub transaction_message: Option<String>,
+    pub transaction_provenance: Option<JsonValue>,
+    /// Rides on the emitted `doc.changed` event so browsers can classify the
+    /// write (session checkpoints use a benign provenance).
+    pub origin_id: Option<String>,
     pub source: DocumentSource,
     /// Stored verbatim in `block_transactions.ops`; the gateway includes the
     /// request ops plus the ack it needs to answer idempotent replays.
@@ -230,6 +237,24 @@ pub struct BlockMutationCommit {
     pub rows: Vec<BlockRow>,
     pub review_items: Vec<BlockReviewItem>,
     pub normalized_markdown: String,
+}
+
+/// One consistent read of everything a live editing session needs to seed
+/// from canonical state (or a checkpoint needs to refresh its head): the
+/// document's identity, head version, and block projection. Rows are
+/// materialized in-memory from the head Markdown when the stored projection
+/// is missing (nothing is persisted by this read — the first checkpoint
+/// persists them).
+#[derive(Clone, Debug)]
+pub struct SessionSeedState {
+    pub document_id: String,
+    pub library_slug: String,
+    pub path: String,
+    pub head_version_id: String,
+    pub content_type: String,
+    pub metadata: JsonValue,
+    pub rows: Vec<BlockRow>,
+    pub review_items: Vec<BlockReviewItem>,
 }
 
 #[derive(Debug)]
@@ -661,6 +686,74 @@ impl QuarryStore {
         finish_tx(&conn, result).await
     }
 
+    /// Loads the consistent state a live session seeds from (or a checkpoint
+    /// refreshes against), keyed by document id. Returns `Ok(None)` for
+    /// missing/deleted documents and for RawDocuments (which never host
+    /// sessions).
+    pub async fn session_seed_state(&self, document_id: &str) -> Result<Option<SessionSeedState>> {
+        let conn = self.conn()?;
+        conn.execute("BEGIN", ()).await.map_err(map_turso_error)?;
+        let result = async {
+            let mut head_rows = conn
+                .query(
+                    "SELECT d.id, d.path, l.slug, v.id, v.content_type, v.metadata_json,
+                            v.content_hash, v.inline_content
+                     FROM documents d
+                     JOIN libraries l ON l.id = d.library_id
+                     JOIN document_versions v ON v.id = d.head_version_id
+                     WHERE d.id = ?1 AND d.deleted_at IS NULL AND d.head_version_id IS NOT NULL
+                     LIMIT 1",
+                    params![document_id.to_string()],
+                )
+                .await
+                .map_err(map_turso_error)?;
+            let Some(row) = head_rows.next().await.map_err(map_turso_error)? else {
+                return Ok(None);
+            };
+            let path = text(&row, 1)?;
+            let content_type = text(&row, 4)?;
+            if document_kind(&path, &content_type) == DocumentKind::RawDocument {
+                return Ok(None);
+            }
+            let content_hash = opt_text(&row, 6)?;
+            let inline_content = opt_blob(&row, 7)?;
+            let stored_rows = load_block_tree_conn(&conn, document_id).await?;
+            let rows = if stored_rows.is_empty() {
+                let content = match (inline_content, content_hash) {
+                    (Some(bytes), None) => bytes,
+                    (None, Some(hash)) => self.cas.read(&hash)?,
+                    _ => {
+                        return Err(QuarryError::Storage(format!(
+                            "head version for document {document_id} violates inline/CAS invariant"
+                        )))
+                    }
+                };
+                let markdown = String::from_utf8(content).map_err(|_| {
+                    QuarryError::InvalidInput(format!(
+                        "document {path} is not valid UTF-8 Markdown"
+                    ))
+                })?;
+                let (_, body) = split_markdown_frontmatter(&markdown)?;
+                canonical_rows(markdown_to_block_rows(body, || Uuid::new_v4().to_string())?)
+            } else {
+                stored_rows
+            };
+            let review_items = list_block_review_items_conn(&conn, document_id).await?;
+            Ok(Some(SessionSeedState {
+                document_id: text(&row, 0)?,
+                library_slug: text(&row, 2)?,
+                path,
+                head_version_id: text(&row, 3)?,
+                content_type,
+                metadata: serde_json::from_str(&text(&row, 5)?)?,
+                rows,
+                review_items,
+            }))
+        }
+        .await;
+        finish_tx(&conn, result).await
+    }
+
     /// Commits one semantic mutation atomically: replaces the row set and the
     /// review item set, publishes the normalized Markdown export as ONE new
     /// document version through the existing `document_versions` path (so
@@ -695,16 +788,19 @@ impl QuarryStore {
                     commit.document_id, commit.expected_head_version_id, head.head_version_id
                 )));
             }
+            let provenance = commit.transaction_provenance.clone().unwrap_or_else(|| {
+                serde_json::json!({
+                    "mode": "block_transaction",
+                    "client_tx_id": commit.client_tx_id,
+                })
+            });
             let tx = insert_transaction_conn(
                 &conn,
                 &library.id,
                 commit.source,
                 commit.transaction_actor.clone(),
-                None,
-                serde_json::json!({
-                    "mode": "block_transaction",
-                    "client_tx_id": commit.client_tx_id,
-                }),
+                commit.transaction_message.clone(),
+                provenance,
             )
             .await?;
             let version = self
@@ -757,9 +853,10 @@ impl QuarryStore {
             })
         }
         .await;
+        let origin_id = commit.origin_id;
         let outcome = finish_tx(&conn, result).await?;
         if let BlockMutationOutcome::Applied { outcome, .. } = &outcome {
-            self.emit_document_put_events(outcome, None);
+            self.emit_document_put_events(outcome, origin_id);
         }
         Ok(outcome)
     }
@@ -1210,7 +1307,18 @@ fn validate_review_items_against_rows(rows: &[BlockRow], items: &[BlockReviewIte
                 item.id, item.start_offset, item.end_offset, item.block_id
             )));
         }
-        if item.start_offset == item.end_offset && item.state == BlockReviewState::Open {
+        // A collapsed range is only meaningful for an open INSERTION
+        // suggestion (the live-session "type in suggesting mode" shape):
+        // nothing is anchored, but the replacement text is the proposal.
+        let insertion_suggestion = item.kind == BlockReviewKind::Suggestion
+            && item
+                .replacement
+                .as_deref()
+                .is_some_and(|replacement| !replacement.is_empty());
+        if item.start_offset == item.end_offset
+            && item.state == BlockReviewState::Open
+            && !insertion_suggestion
+        {
             return Err(QuarryError::InvalidInput(format!(
                 "open review item {} has a collapsed range",
                 item.id

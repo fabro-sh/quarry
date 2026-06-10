@@ -1699,6 +1699,9 @@ async fn document_block_transactions_inner(
             actor_kind: request.actor.kind.clone(),
             actor_id: request.actor.id.clone(),
             transaction_actor: Some(request.actor.display()),
+            transaction_message: None,
+            transaction_provenance: None,
+            origin_id: None,
             source: DocumentSource::Rest,
             recorded_ops: json!({
                 "ops": request.ops_json,
