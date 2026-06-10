@@ -87,13 +87,13 @@ Document kinds: `.md`/`.markdown`/`text/markdown` → `BlockDocument`; everythin
 
 **Files:** `crates/quarry-storage/src/lib.rs` (schema + new `blocks` module or inline section), `crates/quarry-collab-codec/src/markdown.rs`, `crates/quarry-collab-codec/src/normalize.rs`, tests in `crates/quarry-storage/tests/storage_lifecycle.rs` and `crates/quarry-collab-codec/tests/`.
 
-- [ ] Add the four tables above behind the existing migration mechanism.
-- [ ] Implement `load_block_tree(document_id)` and `replace_block_tree(document_id, tree)` with ordering by `position`.
-- [ ] Implement Markdown → block rows import via the existing codec (`markdown.rs`), including frontmatter → document attrs and `raw_markdown` fallback for safe unsupported constructs; unsafe constructs return the codec's typed `Unsupported` error.
-- [ ] Implement block rows → Markdown export; property test `export == export(import(export))` after one-time normalization.
-- [ ] Implement review-anchor storage and the offset model (UTF-16); unit tests for anchors at block boundaries.
-- [ ] Storage lifecycle tests: import → restart → load tree → export is stable; review anchors survive restart.
-- [ ] Wire document-kind classification (BlockDocument vs RawDocument) at the storage boundary; RawDocument bytes prove untouched in `storage_lifecycle.rs`.
+- [x] Add the four tables above behind the existing migration mechanism.
+- [x] Implement `load_block_tree(document_id)` and `replace_block_tree(document_id, tree)` with ordering by `position`.
+- [x] Implement Markdown → block rows import via the existing codec (`markdown.rs`), including frontmatter → document attrs and `raw_markdown` fallback for safe unsupported constructs; unsafe constructs return the codec's typed `Unsupported` error.
+- [x] Implement block rows → Markdown export; property test `export == export(import(export))` after one-time normalization.
+- [x] Implement review-anchor storage and the offset model (UTF-16); unit tests for anchors at block boundaries.
+- [x] Storage lifecycle tests: import → restart → load tree → export is stable; review anchors survive restart.
+- [x] Wire document-kind classification (BlockDocument vs RawDocument) at the storage boundary; RawDocument bytes prove untouched in `storage_lifecycle.rs`.
 
 ### Phase 2: Semantic Mutation Gateway (Rows-Authoritative Mode)
 
