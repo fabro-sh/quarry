@@ -389,6 +389,79 @@ fn comment_anchor_tracks_concurrent_inserts_through_marks() {
 }
 
 #[test]
+fn insert_at_the_start_boundary_is_excluded_from_the_anchor() {
+    let rows = vec![block("b1", None, 0, "p", "Intro with bold and plain runs.")];
+    let anchors = vec![comment("c1", "b1", 11, 15)]; // "bold"
+    let doc = seeded_doc(&rows, &anchors);
+
+    apply_browser_edit(&doc, |txn, root| {
+        let intro = block_text(txn, root, "b1");
+        intro.insert(txn, 11, "NEW "); // exactly at the anchor's start
+    });
+
+    let projection = project(&doc_children(&doc));
+    assert_eq!(
+        projection.rows[0].text,
+        "Intro with NEW bold and plain runs."
+    );
+    // The Gate A start rule holds for marks too: the anchor shifts right and
+    // never grows leftward.
+    assert_eq!(
+        comparable(projection.anchors),
+        comparable(vec![comment("c1", "b1", 15, 19)])
+    );
+}
+
+#[test]
+fn insert_at_the_end_boundary_grows_the_anchor_rightward() {
+    let rows = vec![block("b1", None, 0, "p", "Intro with bold and plain runs.")];
+    let anchors = vec![comment("c1", "b1", 11, 15)]; // "bold"
+    let doc = seeded_doc(&rows, &anchors);
+
+    apply_browser_edit(&doc, |txn, root| {
+        let intro = block_text(txn, root, "b1");
+        intro.insert(txn, 15, "ish"); // exactly at the anchor's end
+    });
+
+    let projection = project(&doc_children(&doc));
+    assert_eq!(
+        projection.rows[0].text,
+        "Intro with boldish and plain runs."
+    );
+    // Documented divergence from the Gate A sticky-index end rule: a plain
+    // insert at a mark's END boundary inherits the mark (Yjs format-marker
+    // semantics), so the anchor grows rightward — exactly what the editor
+    // displays when a user types at the end of a highlighted range. Rows-mode
+    // `replace_block_content` keeps the Gate A exclusion; see the
+    // session_doc module docs.
+    assert_eq!(
+        comparable(projection.anchors),
+        comparable(vec![comment("c1", "b1", 11, 18)])
+    );
+}
+
+#[test]
+fn insert_at_a_suggestion_end_boundary_grows_the_anchored_range() {
+    let rows = vec![block("b1", None, 0, "p", "Replace bold here.")];
+    let anchors = vec![suggestion("s1", "b1", 8, 12, "brave")]; // "bold"
+    let doc = seeded_doc(&rows, &anchors);
+
+    apply_browser_edit(&doc, |txn, root| {
+        let text = block_text(txn, root, "b1");
+        text.insert(txn, 12, "er"); // exactly at the remove-range's end
+    });
+
+    let projection = project(&doc_children(&doc));
+    // The insert inherits the suggestion's remove mark: the anchored (to be
+    // replaced) range grows to "bolder"; the replacement is untouched.
+    assert_eq!(projection.rows[0].text, "Replace bolder here.");
+    assert_eq!(
+        comparable(projection.anchors),
+        comparable(vec![suggestion("s1", "b1", 8, 14, "brave")])
+    );
+}
+
+#[test]
 fn deleting_the_whole_commented_range_removes_the_anchor_marks() {
     let rows = vec![block("b1", None, 0, "p", "Intro with bold and plain runs.")];
     let anchors = vec![comment("c1", "b1", 11, 15)];

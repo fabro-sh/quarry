@@ -35,6 +35,30 @@
 //! - let browser-created comments/suggestions reach rows: the checkpoint
 //!   discovers new mark ids it never seeded.
 //!
+//! ## Boundary-insert semantics (rows-mode vs session-mode divergence)
+//!
+//! Marks follow Yjs format-marker semantics, which differ from the Gate A
+//! sticky-index rules at exactly one boundary:
+//!
+//! - Insert at the anchor's START: excluded — the anchor shifts right and
+//!   never grows leftward (same as Gate A `Assoc::After`).
+//! - Insert strictly INSIDE the anchor: included — the anchor grows (same
+//!   as Gate A).
+//! - Insert at the anchor's END: **included — the anchor grows rightward**,
+//!   diverging from Gate A's `Assoc::Before` exclusion. A plain insert at a
+//!   mark's end boundary inherits the mark, for review marks exactly as for
+//!   bold runs (and for a suggestion's remove-range, which grows to cover
+//!   the new text).
+//!
+//! This divergence is ACCEPTED as the session-mode semantics: during a live
+//! session the editor's mark behavior is WYSIWYG-authoritative — when a
+//! user types at the end of a highlighted range, Plate extends the
+//! highlight, and persisting what the browser displays beats persisting an
+//! invisible sticky range that disagrees with it. Rows-mode (the gateway's
+//! `replace_block_content` anchor math in `gateway.rs`) keeps the Gate A
+//! exclusion at BOTH boundaries. Pinned by the boundary-insert tests in
+//! `tests/session_doc.rs`.
+//!
 //! ## Coordinate system
 //!
 //! Row offsets are UTF-16 code units over a block's flat text. Suggestion

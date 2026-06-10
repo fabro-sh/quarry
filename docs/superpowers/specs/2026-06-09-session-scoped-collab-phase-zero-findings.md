@@ -182,10 +182,12 @@ linear-space diff (Myers/Hirschberg) and sorted-merge intersection.
 
 ## Design deltas (additive; apply during the relevant phases)
 
-1. **Checkpoint anchor re-placement (Phase 3):** after every checkpoint,
+1. **Checkpoint anchor re-placement (Phase 3):** ~~after every checkpoint,
    the server re-places all anchors from the just-written rows into live
    branches, bounding anchor loss from client-side block moves to one
-   checkpoint window.
+   checkpoint window.~~ **Superseded by Phase 3 delta 6:** anchors ride as
+   marks, which travel with content through client-side moves natively —
+   no re-placement pass exists or is needed.
 2. **Websocket auth posture (Phases 3/7):** the collab websocket is
    unauthenticated; keep loopback-only posture and record the limitation.
 3. **Consider `set_block_type` (Phase 2 vocabulary):** without it, type
@@ -196,3 +198,30 @@ linear-space diff (Myers/Hirschberg) and sorted-merge intersection.
 5. **Gateway awareness hygiene (transition only):** the gateway client must
    not set `quarryCollab.sessionId` awareness state while the legacy
    flusher exists.
+
+## Phase 3 design deltas (as built; see `quarry_collab_codec::session_doc`)
+
+6. **Anchors ride as browser marks, not sticky indices.** Session docs
+   carry review anchors as the browser's own `comment_<id>` /
+   `suggestion_<id>` text marks plus the `review` meta map; the checkpoint
+   extracts mark ranges back to row offsets. This supersedes the Gate A
+   sticky-index mechanics for live sessions AND design delta 1: marks move
+   with content through edits and client-side block moves natively, stay in
+   lockstep with what the editor displays, and let browser-created review
+   items reach rows. (The Gate A offset rules remain binding for rows-mode
+   gateway math.)
+7. **End-boundary divergence.** Yjs format-marker semantics differ from
+   Gate A at one boundary: a plain insert exactly at a mark's END grows the
+   anchor rightward (inserts at the START stay excluded). Accepted as the
+   session-mode semantics — the editor extends highlights the same way, and
+   live sessions persist what the browser displays. Rows-mode
+   `replace_block_content` keeps the Gate A exclusion at both boundaries.
+   Pinned by the boundary-insert tests in
+   `crates/quarry-collab-codec/tests/session_doc.rs`.
+8. **PUT-as-checkpoint (transition only, dissolves with Phase 5).** A
+   Markdown PUT carrying a `browser:*` origin on a document with an active
+   session is a checkpoint trigger, not a write: the session doc is
+   authoritative, the body and `If-Match` are ignored, and the response
+   acks the checkpoint's version. Checkpoint `doc.changed` events carry an
+   `agent-injected:…` origin so the unmodified browser classifies them as a
+   benign refresh.
