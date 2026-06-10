@@ -551,10 +551,10 @@ impl EventParser {
                         );
                     }
                     Tag::Link {
-                        link_type,
+                        link_type: LinkType::WikiLink { .. },
                         dest_url,
                         ..
-                    } if matches!(link_type, LinkType::WikiLink { .. }) => {
+                    } => {
                         let link_children =
                             self.parse_inline_until(TagEnd::Link, InlineContext::default())?;
                         children.push(wikilink_from_link(dest_url.as_ref(), link_children));
@@ -573,10 +573,10 @@ impl EventParser {
                         ));
                     }
                     Tag::Image {
-                        link_type,
+                        link_type: LinkType::WikiLink { .. },
                         dest_url,
                         ..
-                    } if matches!(link_type, LinkType::WikiLink { .. }) => {
+                    } => {
                         let link_children =
                             self.parse_inline_until(TagEnd::Image, InlineContext::default())?;
                         children.push(wikilink_from_link_with_embed(
@@ -698,10 +698,10 @@ impl EventParser {
                     );
                 }
                 Event::Start(Tag::Link {
-                    link_type,
+                    link_type: LinkType::WikiLink { .. },
                     dest_url,
                     ..
-                }) if matches!(link_type, LinkType::WikiLink { .. }) => {
+                }) => {
                     let link_children =
                         self.parse_inline_until(TagEnd::Link, InlineContext::default())?;
                     children.push(wikilink_from_link(dest_url.as_ref(), link_children));
@@ -720,10 +720,10 @@ impl EventParser {
                     ));
                 }
                 Event::Start(Tag::Image {
-                    link_type,
+                    link_type: LinkType::WikiLink { .. },
                     dest_url,
                     ..
-                }) if matches!(link_type, LinkType::WikiLink { .. }) => {
+                }) => {
                     let link_children =
                         self.parse_inline_until(TagEnd::Image, InlineContext::default())?;
                     children.push(wikilink_from_link_with_embed(

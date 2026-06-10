@@ -1,5 +1,6 @@
 mod collab;
 mod gateway;
+mod session;
 
 #[cfg(feature = "bundle_ui")]
 use axum::body::Body;
@@ -19,10 +20,9 @@ use pulldown_cmark::{
     Event as MarkdownEvent, Options as MarkdownOptions, Parser as MarkdownParser, Tag,
 };
 use quarry_collab_codec::{
-    build_nodes, inline_comment_body, parse_review_document, review_block_to_slate,
-    review_blocks_to_slate, review_markdown_to_slate, review_markers,
+    inline_comment_body, parse_review_document, review_markers,
     review_meta_with_inline_comment_bodies, ReviewMeta, ReviewMetaEntry,
-    ReviewSuggestionKind as CodecReviewSuggestionKind, Unsupported,
+    ReviewSuggestionKind as CodecReviewSuggestionKind,
 };
 use quarry_core::{
     now_timestamp, CollabInviteToken, ConflictRecord, DocumentHistoryEntry, DocumentLink,
@@ -48,14 +48,10 @@ use tokio::sync::Mutex;
 use utoipa::{OpenApi, ToSchema};
 use uuid::Uuid;
 
-use crate::collab::{
-    persist_clean_recovery_seed_for_version, InjectionBatch, InjectionOp, LiveMutation,
-};
-
 #[derive(Clone)]
 pub struct AppState {
     store: QuarryStore,
-    collab: collab::CollabHub,
+    sessions: session::SessionHub,
     agent_idempotency: AgentIdempotencyCache,
     agent_events: AgentEventJournal,
     agent_presence: AgentPresenceRegistry,
@@ -369,10 +365,10 @@ pub fn router(store: QuarryStore) -> Router {
 
     let router = router.layer(middleware::from_fn(request_tracing_middleware));
 
-    let collab = collab::CollabHub::new(store.clone());
+    let sessions = session::SessionHub::new(store.clone());
     router.with_state(AppState {
         store,
-        collab,
+        sessions,
         agent_idempotency: AgentIdempotencyCache::default(),
         agent_events,
         agent_presence: AgentPresenceRegistry::default(),
@@ -1006,7 +1002,7 @@ async fn collab_websocket(
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     ws.on_upgrade(move |socket| async move {
-        state.collab.serve_socket(document_id, socket).await;
+        state.sessions.serve_socket(document_id, socket).await;
     })
 }
 
@@ -2110,6 +2106,32 @@ async fn put_document(
     let browser_origin = origin_id
         .as_deref()
         .is_some_and(|origin| origin.starts_with("browser:"));
+
+    // Transitional rule (Phase 3, dissolves with the Phase 5 browser): a
+    // Markdown PUT from a live-session participant is a checkpoint trigger,
+    // not an independent write. The session doc is authoritative and already
+    // contains those edits (the autosave body is the flusher's serialization
+    // of the same doc), so checkpoint and ack with the new head ETag. The
+    // PUT body and its If-Match are deliberately ignored — checkpoints move
+    // the head, so the flusher's clock is routinely stale.
+    if browser_origin
+        && quarry_storage::document_kind(&path, &content_type)
+            == quarry_storage::DocumentKind::BlockDocument
+    {
+        if let Ok(document) = state.store.head_document(&library, &path).await {
+            if let Some(outcome) = state.sessions.checkpoint_for_autosave(&document.id).await? {
+                tracing::debug!(
+                    event = "collab.session.autosave_checkpoint",
+                    document_id = %document.id,
+                    path = %path,
+                    version_id = %outcome.version.id,
+                    "browser autosave acknowledged via session checkpoint"
+                );
+                return json_with_etag(StatusCode::OK, &outcome, &outcome.version.id);
+            }
+        }
+    }
+
     let outcome = state
         .store
         .put_document_with_transaction(
@@ -2124,31 +2146,6 @@ async fn put_document(
             transaction,
         )
         .await?;
-    if browser_origin {
-        if !persist_clean_recovery_seed_for_version(
-            &state.store,
-            &outcome.document.id,
-            &outcome.version.id,
-            &content_type,
-            body.as_ref(),
-        )
-        .await
-        {
-            tracing::warn!(
-                event = "collab.agent_injection.recovery_degraded",
-                document_id = %outcome.document.id,
-                version_id = %outcome.version.id,
-                outcome = "degraded",
-                reason_code = "persist_clean_seed_failed",
-                reason = "failed to persist clean collab recovery seed after browser flush",
-                "failed to persist clean collab recovery seed after browser flush"
-            );
-        }
-        state
-            .collab
-            .mark_room_recovery_clean(&outcome.document.id, outcome.version.id.clone())
-            .await;
-    }
     json_with_etag(StatusCode::OK, &outcome, &outcome.version.id)
 }
 
@@ -2256,20 +2253,18 @@ async fn post_document_action(
         return json_response(StatusCode::OK, &token);
     }
 
+    // Phase 3 quarantine: the legacy `/edit` and `/ops` mutation facades are
+    // gone for block documents (every Markdown document). They rode the
+    // deleted injection gate; `POST .../transactions` is the single mutation
+    // contract. Full route deletion is Phase 7.
     if let Some(path) = path.strip_suffix("/edit") {
-        let request: AgentEditRequest = serde_json::from_value(request)
-            .map_err(|error| QuarryError::InvalidPath(format!("invalid edit request: {error}")))?;
-        let response =
-            agent_edit_document(&state, &headers, &query, &library, path, request).await?;
-        return agent_edit_response(response);
+        return Ok(gateway::legacy_endpoint_quarantined(
+            &library, path, "/edit",
+        ));
     }
 
     if let Some(path) = path.strip_suffix("/ops") {
-        let request: AgentOpsRequest = serde_json::from_value(request)
-            .map_err(|error| QuarryError::InvalidPath(format!("invalid ops request: {error}")))?;
-        let response =
-            agent_ops_document(&state, &headers, &query, &library, path, request).await?;
-        return agent_ops_response(response);
+        return Ok(gateway::legacy_endpoint_quarantined(&library, path, "/ops"));
     }
 
     if let Some(path) = path.strip_suffix("/presence") {
@@ -2342,6 +2337,9 @@ struct AgentEditResult {
     version_id: Option<String>,
 }
 
+/// Legacy edit planning kept only for the review-process facade; the ops
+/// bookkeeping fed the deleted injection gate. Phase 7 deletes it wholesale.
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct AgentEditPlan {
     markdown: String,
@@ -2350,6 +2348,7 @@ struct AgentEditPlan {
     original_blocks: Vec<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 enum PlannedAgentEditOp {
     ReplaceDocument,
@@ -2859,131 +2858,23 @@ async fn agent_ops_document(
         });
     }
 
+    // The injection gate is gone (Phase 3): this legacy path (reachable only
+    // through the review-process endpoint) writes Markdown directly. A live
+    // session is NOT consulted; its next checkpoint supersedes this write
+    // (transitional, until Phase 4 reconciles whole-file writes).
     let base_version_id = version_id_from_base_token(&request.base_token)?;
-    let live_room = state.collab.live_room(&document.id).await;
-    let (injection_guard, injection_status, injected_origin_id) = if let Some(room) = live_room {
-        tracing::debug!(
-            event = "collab.agent_injection.attempted",
-            document_id = %document.id,
+    let outcome = state
+        .store
+        .put_document(
+            library,
             path,
-            operation = "agent_ops",
-            "agent ops live injection attempted"
-        );
-        let plan = match agent_ops_live_mutation_plan(&markdown, &applied) {
-            Ok(plan) => plan,
-            Err(error) => {
-                tracing::debug!(
-                    event = "collab.agent_injection.rejected",
-                    document_id = %document.id,
-                    path,
-                    operation = "agent_ops",
-                    outcome = "rejected",
-                    reason_code = "not_codec_eligible",
-                    reason = %error,
-                    "agent ops live mutation rejected because operation is not codec eligible"
-                );
-                return Err(live_gate_rejected_error());
-            }
-        };
-        let status = if plan.batch.is_some() {
-            "injected"
-        } else {
-            "metadata_only_injected"
-        };
-        let mutation = match (plan.batch, plan.review) {
-            (Some(batch), review) => LiveMutation::content(batch, review),
-            (None, Some(review)) => LiveMutation::metadata(review),
-            (None, None) => {
-                tracing::debug!(
-                    event = "collab.agent_injection.rejected",
-                    document_id = %document.id,
-                    path,
-                    operation = "agent_ops",
-                    outcome = "rejected",
-                    reason_code = "empty_mutation",
-                    reason = "agent ops produced no live mutation",
-                    "agent ops live mutation rejected because it was empty"
-                );
-                return Err(live_gate_rejected_error());
-            }
-        };
-        let Some(guard) = room
-            .begin_live_mutation(mutation, &plan.original_blocks, base_version_id.clone())
-            .await
-        else {
-            tracing::debug!(
-                event = "collab.agent_injection.rejected",
-                document_id = %document.id,
-                path,
-                operation = "agent_ops",
-                outcome = "rejected",
-                reason_code = "gate_rejected",
-                reason = "live room did not match the expected base",
-                "agent ops live mutation gate rejected live room"
-            );
-            return Err(live_gate_rejected_error());
-        };
-        (
-            Some(guard),
-            status.to_string(),
-            Some(format!("agent-injected:{request_hash}")),
+            applied.markdown.into_bytes(),
+            document.version.metadata.clone(),
+            &document.version.content_type,
+            DocumentSource::Rest,
+            WritePrecondition::IfMatch(base_version_id),
         )
-    } else {
-        tracing::debug!(
-            event = "collab.agent_injection.rejected",
-            document_id = %document.id,
-            path,
-            operation = "agent_ops",
-            outcome = "skipped",
-            reason_code = "no_live_room",
-            reason = "no live collab room exists",
-            "agent ops skipped live injection because no live collab room exists"
-        );
-        (None, "no_live_room".to_string(), None)
-    };
-
-    let outcome = if let Some(guard) = injection_guard {
-        let outcome = state
-            .store
-            .commit_document_without_events(
-                library,
-                path,
-                applied.markdown.clone().into_bytes(),
-                document.version.metadata.clone(),
-                &document.version.content_type,
-                DocumentSource::Rest,
-                WritePrecondition::IfMatch(base_version_id.clone()),
-            )
-            .await?;
-        let _commit_outcome = guard.commit(outcome.version.id.clone()).await;
-        state
-            .store
-            .emit_document_put_events(&outcome, injected_origin_id);
-        tracing::debug!(
-            event = "collab.agent_injection.committed",
-            document_id = %outcome.document.id,
-            path = %outcome.document.path,
-            tx_id = %outcome.transaction.id,
-            version_id = %outcome.version.id,
-            operation = "agent_ops",
-            outcome = "committed",
-            "agent ops live injection committed"
-        );
-        outcome
-    } else {
-        state
-            .store
-            .put_document(
-                library,
-                path,
-                applied.markdown.into_bytes(),
-                document.version.metadata.clone(),
-                &document.version.content_type,
-                DocumentSource::Rest,
-                WritePrecondition::IfMatch(base_version_id),
-            )
-            .await?
-    };
+        .await?;
     let version_id = outcome.version.id.clone();
     let response = AgentOpsResponse {
         dry_run: false,
@@ -2991,7 +2882,7 @@ async fn agent_ops_document(
         results: applied.results,
         outcome: Some(outcome),
         markdown: None,
-        injection: Some(injection_status),
+        injection: None,
     };
 
     if let Some(cache_key) = cache_key {
@@ -3010,14 +2901,6 @@ async fn agent_ops_document(
         response,
         version_id: Some(version_id),
     })
-}
-
-fn agent_ops_response(result: AgentOpsResult) -> Result<Response, ApiError> {
-    if let Some(version_id) = result.version_id {
-        json_with_etag(StatusCode::OK, &result.response, &version_id)
-    } else {
-        json_response(StatusCode::OK, &result.response)
-    }
 }
 
 async fn agent_document_snapshot(
@@ -3135,124 +3018,30 @@ async fn agent_edit_document(
         });
     }
 
+    // The injection gate is gone (Phase 3): this legacy path (reachable only
+    // through the review-process endpoint) writes Markdown directly. A live
+    // session is NOT consulted; its next checkpoint supersedes this write
+    // (transitional, until Phase 4 reconciles whole-file writes).
     let base_version_id = version_id_from_base_token(&request.base_token)?;
-    let injected_origin_id = format!("agent-injected:{request_hash}");
-    let review_meta = parse_review_document(&plan.markdown).meta;
-    // Track why an edit did or didn't reach the live room, so the response can
-    // report it (observability for agents and tests) instead of silently
-    // falling back to a plain write.
-    let (injection_guard, injection_status) = match agent_edit_injection_batch(&plan) {
-        Ok(batch) => match state.collab.live_room(&document.id).await {
-            Some(room) => {
-                tracing::debug!(
-                    event = "collab.agent_injection.attempted",
-                    document_id = %document.id,
-                    path,
-                    operation = "agent_edit",
-                    "agent edit live injection attempted"
-                );
-                match room
-                    .begin_live_mutation(
-                        LiveMutation::content(batch, Some(review_meta.clone())),
-                        &plan.original_blocks,
-                        base_version_id.clone(),
-                    )
-                    .await
-                {
-                    Some(guard) => (Some(guard), "injected"),
-                    None => {
-                        tracing::debug!(
-                            event = "collab.agent_injection.rejected",
-                            document_id = %document.id,
-                            path,
-                            operation = "agent_edit",
-                            outcome = "rejected",
-                            reason_code = "gate_rejected",
-                            reason = "live room did not match the expected base",
-                            "agent edit live mutation gate rejected live room"
-                        );
-                        (None, "gate_rejected")
-                    }
-                }
-            }
-            None => {
-                tracing::debug!(
-                    event = "collab.agent_injection.rejected",
-                    document_id = %document.id,
-                    path,
-                    operation = "agent_edit",
-                    outcome = "skipped",
-                    reason_code = "no_live_room",
-                    reason = "no live collab room exists",
-                    "agent edit skipped live injection because no live collab room exists"
-                );
-                (None, "no_live_room")
-            }
-        },
-        Err(error) => {
-            tracing::debug!(
-                event = "collab.agent_injection.rejected",
-                document_id = %document.id,
-                path,
-                operation = "agent_edit",
-                outcome = "skipped",
-                reason_code = "not_codec_eligible",
-                reason = %error,
-                "agent edit skipped live injection because edit is not codec eligible"
-            );
-            (None, "not_codec_eligible")
-        }
-    };
-
-    let outcome = if let Some(guard) = injection_guard {
-        let outcome = state
-            .store
-            .commit_document_without_events(
-                library,
-                path,
-                plan.markdown.clone().into_bytes(),
-                document.version.metadata.clone(),
-                &document.version.content_type,
-                DocumentSource::Rest,
-                WritePrecondition::IfMatch(base_version_id.clone()),
-            )
-            .await?;
-        let _commit_outcome = guard.commit(outcome.version.id.clone()).await;
-        state
-            .store
-            .emit_document_put_events(&outcome, Some(injected_origin_id));
-        tracing::debug!(
-            event = "collab.agent_injection.committed",
-            document_id = %outcome.document.id,
-            path = %outcome.document.path,
-            tx_id = %outcome.transaction.id,
-            version_id = %outcome.version.id,
-            operation = "agent_edit",
-            outcome = "committed",
-            "agent edit live injection committed"
-        );
-        outcome
-    } else {
-        state
-            .store
-            .put_document(
-                library,
-                path,
-                plan.markdown.into_bytes(),
-                document.version.metadata.clone(),
-                &document.version.content_type,
-                DocumentSource::Rest,
-                WritePrecondition::IfMatch(base_version_id),
-            )
-            .await?
-    };
+    let outcome = state
+        .store
+        .put_document(
+            library,
+            path,
+            plan.markdown.into_bytes(),
+            document.version.metadata.clone(),
+            &document.version.content_type,
+            DocumentSource::Rest,
+            WritePrecondition::IfMatch(base_version_id),
+        )
+        .await?;
     let version_id = outcome.version.id.clone();
     let response = AgentEditResponse {
         dry_run: false,
         next_base_token: Some(version_id.clone()),
         outcome: Some(outcome),
         markdown: None,
-        injection: Some(injection_status.to_string()),
+        injection: None,
     };
 
     if let Some(cache_key) = cache_key {
@@ -3271,14 +3060,6 @@ async fn agent_edit_document(
         response,
         version_id: Some(version_id),
     })
-}
-
-fn agent_edit_response(result: AgentEditResult) -> Result<Response, ApiError> {
-    if let Some(version_id) = result.version_id {
-        json_with_etag(StatusCode::OK, &result.response, &version_id)
-    } else {
-        json_response(StatusCode::OK, &result.response)
-    }
 }
 
 fn agent_edit_request_hash(request: &AgentEditRequest, dry_run: bool) -> Result<String, ApiError> {
@@ -3650,211 +3431,13 @@ fn apply_agent_edit(
     })
 }
 
-fn agent_edit_injection_batch(plan: &AgentEditPlan) -> Result<InjectionBatch, Unsupported> {
-    // Per-original-block live node counts. Comment/suggestion marks are
-    // reproduced and the trailing endmatter block contributes no live nodes, so
-    // this now succeeds for review documents (previously bailed on endmatter).
-    let original_nodes = review_blocks_to_slate(&plan.original_blocks)
-        .map_err(|error| error.context("original blocks"))?;
-
-    let mut prefix = Vec::with_capacity(original_nodes.len());
-    let mut total = 0u32;
-    for nodes in &original_nodes {
-        prefix.push(total);
-        let node_count = u32::try_from(nodes.len())
-            .map_err(|_| Unsupported::new("original node count exceeds u32"))?;
-        total = total
-            .checked_add(node_count)
-            .ok_or_else(|| Unsupported::new("original node count overflow"))?;
-    }
-    let original_node_count = |ordinal: usize| -> Result<u32, Unsupported> {
-        let nodes = original_nodes
-            .get(ordinal)
-            .ok_or_else(|| Unsupported::new(format!("missing original block ordinal {ordinal}")))?;
-        u32::try_from(nodes.len()).map_err(|_| Unsupported::new("original node count exceeds u32"))
-    };
-
-    // New blocks are reproduced against the edited document's own endmatter.
-    let new_meta = parse_review_document(&plan.markdown).meta;
-    for (ordinal, block) in plan.blocks.iter().enumerate() {
-        review_block_to_slate(block, &new_meta)
-            .map_err(|error| error.context(format!("edited block {ordinal}")))?;
-    }
-
-    let mut ops = Vec::with_capacity(plan.ops.len());
-    for op in &plan.ops {
-        match op {
-            PlannedAgentEditOp::ReplaceDocument => {
-                ops.push(InjectionOp::ReplaceSpan {
-                    start: 0,
-                    old_node_count: total,
-                    new_nodes: built_nodes_for_markdown_document(&plan.markdown)?,
-                });
-            }
-            PlannedAgentEditOp::ReplaceBlock { ordinal, markdown } => {
-                ops.push(InjectionOp::ReplaceSpan {
-                    start: *prefix.get(*ordinal).ok_or_else(|| {
-                        Unsupported::new(format!("missing original block ordinal {ordinal}"))
-                    })?,
-                    old_node_count: original_node_count(*ordinal)?,
-                    new_nodes: built_nodes_for_block(markdown, &new_meta)?,
-                });
-            }
-            PlannedAgentEditOp::InsertBefore {
-                ordinal,
-                markdown_blocks,
-            } => {
-                ops.push(InjectionOp::InsertAt {
-                    index: *prefix.get(*ordinal).ok_or_else(|| {
-                        Unsupported::new(format!("missing original block ordinal {ordinal}"))
-                    })?,
-                    new_nodes: built_nodes_for_blocks(markdown_blocks, &new_meta)?,
-                });
-            }
-            PlannedAgentEditOp::InsertAfter {
-                ordinal,
-                markdown_blocks,
-            } => {
-                let start = *prefix.get(*ordinal).ok_or_else(|| {
-                    Unsupported::new(format!("missing original block ordinal {ordinal}"))
-                })?;
-                ops.push(InjectionOp::InsertAt {
-                    index: start
-                        .checked_add(original_node_count(*ordinal)?)
-                        .ok_or_else(|| Unsupported::new("injection index overflow"))?,
-                    new_nodes: built_nodes_for_blocks(markdown_blocks, &new_meta)?,
-                });
-            }
-            PlannedAgentEditOp::DeleteBlock { ordinal } => {
-                ops.push(InjectionOp::DeleteSpan {
-                    start: *prefix.get(*ordinal).ok_or_else(|| {
-                        Unsupported::new(format!("missing original block ordinal {ordinal}"))
-                    })?,
-                    old_node_count: original_node_count(*ordinal)?,
-                });
-            }
-        }
-    }
-    InjectionBatch::new(ops).ok_or_else(|| Unsupported::new("empty injection batch"))
-}
-
-fn built_nodes_for_markdown_document(
-    markdown: &str,
-) -> Result<Vec<quarry_collab_codec::BuiltNode>, Unsupported> {
-    if markdown.is_empty() {
-        return Ok(Vec::new());
-    }
-    let nodes = review_markdown_to_slate(markdown)
-        .map_err(|error| error.context("replacement document"))?;
-    build_nodes(&nodes)
-}
-
-fn built_nodes_for_block(
-    markdown: &str,
-    meta: &ReviewMeta,
-) -> Result<Vec<quarry_collab_codec::BuiltNode>, Unsupported> {
-    let nodes = review_block_to_slate(markdown, meta)?;
-    build_nodes(&nodes)
-}
-
-fn built_nodes_for_blocks(
-    markdown_blocks: &[String],
-    meta: &ReviewMeta,
-) -> Result<Vec<quarry_collab_codec::BuiltNode>, Unsupported> {
-    let mut built = Vec::new();
-    for markdown in markdown_blocks {
-        built.extend(built_nodes_for_block(markdown, meta)?);
-    }
-    Ok(built)
-}
-
-struct AgentOpsLiveMutationPlan {
-    batch: Option<InjectionBatch>,
-    original_blocks: Vec<String>,
-    review: Option<ReviewMeta>,
-}
-
-fn agent_ops_live_mutation_plan(
-    original_markdown: &str,
-    applied: &AppliedAgentOps,
-) -> Result<AgentOpsLiveMutationPlan, Unsupported> {
-    let batch = if applied.changed_ordinals.is_empty() {
-        None
-    } else {
-        Some(agent_ops_injection_batch(
-            original_markdown,
-            &applied.markdown,
-            &applied.changed_ordinals,
-        )?)
-    };
-    if batch.is_none() && applied.review_meta == parse_review_document(original_markdown).meta {
-        return Err(Unsupported::new(
-            "agent ops mutation produced no live patch",
-        ));
-    }
-    Ok(AgentOpsLiveMutationPlan {
-        batch,
-        original_blocks: split_markdown_blocks(original_markdown),
-        review: Some(applied.review_meta.clone()),
-    })
-}
-
-fn agent_ops_injection_batch(
-    original_markdown: &str,
-    edited_markdown: &str,
-    changed_ordinals: &[usize],
-) -> Result<InjectionBatch, Unsupported> {
-    let original_blocks = split_markdown_blocks(original_markdown);
-    let original_nodes = review_blocks_to_slate(&original_blocks)
-        .map_err(|error| error.context("original blocks"))?;
-
-    let mut prefix = Vec::with_capacity(original_nodes.len());
-    let mut total = 0u32;
-    for nodes in &original_nodes {
-        prefix.push(total);
-        let node_count = u32::try_from(nodes.len())
-            .map_err(|_| Unsupported::new("original node count exceeds u32"))?;
-        total = total
-            .checked_add(node_count)
-            .ok_or_else(|| Unsupported::new("original node count overflow"))?;
-    }
-
-    let edited_document = parse_review_document(edited_markdown);
-    let edited_blocks = split_markdown_blocks(&edited_document.body);
-    let mut ops = Vec::with_capacity(changed_ordinals.len());
-    for ordinal in changed_ordinals {
-        let start = *prefix
-            .get(*ordinal)
-            .ok_or_else(|| Unsupported::new(format!("missing original block ordinal {ordinal}")))?;
-        let old_node_count = original_nodes
-            .get(*ordinal)
-            .ok_or_else(|| Unsupported::new(format!("missing original block ordinal {ordinal}")))
-            .and_then(|nodes| {
-                u32::try_from(nodes.len())
-                    .map_err(|_| Unsupported::new("original node count exceeds u32"))
-            })?;
-        let new_nodes = if let Some(edited_block) = edited_blocks.get(*ordinal) {
-            built_nodes_for_block(edited_block, &edited_document.meta)?
-        } else if edited_document.body.trim().is_empty() {
-            Vec::new()
-        } else {
-            return Err(Unsupported::new(format!(
-                "missing edited block ordinal {ordinal}"
-            )));
-        };
-        ops.push(InjectionOp::ReplaceSpan {
-            start,
-            old_node_count,
-            new_nodes,
-        });
-    }
-    InjectionBatch::new(ops).ok_or_else(|| Unsupported::new("empty injection batch"))
-}
-
 struct AppliedAgentOps {
     markdown: String,
     results: Vec<AgentOpsResultItem>,
+    /// Fed the deleted injection gate; kept until Phase 7 deletes the facade.
+    #[allow(dead_code)]
     changed_ordinals: Vec<usize>,
+    #[allow(dead_code)]
     review_meta: ReviewMeta,
 }
 
@@ -4837,13 +4420,6 @@ fn stale_base_error() -> ApiError {
     QuarryError::PreconditionFailed("STALE_BASE".to_string()).into()
 }
 
-fn live_gate_rejected_error() -> ApiError {
-    ApiError {
-        status: StatusCode::CONFLICT,
-        message: "LIVE_GATE_REJECTED".to_string(),
-    }
-}
-
 fn block_hash(markdown: &str) -> String {
     blake3::hash(markdown.as_bytes()).to_hex().to_string()
 }
@@ -5456,57 +5032,6 @@ fn metadata_from_headers(headers: &HeaderMap, content_type: &str) -> Result<Json
 mod tests {
     use super::*;
     use axum::response::IntoResponse;
-
-    #[test]
-    fn injection_batch_supports_documents_with_review_comments() {
-        // A document carrying a CriticMarkup comment + endmatter used to disable
-        // live injection entirely. Replacing the commented prose block must now
-        // produce a batch (the endmatter block contributes no live nodes).
-        let original = "Quote {==highlight==}{>>note<<}{#c1} tail\n\n---\ncomments:\n  c1:\n    by: ai:codex\n    at: 2026-06-05T02:41:00.480Z\n";
-        let original_blocks = split_markdown_blocks(original);
-        assert_eq!(original_blocks.len(), 2, "prose block + endmatter block");
-
-        let new_block = "Replaced prose\n\n".to_string();
-        let mut blocks = original_blocks.clone();
-        blocks[0] = new_block.clone();
-        let plan = AgentEditPlan {
-            markdown: blocks.concat(),
-            blocks,
-            ops: vec![PlannedAgentEditOp::ReplaceBlock {
-                ordinal: 0,
-                markdown: new_block,
-            }],
-            original_blocks,
-        };
-
-        assert!(
-            agent_edit_injection_batch(&plan).is_ok(),
-            "review-comment edit should produce a live injection batch"
-        );
-    }
-
-    #[test]
-    fn injection_batch_reports_codec_rejection_reason() {
-        let original = "Add {++x++} now\n";
-        let original_blocks = split_markdown_blocks(original);
-        let new_block = "Plain replacement\n".to_string();
-        let plan = AgentEditPlan {
-            markdown: new_block.clone(),
-            blocks: vec![new_block.clone()],
-            ops: vec![PlannedAgentEditOp::ReplaceBlock {
-                ordinal: 0,
-                markdown: new_block,
-            }],
-            original_blocks,
-        };
-
-        let error = agent_edit_injection_batch(&plan).unwrap_err();
-
-        assert_eq!(
-            error.0,
-            "original blocks: block 0: review marker without {#id}"
-        );
-    }
 
     #[test]
     fn canonical_review_markdown_prunes_dropped_root_and_replies() {

@@ -286,7 +286,7 @@ fn element_from_embedded_text<T: ReadTxn>(
 
 fn xml_attrs_to_slate<T: ReadTxn>(txn: &T, child: &XmlTextRef) -> Result<SlateAttrs, Unsupported> {
     let mut entries = child.attributes(txn).collect::<Vec<_>>();
-    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    entries.sort_by_key(|(left, _)| *left);
     let mut out = SlateAttrs::new();
     for (key, value) in entries {
         out.insert(key.to_string(), out_to_value(value)?);
@@ -298,7 +298,7 @@ fn yrs_attrs_to_slate(attrs: Option<&Attrs>) -> Result<SlateAttrs, Unsupported> 
     let mut out = SlateAttrs::new();
     if let Some(attrs) = attrs {
         let mut entries = attrs.iter().collect::<Vec<_>>();
-        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        entries.sort_by_key(|(left, _)| *left);
         for (key, value) in entries {
             out.insert(key.to_string(), any_to_value(value)?);
         }

@@ -1,0 +1,1229 @@
+//! Ephemeral per-document editing sessions — Phase 3 of the session-scoped
+//! collaboration rewrite.
+//!
+//! ## Lifecycle
+//!
+//! A session is an in-memory Yjs document that exists only while websocket
+//! subscribers are connected:
+//!
+//! - The FIRST subscriber seeds a fresh doc from canonical block rows (and
+//!   review anchors, overlaid as the browser's comment/suggestion marks —
+//!   see `quarry_collab_codec::session_doc`). If the stored projection is
+//!   missing, rows are materialized in-memory from the head Markdown; the
+//!   first checkpoint persists them.
+//! - Updates broadcast to peers over the y-sync v1 protocol; awareness is
+//!   relayed and never persisted.
+//! - A debounced checkpoint ([`CHECKPOINT_DEBOUNCE`] after the last update)
+//!   projects the session doc back to rows and commits ONE version + ONE
+//!   coalesced `browser_session` history row through
+//!   [`QuarryStore::commit_block_mutation`]. The checkpoint is the only
+//!   durable effect of typing.
+//! - The LAST subscriber leaving runs a final checkpoint and discards the
+//!   doc. Nothing CRDT-shaped is ever stored.
+//!
+//! ## The mode switch
+//!
+//! [`SessionHub::lock_document`] hands out the per-document async mutex that
+//! serializes seed, checkpoint, discard, and semantic transactions. The
+//! gateway locks it, asks for the live session, and dispatches: no session →
+//! rows mode (plain SQL); session → the transaction applies into the live
+//! doc as a collaborator and forces a checkpoint before acking (see
+//! `gateway::apply_session_transaction`). Writers arriving mid-transition
+//! wait on the mutex; they are never rejected because a session exists.
+//!
+//! ## Transitional rules (until Phase 5 simplifies the browser)
+//!
+//! The unmodified browser still runs its autosave flusher and SSE
+//! classification. Two rules keep it coherent:
+//!
+//! - **Markdown PUT from a session participant** (an `x-quarry-origin-id`
+//!   starting with `browser:` on a document with an active session) is
+//!   treated as a checkpoint trigger, not an independent write: the session
+//!   doc is authoritative and already contains those edits, so the server
+//!   checkpoints and acks with the new head ETag, ignoring the PUT body and
+//!   its `If-Match` (the flusher's clock is routinely stale once checkpoints
+//!   move the head). See `put_document` in `lib.rs`.
+//! - **Checkpoint `doc.changed` events carry an `agent-injected:…`
+//!   `origin_id`**, which today's browser classifies as a benign refresh
+//!   (`session-events.ts`) instead of "External version available".
+//!
+//! Both rules dissolve when Phase 5 deletes the flusher and the external
+//! version classification.
+//!
+//! ## Known transitional hazards (accepted, fixed by Phases 4/5)
+//!
+//! - An external legacy Markdown write racing a live session is overwritten
+//!   by the next checkpoint (session-authoritative, whole-document
+//!   last-writer-wins). Phase 4's diff3 reconciliation replaces this.
+//! - A browser whose provider reconnects with its OLD Y.Doc after the
+//!   session was discarded merges stale content into the fresh seed
+//!   (duplication). Phase 5 reseeds reconnecting browsers with a fresh doc.
+//! - The collab websocket remains unauthenticated (phase-one loopback
+//!   posture, design delta 2); sessions do not widen exposure.
+
+use crate::collab::{serve_session_socket, SHARED_ROOT};
+use axum::extract::ws::WebSocket;
+use quarry_collab_codec::{
+    apply_built, block_rows_to_markdown, build_nodes, project_session_nodes,
+    read_review_meta_from_map, seed_session_nodes, utf16_len, write_review_meta_to_map, BlockRow,
+    Node, ReviewMeta, ReviewMetaEntry, SessionAnchor, SessionAnchorKind, SessionProjection,
+    Unsupported,
+};
+use quarry_core::{now_timestamp, render_markdown_frontmatter, QuarryError, WriteOutcome};
+use quarry_storage::{
+    BlockMutationCommit, BlockMutationOutcome, BlockReviewItem, BlockReviewKind, BlockReviewState,
+    QuarryStore,
+};
+use serde_json::json;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::time::Duration;
+use tokio::sync::broadcast;
+use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
+use tokio::task::JoinHandle;
+use tokio::time::timeout;
+use uuid::Uuid;
+use yrs::encoding::write::Write;
+use yrs::sync::Awareness;
+use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
+use yrs::{Doc, OffsetKind, Options, ReadTxn, Transact, TransactionMut, WriteTxn, XmlTextRef};
+
+/// How long after the last doc update the debounced checkpoint fires.
+pub(crate) const CHECKPOINT_DEBOUNCE: Duration = Duration::from_millis(2_000);
+/// Retries when an external legacy write races a checkpoint commit.
+const CHECKPOINT_RETRY_LIMIT: usize = 5;
+/// The review-map root shared with the browser (`review-doc.ts`).
+pub(crate) const REVIEW_ROOT: &str = "review";
+
+type AwarenessRef = Arc<RwLock<Awareness>>;
+
+// ---------------------------------------------------------------------------
+// Hub and per-document entries
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+pub(crate) struct SessionHub {
+    entries: Arc<Mutex<HashMap<String, Arc<DocEntry>>>>,
+    store: QuarryStore,
+}
+
+struct DocEntry {
+    state: Arc<Mutex<DocState>>,
+}
+
+#[derive(Default)]
+struct DocState {
+    session: Option<Arc<LiveSession>>,
+}
+
+/// The per-document mutex, held across seed/checkpoint/discard/transaction.
+pub(crate) struct DocumentGuard {
+    state: OwnedMutexGuard<DocState>,
+}
+
+impl DocumentGuard {
+    pub(crate) fn session(&self) -> Option<Arc<LiveSession>> {
+        self.state.session.clone()
+    }
+}
+
+impl SessionHub {
+    pub(crate) fn new(store: QuarryStore) -> Self {
+        Self {
+            entries: Arc::default(),
+            store,
+        }
+    }
+
+    async fn entry(&self, document_id: &str) -> Arc<DocEntry> {
+        let mut entries = self.entries.lock().await;
+        entries
+            .entry(document_id.to_string())
+            .or_insert_with(|| {
+                Arc::new(DocEntry {
+                    state: Arc::new(Mutex::new(DocState::default())),
+                })
+            })
+            .clone()
+    }
+
+    /// Serializes against seed/checkpoint/discard/transactions for one
+    /// document. The guard exposes the live session, if any.
+    pub(crate) async fn lock_document(&self, document_id: &str) -> DocumentGuard {
+        let entry = self.entry(document_id).await;
+        DocumentGuard {
+            state: entry.state.clone().lock_owned().await,
+        }
+    }
+
+    /// The transitional autosave rule: a Markdown PUT from a session
+    /// participant acks the session's durable state instead of writing.
+    /// `Ok(None)` = no live session, the PUT proceeds as a legacy write.
+    pub(crate) async fn checkpoint_for_autosave(
+        &self,
+        document_id: &str,
+    ) -> Result<Option<WriteOutcome>, QuarryError> {
+        let guard = self.lock_document(document_id).await;
+        let Some(session) = guard.session() else {
+            return Ok(None);
+        };
+        if let Some(outcome) = session.checkpoint_browser_session(&self.store).await? {
+            return Ok(Some(outcome));
+        }
+        if let Some(outcome) = session.last_outcome() {
+            return Ok(Some(outcome));
+        }
+        // A clean session that has never committed: force one
+        // identical-content checkpoint so the autosave acks a real version.
+        let awareness = session.awareness().write().await;
+        let outcome = session
+            .commit_doc_state(&self.store, &awareness, None)
+            .await?;
+        Ok(Some(outcome))
+    }
+
+    pub(crate) async fn serve_socket(&self, document_id: String, socket: WebSocket) {
+        let collab_session_id = Uuid::new_v4().to_string();
+        let entry = self.entry(&document_id).await;
+        let session = {
+            let mut state = entry.state.clone().lock_owned().await;
+            let session = match &state.session {
+                Some(session) => session.clone(),
+                None => {
+                    match LiveSession::seed(&self.store, &document_id, entry.state.clone()).await {
+                        Ok(Some(session)) => {
+                            state.session = Some(session.clone());
+                            session
+                        }
+                        Ok(None) => {
+                            tracing::debug!(
+                                event = "collab.session.refused",
+                                %document_id,
+                                reason_code = "not_a_block_document",
+                                "collab session refused: missing, deleted, or raw document"
+                            );
+                            return;
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                event = "collab.session.refused",
+                                %document_id,
+                                %error,
+                                reason_code = "seed_failed",
+                                "collab session refused: seeding from rows failed"
+                            );
+                            return;
+                        }
+                    }
+                }
+            };
+            session.subscribers.fetch_add(1, Ordering::SeqCst);
+            session
+        };
+        tracing::debug!(
+            event = "collab.socket.opened",
+            %document_id,
+            %collab_session_id,
+            "collab socket opened"
+        );
+
+        let result = serve_session_socket(&session, socket, &collab_session_id).await;
+        match result {
+            Ok(()) => tracing::debug!(
+                event = "collab.socket.closed",
+                %document_id,
+                %collab_session_id,
+                outcome = "closed",
+                "collab socket closed"
+            ),
+            Err(error) => tracing::debug!(
+                event = "collab.socket.closed",
+                %document_id,
+                %collab_session_id,
+                outcome = "protocol_error",
+                reason = %error,
+                "collab websocket closed with protocol error"
+            ),
+        }
+
+        // Leave: under the document mutex, run the final checkpoint and
+        // discard the session when the last subscriber departs.
+        let mut state = entry.state.clone().lock_owned().await;
+        if session.subscribers.fetch_sub(1, Ordering::SeqCst) == 1 {
+            if let Err(error) = session.checkpoint_browser_session(&self.store).await {
+                tracing::warn!(
+                    event = "collab.session.final_checkpoint_failed",
+                    %document_id,
+                    %error,
+                    "final session checkpoint failed; un-checkpointed edits are lost"
+                );
+            }
+            if state
+                .session
+                .as_ref()
+                .is_some_and(|live| Arc::ptr_eq(live, &session))
+            {
+                state.session = None;
+            }
+            tracing::debug!(
+                event = "collab.session.discarded",
+                %document_id,
+                "collab session discarded after last subscriber left"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Live session
+// ---------------------------------------------------------------------------
+
+pub(crate) struct LiveSession {
+    pub(crate) document_id: String,
+    library_slug: String,
+    awareness: AwarenessRef,
+    broadcast_tx: broadcast::Sender<Vec<u8>>,
+    _doc_sub: yrs::Subscription,
+    _awareness_sub: yrs::Subscription,
+    awareness_task: JoinHandle<()>,
+    checkpoint_task: StdMutex<Option<JoinHandle<()>>>,
+    /// Bumped on every doc update (browser or server).
+    update_seq: Arc<AtomicU64>,
+    /// The `update_seq` covered by the last checkpoint.
+    checkpointed_seq: AtomicU64,
+    /// The head version the next checkpoint expects (last committed by this
+    /// session, or the seed head).
+    head_version_id: StdMutex<String>,
+    last_outcome: StdMutex<Option<WriteOutcome>>,
+    /// The full review item set as of the last seed/checkpoint/transaction.
+    items: StdMutex<HashMap<String, BlockReviewItem>>,
+    subscribers: AtomicUsize,
+}
+
+impl Drop for LiveSession {
+    fn drop(&mut self) {
+        self.awareness_task.abort();
+        if let Some(task) = self.checkpoint_task.lock().unwrap().take() {
+            task.abort();
+        }
+    }
+}
+
+impl LiveSession {
+    /// Seeds a fresh session from canonical state. `Ok(None)` when the
+    /// document cannot host a session (missing, deleted, or raw).
+    async fn seed(
+        store: &QuarryStore,
+        document_id: &str,
+        entry_state: Arc<Mutex<DocState>>,
+    ) -> Result<Option<Arc<LiveSession>>, QuarryError> {
+        let Some(seed) = store.session_seed_state(document_id).await? else {
+            return Ok(None);
+        };
+        let items: HashMap<String, BlockReviewItem> = seed
+            .review_items
+            .iter()
+            .map(|item| (item.id.clone(), item.clone()))
+            .collect();
+        let anchors = doc_anchors(&seed.review_items);
+        let nodes = seed_session_nodes(&seed.rows, &anchors)?;
+        let built = build_nodes(&nodes)?;
+        let meta = review_meta_for_items(&seed.review_items);
+
+        let doc = Doc::with_options(Options {
+            offset_kind: OffsetKind::Utf16,
+            ..Default::default()
+        });
+        {
+            let mut txn = doc.transact_mut();
+            let text = txn.get_or_insert_text(SHARED_ROOT);
+            let root: &XmlTextRef = text.as_ref();
+            let root = root.clone();
+            apply_built(&mut txn, &root, 0, &built);
+            let review = txn.get_or_insert_map(REVIEW_ROOT);
+            write_review_meta_to_map(&mut txn, &review, &meta);
+        }
+
+        let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
+        let (broadcast_tx, _broadcast_keepalive) = broadcast::channel(64);
+        let (dirty_tx, mut dirty_rx) = unbounded_channel::<()>();
+        // The doc observer owns the only sender; the channel closes with it.
+        let update_seq = Arc::new(AtomicU64::new(0));
+
+        let mut lock = awareness.write().await;
+        let doc_sub = {
+            let sink = broadcast_tx.clone();
+            let seq = update_seq.clone();
+            let dirty = dirty_tx;
+            lock.doc()
+                .observe_update_v1(move |_txn, update| {
+                    seq.fetch_add(1, Ordering::SeqCst);
+                    let mut encoder = EncoderV1::new();
+                    encoder.write_var(yrs::sync::protocol::MSG_SYNC);
+                    encoder.write_var(yrs::sync::protocol::MSG_SYNC_UPDATE);
+                    encoder.write_buf(&update.update);
+                    let _ = sink.send(encoder.to_vec());
+                    let _ = dirty.send(());
+                })
+                .map_err(|error| QuarryError::Storage(format!("observe session doc: {error}")))?
+        };
+        let (awareness_changes_tx, mut awareness_changes_rx) = unbounded_channel();
+        let awareness_sub = lock.on_update(move |_awareness, event, _origin| {
+            let _ = awareness_changes_tx.send(event.all_changes());
+        });
+        drop(lock);
+
+        let awareness_task = {
+            let awareness = Arc::downgrade(&awareness);
+            let sink = broadcast_tx.clone();
+            tokio::spawn(async move {
+                while let Some(changed) = awareness_changes_rx.recv().await {
+                    let Some(awareness) = awareness.upgrade() else {
+                        return;
+                    };
+                    let awareness = awareness.read().await;
+                    if let Ok(update) = awareness.update_with_clients(changed) {
+                        let _ = sink.send(yrs::sync::Message::Awareness(update).encode_v1());
+                    }
+                }
+            })
+        };
+
+        let session = Arc::new(LiveSession {
+            document_id: document_id.to_string(),
+            library_slug: seed.library_slug.clone(),
+            awareness,
+            broadcast_tx,
+            _doc_sub: doc_sub,
+            _awareness_sub: awareness_sub,
+            awareness_task,
+            checkpoint_task: StdMutex::new(None),
+            update_seq,
+            checkpointed_seq: AtomicU64::new(0),
+            head_version_id: StdMutex::new(seed.head_version_id.clone()),
+            last_outcome: StdMutex::new(None),
+            items: StdMutex::new(items),
+            subscribers: AtomicUsize::new(0),
+        });
+
+        // Debounced checkpointer: waits for quiet after the last update,
+        // then checkpoints under the document mutex.
+        let checkpoint_task = {
+            let store = store.clone();
+            let weak = Arc::downgrade(&session);
+            tokio::spawn(async move {
+                while dirty_rx.recv().await.is_some() {
+                    while timeout(CHECKPOINT_DEBOUNCE, dirty_rx.recv())
+                        .await
+                        .is_ok_and(|received| received.is_some())
+                    {}
+                    let Some(session) = weak.upgrade() else {
+                        return;
+                    };
+                    let _guard = entry_state.lock().await;
+                    if let Err(error) = session.checkpoint_browser_session(&store).await {
+                        tracing::warn!(
+                            event = "collab.session.checkpoint_failed",
+                            document_id = %session.document_id,
+                            %error,
+                            "debounced session checkpoint failed; will retry on the next edit"
+                        );
+                    }
+                }
+            })
+        };
+        *session.checkpoint_task.lock().unwrap() = Some(checkpoint_task);
+
+        tracing::debug!(
+            event = "collab.session.seeded",
+            %document_id,
+            library = %seed.library_slug,
+            path = %seed.path,
+            head_version_id = %seed.head_version_id,
+            blocks = seed.rows.len(),
+            review_items = seed.review_items.len(),
+            "collab session seeded from block rows"
+        );
+        Ok(Some(session))
+    }
+
+    pub(crate) fn awareness(&self) -> &AwarenessRef {
+        &self.awareness
+    }
+
+    pub(crate) fn subscribe_broadcast(&self) -> broadcast::Receiver<Vec<u8>> {
+        self.broadcast_tx.subscribe()
+    }
+
+    pub(crate) fn last_outcome(&self) -> Option<WriteOutcome> {
+        self.last_outcome.lock().unwrap().clone()
+    }
+
+    pub(crate) fn items_snapshot(&self) -> Vec<BlockReviewItem> {
+        let mut items: Vec<BlockReviewItem> =
+            self.items.lock().unwrap().values().cloned().collect();
+        items.sort_by(|left, right| left.id.cmp(&right.id));
+        items
+    }
+
+    /// Commits a coalesced `browser_session` checkpoint of the current doc
+    /// state. Caller holds the document mutex. `Ok(None)` = clean.
+    pub(crate) async fn checkpoint_browser_session(
+        &self,
+        store: &QuarryStore,
+    ) -> Result<Option<WriteOutcome>, QuarryError> {
+        let awareness = self.awareness.write().await;
+        if !self.is_dirty() {
+            return Ok(None);
+        }
+        let outcome = self.commit_doc_state(store, &awareness, None).await?;
+        Ok(Some(outcome))
+    }
+
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.update_seq.load(Ordering::SeqCst) != self.checkpointed_seq.load(Ordering::SeqCst)
+    }
+
+    /// Projects the locked doc and commits it as the new canonical state.
+    /// `transaction` carries the gateway's commit fields for session-mode
+    /// transactions; `None` commits a coalesced browser-session checkpoint.
+    pub(crate) async fn commit_doc_state(
+        &self,
+        store: &QuarryStore,
+        awareness: &Awareness,
+        transaction: Option<SessionTransactionCommit>,
+    ) -> Result<WriteOutcome, QuarryError> {
+        let seq = self.update_seq.load(Ordering::SeqCst);
+        let (projection, meta) = self.project_locked(awareness)?;
+        let prior_items = self.items.lock().unwrap().clone();
+        let now = now_timestamp();
+        let items =
+            reconcile_review_items(&self.document_id, &prior_items, &projection, &meta, &now);
+
+        for attempt in 0..CHECKPOINT_RETRY_LIMIT {
+            let Some(head) = store.session_seed_state(&self.document_id).await? else {
+                return Err(QuarryError::NotFound(format!(
+                    "document {} disappeared mid-session",
+                    self.document_id
+                )));
+            };
+            if attempt > 0 || head.head_version_id != *self.head_version_id.lock().unwrap() {
+                tracing::warn!(
+                    event = "collab.session.head_moved",
+                    document_id = %self.document_id,
+                    expected = %self.head_version_id.lock().unwrap(),
+                    found = %head.head_version_id,
+                    "external write raced a live session; the session state wins (transitional)"
+                );
+            }
+            let normalized = format!(
+                "{}{}",
+                render_markdown_frontmatter(&head.metadata)?,
+                block_rows_to_markdown(&projection.rows)?
+            );
+            let commit = match &transaction {
+                Some(tx) => BlockMutationCommit {
+                    document_id: self.document_id.clone(),
+                    expected_head_version_id: head.head_version_id.clone(),
+                    client_tx_id: tx.client_tx_id.clone(),
+                    actor_kind: tx.actor_kind.clone(),
+                    actor_id: tx.actor_id.clone(),
+                    transaction_actor: tx.transaction_actor.clone(),
+                    transaction_message: None,
+                    transaction_provenance: None,
+                    origin_id: Some(format!("agent-injected:tx:{}", tx.client_tx_id)),
+                    source: quarry_core::DocumentSource::Rest,
+                    recorded_ops: tx.recorded_ops.clone(),
+                    metadata: head.metadata.clone(),
+                    content_type: head.content_type.clone(),
+                    rows: projection.rows.clone(),
+                    review_items: sorted_items(&items),
+                    normalized_markdown: normalized,
+                },
+                None => BlockMutationCommit {
+                    document_id: self.document_id.clone(),
+                    expected_head_version_id: head.head_version_id.clone(),
+                    client_tx_id: format!("session-checkpoint-{}", Uuid::new_v4()),
+                    actor_kind: "browser_session".to_string(),
+                    actor_id: None,
+                    transaction_actor: Some("browser".to_string()),
+                    transaction_message: Some("Live session edits".to_string()),
+                    transaction_provenance: Some(json!({
+                        "history": {
+                            "kind": "autosave",
+                            "reason": "session_checkpoint",
+                        }
+                    })),
+                    origin_id: Some(format!(
+                        "agent-injected:session-checkpoint:{}",
+                        Uuid::new_v4()
+                    )),
+                    source: quarry_core::DocumentSource::Rest,
+                    recorded_ops: json!({
+                        "ops": [],
+                        "actor": { "kind": "browser_session" },
+                        "ack": { "status": "committed", "changed_block_ids": [] },
+                    }),
+                    metadata: head.metadata.clone(),
+                    content_type: head.content_type.clone(),
+                    rows: projection.rows.clone(),
+                    review_items: sorted_items(&items),
+                    normalized_markdown: normalized,
+                },
+            };
+            match store
+                .commit_block_mutation(&self.library_slug, commit)
+                .await
+            {
+                Ok(BlockMutationOutcome::Applied { outcome, .. }) => {
+                    self.checkpointed_seq.store(seq, Ordering::SeqCst);
+                    *self.head_version_id.lock().unwrap() = outcome.version.id.clone();
+                    *self.items.lock().unwrap() = items;
+                    *self.last_outcome.lock().unwrap() = Some((*outcome).clone());
+                    tracing::debug!(
+                        event = "collab.session.checkpointed",
+                        document_id = %self.document_id,
+                        version_id = %outcome.version.id,
+                        blocks = projection.rows.len(),
+                        "session checkpoint committed"
+                    );
+                    return Ok(*outcome);
+                }
+                Ok(BlockMutationOutcome::Replayed(_)) => {
+                    return Err(QuarryError::Conflict(format!(
+                        "session checkpoint client_tx_id collided for document {}",
+                        self.document_id
+                    )));
+                }
+                Err(QuarryError::PreconditionFailed(_)) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(QuarryError::Busy(format!(
+            "document {} head kept moving during a session checkpoint",
+            self.document_id
+        )))
+    }
+
+    /// Projects the locked doc into rows/anchors plus the review meta map.
+    /// Caller must hold the doc's write lock (the `awareness` it passes is
+    /// the locked guard's target) so the projection cannot race updates.
+    pub(crate) fn project_locked(
+        &self,
+        awareness: &Awareness,
+    ) -> Result<(SessionProjection, ReviewMeta), QuarryError> {
+        let txn = awareness.doc().transact();
+        let root = content_root(&txn)?;
+        let fragment =
+            quarry_collab_codec::xmltext_to_slate(&txn, &root).map_err(session_projection_error)?;
+        let Node::Element { children, .. } = fragment else {
+            return Err(QuarryError::Storage(
+                "session doc root did not project to a fragment".to_string(),
+            ));
+        };
+        let projection = project_session_nodes(&children, || Uuid::new_v4().to_string())
+            .map_err(session_projection_error)?;
+        let meta = match txn.get_map(REVIEW_ROOT) {
+            Some(map) => read_review_meta_from_map(&txn, &map),
+            None => ReviewMeta::default(),
+        };
+        Ok((projection, meta))
+    }
+
+    /// Applies a desired doc image (from the gateway's apply engine) into the
+    /// locked live doc, as the session's own collaborator client.
+    pub(crate) fn apply_desired_state(
+        &self,
+        awareness: &Awareness,
+        pre: &[Node],
+        desired: &[Node],
+        desired_items: &[BlockReviewItem],
+    ) -> Result<(), QuarryError> {
+        let mut txn = awareness.doc().transact_mut();
+        let root = content_root_mut(&mut txn)?;
+        quarry_collab_codec::reconcile_session_children(&mut txn, &root, pre, desired)
+            .map_err(session_projection_error)?;
+        let review = txn.get_or_insert_map(REVIEW_ROOT);
+        write_review_meta_to_map(&mut txn, &review, &review_meta_for_items(desired_items));
+        Ok(())
+    }
+
+    /// Marks the current doc state as covered by `outcome` (used by the
+    /// gateway after committing a session-mode transaction while holding the
+    /// awareness write lock).
+    pub(crate) fn mark_committed(&self, outcome: &WriteOutcome, items: &[BlockReviewItem]) {
+        self.checkpointed_seq
+            .store(self.update_seq.load(Ordering::SeqCst), Ordering::SeqCst);
+        *self.head_version_id.lock().unwrap() = outcome.version.id.clone();
+        *self.items.lock().unwrap() = items
+            .iter()
+            .map(|item| (item.id.clone(), item.clone()))
+            .collect();
+        *self.last_outcome.lock().unwrap() = Some(outcome.clone());
+    }
+}
+
+/// Commit fields a session-mode gateway transaction supplies.
+pub(crate) struct SessionTransactionCommit {
+    pub client_tx_id: String,
+    pub actor_kind: String,
+    pub actor_id: Option<String>,
+    pub transaction_actor: Option<String>,
+    pub recorded_ops: serde_json::Value,
+}
+
+fn session_projection_error(error: Unsupported) -> QuarryError {
+    QuarryError::UnsupportedMarkdown(error)
+}
+
+fn content_root<T: ReadTxn>(txn: &T) -> Result<XmlTextRef, QuarryError> {
+    let text = txn.get_text(SHARED_ROOT).ok_or_else(|| {
+        QuarryError::Storage("session doc is missing its content root".to_string())
+    })?;
+    let root: &XmlTextRef = text.as_ref();
+    Ok(root.clone())
+}
+
+fn content_root_mut(txn: &mut TransactionMut<'_>) -> Result<XmlTextRef, QuarryError> {
+    let text = txn.get_or_insert_text(SHARED_ROOT);
+    let root: &XmlTextRef = text.as_ref();
+    Ok(root.clone())
+}
+
+// ---------------------------------------------------------------------------
+// Review item ↔ session doc reconciliation
+// ---------------------------------------------------------------------------
+
+/// Whether an item is represented in the live doc (as marks and/or a review
+/// meta entry). Everything else passes through checkpoints untouched.
+fn doc_represented(item: &BlockReviewItem) -> bool {
+    match item.kind {
+        BlockReviewKind::Comment => {
+            if item.parent_item_id.is_some() {
+                // Replies ride only in the meta map, keyed under the thread.
+                return matches!(
+                    item.state,
+                    BlockReviewState::Open | BlockReviewState::Resolved
+                );
+            }
+            matches!(
+                item.state,
+                BlockReviewState::Open | BlockReviewState::Resolved
+            ) && item.start_offset < item.end_offset
+        }
+        BlockReviewKind::Suggestion => {
+            item.state == BlockReviewState::Open
+                && (item.start_offset < item.end_offset
+                    || item
+                        .replacement
+                        .as_deref()
+                        .is_some_and(|replacement| !replacement.is_empty()))
+        }
+        BlockReviewKind::Conflict => false,
+    }
+}
+
+/// The doc-mark image of a row item set: open/resolved comments and open
+/// suggestions become [`SessionAnchor`]s (replies and dead anchors do not).
+pub(crate) fn doc_anchors(items: &[BlockReviewItem]) -> Vec<SessionAnchor> {
+    items
+        .iter()
+        .filter(|item| doc_represented(item) && item.parent_item_id.is_none())
+        .map(|item| SessionAnchor {
+            id: item.id.clone(),
+            kind: match item.kind {
+                BlockReviewKind::Suggestion => SessionAnchorKind::Suggestion,
+                _ => SessionAnchorKind::Comment,
+            },
+            block_id: item.block_id.clone(),
+            start: item.start_offset,
+            end: item.end_offset,
+            replacement: match item.kind {
+                BlockReviewKind::Suggestion => Some(item.replacement.clone().unwrap_or_default()),
+                _ => None,
+            },
+            by: item.author.clone(),
+            at_ms: chrono_ms(&item.created_at),
+        })
+        .collect()
+}
+
+fn chrono_ms(at: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(at)
+        .map(|dt| dt.timestamp_millis())
+        .unwrap_or(0)
+}
+
+/// The review meta map image of a row item set (what the browser reads for
+/// bodies, authors, threading, and resolution state).
+pub(crate) fn review_meta_for_items(items: &[BlockReviewItem]) -> ReviewMeta {
+    let mut comments = BTreeMap::new();
+    let mut suggestions = BTreeMap::new();
+    for item in items.iter().filter(|item| doc_represented(item)) {
+        let entry = ReviewMetaEntry {
+            by: item.author.clone().unwrap_or_else(|| "unknown".to_string()),
+            at: item.created_at.clone(),
+            body: item.body.clone(),
+            re: item.parent_item_id.clone(),
+            status: (item.state == BlockReviewState::Resolved).then(|| "resolved".to_string()),
+            resolved: (item.state == BlockReviewState::Resolved).then(|| item.updated_at.clone()),
+        };
+        match item.kind {
+            BlockReviewKind::Suggestion => {
+                suggestions.insert(item.id.clone(), entry);
+            }
+            _ => {
+                comments.insert(item.id.clone(), entry);
+            }
+        }
+    }
+    ReviewMeta {
+        comments,
+        suggestions,
+    }
+}
+
+/// Merges the checkpoint projection back into the full review item set:
+///
+/// - extracted anchors update/create items (anchor offsets, bodies and
+///   resolution state from the meta map);
+/// - doc-represented items whose marks vanished orphan (comments) or
+///   invalidate (suggestions) when their meta entry remains, and are deleted
+///   when the browser removed the entry (comment delete, suggestion
+///   accept/reject);
+/// - meta-only reply entries upsert reply items under their thread root;
+/// - items never represented in the doc (orphaned/invalidated/resolved
+///   suggestions/conflicts) pass through, with anchors clamped to the new
+///   text so the commit-time validation holds.
+fn reconcile_review_items(
+    document_id: &str,
+    prior: &HashMap<String, BlockReviewItem>,
+    projection: &SessionProjection,
+    meta: &ReviewMeta,
+    now: &str,
+) -> HashMap<String, BlockReviewItem> {
+    let texts: HashMap<&str, &str> = projection
+        .rows
+        .iter()
+        .map(|row| (row.block_id.as_str(), row.text.as_str()))
+        .collect();
+    let extracted: HashMap<&str, &SessionAnchor> = projection
+        .anchors
+        .iter()
+        .map(|anchor| (anchor.id.as_str(), anchor))
+        .collect();
+    let mut items: HashMap<String, BlockReviewItem> = HashMap::new();
+
+    // 1. Prior items: update from the doc or pass through.
+    for (id, item) in prior {
+        if !doc_represented(item) {
+            items.insert(id.clone(), clamped(item.clone(), &texts));
+            continue;
+        }
+        if item.parent_item_id.is_some() {
+            // Replies are handled with their thread root below.
+            continue;
+        }
+        let meta_entry = match item.kind {
+            BlockReviewKind::Suggestion => meta.suggestions.get(id),
+            _ => meta.comments.get(id),
+        };
+        match (extracted.get(id.as_str()), meta_entry) {
+            (Some(anchor), entry) => {
+                let mut updated = item.clone();
+                updated.block_id = anchor.block_id.clone();
+                updated.start_offset = anchor.start;
+                updated.end_offset = anchor.end;
+                if item.kind == BlockReviewKind::Suggestion {
+                    updated.replacement = anchor.replacement.clone();
+                }
+                if let Some(entry) = entry {
+                    updated.body = entry.body.clone().or(updated.body);
+                    let resolved = entry.status.as_deref() == Some("resolved");
+                    updated.state = if resolved {
+                        BlockReviewState::Resolved
+                    } else if anchor.start == anchor.end && item.kind == BlockReviewKind::Comment {
+                        BlockReviewState::Orphaned
+                    } else {
+                        BlockReviewState::Open
+                    };
+                } else if anchor.start == anchor.end && item.kind == BlockReviewKind::Comment {
+                    updated.state = BlockReviewState::Orphaned;
+                }
+                if updated != *item {
+                    updated.updated_at = now.to_string();
+                }
+                items.insert(id.clone(), updated);
+            }
+            (None, Some(_)) => {
+                // The anchored text was deleted but the entry remains: the
+                // Gate A "collapsed means orphaned" rule, at the row layer.
+                let mut updated = item.clone();
+                updated.state = match item.kind {
+                    BlockReviewKind::Suggestion => BlockReviewState::Invalidated,
+                    _ => BlockReviewState::Orphaned,
+                };
+                updated.updated_at = now.to_string();
+                items.insert(id.clone(), clamped(updated, &texts));
+            }
+            (None, None) => {
+                // Browser deleted the item (comment delete, suggestion
+                // accept/reject): drop it and its replies.
+            }
+        }
+    }
+
+    // 2. Browser-created anchors (ids the session never seeded).
+    for anchor in &projection.anchors {
+        if items.contains_key(&anchor.id) || prior.contains_key(&anchor.id) {
+            continue;
+        }
+        let (kind, meta_entry) = match anchor.kind {
+            SessionAnchorKind::Suggestion => (
+                BlockReviewKind::Suggestion,
+                meta.suggestions.get(&anchor.id),
+            ),
+            SessionAnchorKind::Comment => (BlockReviewKind::Comment, meta.comments.get(&anchor.id)),
+        };
+        let quote = texts
+            .get(anchor.block_id.as_str())
+            .map(|text| utf16_slice_clamped(text, anchor.start, anchor.end));
+        items.insert(
+            anchor.id.clone(),
+            BlockReviewItem {
+                id: anchor.id.clone(),
+                document_id: document_id.to_string(),
+                block_id: anchor.block_id.clone(),
+                kind,
+                start_offset: anchor.start,
+                end_offset: anchor.end,
+                body: meta_entry.and_then(|entry| entry.body.clone()),
+                replacement: anchor.replacement.clone(),
+                author: meta_entry
+                    .map(|entry| entry.by.clone())
+                    .or_else(|| anchor.by.clone()),
+                state: if meta_entry
+                    .is_some_and(|entry| entry.status.as_deref() == Some("resolved"))
+                {
+                    BlockReviewState::Resolved
+                } else {
+                    BlockReviewState::Open
+                },
+                quote,
+                context_before: None,
+                context_after: None,
+                parent_item_id: None,
+                created_at: meta_entry
+                    .map(|entry| entry.at.clone())
+                    .filter(|at| !at.is_empty())
+                    .unwrap_or_else(|| now.to_string()),
+                updated_at: now.to_string(),
+            },
+        );
+    }
+
+    // 3. Replies: meta entries threading onto a root that survived.
+    for (id, entry) in &meta.comments {
+        let Some(parent_id) = &entry.re else {
+            continue;
+        };
+        let Some(root) = items.get(parent_id).cloned() else {
+            continue;
+        };
+        let prior_reply = prior.get(id);
+        let reply = BlockReviewItem {
+            id: id.clone(),
+            document_id: document_id.to_string(),
+            block_id: root.block_id.clone(),
+            kind: BlockReviewKind::Comment,
+            start_offset: root.start_offset,
+            end_offset: root.end_offset,
+            body: entry.body.clone(),
+            replacement: None,
+            author: Some(entry.by.clone()),
+            state: root.state,
+            quote: root.quote.clone(),
+            context_before: None,
+            context_after: None,
+            parent_item_id: Some(parent_id.clone()),
+            created_at: prior_reply
+                .map(|item| item.created_at.clone())
+                .or_else(|| Some(entry.at.clone()).filter(|at| !at.is_empty()))
+                .unwrap_or_else(|| now.to_string()),
+            updated_at: now.to_string(),
+        };
+        items.insert(id.clone(), reply);
+    }
+
+    items
+}
+
+/// Anchors of pass-through items must stay valid against the new text:
+/// clamp the range (the item is never open here, so a collapsed result is
+/// legal) rather than failing the whole checkpoint.
+fn clamped(mut item: BlockReviewItem, texts: &HashMap<&str, &str>) -> BlockReviewItem {
+    let Some(text) = texts.get(item.block_id.as_str()) else {
+        return item;
+    };
+    let len = utf16_len(text);
+    let start = clamp_to_boundary(text, item.start_offset.min(len));
+    let end = clamp_to_boundary(text, item.end_offset.min(len)).max(start);
+    if (start, end) != (item.start_offset, item.end_offset) {
+        item.start_offset = start;
+        item.end_offset = end;
+        if item.state == BlockReviewState::Open && start == end {
+            item.state = match item.kind {
+                BlockReviewKind::Suggestion => BlockReviewState::Invalidated,
+                _ => BlockReviewState::Orphaned,
+            };
+        }
+    }
+    item
+}
+
+fn clamp_to_boundary(text: &str, offset: u32) -> u32 {
+    let mut candidate = offset;
+    while candidate > 0 && !quarry_collab_codec::is_utf16_boundary(text, candidate) {
+        candidate -= 1;
+    }
+    candidate
+}
+
+fn utf16_slice_clamped(text: &str, start: u32, end: u32) -> String {
+    let len = utf16_len(text);
+    let start = clamp_to_boundary(text, start.min(len));
+    let end = clamp_to_boundary(text, end.min(len)).max(start);
+    let units: Vec<u16> = text
+        .encode_utf16()
+        .skip(start as usize)
+        .take((end - start) as usize)
+        .collect();
+    String::from_utf16_lossy(&units)
+}
+
+fn sorted_items(items: &HashMap<String, BlockReviewItem>) -> Vec<BlockReviewItem> {
+    let mut sorted: Vec<BlockReviewItem> = items.values().cloned().collect();
+    sorted.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    sorted
+}
+
+/// Rebuilds the doc image of a row+item state (the gateway uses pre/desired
+/// pairs of these for in-place reconciliation).
+pub(crate) fn doc_image(
+    rows: &[BlockRow],
+    items: &[BlockReviewItem],
+) -> Result<Vec<Node>, QuarryError> {
+    seed_session_nodes(rows, &doc_anchors(items)).map_err(session_projection_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quarry_collab_codec::SessionProjection;
+
+    fn item(id: &str, kind: BlockReviewKind, start: u32, end: u32) -> BlockReviewItem {
+        BlockReviewItem {
+            id: id.to_string(),
+            document_id: "doc-1".to_string(),
+            block_id: "b1".to_string(),
+            kind,
+            start_offset: start,
+            end_offset: end,
+            body: Some("body".to_string()),
+            replacement: matches!(kind, BlockReviewKind::Suggestion)
+                .then(|| "replacement".to_string()),
+            author: Some("user".to_string()),
+            state: BlockReviewState::Open,
+            quote: Some("quote".to_string()),
+            context_before: None,
+            context_after: None,
+            parent_item_id: None,
+            created_at: "2026-06-09T00:00:00.000Z".to_string(),
+            updated_at: "2026-06-09T00:00:00.000Z".to_string(),
+        }
+    }
+
+    fn row(block_id: &str, text: &str) -> BlockRow {
+        BlockRow {
+            block_id: block_id.to_string(),
+            parent_block_id: None,
+            position: 0,
+            block_type: "p".to_string(),
+            attrs: Default::default(),
+            text: text.to_string(),
+            marks: Vec::new(),
+            links: Vec::new(),
+        }
+    }
+
+    fn anchor(id: &str, kind: SessionAnchorKind, start: u32, end: u32) -> SessionAnchor {
+        SessionAnchor {
+            id: id.to_string(),
+            kind,
+            block_id: "b1".to_string(),
+            start,
+            end,
+            replacement: matches!(kind, SessionAnchorKind::Suggestion)
+                .then(|| "replacement".to_string()),
+            by: Some("user".to_string()),
+            at_ms: 0,
+        }
+    }
+
+    fn projection(rows: Vec<BlockRow>, anchors: Vec<SessionAnchor>) -> SessionProjection {
+        SessionProjection { rows, anchors }
+    }
+
+    fn prior(items: &[BlockReviewItem]) -> HashMap<String, BlockReviewItem> {
+        items
+            .iter()
+            .map(|item| (item.id.clone(), item.clone()))
+            .collect()
+    }
+
+    const NOW: &str = "2026-06-09T01:00:00.000Z";
+
+    #[test]
+    fn extracted_anchor_updates_offsets_and_meta_resolution() {
+        let comment = item("c1", BlockReviewKind::Comment, 0, 4);
+        let meta = review_meta_for_items(&[BlockReviewItem {
+            state: BlockReviewState::Resolved,
+            ..comment.clone()
+        }]);
+        let items = reconcile_review_items(
+            "doc-1",
+            &prior(&[comment]),
+            &projection(
+                vec![row("b1", "XX text")],
+                vec![anchor("c1", SessionAnchorKind::Comment, 2, 6)],
+            ),
+            &meta,
+            NOW,
+        );
+        let updated = &items["c1"];
+        assert_eq!((updated.start_offset, updated.end_offset), (2, 6));
+        assert_eq!(updated.state, BlockReviewState::Resolved);
+    }
+
+    #[test]
+    fn lost_marks_with_surviving_meta_orphan_comments_and_invalidate_suggestions() {
+        let comment = item("c1", BlockReviewKind::Comment, 0, 4);
+        let suggestion = item("s1", BlockReviewKind::Suggestion, 5, 9);
+        let meta = review_meta_for_items(&[comment.clone(), suggestion.clone()]);
+        let items = reconcile_review_items(
+            "doc-1",
+            &prior(&[comment, suggestion]),
+            &projection(vec![row("b1", "shrunk")], vec![]),
+            &meta,
+            NOW,
+        );
+        assert_eq!(items["c1"].state, BlockReviewState::Orphaned);
+        assert_eq!(items["s1"].state, BlockReviewState::Invalidated);
+        // Clamped to the new text so the commit-time validation holds.
+        assert!(items["s1"].end_offset <= 6);
+    }
+
+    #[test]
+    fn deleted_meta_entry_drops_the_item_and_its_replies() {
+        let root = item("c1", BlockReviewKind::Comment, 0, 4);
+        let reply = BlockReviewItem {
+            id: "r1".to_string(),
+            parent_item_id: Some("c1".to_string()),
+            ..root.clone()
+        };
+        let items = reconcile_review_items(
+            "doc-1",
+            &prior(&[root, reply]),
+            &projection(vec![row("b1", "text stays")], vec![]),
+            &ReviewMeta::default(),
+            NOW,
+        );
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn browser_created_reply_threads_under_its_root() {
+        let root = item("c1", BlockReviewKind::Comment, 0, 4);
+        let mut meta = review_meta_for_items(std::slice::from_ref(&root));
+        meta.comments.insert(
+            "r1".to_string(),
+            ReviewMetaEntry {
+                by: "Blair".to_string(),
+                at: "2026-06-09T00:30:00.000Z".to_string(),
+                body: Some("A reply".to_string()),
+                re: Some("c1".to_string()),
+                status: None,
+                resolved: None,
+            },
+        );
+        let items = reconcile_review_items(
+            "doc-1",
+            &prior(&[root]),
+            &projection(
+                vec![row("b1", "text stays")],
+                vec![anchor("c1", SessionAnchorKind::Comment, 0, 4)],
+            ),
+            &meta,
+            NOW,
+        );
+        let reply = &items["r1"];
+        assert_eq!(reply.parent_item_id.as_deref(), Some("c1"));
+        assert_eq!(reply.body.as_deref(), Some("A reply"));
+        assert_eq!(reply.author.as_deref(), Some("Blair"));
+        assert_eq!(reply.block_id, "b1");
+    }
+
+    #[test]
+    fn passthrough_items_survive_untouched_and_clamped() {
+        let orphaned = BlockReviewItem {
+            state: BlockReviewState::Orphaned,
+            start_offset: 3,
+            end_offset: 3,
+            ..item("c-old", BlockReviewKind::Comment, 3, 3)
+        };
+        let stale = BlockReviewItem {
+            state: BlockReviewState::Invalidated,
+            start_offset: 2,
+            end_offset: 40,
+            ..item("s-old", BlockReviewKind::Suggestion, 2, 40)
+        };
+        let items = reconcile_review_items(
+            "doc-1",
+            &prior(&[orphaned.clone(), stale]),
+            &projection(vec![row("b1", "short")], vec![]),
+            &ReviewMeta::default(),
+            NOW,
+        );
+        assert_eq!(items["c-old"], orphaned);
+        assert_eq!(items["s-old"].end_offset, 5);
+    }
+
+    #[test]
+    fn insertion_suggestions_and_dead_anchors_are_not_doc_represented() {
+        let insertion = BlockReviewItem {
+            start_offset: 4,
+            end_offset: 4,
+            ..item("s-ins", BlockReviewKind::Suggestion, 4, 4)
+        };
+        assert!(doc_represented(&insertion));
+        let orphaned = BlockReviewItem {
+            state: BlockReviewState::Orphaned,
+            ..item("c1", BlockReviewKind::Comment, 0, 4)
+        };
+        assert!(!doc_represented(&orphaned));
+        let resolved_comment = BlockReviewItem {
+            state: BlockReviewState::Resolved,
+            ..item("c2", BlockReviewKind::Comment, 0, 4)
+        };
+        assert!(doc_represented(&resolved_comment));
+        let conflict = item("x1", BlockReviewKind::Conflict, 0, 4);
+        assert!(!doc_represented(&conflict));
+    }
+}

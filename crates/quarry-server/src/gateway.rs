@@ -1,6 +1,8 @@
-//! Semantic mutation gateway — Phase 2 of the session-scoped collaboration
-//! rewrite (rows-authoritative mode only; Phase 3 adds the live-session
-//! dispatch).
+//! Semantic mutation gateway — Phases 2 and 3 of the session-scoped
+//! collaboration rewrite: a mode-independent apply engine with a
+//! per-document mode switch (rows-authoritative vs session-authoritative
+//! dispatch; see `apply_rows_transaction` / `apply_session_transaction` and
+//! the `session` module).
 //!
 //! `POST /v1/libraries/{library}/documents/{path}/transactions` is the public
 //! mutation contract for agents (and later Git/FUSE/CLI via Phase 4's
@@ -114,14 +116,15 @@
 //! `conflict`-kind rows (Phase 4) are not yet projected. Documents without
 //! rows keep the legacy CriticMarkup/endmatter projection untouched.
 //!
-//! ## Transitional caveats (until Phases 3/5 replace the legacy paths)
+//! ## Transitional caveats (until Phases 4/5 replace the legacy paths)
 //!
-//! - A legacy autosave/PUT landing after a transaction clears the block
+//! - A Markdown PUT from OUTSIDE a live session still clears the block
 //!   projection fail-closed (Phase 1 policy); the next gateway read/write
-//!   re-materializes rows with fresh `block_id`s.
-//! - If a legacy Yjs live room is active, transactions still apply to rows:
-//!   the legacy room is separate state — the gateway neither integrates with
-//!   it nor consults the injection gate.
+//!   re-materializes rows with fresh `block_id`s, and a live session's next
+//!   checkpoint supersedes the write entirely. Phase 4's diff3
+//!   reconciliation replaces both behaviors.
+//! - A PUT from a session PARTICIPANT is a checkpoint trigger, not a write
+//!   (see the `session` module docs).
 
 use crate::{
     json_response, json_with_etag, AgentBlockRef, AgentReviewComment, AgentReviewReply,
@@ -161,6 +164,7 @@ pub(crate) enum GatewayErrorCode {
     UnsupportedMarkdown,
     InvalidTransaction,
     UnsupportedBlockDocument,
+    UnsupportedLegacyEndpoint,
 }
 
 impl GatewayErrorCode {
@@ -175,6 +179,7 @@ impl GatewayErrorCode {
             Self::UnsupportedMarkdown => "UNSUPPORTED_MARKDOWN",
             Self::InvalidTransaction => "INVALID_TRANSACTION",
             Self::UnsupportedBlockDocument => "UNSUPPORTED_BLOCK_DOCUMENT",
+            Self::UnsupportedLegacyEndpoint => "UNSUPPORTED_LEGACY_ENDPOINT",
         }
     }
 
@@ -191,6 +196,7 @@ impl GatewayErrorCode {
             | Self::SuggestionAlreadyResolved
             | Self::UnsupportedMarkdown
             | Self::UnsupportedBlockDocument => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::UnsupportedLegacyEndpoint => StatusCode::GONE,
         }
     }
 }
@@ -272,6 +278,20 @@ fn gateway_reply(result: Result<Response, GatewayFailure>) -> Result<Response, A
         Err(GatewayFailure::Typed(error)) => Ok(error.into_response()),
         Err(GatewayFailure::Api(error)) => Err(error),
     }
+}
+
+/// The legacy `/edit` and `/ops` mutation facades are quarantined for block
+/// documents (Phase 3): they used the deleted injection gate and a second
+/// mutation vocabulary. Full route deletion is Phase 7.
+pub(crate) fn legacy_endpoint_quarantined(library: &str, path: &str, endpoint: &str) -> Response {
+    GatewayError::new(
+        GatewayErrorCode::UnsupportedLegacyEndpoint,
+        format!(
+            "the {endpoint} endpoint was removed; use \
+             POST /v1/libraries/{library}/documents/{path}/transactions"
+        ),
+    )
+    .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -1666,6 +1686,26 @@ async fn document_block_transactions_inner(
     payload: JsonValue,
 ) -> Result<Response, GatewayFailure> {
     let request = parse_transaction(payload)?;
+    // The mode switch: resolve the document, take its per-document mutex
+    // (serializing against session seed/checkpoint/discard), and dispatch on
+    // whether a live session exists. A transaction racing a transition waits
+    // here; it is never rejected because a session exists.
+    let document = state.store.head_document(library, path).await?;
+    let guard = state.sessions.lock_document(&document.id).await;
+    match guard.session() {
+        Some(session) => apply_session_transaction(state, &session, library, path, &request).await,
+        None => apply_rows_transaction(state, library, path, &request).await,
+    }
+}
+
+/// Rows-authoritative mode: ops apply directly to block rows in one SQL
+/// transaction. The caller holds the per-document mutex.
+async fn apply_rows_transaction(
+    state: &AppState,
+    library: &str,
+    path: &str,
+    request: &ParsedTransaction,
+) -> Result<Response, GatewayFailure> {
     for _attempt in 0..COMMIT_RETRY_LIMIT {
         let snapshot = state
             .store
@@ -1677,21 +1717,6 @@ async fn document_block_transactions_inner(
         require_block_document(&snapshot.path, &snapshot.content_type)?;
         let status = transaction_status(&request.base_clock, &snapshot)?;
         let applied = apply_ops(&snapshot, &request.ops, &request.actor)?;
-        let body = block_rows_to_markdown(&applied.rows).map_err(|unsupported| {
-            GatewayError::new(
-                GatewayErrorCode::UnsupportedMarkdown,
-                unsupported.to_string(),
-            )
-        })?;
-        let normalized = format!(
-            "{}{}",
-            render_markdown_frontmatter(&snapshot.metadata).map_err(GatewayFailure::from)?,
-            body
-        );
-        let ack_json = json!({
-            "status": status,
-            "changed_block_ids": applied.changed_block_ids,
-        });
         let commit = BlockMutationCommit {
             document_id: snapshot.document_id.clone(),
             expected_head_version_id: snapshot.head_version_id.clone(),
@@ -1703,16 +1728,12 @@ async fn document_block_transactions_inner(
             transaction_provenance: None,
             origin_id: None,
             source: DocumentSource::Rest,
-            recorded_ops: json!({
-                "ops": request.ops_json,
-                "actor": request.actor,
-                "ack": ack_json,
-            }),
+            recorded_ops: recorded_ops(request, status, &applied.changed_block_ids),
             metadata: snapshot.metadata.clone(),
             content_type: snapshot.content_type.clone(),
-            rows: applied.rows,
+            rows: applied.rows.clone(),
             review_items: applied.review_items,
-            normalized_markdown: normalized,
+            normalized_markdown: normalized_markdown(&applied.rows, &snapshot.metadata)?,
         };
         match state.store.commit_block_mutation(library, commit).await {
             Ok(BlockMutationOutcome::Applied { outcome, record }) => {
@@ -1734,6 +1755,153 @@ async fn document_block_transactions_inner(
     Err(GatewayFailure::Api(
         QuarryError::Busy("document head kept moving during the block transaction".to_string())
             .into(),
+    ))
+}
+
+/// Session-authoritative mode (the Gate B mechanics): the transaction
+/// applies into the live Yjs doc as another collaborator and forces a
+/// checkpoint before acking, so an acked write is durable in rows.
+///
+/// Under the per-document mutex and the doc's write lock:
+///
+/// 1. flush pending browser typing as a coalesced `browser_session`
+///    checkpoint (so the ops validate against — and history attributes —
+///    exactly what the agent's transaction saw);
+/// 2. run the same pure apply engine as rows mode against the freshly
+///    checkpointed rows;
+/// 3. reconcile the live doc in place to the applied result (untouched
+///    blocks keep their element identity, so peer cursors survive; review
+///    ops become mark/meta edits);
+/// 4. commit the applied rows/items as the transaction's version and ack.
+///
+/// Browser updates queue on the doc write lock for the duration and merge
+/// right after — they land in the NEXT checkpoint. No op needs the
+/// reseed/state-replacement fallback: every gateway op is expressible as an
+/// in-place doc reconciliation.
+async fn apply_session_transaction(
+    state: &AppState,
+    session: &crate::session::LiveSession,
+    library: &str,
+    path: &str,
+    request: &ParsedTransaction,
+) -> Result<Response, GatewayFailure> {
+    let awareness = session.awareness().clone().write_owned().await;
+    for _attempt in 0..COMMIT_RETRY_LIMIT {
+        // 1. Force-checkpoint pending typing (no-op when clean).
+        if session.is_dirty() {
+            match session
+                .commit_doc_state(&state.store, &awareness, None)
+                .await
+            {
+                Ok(_) => {}
+                Err(QuarryError::PreconditionFailed(_)) => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let snapshot = state
+            .store
+            .block_mutation_state(library, path, &request.client_tx_id)
+            .await?;
+        if let Some(record) = &snapshot.replay {
+            return replay_response(record);
+        }
+        require_block_document(&snapshot.path, &snapshot.content_type)?;
+        let status = transaction_status(&request.base_clock, &snapshot)?;
+
+        // 2. Apply against the session's authoritative state. After the
+        //    flush, stored rows equal the session projection; review items
+        //    come from the session (the store snapshot agrees, but the
+        //    session is the source of truth while it lives).
+        let mut session_snapshot = snapshot.clone();
+        session_snapshot.review_items = session.items_snapshot();
+        let applied = apply_ops(&session_snapshot, &request.ops, &request.actor)?;
+
+        // 3. Write the change into the live doc as a collaborator.
+        let pre = crate::session::doc_image(&session_snapshot.rows, &session_snapshot.review_items)
+            .map_err(GatewayFailure::from)?;
+        let desired = crate::session::doc_image(&applied.rows, &applied.review_items)
+            .map_err(GatewayFailure::from)?;
+        session
+            .apply_desired_state(&awareness, &pre, &desired, &applied.review_items)
+            .map_err(GatewayFailure::from)?;
+
+        // 4. Checkpoint-before-ack: commit the applied state as this
+        //    transaction's version.
+        let commit = BlockMutationCommit {
+            document_id: session_snapshot.document_id.clone(),
+            expected_head_version_id: session_snapshot.head_version_id.clone(),
+            client_tx_id: request.client_tx_id.clone(),
+            actor_kind: request.actor.kind.clone(),
+            actor_id: request.actor.id.clone(),
+            transaction_actor: Some(request.actor.display()),
+            transaction_message: None,
+            transaction_provenance: None,
+            // In-session browsers classify this as a benign refresh
+            // (`session-events.ts`), exactly like checkpoint commits.
+            origin_id: Some(format!("agent-injected:tx:{}", request.client_tx_id)),
+            source: DocumentSource::Rest,
+            recorded_ops: recorded_ops(request, status, &applied.changed_block_ids),
+            metadata: session_snapshot.metadata.clone(),
+            content_type: session_snapshot.content_type.clone(),
+            rows: applied.rows.clone(),
+            review_items: applied.review_items.clone(),
+            normalized_markdown: normalized_markdown(&applied.rows, &session_snapshot.metadata)?,
+        };
+        match state.store.commit_block_mutation(library, commit).await {
+            Ok(BlockMutationOutcome::Applied { outcome, record }) => {
+                session.mark_committed(&outcome, &applied.review_items);
+                let ack = BlockTransactionAck {
+                    status: status.to_string(),
+                    document_clock: outcome.version.id.clone(),
+                    transaction_id: record.id,
+                    changed_block_ids: applied.changed_block_ids,
+                };
+                return Ok(json_with_etag(StatusCode::OK, &ack, &ack.document_clock)?);
+            }
+            Ok(BlockMutationOutcome::Replayed(record)) => return replay_response(&record),
+            // An external legacy write raced the session; reload and retry.
+            // The doc already carries this transaction's edits, so the retry
+            // flushes them via the step-1 checkpoint and replays the ops...
+            // which would double-apply. Instead, surface busy: the client
+            // retries with a fresh clock and idempotency replays cleanly.
+            Err(QuarryError::PreconditionFailed(detail)) => {
+                return Err(GatewayFailure::Api(QuarryError::Busy(detail).into()));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(GatewayFailure::Api(
+        QuarryError::Busy("document head kept moving during the block transaction".to_string())
+            .into(),
+    ))
+}
+
+fn recorded_ops(
+    request: &ParsedTransaction,
+    status: &str,
+    changed_block_ids: &[String],
+) -> JsonValue {
+    json!({
+        "ops": request.ops_json,
+        "actor": request.actor,
+        "ack": {
+            "status": status,
+            "changed_block_ids": changed_block_ids,
+        },
+    })
+}
+
+fn normalized_markdown(rows: &[BlockRow], metadata: &JsonValue) -> Result<String, GatewayFailure> {
+    let body = block_rows_to_markdown(rows).map_err(|unsupported| {
+        GatewayError::new(
+            GatewayErrorCode::UnsupportedMarkdown,
+            unsupported.to_string(),
+        )
+    })?;
+    Ok(format!(
+        "{}{}",
+        render_markdown_frontmatter(metadata).map_err(GatewayFailure::from)?,
+        body
     ))
 }
 
