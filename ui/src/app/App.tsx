@@ -881,9 +881,16 @@ function Workspace() {
     setSelectedPath('');
   }
 
-  function downloadCurrentMarkdown() {
-    if (!selectedPath) return;
-    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+  // Downloads serve the canonical export (frontmatter included) — the same
+  // bytes Git, FUSE, CLI, and agents see — not the editor's local serializer
+  // mirror, which is a second Markdown writer that can drift from canonical.
+  // Canonical reflects the last checkpoint; the save indicator already tells
+  // the user whether their latest keystrokes are covered.
+  async function downloadCurrentMarkdown() {
+    if (!activeLibrary || !selectedPath) return;
+    const response = await fetch(documentHref(activeLibrary, selectedPath));
+    if (!response.ok) return;
+    const blob = await response.blob();
     const url = URL.createObjectURL(blob);
     const anchor = window.document.createElement('a');
     anchor.href = url;

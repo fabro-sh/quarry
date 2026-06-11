@@ -1757,7 +1757,8 @@ describe('Quarry Browser workspace', () => {
     expect(await screen.findByRole('main')).toHaveAttribute('data-theme', 'light');
   });
 
-  it('downloads the current document as markdown from the command palette', async () => {
+  it('downloads the canonical document bytes from the command palette', async () => {
+    let documentFetches = 0;
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/v1/libraries') {
@@ -1777,7 +1778,12 @@ describe('Quarry Browser workspace', () => {
         ]);
       }
       if (url === '/v1/libraries/dl-lib/documents/notes/readme.md') {
-        return new Response('# Readme\nBody', { headers: { ETag: '"v1"', 'content-type': 'text/markdown' } });
+        documentFetches += 1;
+        // The first fetch loads the editor; later fetches are download-time
+        // reads and serve distinct bytes so the test can prove the download
+        // came from the canonical API export, not the editor's local mirror.
+        const body = documentFetches === 1 ? '# Readme\nBody' : '---\ntitle: Readme\n---\n\n# Readme\nBody\n';
+        return new Response(body, { headers: { ETag: '"v1"', 'content-type': 'text/markdown' } });
       }
       if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) {
         return json({ path: 'notes/readme.md', links: [] });
@@ -1790,7 +1796,11 @@ describe('Quarry Browser workspace', () => {
       return new Response('not found', { status: 404 });
     });
     vi.stubGlobal('fetch', fetch);
-    const createObjectURL = vi.fn(() => 'blob:mock');
+    const downloadedBlobs: Blob[] = [];
+    const createObjectURL = vi.fn((blob: Blob) => {
+      downloadedBlobs.push(blob);
+      return 'blob:mock';
+    });
     URL.createObjectURL = createObjectURL;
     URL.revokeObjectURL = vi.fn();
     let downloadName = '';
@@ -1807,8 +1817,18 @@ describe('Quarry Browser workspace', () => {
     await userEvent.keyboard('{Control>}k{/Control}');
     await userEvent.click(await screen.findByText('Download as Markdown'));
 
-    expect(createObjectURL).toHaveBeenCalled();
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalled());
     expect(downloadName).toBe('readme.md');
+    expect(downloadedBlobs).toHaveLength(1);
+    // jsdom's Blob exposes neither .text() nor .arrayBuffer(); FileReader is
+    // the one reader it supports.
+    const downloadedText = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(downloadedBlobs[0]);
+    });
+    expect(downloadedText).toBe('---\ntitle: Readme\n---\n\n# Readme\nBody\n');
     click.mockRestore();
   });
 });
