@@ -67,8 +67,8 @@ Use a stable agent id for the session, such as `ai:codex:<short-id>` or
 
 Idempotency rides in the transaction body: `client_tx_id` is unique per
 document, and replaying the same `client_tx_id` returns the original ack
-without re-applying. Use a readable `actor.label` (and `by` in presence) so the
-human can see who acted.
+without re-applying. Use the plain agent name as `actor.label` (`Codex`,
+`Claude`, `Gemini`); this is the visible byline.
 
 ## Read The Document
 
@@ -457,6 +457,6 @@ Then report the evidence to the user. Do not keep retrying destructive writes.
 - Prefer comments and suggestions for review requests.
 - Use direct edits for implementation requests.
 - Re-read `/blocks` after any event and after any stale write.
-- Include a readable `actor.label` so the user can see who acted.
+- Use the plain agent name as `actor.label`; it is the visible byline.
 - Fetch `/.well-known/agent.json` and `/v1/openapi.json` when you need current
   route metadata or schemas.

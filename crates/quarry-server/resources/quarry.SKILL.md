@@ -16,8 +16,9 @@ A Markdown document is a tree of blocks with stable `block_id`s. Read
 `GET $DOC/blocks`, address blocks by `block_id`, and send every mutation —
 edits, comments, suggestions — as one transaction to `POST $DOC/transactions`.
 
-Every write should carry a readable `actor.label`. Presence uses
-`X-Agent-Id: ai:<agent-name>` or another stable session id.
+Every write should use the plain agent name as `actor.label` (`Codex`,
+`Claude`, `Gemini`); this is the visible byline. Presence uses `X-Agent-Id:
+ai:<agent-name>` or another stable session id.
 
 ## Default Behavior
 
