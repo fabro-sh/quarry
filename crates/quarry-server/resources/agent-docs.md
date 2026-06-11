@@ -87,8 +87,8 @@ The response carries the rows and the current document clock:
       "block_id": "01J9ZX...",
       "parent_block_id": null,
       "position": 0,
-      "block_type": "heading",
-      "attrs": { "level": 1 },
+      "block_type": "h1",
+      "attrs": {},
       "text": "Title",
       "marks": [],
       "links": []
@@ -187,8 +187,13 @@ wait, retry, or coordinate with live editors.
 - `set_link` — `{block_id, start, end, url}`; `url: null` removes links in the
   range.
 
-Block types include `paragraph`, `heading`, `list_item`, `code_block`,
-`quote`, `image_embed`, `table`, and `raw_markdown`.
+Block types are `p`, `h1`–`h6` (the heading level IS the type), `blockquote`,
+`code_block` (with `code_line` children), `mermaid`, `table` (with `tr` and
+`th`/`td` children), `img`, `hr`, and `raw_markdown`. There is no list-item
+type: a list item is a `p` row whose attrs carry the list shape —
+`{"indent": 1, "listStyleType": "disc" | "decimal" | "todo"}` plus `checked`
+for todos and `listStart` for ordered lists. Copy unfamiliar shapes from a
+`GET /blocks` read of a document that already contains them.
 
 Insert a paragraph after the current second block:
 
@@ -201,7 +206,7 @@ curl -sS -X POST "$DOC/transactions" \
     "base_clock": "version_124",
     "actor": { "kind": "agent", "id": "ai:codex:abc123", "label": "Codex" },
     "ops": [
-      { "op": "insert_block", "position": 2, "block_type": "paragraph",
+      { "op": "insert_block", "position": 2, "block_type": "p",
         "text": "A new paragraph." }
     ]
   }'

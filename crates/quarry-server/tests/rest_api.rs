@@ -890,6 +890,17 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
     assert!(docs.contains("committed_rebased"));
     assert!(docs.contains("STALE_BASE"));
     assert!(docs.contains("set_block_type"));
+    // The documented block-type vocabulary is the codec's REAL one (the
+    // insert example commits verbatim — see
+    // agent_docs_insert_block_example_commits_as_documented). Fake friendly
+    // names would 422 at commit time.
+    assert!(docs.contains("`p`, `h1`\u{2013}`h6`"));
+    assert!(docs.contains("`raw_markdown`"));
+    assert!(docs.contains("listStyleType"));
+    assert!(docs.contains("\"block_type\": \"p\""));
+    assert!(!docs.contains("`paragraph`"));
+    assert!(!docs.contains("list_item"));
+    assert!(!docs.contains("image_embed"));
     assert!(docs.contains("comment.reply"));
     assert!(docs.contains("suggestion.accept"));
     assert!(docs.contains("conflict"));
@@ -5401,6 +5412,74 @@ async fn markdown_put_overlapping_edits_become_conflict_review_items() {
     assert_eq!(conflicts[0]["incomingMarkdown"], "Bravo, external.\n");
     assert_eq!(conflicts[0]["baseMarkdown"], "Bravo.\n");
     assert_eq!(conflicts[0]["canonicalMarkdown"], "Bravo, canonical.\n");
+}
+
+/// The agent-docs `insert_block` example must be a WORKING request: extract
+/// the documented transaction body verbatim from the served docs, point its
+/// `base_clock` at the real document, and commit it. Vocabulary drift between
+/// the docs and the codec fails here.
+#[tokio::test]
+async fn agent_docs_insert_block_example_commits_as_documented() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "# Title\n\nAlpha.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let clock = tree["document_clock"].as_str().unwrap().to_string();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/agent-docs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let docs = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    // The example is the curl payload after "Insert a paragraph…": the JSON
+    // between `-d '` and the closing `}'` (no single quotes inside JSON).
+    let anchor = docs
+        .find("Insert a paragraph after the current second block")
+        .expect("docs keep the insert example");
+    let body_start = docs[anchor..].find("-d '").expect("curl -d payload") + anchor + 4;
+    let body_end = docs[body_start..].find("}'").expect("payload terminator") + body_start + 1;
+    let documented = docs[body_start..body_end].replace("version_124", &clock);
+    let payload: Value = serde_json::from_str(&documented)
+        .unwrap_or_else(|error| panic!("documented example must be valid JSON: {error}"));
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/blocks/documents/doc.md/transactions",
+            payload,
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let ack = response_json(response).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "documented example must commit: {ack}"
+    );
+    assert_eq!(ack["status"], "committed");
+
+    let after = get_block_tree(&app, "doc.md").await;
+    assert_eq!(after["blocks"][2]["block_type"], "p");
+    assert_eq!(after["blocks"][2]["text"], "A new paragraph.");
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "# Title\n\nAlpha.\n\nA new paragraph.\n"
+    );
 }
 
 /// Phase 7: a version restore on a BlockDocument is a whole-file write

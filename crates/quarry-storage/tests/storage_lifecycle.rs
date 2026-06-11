@@ -331,6 +331,67 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
 }
 
 #[tokio::test]
+async fn legacy_database_with_collab_recovery_states_reopens_cleanly() {
+    let root = tempfile::tempdir().unwrap();
+    let db_path = root.path().join("quarry.db");
+
+    // A database from before Phase 7 carries the recovery-state table.
+    let db = turso::Builder::new_local(db_path.to_str().unwrap())
+        .build()
+        .await
+        .unwrap();
+    let conn = db.connect().unwrap();
+    conn.execute(
+        "CREATE TABLE collab_recovery_states(
+           document_id TEXT PRIMARY KEY,
+           base_version_id TEXT,
+           update_v1 BLOB NOT NULL,
+           dirty INTEGER NOT NULL,
+           updated_at TEXT NOT NULL
+         )",
+        (),
+    )
+    .await
+    .unwrap();
+    conn.execute(
+        "INSERT INTO collab_recovery_states VALUES ('doc-1', NULL, x'01', 1, 'now')",
+        (),
+    )
+    .await
+    .unwrap();
+    drop(conn);
+    drop(db);
+
+    // Opening the store drops the table and the store works normally.
+    let store = QuarryStore::open(StoreConfig {
+        db_path: db_path.clone(),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    store.create_library("legacy").await.unwrap();
+    drop(store);
+
+    let db = turso::Builder::new_local(db_path.to_str().unwrap())
+        .build()
+        .await
+        .unwrap();
+    let conn = db.connect().unwrap();
+    let mut rows = conn
+        .query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'collab_recovery_states'",
+            (),
+        )
+        .await
+        .unwrap();
+    assert!(
+        rows.next().await.unwrap().is_none(),
+        "table dropped at open"
+    );
+}
+
+#[tokio::test]
 async fn manages_stateful_collab_invite_tokens_by_document_id() {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {
