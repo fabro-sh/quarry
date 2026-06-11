@@ -10,7 +10,7 @@ pub mod trailing;
 pub mod yjs_builder;
 
 pub use markdown::{block_markdown_to_slate, block_markdown_to_slate_raw};
-pub use markdown_writer::{is_known_inline_mark, slate_to_markdown};
+pub use markdown_writer::{is_known_inline_mark, slate_to_markdown, KNOWN_BLOCK_TYPES};
 pub use reconcile::{reconcile, ReconcileBase, ReconcileConflict, ReconcileOp, ReconcileOutcome};
 pub use review::{
     has_review_endmatter, hydrate_inline_comment_bodies, inline_comment_body,

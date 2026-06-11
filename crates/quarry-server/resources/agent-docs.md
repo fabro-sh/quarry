@@ -17,7 +17,9 @@ every mutation — edits, comments, suggestions — as one semantic transaction 
 4. Reply with the required ready message.
 5. Wait for the user's instruction before editing.
 6. Send one `POST /transactions` envelope with your ops (edits and review ops
-   share the same vocabulary and commit atomically).
+   share the same vocabulary and commit atomically). To author or restructure
+   a whole document, `PUT` it as plain Markdown instead (see Whole-Document
+   Markdown Writes).
 7. On a retryable error (`retryable: true`), re-read `/blocks` and resubmit
    once with a fresh `base_clock` and a NEW `client_tx_id`.
 
@@ -101,8 +103,12 @@ The response carries the rows and the current document clock:
   Git/FUSE/CLI. Copy them verbatim; never invent or guess them.
 - Blocks form a tree (`parent_block_id` + sibling `position`). `text` is the
   block's flat text; all offsets into it are UTF-16 code units.
-- `marks` are inline formatting runs (`{start, end, marks}`), `links` are
-  `{start, end, url}` ranges.
+- `marks` are inline formatting runs. Each run is `{start, end, marks}` where
+  `marks` is an OBJECT keyed by mark name — for example
+  `{"start": 0, "end": 5, "marks": {"bold": true}}`, never
+  `{"type": "bold"}` or a list. Mark names: `bold`, `italic`,
+  `strikethrough`, `underline`, `superscript`, `subscript`, `code`.
+- `links` are `{start, end, url}` ranges.
 - `raw_markdown` blocks carry their source in `attrs.markdown` and have no flat
   text — edit them with `set_block_attrs`, not text ops.
 
@@ -169,8 +175,10 @@ wait, retry, or coordinate with live editors.
 
 ### Edit Operations
 
-- `insert_block` — `{position, block_type, text?, attrs?, parent_block_id?}`.
+- `insert_block` — `{position, block_type, text?, attrs?, marks?, links?, parent_block_id?}`.
   `position` is the sibling index under the parent (top level when omitted).
+  `marks` uses the run shape above:
+  `[{"start": 0, "end": 5, "marks": {"bold": true}}]`.
 - `delete_block` — `{block_id}`. Deletes the block and its descendants.
 - `move_block` — `{block_id, position, parent_block_id?}`. Placement only:
   content, children, ids, and review anchors ride along.
@@ -182,8 +190,10 @@ wait, retry, or coordinate with live editors.
   from `raw_markdown`.
 - `set_block_attrs` — `{block_id, attrs}`. Replaces attrs wholesale (for
   `raw_markdown` blocks, `attrs.markdown` must stay a non-empty string).
-- `add_mark` / `remove_mark` — `{block_id, start, end, marks}` over UTF-16
-  offsets; `remove_mark` takes a list of mark names.
+- `add_mark` — `{block_id, start, end, marks}` over UTF-16 offsets. `marks`
+  is an object of mark names to merge into the range, e.g. `{"bold": true}`.
+- `remove_mark` — `{block_id, start, end, marks}`. Unlike `add_mark`, here
+  `marks` is a LIST of mark names to clear, e.g. `["bold"]`.
 - `set_link` — `{block_id, start, end, url}`; `url: null` removes links in the
   range.
 
@@ -192,8 +202,9 @@ Block types are `p`, `h1`–`h6` (the heading level IS the type), `blockquote`,
 `th`/`td` children), `img`, `hr`, and `raw_markdown`. There is no list-item
 type: a list item is a `p` row whose attrs carry the list shape —
 `{"indent": 1, "listStyleType": "disc" | "decimal" | "todo"}` plus `checked`
-for todos and `listStart` for ordered lists. Copy unfamiliar shapes from a
-`GET /blocks` read of a document that already contains them.
+for todos and `listStart` for ordered lists (`indent` defaults to 1 when
+omitted). Copy unfamiliar shapes from a `GET /blocks` read of a document that
+already contains them.
 
 Insert a paragraph after the current second block:
 
@@ -253,6 +264,46 @@ A full review as one transaction:
 
 For a tight word-level redline, anchor only the words that change rather than
 the whole sentence.
+
+## Whole-Document Markdown Writes
+
+Block transactions are for surgical edits, comments, and suggestions. To
+author a document from scratch or restructure one wholesale, skip the block
+vocabulary entirely and `PUT` the document as plain Markdown — the server
+parses headings, lists, marks, links, tables, and code fences from ordinary
+syntax:
+
+```sh
+curl -sS -X PUT "$DOC" \
+  -H "Content-Type: text/markdown" \
+  -H "X-Agent-Id: $AGENT_ID" \
+  -H 'If-Match: "<document_clock>"' \
+  --data-binary @article.md
+```
+
+Semantics:
+
+- `If-Match` selects the MERGE BASE, not a strict precondition: the write is
+  diff3-merged (`base`, your file, current canonical) so edits that landed
+  after your read survive instead of being overwritten. A known-but-stale
+  clock still merges cleanly; an unknown clock fails 412. Omitting
+  `If-Match` degenerates to a two-way merge against the current document.
+  `If-None-Match: *` creates a new document.
+- `block_id`s and review anchors survive the rewrite — unchanged blocks keep
+  their ids, so existing comments and suggestions stay anchored.
+- True merge conflicts never fail the write: each one commits atomically as
+  a conflict artifact and surfaces in `GET $DOC/review` under `conflicts`.
+- A byte-identical body is a no-op (no new version).
+- Write failures are content errors only: CriticMarkup (typed
+  `UNSUPPORTED_MARKDOWN`), invalid frontmatter YAML, or non-UTF-8 bytes.
+
+The response carries the new version; live browser sessions receive the merge
+as a collaborator edit, same as transactions.
+
+After a `PUT`, re-read `GET $DOC/blocks` before block-level follow-ups:
+constructs the codec cannot model as first-class blocks land as
+`raw_markdown` blocks — preserved and rendered verbatim, but not addressable
+by text/marks ops, comments, or suggestions.
 
 ## Reading Review State
 
@@ -354,6 +405,7 @@ stated can never succeed — rebuild the request instead of retrying it.
 | `UNSUPPORTED_MARKDOWN` | 422 | no | content the codec refuses (e.g. CriticMarkup) |
 | `UNSUPPORTED_BLOCK_DOCUMENT` | 422 | no | block APIs on a non-Markdown document |
 | `INVALID_TRANSACTION` | 400 | no | malformed envelope or op |
+| `UNKNOWN_BLOCK_TYPE` | 400 | no | a `block_type` outside the vocabulary; the message lists valid types |
 
 If a retryable write still fails after one fresh `/blocks` read, stop and
 report the raw error to the user instead of guessing.

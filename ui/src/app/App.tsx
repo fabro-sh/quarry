@@ -15,6 +15,7 @@ import {
   FileArchive,
   FilePlus2,
   FileText,
+  FolderInput,
   FolderTree,
   GitBranch,
   Hash,
@@ -138,7 +139,7 @@ import { buildAddAgentPrompt, buildTokenizedDocumentUrl } from './agent-invite';
 type EventState = 'idle' | 'connecting' | 'open' | 'polling' | 'error';
 type ThemePreference = 'light' | 'dark';
 type TreeOpenState = Record<string, boolean>;
-type RightPaneTab = 'links' | 'versions' | 'conflicts' | 'comments';
+type RightPaneTab = 'links' | 'versions' | 'comments';
 const EVENT_POLL_INTERVAL_MS = 5_000;
 // How long the settled "Saved" status lingers before it fades away, so the
 // header confirms the save and then gets out of the way.
@@ -1091,6 +1092,13 @@ function Workspace() {
     setPaletteQuery('');
   }
 
+  function copyFuseMountCommand() {
+    void copyText(
+      `mkdir -p ${activeLibrary} && quarry mount ${activeLibrary} ${activeLibrary}`,
+      'FUSE mount command'
+    );
+  }
+
   return (
     <main
       className="isolate flex h-screen min-h-0 flex-col overflow-hidden bg-canvas text-ink antialiased"
@@ -1222,11 +1230,13 @@ function Workspace() {
       </PanelGroup>
 
       <CommandPalette
+        activeLibrary={activeLibrary}
         documents={documents}
         open={paletteOpen}
         query={paletteQuery}
         selectedPath={selectedPath}
         onClose={closePalette}
+        onCopyFuseMount={copyFuseMountCommand}
         onCreate={() => void createNewDocument()}
         onDelete={deleteCurrent}
         onDownload={downloadCurrentMarkdown}
@@ -1489,12 +1499,14 @@ function BinaryPreview({
 }
 
 function CommandPalette({
+  activeLibrary,
   documents,
   open,
   query,
   selectedPath,
   theme,
   onClose,
+  onCopyFuseMount,
   onCreate,
   onDelete,
   onDownload,
@@ -1506,12 +1518,14 @@ function CommandPalette({
   onSearch,
   onToggleTheme,
 }: {
+  activeLibrary: string;
   documents: DocumentListEntry[];
   open: boolean;
   query: string;
   selectedPath: string;
   theme: ThemePreference;
   onClose: () => void;
+  onCopyFuseMount: () => void;
   onCreate: () => void;
   onDelete: () => void;
   onDownload: () => void;
@@ -1630,6 +1644,14 @@ function CommandPalette({
               </Command.Item>
               <Command.Item className={commandItem} value="sync git pull push peers" onSelect={() => run(onOpenGit)}>
                 <span className="min-w-0 flex-1 truncate">Sync with Git peer</span>
+              </Command.Item>
+              <Command.Item
+                className={commandItem}
+                value="fuse mount filesystem copy linux"
+                onSelect={() => run(onCopyFuseMount)}
+              >
+                <span className="min-w-0 flex-1 truncate">Copy FUSE mount command</span>
+                <span className="shrink-0 truncate text-xs text-muted">{activeLibrary}</span>
               </Command.Item>
               <Command.Item
                 className={commandItem}
@@ -2922,6 +2944,7 @@ function DocumentToolbar({
               </>
             ) : null}
             <DropdownMenu.Item className={menuItem} onSelect={onRename}>
+              <FolderInput className="shrink-0" size={15} />
               Move…
             </DropdownMenu.Item>
             <DropdownMenu.Separator className="my-1 h-px bg-line" />
@@ -3074,7 +3097,9 @@ function RightPane({
         ) : null}
         {selectedTab === 'versions' ? (
           <>
-            <h2 className={rightHeading}>{selectedTabLabel}</h2>
+            <h2 className={rightHeading}>Conflicts</h2>
+            <ConflictList conflicts={conflicts} onOpen={onOpenConflict} onResolve={onResolveConflict} />
+            <h2 className={cn(rightHeading, 'mt-6')}>Versions</h2>
             <button className={`${secondaryButton} mb-2 w-full justify-center`} onClick={onDiffCurrent} type="button">
               Diff editor against latest
             </button>
@@ -3094,12 +3119,6 @@ function RightPane({
               selectedVersionId={selectedVersionId}
               versions={versions}
             />
-          </>
-        ) : null}
-        {selectedTab === 'conflicts' ? (
-          <>
-            <h2 className={rightHeading}>{selectedTabLabel}</h2>
-            <ConflictList conflicts={conflicts} onOpen={onOpenConflict} onResolve={onResolveConflict} />
           </>
         ) : null}
         {selectedTab === 'comments' ? (
@@ -3920,8 +3939,7 @@ const menuItem =
   'flex w-full cursor-pointer items-center gap-2 rounded px-2.5 py-1.5 text-left text-sm text-body outline-none select-none data-highlighted:bg-well';
 const rightHeading = 'mb-2.5 flex items-center gap-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-faint';
 const rightPaneTabs: Array<{ key: RightPaneTab; label: string }> = [
+  { key: 'comments', label: 'Comments' },
   { key: 'links', label: 'Links' },
   { key: 'versions', label: 'Versions' },
-  { key: 'conflicts', label: 'Conflicts' },
-  { key: 'comments', label: 'Comments' },
 ];

@@ -1239,7 +1239,7 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Conflict/ }));
-    await userEvent.click(screen.getByRole('tab', { name: 'Conflicts' }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Versions' }));
     expect(await screen.findByText(/Discovered 2026-05-28T12:00:00Z/)).toBeInTheDocument();
     expect(screen.getByText('Sibling conflict.sibling.md')).toBeInTheDocument();
     await userEvent.click(await screen.findByLabelText('Resolve conflict conflict-1'));
@@ -1308,7 +1308,7 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Conflict/ }));
-    await userEvent.click(screen.getByRole('tab', { name: 'Conflicts' }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Versions' }));
     await userEvent.click(await screen.findByLabelText('Open conflict conflict-merge'));
 
     await waitFor(() => expect(screen.getAllByText('# Ours').length).toBeGreaterThan(0));
@@ -1521,6 +1521,34 @@ describe('Quarry Browser workspace', () => {
 
     await userEvent.click(within(settings).getByRole('button', { name: 'Close settings' }));
     expect(screen.queryByRole('dialog', { name: 'Workspace settings' })).not.toBeInTheDocument();
+  });
+
+  it('copies the FUSE mount command from the command palette', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/v1/libraries') {
+        return json([{ id: 'lib-fuse', slug: 'fuse-lib', created_at: 'now', settings: {} }]);
+      }
+      if (url === '/v1/libraries/fuse-lib/documents') return json([]);
+      if (url === '/v1/libraries/fuse-lib/conflicts') return json([]);
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    await screen.findByRole('combobox', { name: 'Library switcher' });
+    await userEvent.keyboard('{Control>}k{/Control}');
+    await userEvent.click(await screen.findByText('Copy FUSE mount command'));
+
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith('mkdir -p fuse-lib && quarry mount fuse-lib fuse-lib')
+    );
   });
 
   it('traps settings dialog focus', async () => {

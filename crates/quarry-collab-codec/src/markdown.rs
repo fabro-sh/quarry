@@ -49,6 +49,11 @@ pub(crate) fn browser_compatible_markdown_options() -> Options {
     // Some enabled extensions still parse to unsupported events below; that is
     // intentional because the browser can also recognize those syntaxes and the
     // injection path must fail closed rather than accept them as plain text.
+    //
+    // ENABLE_MATH is deliberately absent: the browser's deserializer has no
+    // math plugin, so `$` is plain text there — enabling it here made prose
+    // with two dollar signs (e.g. "- $0 / +$200" price lists) degrade whole
+    // blocks to raw_markdown for a syntax nothing downstream supports.
     Options::ENABLE_TABLES
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_STRIKETHROUGH
@@ -56,7 +61,6 @@ pub(crate) fn browser_compatible_markdown_options() -> Options {
         | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
         | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS
         | Options::ENABLE_OLD_FOOTNOTES
-        | Options::ENABLE_MATH
         | Options::ENABLE_GFM
         | Options::ENABLE_DEFINITION_LIST
         | Options::ENABLE_SUPERSCRIPT
@@ -952,7 +956,6 @@ mod tests {
             | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
             | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS
             | Options::ENABLE_OLD_FOOTNOTES
-            | Options::ENABLE_MATH
             | Options::ENABLE_GFM
             | Options::ENABLE_DEFINITION_LIST
             | Options::ENABLE_SUPERSCRIPT
@@ -963,5 +966,8 @@ mod tests {
         assert_eq!(actual, expected);
         assert!(!actual.contains(Options::ENABLE_SMART_PUNCTUATION));
         assert!(!actual.contains(Options::ENABLE_HEADING_ATTRIBUTES));
+        // The browser's deserializer has no math plugin; `$` must stay plain
+        // text so dollar amounts never degrade blocks to raw_markdown.
+        assert!(!actual.contains(Options::ENABLE_MATH));
     }
 }

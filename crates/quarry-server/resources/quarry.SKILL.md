@@ -33,7 +33,8 @@ If the user shares a Quarry locator URL:
 Use review ops (`comment.add`, `suggestion.add`, …) for feedback requests. Use
 edit ops (`replace_block_content`, `insert_block`, …) only when the user asks
 you to directly change document content. Both share the same transaction
-envelope.
+envelope. To author or restructure a whole document, prefer the Markdown `PUT`
+(see Whole-Document Markdown Writes) over hand-assembling block ops.
 
 ## Locator URLs And Auth
 
@@ -147,14 +148,28 @@ Edit ops:
 
 | op | shape |
 |---|---|
-| `insert_block` | `{position, block_type, text?, attrs?, parent_block_id?}` |
+| `insert_block` | `{position, block_type, text?, attrs?, marks?, links?, parent_block_id?}` |
 | `delete_block` | `{block_id}` (descendants too) |
 | `move_block` | `{block_id, position, parent_block_id?}` — placement only |
 | `replace_block_content` | `{block_id, text, marks?, links?}` |
 | `set_block_type` | `{block_id, block_type, attrs?}` — id/text/anchors preserved |
 | `set_block_attrs` | `{block_id, attrs}` — replaces attrs wholesale |
-| `add_mark` / `remove_mark` | `{block_id, start, end, marks}` |
+| `add_mark` | `{block_id, start, end, marks}` — `marks` is an object, e.g. `{"bold": true}` |
+| `remove_mark` | `{block_id, start, end, marks}` — `marks` is a LIST of names, e.g. `["bold"]` |
 | `set_link` | `{block_id, start, end, url}` (`url: null` removes) |
+
+Block types: `p`, `h1`–`h6`, `blockquote`, `code_block` (+ `code_line`
+children), `mermaid`, `table` (+ `tr`/`th`/`td` children), `img`, `hr`,
+`raw_markdown`. There is NO list type (`ul`/`ol`/`li` are rejected): a list
+item is a `p` block with attrs
+`{"indent": 1, "listStyleType": "disc" | "decimal" | "todo"}` (`indent`
+defaults to 1; `checked` for todos, `listStart` for ordered lists).
+
+A mark run (in `/blocks` reads and in `insert_block`/`replace_block_content`
+`marks`) is `{start, end, marks}` where `marks` is an OBJECT keyed by mark
+name: `[{"start": 0, "end": 5, "marks": {"bold": true}}]` — never
+`{"type": "bold"}` or a list. Mark names: `bold`, `italic`, `strikethrough`,
+`underline`, `superscript`, `subscript`, `code`.
 
 Review ops (same envelope, freely mixable with edit ops):
 
@@ -171,6 +186,33 @@ Anchors are `{block_id, start, end}` offsets into the block's `text`; `quote`
 is an optional copy of the anchored text for display. An empty `replacement`
 proposes a deletion; a collapsed range (`start == end`) proposes an insertion.
 For a tight word-level redline, anchor only the words that change.
+
+## Whole-Document Markdown Writes
+
+To author or restructure substantial content, skip block ops and `PUT` the
+whole document as Markdown — the server parses lists, marks, and links from
+ordinary syntax, so there is no block/attrs vocabulary to get wrong:
+
+```bash
+curl -sS -X PUT "$DOC" \
+  -H "Content-Type: text/markdown" \
+  -H "X-Agent-Id: $AGENT_ID" \
+  -H 'If-Match: "<document_clock>"' \
+  --data-binary @article.md
+```
+
+- Send `If-Match` with the clock you last read. It selects the merge base:
+  the write is diff3-merged against the current document, so concurrent
+  edits survive instead of being overwritten. A known-but-stale clock still
+  merges; an unknown one fails 412. No `If-Match` degenerates to a two-way
+  merge against the current document.
+- `block_id`s and review anchors survive the rewrite. Merge leftovers become
+  `conflicts` in `GET $DOC/review` — never write failures.
+- Use `PUT` to create or rewrite documents wholesale; use block transactions
+  for surgical edits, comments, and suggestions on existing content.
+
+After a `PUT`, re-read `GET $DOC/blocks`: ambiguous Markdown can land as
+`raw_markdown` blocks, preserved verbatim but not block-addressable.
 
 ## Reading Review State
 
@@ -233,6 +275,7 @@ once. `retryable: false` = the ops as stated can never succeed; rebuild.
 | `UNSUPPORTED_MARKDOWN` (422) | The content is refused (e.g. CriticMarkup); fix the content |
 | `UNSUPPORTED_BLOCK_DOCUMENT` (422) | Not a Markdown document; block APIs do not apply |
 | `INVALID_TRANSACTION` (400) | Malformed envelope/op; fix the request |
+| `UNKNOWN_BLOCK_TYPE` (400) | `block_type` outside the vocabulary; the message lists valid types |
 
 If a retryable write still fails after one fresh read, stop and report the raw
 error instead of guessing.

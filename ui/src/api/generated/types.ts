@@ -373,6 +373,7 @@ export type BlockTransactionErrorCode =
   | 'SUGGESTION_ALREADY_RESOLVED'
   | 'UNSUPPORTED_MARKDOWN'
   | 'INVALID_TRANSACTION'
+  | 'UNKNOWN_BLOCK_TYPE'
   | 'UNSUPPORTED_BLOCK_DOCUMENT';
 
 export interface BlockTransactionErrorPayload {

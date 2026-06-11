@@ -71,21 +71,23 @@ Document path: ${path}
    <one-sentence summary of the document>
    I can edit directly, or leave comments and suggestions for you to review. What would you like me to do?
 
-4. While working, monitor document activity.
+4. Read the skill document BEFORE your first edit, comment, or suggestion.
+   Skill: ${discoveryOrigin}/quarry.SKILL.md
+   It defines the transaction op shapes, the block-type vocabulary (there is no list type — a list item is a "p" block with list attrs), and the mark-run shape. Do not guess these.
+   Docs: ${discoveryOrigin}/agent-docs
+   Discovery: ${discoveryOrigin}/.well-known/agent.json
+
+5. While working, monitor document activity.
    Prefer GET ${documentApi}/events/stream
    If you cannot keep a stream open, poll GET ${libraryApi}/events/pending?after=<last-seen-id>.
    When an event arrives, re-read the block tree before replying or editing.
 
-5. Do not edit until the user gives further instructions.
-   For every edit and review operation, POST ${documentApi}/transactions with {"client_tx_id":"<unique-id>","base_clock":"<document_clock>","actor":{"kind":"agent","id":"<agent-id>"},"ops":[...]}.
+6. Do not edit until the user gives further instructions.
+   For surgical edits and review operations, POST ${documentApi}/transactions with {"client_tx_id":"<unique-id>","base_clock":"<document_clock>","actor":{"kind":"agent","id":"<agent-id>"},"ops":[...]}.
    Ops: insert_block, delete_block, move_block, replace_block_content, set_block_attrs, mark/link ops, comment.add, comment.reply, comment.resolve, comment.delete, suggestion.add, suggestion.accept, suggestion.reject.
+   To author or restructure the whole document, instead PUT ${documentApi} with a plain Markdown body and header If-Match: "<document_clock>" — concurrent edits diff3-merge rather than being overwritten (details in the skill).
    To read existing comments, suggestions, and merge conflicts, GET ${documentApi}/review.
-   Errors are typed {code, retryable, message}; when retryable, refresh GET ${documentApi}/blocks and resubmit with the new document_clock.
-
-6. If you need setup details for deeper interaction, fetch:
-   Skill: ${discoveryOrigin}/quarry.SKILL.md
-   Docs: ${discoveryOrigin}/agent-docs
-   Discovery: ${discoveryOrigin}/.well-known/agent.json`;
+   Errors are typed {code, retryable, message}; when retryable, refresh GET ${documentApi}/blocks and resubmit with the new document_clock.`;
 }
 
 function normalizedOrigin(origin: string) {

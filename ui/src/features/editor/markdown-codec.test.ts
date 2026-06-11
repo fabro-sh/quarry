@@ -28,6 +28,21 @@ describe('markdown codec', () => {
     expect(plateValueToMarkdown(value)).toContain('~~struck~~');
   });
 
+  it('serializes raw_markdown blocks verbatim instead of dropping them', () => {
+    const source = '- **CPU:** AMD Ryzen 5 7600 - $230\n- **PSU:** Corsair RM650 - $90';
+    const value = [
+      { type: 'p', children: [{ text: 'Shopping list:' }] },
+      { type: 'raw_markdown', markdown: source, children: [{ text: '' }] },
+      { type: 'p', children: [{ text: 'Total: $320.' }] },
+    ];
+
+    const markdown = plateValueToMarkdown(value);
+
+    expect(markdown).toContain('Shopping list:');
+    expect(markdown).toContain(source);
+    expect(markdown).toContain('Total: $320.');
+  });
+
   it('round-trips headings from h1 through h6', () => {
     const markdown = '# One\n\n## Two\n\n### Three\n\n#### Four\n\n##### Five\n\n###### Six\n';
     expect(plateValueToMarkdown(markdownToPlateValue(markdown))).toContain('###### Six');

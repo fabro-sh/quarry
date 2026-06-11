@@ -21,6 +21,33 @@ pub fn is_known_inline_mark(key: &str) -> bool {
     MARK_ORDER.contains(&key)
 }
 
+/// Every block type the Markdown writer can render, structural children
+/// (`code_line`, `tr`, `th`, `td`) included. There is deliberately no list
+/// type: a list item is a `p` row whose attrs carry `listStyleType`/`indent`.
+/// The gateway validates incoming `block_type`s against this list so unknown
+/// types fail at the API boundary instead of surfacing later as a rendering
+/// error.
+pub const KNOWN_BLOCK_TYPES: [&str; 18] = [
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "blockquote",
+    "code_block",
+    "code_line",
+    "mermaid",
+    "table",
+    "tr",
+    "th",
+    "td",
+    "img",
+    "hr",
+    "raw_markdown",
+];
+
 const MARK_ORDER: [&str; 7] = [
     "bold",
     "italic",
@@ -40,9 +67,10 @@ const MARK_DELIMITERS: [(&str, &str, &str); 6] = [
     ("subscript", "<sub>", "</sub>"),
 ];
 
-/// Characters escaped everywhere in plain text (outside code).
-const GLOBAL_ESCAPES: [char; 14] = [
-    '\\', '`', '*', '_', '[', ']', '<', '>', '&', '#', '|', '~', '^', '$',
+/// Characters escaped everywhere in plain text (outside code). `$` is not
+/// escaped because the parser does not enable math (`$` is plain text).
+const GLOBAL_ESCAPES: [char; 13] = [
+    '\\', '`', '*', '_', '[', ']', '<', '>', '&', '#', '|', '~', '^',
 ];
 
 /// Characters escaped only at the start of a line.

@@ -142,6 +142,52 @@ fn imports_nested_list_items_as_flat_rows_with_indent_attrs() {
 }
 
 #[test]
+fn dollar_prices_in_list_items_import_as_list_rows_not_raw_markdown() {
+    let markdown = "- **GPU:** integrated - $0 / +$200\n- plain $5 item\n";
+    let rows = import(markdown);
+
+    let items: Vec<(&str, &str)> = rows
+        .iter()
+        .map(|row| (row.block_type.as_str(), row.text.as_str()))
+        .collect();
+    assert_eq!(
+        items,
+        vec![
+            ("p", "GPU: integrated - $0 / +$200"),
+            ("p", "plain $5 item"),
+        ]
+    );
+    assert_eq!(
+        rows[0].marks,
+        vec![MarkRun {
+            start: 0,
+            end: 4,
+            marks: attrs([("bold", json!(true))]),
+        }]
+    );
+    assert_eq!(
+        serde_json::to_value(&rows[0].attrs).unwrap(),
+        json!({"indent": 1, "listStyleType": "disc"})
+    );
+
+    assert_eq!(export(&rows), markdown);
+    assert_eq!(reexport(markdown), markdown);
+}
+
+#[test]
+fn dollar_signs_in_plain_text_export_unescaped_and_stably() {
+    let markdown = "A workstation at around $800-900 USD, give or take $50.\n";
+    let rows = import(markdown);
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].block_type, "p");
+    assert_eq!(rows[0].text, "A workstation at around $800-900 USD, give or take $50.");
+
+    assert_eq!(export(&rows), markdown);
+    assert_eq!(reexport(markdown), markdown);
+}
+
+#[test]
 fn safe_unsupported_block_falls_back_to_raw_markdown_row() {
     let rows = import("Before.\n\n<div>\nopaque html\n</div>\n\nAfter.\n");
 

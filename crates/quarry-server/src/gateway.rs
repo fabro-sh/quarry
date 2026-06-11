@@ -150,6 +150,7 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use quarry_collab_codec::{
     block_rows_to_markdown, is_utf16_boundary, utf16_len, Attrs, BlockRow, LinkRange, MarkRun,
+    KNOWN_BLOCK_TYPES,
 };
 use quarry_core::{
     now_timestamp, render_markdown_frontmatter, DocumentSource, QuarryError, WritePrecondition,
@@ -178,6 +179,7 @@ pub(crate) enum GatewayErrorCode {
     SuggestionAlreadyResolved,
     UnsupportedMarkdown,
     InvalidTransaction,
+    UnknownBlockType,
     UnsupportedBlockDocument,
 }
 
@@ -192,6 +194,7 @@ impl GatewayErrorCode {
             Self::SuggestionAlreadyResolved => "SUGGESTION_ALREADY_RESOLVED",
             Self::UnsupportedMarkdown => "UNSUPPORTED_MARKDOWN",
             Self::InvalidTransaction => "INVALID_TRANSACTION",
+            Self::UnknownBlockType => "UNKNOWN_BLOCK_TYPE",
             Self::UnsupportedBlockDocument => "UNSUPPORTED_BLOCK_DOCUMENT",
         }
     }
@@ -204,7 +207,7 @@ impl GatewayErrorCode {
         match self {
             Self::StaleBase | Self::BlockMoveConflict => StatusCode::PRECONDITION_FAILED,
             Self::BlockDeleted | Self::AnchorNotFound => StatusCode::NOT_FOUND,
-            Self::InvalidTransaction => StatusCode::BAD_REQUEST,
+            Self::InvalidTransaction | Self::UnknownBlockType => StatusCode::BAD_REQUEST,
             Self::SuggestionInvalidated
             | Self::SuggestionAlreadyResolved
             | Self::UnsupportedMarkdown
@@ -562,11 +565,7 @@ fn parse_transaction(payload: JsonValue) -> Result<ParsedTransaction, GatewayErr
         .ops
         .iter()
         .enumerate()
-        .map(|(index, op)| {
-            serde_json::from_value::<BlockOp>(op.clone()).map_err(|error| {
-                GatewayError::invalid(format!("invalid op at index {index}: {error}"))
-            })
-        })
+        .map(|(index, op)| parse_op(index, op))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(ParsedTransaction {
         client_tx_id: request.client_tx_id,
@@ -574,6 +573,63 @@ fn parse_transaction(payload: JsonValue) -> Result<ParsedTransaction, GatewayErr
         actor: request.actor,
         ops_json: JsonValue::Array(request.ops),
         ops,
+    })
+}
+
+/// Deserializes one transaction op, qualifying any failure with the op name
+/// and — for marks — the offending element and the expected shape. Serde's
+/// bare "missing field `marks`" reads as the op-level field being absent even
+/// when the real failure is a malformed run inside `marks[0]` (the
+/// internally-tagged op enum buffers its content, so no JSON path survives
+/// into serde errors).
+fn parse_op(index: usize, op: &JsonValue) -> Result<BlockOp, GatewayError> {
+    serde_json::from_value::<BlockOp>(op.clone()).map_err(|error| {
+        let op_name = op.get("op").and_then(JsonValue::as_str).unwrap_or("?");
+        let message = match marks_hint(op_name, op, &error.to_string()) {
+            Some(hint) => format!("{error}; {hint}"),
+            None => error.to_string(),
+        };
+        GatewayError::invalid(format!(
+            "invalid op at index {index} ({op_name}): {message}"
+        ))
+    })
+}
+
+/// The marks vocabulary is the most commonly guessed-wrong shape, so a parse
+/// failure on an op whose `marks` field is malformed (or whose serde error
+/// names `marks`) spells out the expected shape for that op.
+fn marks_hint(op_name: &str, op: &JsonValue, message: &str) -> Option<String> {
+    let marks = op.get("marks");
+    let message_names_marks = message.contains("`marks`");
+    match op_name {
+        "add_mark" => (message_names_marks || marks.is_some_and(|m| !m.is_object())).then(|| {
+            r#"in add_mark, `marks` is an object keyed by mark name, e.g. {"bold": true}"#
+                .to_string()
+        }),
+        "remove_mark" => (message_names_marks || marks.is_some_and(|m| !m.is_array())).then(|| {
+            r#"in remove_mark, `marks` is a list of mark names, e.g. ["bold"]"#.to_string()
+        }),
+        _ => {
+            const RUN_SHAPE: &str = r#"a mark run is {"start": 0, "end": 5, "marks": {"bold": true}} — `marks` is an object keyed by mark name, never a list or a `type` field"#;
+            if let Some(run_index) = first_bad_mark_run(op) {
+                Some(format!(
+                    "`marks[{run_index}]` is not a valid mark run; {RUN_SHAPE}"
+                ))
+            } else {
+                message_names_marks.then(|| RUN_SHAPE.to_string())
+            }
+        }
+    }
+}
+
+/// Index of the first element of `op.marks` that is not shaped
+/// `{start, end, marks: <object>}`.
+fn first_bad_mark_run(op: &JsonValue) -> Option<usize> {
+    let runs = op.get("marks")?.as_array()?;
+    runs.iter().position(|run| {
+        !(run.get("start").is_some_and(JsonValue::is_u64)
+            && run.get("end").is_some_and(JsonValue::is_u64)
+            && run.get("marks").is_some_and(JsonValue::is_object))
     })
 }
 
@@ -991,13 +1047,14 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
             }
             validate_block_type(block_type)?;
             validate_attrs(attrs)?;
+            let attrs = normalize_list_attrs(attrs)?;
             if block_type == "raw_markdown" {
                 if !text.is_empty() || !marks.is_empty() || !links.is_empty() {
                     return Err(GatewayError::invalid(
                         "raw_markdown blocks carry no flat text, marks, or links",
                     ));
                 }
-                validate_raw_markdown_attrs(attrs)?;
+                validate_raw_markdown_attrs(&attrs)?;
             }
             validate_inline_ranges(text, marks, links)?;
             ctx.model.blocks.insert(
@@ -1005,7 +1062,7 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
                 ModelBlock {
                     parent: parent_block_id.clone(),
                     block_type: block_type.clone(),
-                    attrs: attrs.clone(),
+                    attrs,
                     text: text.clone(),
                     marks: marks.clone(),
                     links: links.clone(),
@@ -1085,13 +1142,14 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
         }
         BlockOp::SetBlockAttrs { block_id, attrs } => {
             validate_attrs(attrs)?;
+            let attrs = normalize_list_attrs(attrs)?;
             let block = require_block_mut(&mut ctx.model, block_id)?;
             if block.block_type == "raw_markdown" {
                 // Attrs replace wholesale: dropping or blanking the markdown
                 // attribute would silently erase the block's content.
-                validate_raw_markdown_attrs(attrs)?;
+                validate_raw_markdown_attrs(&attrs)?;
             }
-            block.attrs = attrs.clone();
+            block.attrs = attrs;
             ctx.changed.insert(block_id.clone());
             Ok(())
         }
@@ -1101,9 +1159,13 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
             attrs,
         } => {
             validate_block_type(block_type)?;
-            if let Some(attrs) = attrs {
-                validate_attrs(attrs)?;
-            }
+            let attrs = attrs
+                .as_ref()
+                .map(|attrs| {
+                    validate_attrs(attrs)?;
+                    normalize_list_attrs(attrs)
+                })
+                .transpose()?;
             let block = require_block_mut(&mut ctx.model, block_id)?;
             if block.block_type == "raw_markdown" || block_type == "raw_markdown" {
                 return Err(GatewayError::invalid(
@@ -1113,7 +1175,7 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
             }
             block.block_type = block_type.clone();
             if let Some(attrs) = attrs {
-                block.attrs = attrs.clone();
+                block.attrs = attrs;
             }
             ctx.changed.insert(block_id.clone());
             Ok(())
@@ -1584,10 +1646,18 @@ fn suggestion_invalidated(item_id: &str) -> GatewayError {
 }
 
 fn validate_block_type(block_type: &str) -> Result<(), GatewayError> {
-    if block_type.trim().is_empty() {
-        return Err(GatewayError::invalid("block_type must not be empty"));
+    if KNOWN_BLOCK_TYPES.contains(&block_type) {
+        return Ok(());
     }
-    Ok(())
+    Err(GatewayError::new(
+        GatewayErrorCode::UnknownBlockType,
+        format!(
+            "unknown block_type \"{block_type}\"; valid types: {}. There is no list \
+             block type — a list item is a \"p\" block with attrs \
+             {{\"indent\": 1, \"listStyleType\": \"disc\" | \"decimal\" | \"todo\"}}",
+            KNOWN_BLOCK_TYPES.join(", ")
+        ),
+    ))
 }
 
 /// The `id` attribute is the block identity on exported Slate elements; ops
@@ -1599,6 +1669,30 @@ fn validate_attrs(attrs: &Attrs) -> Result<(), GatewayError> {
         ));
     }
     Ok(())
+}
+
+const LIST_STYLE_TYPES: [&str; 3] = ["disc", "decimal", "todo"];
+
+/// Completes and validates the list shape on block attrs. The browser
+/// editor's list plugin requires `indent` next to `listStyleType` and
+/// silently strips the list shape when it is missing — a commit would
+/// succeed and the data would vanish downstream — so the gateway defaults
+/// `indent` to 1 and rejects list styles the editor cannot represent.
+fn normalize_list_attrs(attrs: &Attrs) -> Result<Attrs, GatewayError> {
+    let mut attrs = attrs.clone();
+    let Some(style) = attrs.get("listStyleType") else {
+        return Ok(attrs);
+    };
+    if !style
+        .as_str()
+        .is_some_and(|style| LIST_STYLE_TYPES.contains(&style))
+    {
+        return Err(GatewayError::invalid(format!(
+            "unknown listStyleType {style}; valid values: \"disc\", \"decimal\", \"todo\""
+        )));
+    }
+    attrs.entry("indent".to_string()).or_insert(json!(1));
+    Ok(attrs)
 }
 
 /// A raw_markdown block's whole content lives in its `markdown` attribute;
@@ -2441,6 +2535,191 @@ mod tests {
 
     fn op(value: JsonValue) -> BlockOp {
         serde_json::from_value(value).expect("test op must parse")
+    }
+
+    /// The exact failure an agent hit in the wild: a mark run written as
+    /// `{"type": "strong", ...}` fails INSIDE `marks[0]`, but serde's bare
+    /// "missing field `marks`" read as if the op-level `marks` field were
+    /// absent — the agent retried the identical payload. The error must name
+    /// the op, the offending run, and the expected run shape.
+    #[test]
+    fn op_parse_errors_name_the_op_the_bad_run_and_the_mark_shape() {
+        let error = parse_op(
+            7,
+            &json!({
+                "op": "insert_block",
+                "position": 1,
+                "block_type": "p",
+                "text": "Linux consideration: both work.",
+                "marks": [{"type": "strong", "start": 0, "end": 20}]
+            }),
+        )
+        .unwrap_err();
+
+        let message = error.message();
+        assert!(
+            message.starts_with("invalid op at index 7 (insert_block): missing field `marks`"),
+            "got: {message}"
+        );
+        assert!(
+            message.contains("`marks[0]` is not a valid mark run"),
+            "got: {message}"
+        );
+        assert!(
+            message.contains(r#"a mark run is {"start": 0, "end": 5, "marks": {"bold": true}}"#),
+            "got: {message}"
+        );
+    }
+
+    /// `remove_mark` takes a LIST of names where `add_mark` takes an object;
+    /// each hint must state its own op's shape, not the run shape.
+    #[test]
+    fn remove_mark_parse_error_hints_the_list_shape() {
+        let error = parse_op(
+            0,
+            &json!({
+                "op": "remove_mark",
+                "block_id": "b1",
+                "start": 0,
+                "end": 4,
+                "marks": {"bold": true}
+            }),
+        )
+        .unwrap_err();
+
+        let message = error.message();
+        assert!(
+            message.starts_with("invalid op at index 0 (remove_mark):"),
+            "got: {message}"
+        );
+        assert!(
+            message.contains(r#"`marks` is a list of mark names, e.g. ["bold"]"#),
+            "got: {message}"
+        );
+    }
+
+    #[test]
+    fn add_mark_parse_error_hints_the_object_shape() {
+        let error = parse_op(
+            0,
+            &json!({
+                "op": "add_mark",
+                "block_id": "b1",
+                "start": 0,
+                "end": 4,
+                "marks": ["bold"]
+            }),
+        )
+        .unwrap_err();
+
+        let message = error.message();
+        assert!(
+            message.contains(r#"`marks` is an object keyed by mark name, e.g. {"bold": true}"#),
+            "got: {message}"
+        );
+    }
+
+    /// Failures with no `marks` involvement stay hint-free.
+    #[test]
+    fn op_parse_error_without_marks_has_no_hint() {
+        let error = parse_op(2, &json!({"op": "made_up_op"})).unwrap_err();
+
+        let message = error.message();
+        assert!(
+            message.starts_with("invalid op at index 2 (made_up_op): unknown variant"),
+            "got: {message}"
+        );
+        assert!(!message.contains("mark run"), "got: {message}");
+    }
+
+    /// The wild `ul` guess: an unknown block type must fail typed at the API
+    /// boundary — naming the valid vocabulary and the list-item recipe — not
+    /// surface later as an UNSUPPORTED_MARKDOWN rendering error.
+    #[test]
+    fn unknown_block_type_fails_typed_with_vocabulary_and_list_recipe() {
+        let state = state_with_rows(vec![paragraph("b1", 0, "Existing.")]);
+        let ops = [op(
+            json!({"op": "insert_block", "position": 1, "block_type": "ul", "text": "item"}),
+        )];
+
+        let error = apply_ops(&state, &ops, &actor(), "tx-ul").unwrap_err();
+
+        assert_eq!(error.code(), GatewayErrorCode::UnknownBlockType);
+        let message = error.message();
+        assert!(
+            message.starts_with("unknown block_type \"ul\"; valid types: p, h1, h2"),
+            "got: {message}"
+        );
+        assert!(
+            message.contains(r#"a list item is a "p" block with attrs"#),
+            "got: {message}"
+        );
+    }
+
+    /// The silent failure that shipped: `listStyleType` without `indent`
+    /// committed, then the browser editor's list plugin stripped the list
+    /// shape. The gateway must complete the pair so the commit and the
+    /// surviving data agree.
+    #[test]
+    fn list_style_type_without_indent_gets_indent_defaulted_to_1() {
+        let state = state_with_rows(vec![paragraph("b1", 0, "Existing.")]);
+        let ops = [op(json!({
+            "op": "insert_block",
+            "position": 1,
+            "block_type": "p",
+            "attrs": {"listStyleType": "disc"},
+            "text": "CPU: AMD Ryzen 5 7600"
+        }))];
+
+        let outcome = apply_ops(&state, &ops, &actor(), "tx-list").unwrap();
+
+        let item = outcome
+            .rows
+            .iter()
+            .find(|row| row.text == "CPU: AMD Ryzen 5 7600")
+            .expect("inserted row");
+        assert_eq!(item.attrs.get("listStyleType"), Some(&json!("disc")));
+        assert_eq!(item.attrs.get("indent"), Some(&json!(1)));
+    }
+
+    #[test]
+    fn set_block_attrs_also_defaults_list_indent() {
+        let state = state_with_rows(vec![paragraph("b1", 0, "Item one.")]);
+        let ops = [op(json!({
+            "op": "set_block_attrs",
+            "block_id": "b1",
+            "attrs": {"listStyleType": "decimal"}
+        }))];
+
+        let outcome = apply_ops(&state, &ops, &actor(), "tx-attrs").unwrap();
+
+        let item = outcome.rows.first().expect("row");
+        assert_eq!(item.attrs.get("indent"), Some(&json!(1)));
+    }
+
+    /// An unrepresentable list style would be stripped by the editor just
+    /// like a missing indent; reject it loudly instead.
+    #[test]
+    fn unknown_list_style_type_is_rejected() {
+        let state = state_with_rows(vec![paragraph("b1", 0, "Existing.")]);
+        let ops = [op(json!({
+            "op": "insert_block",
+            "position": 1,
+            "block_type": "p",
+            "attrs": {"listStyleType": "circle"},
+            "text": "item"
+        }))];
+
+        let error = apply_ops(&state, &ops, &actor(), "tx-style").unwrap_err();
+
+        assert_eq!(error.code(), GatewayErrorCode::InvalidTransaction);
+        assert!(
+            error.message().contains(
+                r#"unknown listStyleType "circle"; valid values: "disc", "decimal", "todo""#
+            ),
+            "got: {}",
+            error.message()
+        );
     }
 
     /// A session-mode retry after a failed commit re-runs the same ops; the

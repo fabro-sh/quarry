@@ -26,6 +26,7 @@ import remarkGfm from 'remark-gfm';
 import { remarkInlineMarks } from './remark-inline-marks';
 import { stripPlaceholders } from './image';
 import { applyMermaid, BaseMermaidPlugin, mermaidMdRules } from './mermaid';
+import { RawMarkdownPlugin, rawMarkdownMdRules } from './raw-markdown';
 import {
   BaseTableCellHeaderPlugin,
   BaseTableCellPlugin,
@@ -68,6 +69,10 @@ export const baseMarkdownPlugins = [
   BaseTableRowPlugin,
   BaseTableCellPlugin,
   BaseTableCellHeaderPlugin,
+  // Without this plugin + its serialize rule, raw_markdown blocks (the
+  // canonical fallback for unrepresentable content) silently vanish from
+  // the download/diff mirror.
+  RawMarkdownPlugin,
 ];
 
 export function markdownToPlateValue(markdown: string): PlateValue {
@@ -109,7 +114,7 @@ function editor() {
       MarkdownPlugin.configure({
         options: {
           remarkPlugins: [remarkGfm, remarkInlineMarks],
-          rules: { ...wikiLinkMdRules, ...mermaidMdRules, ...tableMdRules },
+          rules: { ...wikiLinkMdRules, ...mermaidMdRules, ...tableMdRules, ...rawMarkdownMdRules },
         },
       }),
     ],
