@@ -4,10 +4,12 @@ import { ParagraphPlugin, Plate, PlateContent, createPlateEditor } from 'platejs
 import { afterEach, describe, expect, it } from 'vitest';
 import { reviewKit } from './review-kit';
 import { useReviewStore } from '../review/review-store';
+import { emptyReviewMeta } from '../review/rfm-types';
 
 afterEach(() => {
   useReviewStore.getState().setActiveId(null);
   useReviewStore.getState().setHoverId(null);
+  useReviewStore.getState().setMeta(emptyReviewMeta());
 });
 
 describe('CommentLeaf', () => {
@@ -38,6 +40,103 @@ describe('CommentLeaf', () => {
     });
 
     expect(container.querySelector('[data-comment-id="c1"]')).toHaveAttribute('data-active', 'true');
+  });
+
+  it('renders a resolved comment as plain text with no highlight', () => {
+    act(() => {
+      useReviewStore.getState().setMeta({
+        comments: { c1: { by: 'user', at: '2026-06-11T00:00:00Z', body: 'Reformat', status: 'resolved' } },
+        suggestions: {},
+      });
+    });
+
+    const editor = createPlateEditor({
+      plugins: [ParagraphPlugin, ...reviewKit],
+      value: [
+        {
+          type: 'p',
+          children: [{ text: 'commented', comment: true, comment_c1: true }],
+        },
+      ],
+    });
+
+    const { container } = render(
+      <Plate editor={editor}>
+        <PlateContent />
+      </Plate>,
+    );
+
+    expect(container.querySelector('[data-comment-id="c1"]')).toBeNull();
+    const highlighted = container.querySelector('.bg-warn-tint');
+    expect(highlighted).toBeNull();
+    expect(container).toHaveTextContent('commented');
+  });
+
+  it('restores the highlight when a resolved comment is reopened', () => {
+    act(() => {
+      useReviewStore.getState().setMeta({
+        comments: { c1: { by: 'user', at: '2026-06-11T00:00:00Z', status: 'resolved' } },
+        suggestions: {},
+      });
+    });
+
+    const editor = createPlateEditor({
+      plugins: [ParagraphPlugin, ...reviewKit],
+      value: [
+        {
+          type: 'p',
+          children: [{ text: 'commented', comment: true, comment_c1: true }],
+        },
+      ],
+    });
+
+    const { container } = render(
+      <Plate editor={editor}>
+        <PlateContent />
+      </Plate>,
+    );
+
+    expect(container.querySelector('[data-comment-id="c1"]')).toBeNull();
+
+    act(() => {
+      useReviewStore.getState().setMeta({
+        comments: { c1: { by: 'user', at: '2026-06-11T00:00:00Z' } },
+        suggestions: {},
+      });
+    });
+
+    expect(container.querySelector('[data-comment-id="c1"]')).not.toBeNull();
+  });
+
+  it('keeps the highlight keyed to the open comment when it overlaps a resolved one', () => {
+    act(() => {
+      useReviewStore.getState().setMeta({
+        comments: {
+          done: { by: 'user', at: '2026-06-11T00:00:00Z', status: 'resolved' },
+          open: { by: 'user', at: '2026-06-11T00:01:00Z' },
+        },
+        suggestions: {},
+      });
+    });
+
+    const editor = createPlateEditor({
+      plugins: [ParagraphPlugin, ...reviewKit],
+      value: [
+        {
+          type: 'p',
+          children: [{ text: 'commented', comment: true, comment_done: true, comment_open: true }],
+        },
+      ],
+    });
+
+    const { container } = render(
+      <Plate editor={editor}>
+        <PlateContent />
+      </Plate>,
+    );
+
+    expect(container.querySelector('[data-comment-id="open"]')).not.toBeNull();
+    expect(container.querySelector('[data-comment-id="done"]')).toBeNull();
   });
 
   it('reflects the hovered comment', () => {

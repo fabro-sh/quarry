@@ -4,11 +4,12 @@ import { useReviewStore } from '../review/review-store';
 import { readSuggestionMark } from '../review/suggestion-mark';
 import { cn } from '../../lib/utils';
 
-function commentIdOf(leaf: Record<string, unknown>): string | null {
+function commentIdsOf(leaf: Record<string, unknown>): string[] {
+  const ids: string[] = [];
   for (const key of Object.keys(leaf)) {
-    if (key.startsWith('comment_') && key !== 'comment_draft' && leaf[key] === true) return key.slice('comment_'.length);
+    if (key.startsWith('comment_') && key !== 'comment_draft' && leaf[key] === true) ids.push(key.slice('comment_'.length));
   }
-  return null;
+  return ids;
 }
 
 function isCommentDraft(leaf: Record<string, unknown>): boolean {
@@ -16,14 +17,23 @@ function isCommentDraft(leaf: Record<string, unknown>): boolean {
 }
 
 export function CommentLeaf(props: PlateLeafProps) {
-  const id = commentIdOf(props.leaf);
-  const isDraft = !id && isCommentDraft(props.leaf);
+  const ids = commentIdsOf(props.leaf);
+  const meta = useReviewStore((s) => s.meta);
+  // Resolved comments keep their anchor mark in the text so they can be
+  // reopened, but only open comments earn the highlight. A mark with no meta
+  // entry counts as open: meta hydrates after the doc syncs, and dropping the
+  // highlight during that window would flash every comment plain.
+  const id = ids.find((candidate) => meta.comments[candidate]?.status !== 'resolved') ?? null;
+  const isDraft = ids.length === 0 && isCommentDraft(props.leaf);
   const activeId = useReviewStore((s) => s.activeId);
   const hoverId = useReviewStore((s) => s.hoverId);
   const setActiveId = useReviewStore((s) => s.setActiveId);
   const setHoverId = useReviewStore((s) => s.setHoverId);
   const isActive = !!id && activeId === id;
   const isHover = !!id && hoverId === id;
+  if (!id && !isDraft) {
+    return <PlateLeaf {...props} />;
+  }
   // A draft is the as-yet-uncommitted range the composer is targeting: show it
   // with a distinct dashed underline so the user sees what they're commenting on.
   const className = isDraft
