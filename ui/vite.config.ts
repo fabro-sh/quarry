@@ -8,6 +8,9 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
+    // Tailscale serve/funnel fronts the dev server under the tailnet
+    // hostname; the leading dot allows any device on this tailnet.
+    allowedHosts: ['.manatee-truck.ts.net'],
     proxy: {
       '/v1': {
         target: quarryApiOrigin,
