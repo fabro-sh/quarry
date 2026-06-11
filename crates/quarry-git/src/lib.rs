@@ -1098,18 +1098,26 @@ async fn record_exported_sync_state(
             .map(|file| file.content_type.clone())
             .unwrap_or_default();
         if is_block_file(&doc.path, &content_type) {
-            let document = store.get_document(library, &doc.path).await?;
-            if let Ok(text) = String::from_utf8(document.content) {
-                let (_, body) = split_markdown_frontmatter(&text)?;
-                store
-                    .put_block_shadow_base(
-                        "git",
-                        peer_id,
-                        &document.id,
-                        body,
-                        Some(doc.head_version_id.clone()),
-                    )
-                    .await?;
+            // Skip the full-content load when the recorded base already
+            // names the current head: the base only advances with content,
+            // so an unchanged document needs no rewrite (keeps no-op syncs
+            // from reading every Markdown document's body).
+            let recorded = store.block_shadow_base("git", peer_id, &doc.id).await?;
+            let recorded_head = recorded.and_then(|base| base.base_version_id);
+            if recorded_head.as_deref() != Some(doc.head_version_id.as_str()) {
+                let document = store.get_document(library, &doc.path).await?;
+                if let Ok(text) = String::from_utf8(document.content) {
+                    let (_, body) = split_markdown_frontmatter(&text)?;
+                    store
+                        .put_block_shadow_base(
+                            "git",
+                            peer_id,
+                            &document.id,
+                            body,
+                            Some(doc.head_version_id.clone()),
+                        )
+                        .await?;
+                }
             }
         }
         store

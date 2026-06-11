@@ -492,6 +492,18 @@ async fn sync_with_both_sides_unchanged_does_not_create_new_git_commit() {
         .unwrap()
         .target()
         .unwrap();
+    let document_id = store
+        .head_document(&library.slug, "notes/stable.md")
+        .await
+        .unwrap()
+        .id;
+    let base_before = store
+        .block_shadow_base("git", &peer.id, &document_id)
+        .await
+        .unwrap()
+        .expect("export records the peer's shadow base");
+    // Let the clock tick so an (incorrect) rewrite would change updated_at.
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
     let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
 
@@ -505,6 +517,14 @@ async fn sync_with_both_sides_unchanged_does_not_create_new_git_commit() {
         .target()
         .unwrap();
     assert_eq!(head_after, head_before);
+    // The shadow base already named the head, so the sync skipped both the
+    // document-content load and the base rewrite.
+    let base_after = store
+        .block_shadow_base("git", &peer.id, &document_id)
+        .await
+        .unwrap()
+        .expect("shadow base survives a no-op sync");
+    assert_eq!(base_after, base_before);
 }
 
 #[tokio::test]
