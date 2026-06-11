@@ -181,7 +181,10 @@ fn dollar_signs_in_plain_text_export_unescaped_and_stably() {
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].block_type, "p");
-    assert_eq!(rows[0].text, "A workstation at around $800-900 USD, give or take $50.");
+    assert_eq!(
+        rows[0].text,
+        "A workstation at around $800-900 USD, give or take $50."
+    );
 
     assert_eq!(export(&rows), markdown);
     assert_eq!(reexport(markdown), markdown);
