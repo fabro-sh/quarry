@@ -77,11 +77,12 @@
 //!   projection time (`collab.session.unknown_marks_dropped` — they would
 //!   otherwise fail the Markdown writer on every retry), and inline
 //!   elements the row model cannot represent degrade blocks to
-//!   `raw_markdown` rows. Residual triggers (doc shapes the writer still
-//!   rejects) remain possible until Phase 4's reconciler replaces the
-//!   export path — and because a failing SHAPE keeps failing on every
-//!   retry, the loss is UNBOUNDED while it persists: every edit made after
-//!   the last successful checkpoint dies with the discard. That is why the
+//!   `raw_markdown` rows. Residual triggers (doc shapes the Markdown
+//!   writer still rejects) remain possible — checkpoints export through
+//!   `block_rows_to_markdown`, a path the Phase 4 reconciler did not
+//!   replace — and because a failing SHAPE keeps failing on every retry,
+//!   the loss is UNBOUNDED while it persists: every edit made after the
+//!   last successful checkpoint dies with the discard. That is why the
 //!   projection must always export — the containment rules above exist to
 //!   keep every reachable doc shape projectable.
 

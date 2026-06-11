@@ -121,7 +121,10 @@ the write path, not an obstacle to it.
 ### Semantic mutation gateway
 
 The public mutation contract for agents, CLI, Git, FUSE, imports, and browser
-structural commands is unchanged in spirit from the reviewed plan:
+structural commands is unchanged in spirit from the reviewed plan
+(*superseded as built:* browsers never call the gateway — ALL browser edits,
+structural included, flow through the Yjs session and persist via
+checkpoints; the gateway's clients are agents and the whole-file adapters):
 
 - `GET  /v1/libraries/{library}/documents/{path}/blocks`
 - `POST /v1/libraries/{library}/documents/{path}/transactions`

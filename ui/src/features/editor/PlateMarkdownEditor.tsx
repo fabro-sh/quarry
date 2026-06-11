@@ -176,10 +176,12 @@ registerRustWsProviderType();
 
 const REVIEW_RESOLUTION_PUBLISH_ATTEMPTS = 20;
 const REVIEW_RESOLUTION_PUBLISH_INTERVAL_MS = 50;
-// How long after a failed/lost connection the editor mounts a fresh
-// doc + provider attempt. Reconnects never reuse a Y.Doc: the session was
-// reseeded server-side, and merging a stale doc back in would duplicate
-// content (online-only browsers have no pending local state worth keeping).
+// Interval between reachability probes while disconnected (bare WebSocket
+// attempts; see the reconnect-probe effect). The editor remounts a fresh
+// doc + provider only once a probe actually connects — never per interval.
+// Reconnects never reuse a Y.Doc: the session was reseeded server-side, and
+// merging a stale doc back in would duplicate content (online-only browsers
+// have no pending local state worth keeping).
 const RECONNECT_RETRY_MS = 2_000;
 
 // Notion-style markdown shortcuts: typing the markdown prefix at the start of a
