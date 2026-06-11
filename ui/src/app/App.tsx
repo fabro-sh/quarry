@@ -2399,20 +2399,6 @@ function LeftPane({
     });
   }
 
-  function handleLibraryKeyDown(event: ReactKeyboardEvent<HTMLSelectElement>) {
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const values = [...(active ? [] : ['']), ...libraries.map((library) => library.slug)];
-    const currentIndex = Math.max(0, values.indexOf(active?.slug ?? ''));
-    let nextIndex = currentIndex;
-    if (event.key === 'ArrowDown') nextIndex = Math.min(currentIndex + 1, values.length - 1);
-    if (event.key === 'ArrowUp') nextIndex = Math.max(currentIndex - 1, 0);
-    if (event.key === 'Home') nextIndex = 0;
-    if (event.key === 'End') nextIndex = values.length - 1;
-    const next = values[nextIndex];
-    if (next !== (active?.slug ?? '')) onLibraryChange(next);
-  }
-
   useEffect(() => {
     setActiveSearchIndex(0);
   }, [searchResults]);
@@ -2475,20 +2461,38 @@ function LeftPane({
   return (
     <aside aria-label="Document tree" className="flex h-full min-h-0 flex-col border-r border-line bg-surface">
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3">
-        <select
-          aria-label="Library switcher"
-          className="h-8 min-w-0 flex-1 rounded-md border border-line-strong bg-raised px-2.5 text-sm font-medium text-body"
-          value={active?.slug ?? ''}
-          onChange={(event) => onLibraryChange(event.target.value)}
-          onKeyDown={handleLibraryKeyDown}
-        >
-          {active ? null : <option value="">Select library…</option>}
-          {libraries.map((library) => (
-            <option key={library.id} value={library.slug}>
-              {library.slug}
-            </option>
-          ))}
-        </select>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild>
+            <button
+              aria-label="Library switcher"
+              className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-line-strong bg-raised pl-2.5 pr-2 text-sm font-medium text-body transition-colors hover:bg-well"
+              role="combobox"
+              type="button"
+            >
+              <Library className="shrink-0 text-muted" size={15} />
+              <span className="min-w-0 flex-1 truncate text-left">{active?.slug ?? 'Select library…'}</span>
+              <ChevronDown className="shrink-0 text-muted" size={14} />
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              align="start"
+              className="z-50 min-w-[var(--radix-dropdown-menu-trigger-width)] rounded-md border border-line bg-raised p-1 shadow-lg"
+              sideOffset={6}
+            >
+              {libraries.map((library) => (
+                <DropdownMenu.Item
+                  className={cn(menuItem, 'justify-between', library.slug === active?.slug && 'text-accent-ink')}
+                  key={library.id}
+                  onSelect={() => onLibraryChange(library.slug)}
+                >
+                  <span className="truncate">{library.slug}</span>
+                  {library.slug === active?.slug ? <Check className="shrink-0 text-accent-ink" size={15} /> : null}
+                </DropdownMenu.Item>
+              ))}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
       </div>
       <div className="flex h-10 shrink-0 items-center justify-between pr-2 pl-3">
         <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-faint">Documents</span>
