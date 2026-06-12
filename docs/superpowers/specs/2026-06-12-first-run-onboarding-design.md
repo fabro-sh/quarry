@@ -1,31 +1,47 @@
 # First-Run Onboarding Modal & Change Attribution
 
 **Date:** 2026-06-12
-**Status:** Approved
+**Status:** Approved (revised after rebase onto origin/master)
 
 ## Purpose
 
 When a user opens the Quarry workspace UI for the first time, show a modal that
 briefly introduces Quarry and collects their name. The name is recorded as the
-`actor` on every transaction the UI creates, so version history shows who made
-each change.
+transaction `actor` on every document mutation the UI makes, so version history
+shows who made each change.
+
+## What already exists on this base
+
+Much of the original design landed independently; this spec builds on it:
+
+- **Author identity:** `ui/src/features/review/identity.ts` stores a free-form
+  author label in localStorage under `quarry:author` (`loadAuthor` /
+  `saveAuthor` / `normalizeAuthor`), defaulting to `'user'` when unset. It is
+  used as the `by:` label on review items and as `byHint` on collab invites.
+- **Settings field:** the Settings dialog already has an **Author** text field
+  editing that key.
+- **Attribution transport:** mutation endpoints read an optional
+  `X-Quarry-Transaction-Actor` header into `TransactionMetadata.actor`
+  (`transaction_metadata_from_headers` in `crates/quarry-server/src/lib.rs`).
+  The UI client supports it via `DocumentMutationOptions.transactionActor`
+  (`mutationHeaders` in `ui/src/api/client.ts`).
+- **Display:** the version history pane already renders the transaction actor.
+
+**The gaps:** nothing in the UI ever sets `transactionActor`, so UI writes are
+unattributed; and the author is never collected — first-run users silently
+write as `'user'`.
 
 ## Decisions
 
-- **Storage:** localStorage key `quarry:user-name`, alongside existing
-  preference keys (`quarry:theme`, `quarry:active-library`). Per-browser; no
-  server-side persistence.
-- **Wiring:** a new optional `X-Quarry-Actor` request header on the REST
-  auto-commit write endpoints, passed through to the transaction record.
+- **Storage:** reuse the existing `quarry:author` localStorage key and
+  `identity.ts` helpers. No new key, no server-side persistence.
+- **First-run trigger:** the raw localStorage key being absent (not
+  `loadAuthor()`'s `'user'` fallback) means the user never chose a name —
+  show the modal.
 - **Dismissal:** the modal cannot be dismissed without entering a name. No
   close button, no click-outside close, no Escape close.
-
-## First-run detection
-
-On workspace load, if `quarry:user-name` is missing or blank, render the
-onboarding modal over the workspace. Saving a name writes the key and closes
-the modal permanently for that browser. Users who used Quarry before this
-feature will see the modal once — correct, since a name was never collected.
+- **Wiring:** plumb the author into `transactionActor` for every UI document
+  mutation via the existing `browserMutationOptions()` helper.
 
 ## The modal
 
@@ -43,75 +59,79 @@ Content:
 3. A **Get started** primary button, disabled until the trimmed input is
    non-empty. Enter submits when valid.
 
-Input handling: trim before save; whitespace-only counts as empty; input
-`maxLength` of 120 characters.
+Input handling: trim before save (via `saveAuthor`); whitespace-only counts as
+empty; input `maxLength` of 120 characters. Saving writes `quarry:author` and
+closes the modal permanently for that browser. Users from before this feature
+will see the modal once, since a name was never explicitly collected.
 
 ## Attribution wiring
 
-### Server (Rust)
+### UI
 
-The REST auto-commit write handlers in `crates/quarry-server/src/lib.rs` read
-an optional `X-Quarry-Actor` header and pass it to the storage layer:
+`browserMutationOptions()` (`ui/src/app/App.tsx`) currently returns
+`{ originId }` and is already passed to every document mutation call site
+(save, create, upload, move, delete, restore). Add the author:
 
-- `put_document` (PUT `/v1/libraries/{library}/documents/{path}`)
-- `delete_document` (DELETE same path)
-- `move_document` (POST `.../move`)
-- version restore (POST `.../versions/{version}/restore`)
+```ts
+return { originId, transactionActor: author };
+```
 
-The corresponding `quarry-storage` write methods gain an
-`actor: Option<String>` parameter, forwarded to `insert_transaction_conn`
-(which today receives a hardcoded `None` on these paths).
+The two conflict-dialog call sites that build options inline are routed
+through the same helper so no mutation path is missed.
 
-**Header encoding:** the value is percent-encoded UTF-8. Browser `fetch`
-rejects non-Latin-1 header values, so names like "José" must be encoded by the
-client; the server percent-decodes the header value before storing it. A
-missing or empty header means `actor = None`, exactly as today.
+When the author is the `'user'` default (key absent — only possible
+transiently before the modal saves), omit `transactionActor` so those writes
+stay unattributed rather than stamped `'user'`.
 
-The OpenAPI annotations document the new header parameter on these endpoints.
+### Server
 
-### UI client
+One change: `X-Quarry-Transaction-Actor` values are percent-encoded UTF-8.
+Browser `fetch` rejects non-Latin-1 header values and axum's
+`HeaderValue::to_str()` rejects non-ASCII bytes, so a name like "José" would
+otherwise fail the request. The client sends `encodeURIComponent(name)`; the
+server percent-decodes the header value in
+`transaction_metadata_from_headers`. Plain-ASCII values without `%` decode to
+themselves, so existing senders (e.g. agents passing `Codex`) are unaffected.
 
-In `ui/src/api/client.ts`, a helper reads `quarry:user-name` from localStorage
-and returns `{ 'X-Quarry-Actor': encodeURIComponent(name) }`, or `{}` when
-unset. Its result is merged into the request headers of `writeDocument` (which
-backs `putDocument` and `createDocument`), `deleteDocument`, `moveDocument`,
-and `restoreVersion`. No call-site signature changes.
+### Live sync paths (SSE, Yjs WebSocket)
 
-### Display
+No writes bypass REST, so the header covers everything:
 
-No display work needed: the version history pane already renders
-`transaction_actor` when present (`ui/src/app/App.tsx`, actor metadata row).
+- SSE (`/v1/events`) is receive-only.
+- The collab WebSocket (`/v1/collab/{document_id}`) syncs the live Yjs room,
+  but persistence still happens via REST `putDocument` from the flusher
+  client, whose calls go through `browserMutationOptions()` and therefore
+  carry the actor. In a shared session the flusher's name attributes the whole
+  room's changes; per-participant attribution is a multi-user concern and out
+  of scope.
 
 ## Editing the name later
 
-The existing Settings dialog gains a **Your name** text field that reads and
-writes the same `quarry:user-name` key, with the same trim/empty rules. An
-emptied name re-triggers the onboarding modal on next load (same detection
-rule); writes made while the name is unset are unattributed.
+Already exists: the Settings dialog **Author** field. Unchanged, except it now
+also affects attribution (same key). Clearing it removes the key
+(`saveAuthor` semantics), which re-triggers the onboarding modal on next load.
 
 ## Testing
 
 **Rust (`crates/quarry-server/tests/rest_api.rs`):**
 
-- PUT with `X-Quarry-Actor: Bryan` records `transaction_actor = "Bryan"` on
-  the resulting version.
+- PUT with `X-Quarry-Transaction-Actor: Bryan` records actor `Bryan` on the
+  resulting version (may already be covered; verify).
 - Percent-encoded header (`Jos%C3%A9`) decodes to `José` in the stored actor.
 - PUT without the header still records no actor.
 
 **UI (vitest, `ui/src/app/workspace.test.tsx` / `ui/src/api/client.test.ts`):**
 
-- Modal renders when `quarry:user-name` is absent; not when present.
+- Modal renders when `quarry:author` is absent; not when present.
 - Get started is disabled for empty/whitespace input; enabled otherwise.
 - Saving persists the trimmed name and closes the modal.
-- Document writes include the `X-Quarry-Actor` header when a name is set, and
-  omit it when not.
+- Document writes include `X-Quarry-Transaction-Actor` with the
+  percent-encoded name when set, and omit it when the key is absent.
 
 ## Out of scope
 
 - Server-side persistence of the name; multi-user identity; avatars.
-- Attributing CLI/agent/Git writes.
+- Attributing CLI/agent/Git writes (agents already self-declare via the block
+  transaction `actor` and review `by:` labels).
 - Backfilling attribution on existing versions.
-- Actor on explicit-transaction endpoints (they already accept `actor` in the
-  request body).
-- Actor on metadata patch and conflict-resolve endpoints (not called by the
-  UI's write paths today; can adopt the same header later).
+- Per-participant attribution within a shared collab session.
