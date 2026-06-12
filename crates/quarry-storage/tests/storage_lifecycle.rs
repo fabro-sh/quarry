@@ -1952,6 +1952,7 @@ async fn document_mutation_events_include_origin_and_document_identity() {
             "notes/b.md",
             DocumentSource::Rest,
             Some("browser:origin-1".to_string()),
+            None,
         )
         .await
         .unwrap();
@@ -1967,6 +1968,7 @@ async fn document_mutation_events_include_origin_and_document_identity() {
             "notes/b.md",
             DocumentSource::Rest,
             Some("browser:origin-1".to_string()),
+            None,
         )
         .await
         .unwrap();

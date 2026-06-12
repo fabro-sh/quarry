@@ -151,6 +151,7 @@ pub(crate) async fn restore_block_document_version(
     path: &str,
     version: &quarry_core::DocumentVersionContent,
     origin_id: Option<String>,
+    actor: Option<String>,
 ) -> Result<axum::response::Response, GatewayFailure> {
     let version_id = &version.version.id;
     let result = write_markdown_with(
@@ -167,7 +168,7 @@ pub(crate) async fn restore_block_document_version(
         },
         origin_id,
         quarry_storage::TransactionMetadata {
-            actor: None,
+            actor,
             message: Some(format!("Restore version {version_id}")),
             provenance: serde_json::json!({
                 "mode": "auto_commit",

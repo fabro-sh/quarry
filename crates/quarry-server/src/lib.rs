@@ -2438,6 +2438,7 @@ async fn post_document_action(
     Json(request): Json<JsonValue>,
 ) -> Result<Response, ApiError> {
     let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
+    let actor = transaction_metadata_from_headers(&headers)?.actor;
     if let Some((path, version)) = document_version_restore_path(&path) {
         let target = state
             .store
@@ -2456,13 +2457,20 @@ async fn post_document_action(
                     path,
                     &target,
                     origin_id.clone(),
+                    actor.clone(),
                 )
                 .await,
             );
         }
         let outcome = state
             .store
-            .restore_document_version_with_origin(&library, path, version, origin_id.clone())
+            .restore_document_version_with_origin(
+                &library,
+                path,
+                version,
+                origin_id.clone(),
+                actor.clone(),
+            )
             .await?;
         return json_with_etag(StatusCode::OK, &outcome, &outcome.version.id);
     }
@@ -2480,6 +2488,7 @@ async fn post_document_action(
                 to_path,
                 DocumentSource::Rest,
                 origin_id.clone(),
+                actor.clone(),
             )
             .await?;
         return json_response(StatusCode::OK, &transaction);
@@ -2954,10 +2963,11 @@ async fn delete_document(
     Path((library, path)): Path<(String, String)>,
 ) -> Result<Json<TransactionRecord>, ApiError> {
     let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
+    let actor = transaction_metadata_from_headers(&headers)?.actor;
     Ok(Json(
         state
             .store
-            .delete_document_with_origin(&library, &path, DocumentSource::Rest, origin_id)
+            .delete_document_with_origin(&library, &path, DocumentSource::Rest, origin_id, actor)
             .await?,
     ))
 }

@@ -2011,6 +2011,7 @@ impl QuarryStore {
         path: &str,
         version_id: &str,
         origin_id: Option<String>,
+        actor: Option<String>,
     ) -> Result<WriteOutcome> {
         let path = normalize_path(path)?;
         let conn = self.conn()?;
@@ -2034,7 +2035,7 @@ impl QuarryStore {
             WritePrecondition::None,
             origin_id,
             TransactionMetadata {
-                actor: None,
+                actor,
                 message: Some(format!("Restore version {version_id}")),
                 provenance: serde_json::json!({
                     "mode": "auto_commit",
@@ -2051,7 +2052,7 @@ impl QuarryStore {
         path: &str,
         source: DocumentSource,
     ) -> Result<TransactionRecord> {
-        self.delete_document_with_origin(library, path, source, None)
+        self.delete_document_with_origin(library, path, source, None, None)
             .await
     }
 
@@ -2061,6 +2062,7 @@ impl QuarryStore {
         path: &str,
         source: DocumentSource,
         origin_id: Option<String>,
+        actor: Option<String>,
     ) -> Result<TransactionRecord> {
         let path = normalize_path(path)?;
         let source_for_event = source.clone();
@@ -2078,7 +2080,7 @@ impl QuarryStore {
                 &conn,
                 &library.id,
                 source,
-                None,
+                actor,
                 None,
                 serde_json::json!({ "mode": "auto_commit" }),
             )
@@ -2134,7 +2136,7 @@ impl QuarryStore {
         to_path: &str,
         source: DocumentSource,
     ) -> Result<TransactionRecord> {
-        self.move_document_with_origin(library, from_path, to_path, source, None)
+        self.move_document_with_origin(library, from_path, to_path, source, None, None)
             .await
     }
 
@@ -2145,6 +2147,7 @@ impl QuarryStore {
         to_path: &str,
         source: DocumentSource,
         origin_id: Option<String>,
+        actor: Option<String>,
     ) -> Result<TransactionRecord> {
         let from_path = normalize_path(from_path)?;
         let to_path = normalize_path(to_path)?;
@@ -2170,7 +2173,7 @@ impl QuarryStore {
                 &conn,
                 &library.id,
                 source,
-                None,
+                actor,
                 None,
                 serde_json::json!({ "mode": "auto_commit" }),
             )

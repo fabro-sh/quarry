@@ -2470,6 +2470,84 @@ async fn put_document_decodes_percent_encoded_transaction_actor_header() {
     );
 }
 
+#[tokio::test]
+async fn delete_move_and_restore_record_transaction_actor_header() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    store.create_library("actorops").await.unwrap();
+    let app = router(store);
+
+    let v1 = put_markdown(&app, "actorops", "keep.md", "# Doc one\n", None).await;
+    let _v2 = put_markdown(&app, "actorops", "keep.md", "# Doc two\n", None).await;
+    put_markdown(&app, "actorops", "doomed.md", "# Doomed\n", None).await;
+
+    // Move records the actor on its transaction.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/actorops/documents/keep.md/move")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-quarry-transaction-actor", "Avery")
+                .body(Body::from(r#"{"to_path":"kept.md"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["actor"], "Avery");
+
+    // Delete records the actor on its transaction.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri("/v1/libraries/actorops/documents/doomed.md")
+                .header("x-quarry-transaction-actor", "Avery")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["actor"], "Avery");
+
+    // Restore (markdown/BlockDocument path) records the actor on the
+    // restored version.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!(
+                    "/v1/libraries/actorops/documents/kept.md/versions/{v1}/restore"
+                ))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-quarry-transaction-actor", "Avery")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let restored: Value = response_json(response).await;
+    let restored_version = restored["version"]["id"].as_str().unwrap();
+    assert_eq!(
+        version_actor(&app, "actorops", "kept.md", restored_version).await,
+        "Avery"
+    );
+}
+
 /// PUTs markdown into `library`, optionally with an
 /// `x-quarry-transaction-actor` header, returning the written version id.
 async fn put_markdown(
