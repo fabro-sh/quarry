@@ -555,7 +555,8 @@ function mutationHeaders(
   const next = { ...headers };
   if (options.originId) next['X-Quarry-Origin-Id'] = options.originId;
   if (options.transactionActor) {
-    // fetch rejects non-Latin-1 header values; the server percent-decodes.
+    // fetch rejects non-Latin-1 header values; the server percent-decodes
+    // only this header — message and provenance must stay unencoded (Latin-1).
     next['X-Quarry-Transaction-Actor'] = encodeURIComponent(options.transactionActor);
   }
   if (options.transactionMessage) next['X-Quarry-Transaction-Message'] = options.transactionMessage;
