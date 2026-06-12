@@ -139,7 +139,7 @@ import {
 import { AgentAvatar } from '../features/agents/AgentAvatar';
 import { agentKind } from '../features/agents/agents';
 import { imageAssetPath, resolveImageSrc } from '../features/editor/image';
-import { DEFAULT_AUTHOR, loadAuthor, saveAuthor } from '../features/review/identity';
+import { loadAuthor, saveAuthor, storedAuthor } from '../features/review/identity';
 import { CommentsPanel } from '../features/review/ui/CommentsPanel';
 import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../features/tree/tree-model';
 import { cn } from '../lib/utils';
@@ -349,7 +349,7 @@ function Workspace() {
   function browserMutationOptions() {
     return {
       originId: collabSessionIdRef.current,
-      transactionActor: author === DEFAULT_AUTHOR ? undefined : author,
+      transactionActor: storedAuthor(),
     };
   }
 

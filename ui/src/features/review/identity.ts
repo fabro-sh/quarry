@@ -31,6 +31,13 @@ export function hasStoredAuthor(storage?: Storage): boolean {
   return Boolean(target?.getItem(AUTHOR_STORAGE_KEY)?.trim());
 }
 
+// The explicitly chosen author, or undefined when the user never picked
+// one — mutation attribution omits the default rather than stamping 'user'.
+export function storedAuthor(storage?: Storage): string | undefined {
+  const author = loadAuthor(storage);
+  return author === DEFAULT_AUTHOR ? undefined : author;
+}
+
 export function currentAuthor(): string {
   if (typeof window === 'undefined') return DEFAULT_AUTHOR;
   return loadAuthor();

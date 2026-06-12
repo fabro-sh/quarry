@@ -6,6 +6,7 @@ import {
   loadAuthor,
   normalizeAuthor,
   saveAuthor,
+  storedAuthor,
 } from './identity';
 
 describe('currentAuthor', () => {
@@ -35,6 +36,14 @@ describe('currentAuthor', () => {
     expect(saveAuthor('  Avery  ')).toBe('Avery');
     expect(loadAuthor()).toBe('Avery');
     expect(currentAuthor()).toBe('Avery');
+  });
+
+  it('exposes the explicitly chosen author and omits the default', () => {
+    expect(storedAuthor()).toBeUndefined();
+    saveAuthor('Avery');
+    expect(storedAuthor()).toBe('Avery');
+    saveAuthor('user');
+    expect(storedAuthor()).toBeUndefined();
   });
 
   it('removes the stored author when reset to the default', () => {

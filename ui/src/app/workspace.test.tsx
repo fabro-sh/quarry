@@ -36,6 +36,7 @@ describe('Quarry Browser workspace', () => {
       }
       if (url === '/v1/libraries/notes/documents/daily.md' && init?.method === 'PUT') {
         expect(init.headers).toMatchObject({ 'If-Match': '"v1"' });
+        expect(init.headers).not.toHaveProperty('X-Quarry-Transaction-Actor');
         return json({ version: { id: 'v2' } }, { ETag: '"v2"' });
       }
       if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks') || url.endsWith('/versions')) {
