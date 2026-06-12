@@ -83,27 +83,49 @@ When the author is the `'user'` default (key absent — only possible
 transiently before the modal saves), omit `transactionActor` so those writes
 stay unattributed rather than stamped `'user'`.
 
-### Server
+### Server: header decoding
 
-One change: `X-Quarry-Transaction-Actor` values are percent-encoded UTF-8.
-Browser `fetch` rejects non-Latin-1 header values and axum's
-`HeaderValue::to_str()` rejects non-ASCII bytes, so a name like "José" would
-otherwise fail the request. The client sends `encodeURIComponent(name)`; the
-server percent-decodes the header value in
-`transaction_metadata_from_headers`. Plain-ASCII values without `%` decode to
-themselves, so existing senders (e.g. agents passing `Codex`) are unaffected.
+`X-Quarry-Transaction-Actor` values are percent-encoded UTF-8. Browser `fetch`
+rejects non-Latin-1 header values and axum's `HeaderValue::to_str()` rejects
+non-ASCII bytes, so a name like "José" would otherwise fail the request. The
+client sends `encodeURIComponent(name)`; the server percent-decodes the header
+value in `transaction_metadata_from_headers`. Plain-ASCII values without `%`
+decode to themselves, so existing senders (e.g. agents passing `Codex`) are
+unaffected.
 
-### Live sync paths (SSE, Yjs WebSocket)
+### Server: delete / move / restore
 
-No writes bypass REST, so the header covers everything:
+Only `put_document` honors the transaction metadata headers today. The
+`delete_document`, move, and restore handlers pass no actor; the corresponding
+storage methods (`delete_document_with_origin`, `move_document_with_origin`,
+`restore_document_version_with_origin` in `crates/quarry-storage/src/lib.rs`)
+hardcode `None` into their transaction records. Each gains an
+`actor: Option<String>` parameter threaded into its `insert_transaction_conn`
+/ `TransactionMetadata`, and the REST handlers pass the decoded header value.
 
-- SSE (`/v1/events`) is receive-only.
-- The collab WebSocket (`/v1/collab/{document_id}`) syncs the live Yjs room,
-  but persistence still happens via REST `putDocument` from the flusher
-  client, whose calls go through `browserMutationOptions()` and therefore
-  carry the actor. In a shared session the flusher's name attributes the whole
-  room's changes; per-participant attribution is a multi-user concern and out
-  of scope.
+### Server: live session checkpoints (the main edit path)
+
+Typing in the editor does not go through REST at all: the server owns the live
+Yjs session and periodically checkpoints it via `commit_block_mutation`,
+hardcoding `transaction_actor: Some("browser")`
+(`crates/quarry-server/src/session.rs`). This is where most human edits are
+attributed, so it must use the real name.
+
+The browser already publishes the author into Yjs awareness: the Plate editor
+configures cursor data as `{ color, name: author }`, which slate-yjs stores in
+each client's awareness state under the `data` field. At checkpoint time the
+server derives the actor from awareness instead:
+
+- Collect `data.name` from every connected client's awareness state; trim,
+  drop empties, dedupe, sort, join with ", " (multiple participants produce
+  "Avery, Blake").
+- Cache the last non-empty result on the session so the final checkpoint
+  (which can run after the socket closes and awareness empties) still
+  attributes correctly.
+- Fall back to `"browser"` when no name was ever seen — preserving today's
+  behavior for nameless sessions.
+
+SSE (`/v1/events`) is receive-only; nothing to do there.
 
 ## Editing the name later
 
@@ -115,10 +137,15 @@ also affects attribution (same key). Clearing it removes the key
 
 **Rust (`crates/quarry-server/tests/rest_api.rs`):**
 
-- PUT with `X-Quarry-Transaction-Actor: Bryan` records actor `Bryan` on the
-  resulting version (may already be covered; verify).
-- Percent-encoded header (`Jos%C3%A9`) decodes to `José` in the stored actor.
-- PUT without the header still records no actor.
+- PUT with `X-Quarry-Transaction-Actor: Avery` records actor `Avery` on the
+  resulting version; percent-encoded `Jos%C3%A9` decodes to `José`; no header
+  still records no actor.
+- DELETE / move / restore with the header record the actor on their
+  transaction records.
+- A live session whose client publishes awareness cursor data
+  `{ data: { name: "Avery" } }` checkpoints with `transaction_actor: "Avery"`;
+  sessions without awareness names keep checkpointing as `"browser"` (existing
+  test stays green).
 
 **UI (vitest, `ui/src/app/workspace.test.tsx` / `ui/src/api/client.test.ts`):**
 
