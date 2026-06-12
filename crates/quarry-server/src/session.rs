@@ -133,6 +133,24 @@ pub const MSG_QUARRY_CHECKPOINT: u8 = 113;
 
 type AwarenessRef = Arc<RwLock<Awareness>>;
 
+/// The attribution label for a checkpoint: every connected client's
+/// slate-yjs cursor-data name (`{ data: { name } }`), deduped and joined.
+/// Multiple participants produce "Avery, Blake".
+fn awareness_actor(awareness: &Awareness) -> Option<String> {
+    let mut names: Vec<String> = awareness
+        .iter()
+        .filter_map(|(_, state)| {
+            let raw = state.data?;
+            let json: serde_json::Value = serde_json::from_str(&raw).ok()?;
+            let name = json.get("data")?.get("name")?.as_str()?.trim().to_owned();
+            (!name.is_empty()).then_some(name)
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    (!names.is_empty()).then(|| names.join(", "))
+}
+
 // ---------------------------------------------------------------------------
 // Hub and per-document entries
 // ---------------------------------------------------------------------------
@@ -332,6 +350,10 @@ pub(crate) struct LiveSession {
     committed_snapshot: StdMutex<Vec<u8>>,
     /// The full review item set as of the last seed/checkpoint/transaction.
     items: StdMutex<HashMap<String, BlockReviewItem>>,
+    /// Last non-empty awareness author label, kept so the final checkpoint
+    /// (which can run after the socket closed and awareness emptied) still
+    /// attributes correctly.
+    live_actor: StdMutex<Option<String>>,
     subscribers: AtomicUsize,
 }
 
@@ -439,6 +461,7 @@ impl LiveSession {
             head_version_id: StdMutex::new(seed.head_version_id.clone()),
             committed_snapshot: StdMutex::new(committed_snapshot),
             items: StdMutex::new(items),
+            live_actor: StdMutex::new(None),
             subscribers: AtomicUsize::new(0),
         });
 
@@ -550,6 +573,15 @@ impl LiveSession {
         let now = now_timestamp();
         let items =
             reconcile_review_items(&self.document_id, &prior_items, &projection, &meta, &now);
+        if let Some(actor) = awareness_actor(awareness) {
+            *self.live_actor.lock().unwrap() = Some(actor);
+        }
+        let transaction_actor = self
+            .live_actor
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| "browser".to_string());
 
         for attempt in 0..CHECKPOINT_RETRY_LIMIT {
             let Some(head) = store.session_seed_state(&self.document_id).await? else {
@@ -578,7 +610,7 @@ impl LiveSession {
                 client_tx_id: format!("session-checkpoint-{}", Uuid::new_v4()),
                 actor_kind: "browser_session".to_string(),
                 actor_id: None,
-                transaction_actor: Some("browser".to_string()),
+                transaction_actor: Some(transaction_actor.clone()),
                 transaction_message: Some("Live session edits".to_string()),
                 transaction_provenance: Some(json!({
                     "history": {

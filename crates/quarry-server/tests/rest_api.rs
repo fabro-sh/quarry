@@ -4921,6 +4921,27 @@ async fn send_local_edit_unechoed(
         .unwrap();
 }
 
+/// Publishes a slate-yjs-style awareness state carrying the author name,
+/// exactly as the Plate editor's cursor data does.
+async fn send_awareness_name(socket: &mut WsSocket, doc: &Doc, name: &str) {
+    use yrs::sync::awareness::{AwarenessUpdate, AwarenessUpdateEntry};
+    let update = AwarenessUpdate {
+        clients: std::collections::HashMap::from([(
+            doc.client_id(),
+            AwarenessUpdateEntry {
+                clock: 1,
+                json: format!(r##"{{"data":{{"name":"{name}","color":"#8be9fd"}}}}"##).into(),
+            },
+        )]),
+    };
+    socket
+        .send(TungsteniteMessage::Binary(
+            YMessage::Awareness(update).encode_v1().into(),
+        ))
+        .await
+        .unwrap();
+}
+
 async fn document_id_of(store: &QuarryStore, path: &str) -> String {
     store.head_document("blocks", path).await.unwrap().id
 }
@@ -5356,6 +5377,30 @@ async fn raw_versions(app: &axum::Router, path: &str) -> Value {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     response_json(response).await
+}
+
+#[tokio::test]
+async fn session_checkpoint_attributes_awareness_author() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "Attribution target.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    send_awareness_name(&mut socket, &doc, "Avery").await;
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.insert(txn, 19, " Signed.");
+    })
+    .await;
+
+    let markdown = wait_for_markdown_containing(&app, "live.md", "Signed.").await;
+    assert_eq!(markdown, "Attribution target. Signed.\n");
+    let versions = raw_versions(&app, "live.md").await;
+    assert_eq!(
+        versions.as_array().unwrap()[0]["transaction_actor"],
+        "Avery"
+    );
+    server.abort();
 }
 
 #[tokio::test]
