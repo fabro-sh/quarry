@@ -24,7 +24,7 @@ export function saveAuthor(value: string, storage?: Storage): string {
   return author;
 }
 
-// True when the user explicitly chose a name (the raw key exists).
+// True when the user explicitly chose a name (the raw key holds a non-blank value).
 // `loadAuthor()` cannot distinguish "never asked" from "chose the default".
 export function hasStoredAuthor(storage?: Storage): boolean {
   const target = storage ?? (typeof window === 'undefined' ? undefined : window.localStorage);
