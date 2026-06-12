@@ -139,7 +139,13 @@ import {
 import { AgentAvatar } from '../features/agents/AgentAvatar';
 import { agentKind } from '../features/agents/agents';
 import { imageAssetPath, resolveImageSrc } from '../features/editor/image';
-import { hasStoredAuthor, loadAuthor, saveAuthor, storedAuthor } from '../features/review/identity';
+import {
+  DEFAULT_AUTHOR,
+  hasStoredAuthor,
+  loadAuthor,
+  saveAuthor,
+  storedAuthor,
+} from '../features/review/identity';
 import { CommentsPanel } from '../features/review/ui/CommentsPanel';
 import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../features/tree/tree-model';
 import { cn } from '../lib/utils';
@@ -1924,6 +1930,9 @@ function OnboardingDialog({
   const dialogRef = useDialogFocusTrap(open, () => {});
   const [draftName, setDraftName] = useState('');
   const name = draftName.trim();
+  // Reserved: saveAuthor treats the default author as "no stored name", which
+  // would bring this modal back on every load.
+  const submittable = Boolean(name) && name !== DEFAULT_AUTHOR;
 
   if (!open) return null;
 
@@ -1947,23 +1956,23 @@ function OnboardingDialog({
             <label className="grid gap-1">
               <span className="text-muted">Your name</span>
               <input
-                autoFocus
+                aria-describedby="onboarding-name-help"
                 className="h-9 rounded-md border border-line bg-raised px-3 text-sm text-body outline-none focus:border-accent-line focus:ring-2 focus:ring-accent-ring"
                 maxLength={120}
                 onChange={(event) => setDraftName(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter' && name) onSubmit(name);
+                  if (event.key === 'Enter' && submittable) onSubmit(name);
                 }}
                 value={draftName}
               />
             </label>
-            <span className="text-xs text-muted">
+            <span className="text-xs text-muted" id="onboarding-name-help">
               Quarry records your name on every change you make, so history shows who did what.
             </span>
           </div>
           <button
             className={primaryButton}
-            disabled={!name}
+            disabled={!submittable}
             onClick={() => onSubmit(name)}
             type="button"
           >

@@ -1913,6 +1913,11 @@ describe('Quarry Browser workspace', () => {
     await userEvent.type(within(dialog).getByLabelText('Your name'), '   ');
     expect(getStarted).toBeDisabled();
 
+    // The reserved default author name does not count either.
+    await userEvent.clear(within(dialog).getByLabelText('Your name'));
+    await userEvent.type(within(dialog).getByLabelText('Your name'), 'user');
+    expect(getStarted).toBeDisabled();
+
     await userEvent.clear(within(dialog).getByLabelText('Your name'));
     await userEvent.type(within(dialog).getByLabelText('Your name'), '  Avery  ');
     expect(getStarted).toBeEnabled();
