@@ -2548,6 +2548,71 @@ async fn delete_move_and_restore_record_transaction_actor_header() {
     );
 }
 
+#[tokio::test]
+async fn raw_document_restore_records_transaction_actor_header() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    store.create_library("actorraw").await.unwrap();
+    let app = router(store);
+
+    // A plain-text document routes as a RawDocument (not `.md`, not a
+    // markdown content type), so its restore takes the legacy byte path
+    // (`restore_document_version_with_origin`) rather than the markdown
+    // gateway. Restoring the current head short-circuits, so write two
+    // versions and restore the first.
+    let v1 = put_plain_text(&app, "actorraw", "notes.txt", "raw one\n").await;
+    let _v2 = put_plain_text(&app, "actorraw", "notes.txt", "raw two\n").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!(
+                    "/v1/libraries/actorraw/documents/notes.txt/versions/{v1}/restore"
+                ))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-quarry-transaction-actor", "Avery")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let restored: Value = response_json(response).await;
+    let restored_version = restored["version"]["id"].as_str().unwrap();
+    assert_eq!(
+        version_actor(&app, "actorraw", "notes.txt", restored_version).await,
+        "Avery"
+    );
+}
+
+/// PUTs plain text (a RawDocument) into `library`, returning the written
+/// version id.
+async fn put_plain_text(app: &axum::Router, library: &str, path: &str, body: &str) -> String {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/libraries/{library}/documents/{path}"))
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let outcome: Value = response_json(response).await;
+    outcome["version"]["id"].as_str().unwrap().to_string()
+}
+
 /// PUTs markdown into `library`, optionally with an
 /// `x-quarry-transaction-actor` header, returning the written version id.
 async fn put_markdown(
