@@ -27,6 +27,15 @@ describe('currentAuthor', () => {
     expect(hasStoredAuthor()).toBe(false);
   });
 
+  it('treats an externally seeded literal "user" as not stored', () => {
+    // Only producible outside the app (saveAuthor removes the key for the
+    // default). hasStoredAuthor must agree with storedAuthor: never asked,
+    // never attributed.
+    localStorage.setItem('quarry:author', 'user');
+    expect(hasStoredAuthor()).toBe(false);
+    expect(storedAuthor()).toBeUndefined();
+  });
+
   it('normalizes blank names to the default author', () => {
     expect(normalizeAuthor('  ')).toBe('user');
     expect(normalizeAuthor(null)).toBe('user');

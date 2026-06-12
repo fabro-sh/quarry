@@ -141,7 +141,7 @@ import { TableKit } from './table-element';
 import { wikiLinkMdRules } from './wiki-link';
 import { WikiLinkPlugin, WikiLinkProvider, type WikiLinkApi } from './wiki-link-element';
 import { startCommentDraft } from '../review/comment-draft';
-import { currentAuthor } from '../review/identity';
+import { currentAuthor, storedAuthor } from '../review/identity';
 import { markdownToReview, reviewToMarkdown } from '../review/rfm-codec';
 import {
   removeSuggestion,
@@ -394,6 +394,10 @@ export function PlateMarkdownEditor({
     [onSaveStateChange]
   );
   const collabLive = collabState !== 'reconnecting';
+  // Awareness cursor label. Never the 'user' sentinel — the server drops blank
+  // names (keeping its "browser" checkpoint fallback), mirroring how REST
+  // mutations omit the default author rather than stamping 'user'.
+  const collabCursorName = storedAuthor() ?? '';
 
   // The review codec serializes both the value (inline CriticMarkup) and the
   // store's metadata (YAML endmatter). `syncSuggestionsFromValue` mirrors any
@@ -433,7 +437,7 @@ export function PlateMarkdownEditor({
           cursors: {
             data: {
               color: collabColor(collab.sessionId),
-              name: author,
+              name: collabCursorName,
             },
           },
           providers: [
@@ -449,7 +453,7 @@ export function PlateMarkdownEditor({
         },
       }),
     ] as const;
-  }, [author, collabDocumentId, collabEnabled, collabSessionId, collabToken]);
+  }, [collabCursorName, collabDocumentId, collabEnabled, collabSessionId, collabToken]);
   const editor = usePlateEditor(
     {
       plugins: editorPlugins as never,

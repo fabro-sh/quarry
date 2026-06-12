@@ -139,7 +139,8 @@ also affects attribution (same key). Clearing it removes the key
 
 - PUT with `X-Quarry-Transaction-Actor: Avery` records actor `Avery` on the
   resulting version; percent-encoded `Jos%C3%A9` decodes to `José`; no header
-  still records no actor.
+  keeps the pre-existing default (`null` on raw-document paths, the gateway's
+  `"rest"` label on markdown writes).
 - DELETE / move / restore with the header record the actor on their
   transaction records.
 - A live session whose client publishes awareness cursor data

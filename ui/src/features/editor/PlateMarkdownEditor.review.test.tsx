@@ -161,6 +161,20 @@ describe('PlateMarkdownEditor collaboration lifecycle', () => {
     vi.useRealTimers();
   });
 
+  it('publishes a blank awareness cursor name when no author is stored', () => {
+    // The default 'user' sentinel is UI-only and must never reach the server:
+    // blank awareness names are dropped server-side, preserving the "browser"
+    // checkpoint fallback. (Review-item `by:` labels keep the 'user' default.)
+    localStorage.clear();
+    expect(cursorAwarenessName()).toBe('');
+  });
+
+  it('publishes the explicitly stored author as the awareness cursor name', () => {
+    localStorage.setItem('quarry:author', 'Avery');
+    expect(cursorAwarenessName()).toBe('Avery');
+    localStorage.clear();
+  });
+
   it('skips transient blank fallback snapshots while a collab value hydrates', () => {
     expect(shouldSkipUnhydratedCollabPublish('\n', '# Guide\n')).toBe(true);
     expect(shouldSkipUnhydratedCollabPublish('# Guide\n', '# Guide\n')).toBe(false);
@@ -170,6 +184,29 @@ describe('PlateMarkdownEditor collaboration lifecycle', () => {
 
 function yjsChildren(doc: Y.Doc) {
   return yTextToSlateElement(doc.get('content', Y.XmlText)).children;
+}
+
+// Renders a collab editor and returns the cursor name it hands to
+// YjsPlugin.configure — the awareness label the server attributes live-session
+// checkpoints to. The spy only observes the real call; nothing is stubbed.
+function cursorAwarenessName(): unknown {
+  vi.useFakeTimers();
+  const configure = vi.spyOn(YjsPlugin, 'configure');
+  const { unmount } = render(
+    <PlateMarkdownEditor
+      collab={{ documentId: 'doc-cursor', sessionId: 'browser:cursor', token: 'token-1' }}
+      content="# Guide"
+      onChange={vi.fn()}
+    />
+  );
+  const config = configure.mock.calls.at(0)?.[0];
+  unmount();
+  configure.mockRestore();
+  vi.useRealTimers();
+  if (!config || typeof config === 'function') {
+    throw new Error('YjsPlugin.configure was not called with a config object');
+  }
+  return config.options?.cursors?.data?.name;
 }
 
 // The floating toolbar only renders on selection and `usePluginOption` needs the
