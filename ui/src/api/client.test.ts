@@ -114,6 +114,23 @@ describe('Quarry API client', () => {
     );
   });
 
+  it('omits the transaction actor header when no actor is given', async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({ version: { id: 'v2' } }), {
+        headers: { ETag: '"v2"', 'content-type': 'application/json' },
+      })
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await putDocument('notes', 'a.md', 'next', '"v1"', 'text/markdown', {
+      originId: 'browser:session-1',
+    });
+
+    const init = fetch.mock.calls[0]?.[1];
+    expect(init?.headers).toHaveProperty('X-Quarry-Origin-Id', 'browser:session-1');
+    expect(init?.headers).not.toHaveProperty('X-Quarry-Transaction-Actor');
+  });
+
   it('stamps existing document saves with transaction metadata', async () => {
     const fetch = vi.fn(async () =>
       new Response(JSON.stringify({ version: { id: 'v2' } }), {
