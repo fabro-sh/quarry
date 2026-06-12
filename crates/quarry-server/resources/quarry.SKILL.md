@@ -95,6 +95,11 @@ curl -sS -X POST "$DOC/presence" \
 
 Statuses: `reading`, `thinking`, `acting`, `waiting`, `completed`, `error`.
 
+Presence expires after 60 seconds. Holding the document event stream open with
+your `X-Agent-Id` refreshes it automatically; otherwise re-POST `/presence` at
+least once per minute while active. Disconnecting the stream removes your
+presence.
+
 ## Blocks And Stable Ids
 
 ```bash
@@ -245,7 +250,7 @@ Events are activity signals, not document content. Re-read `/blocks` after an
 event before replying, commenting, suggesting, or editing.
 
 ```bash
-curl -N "$DOC/events/stream"
+curl -N -H "X-Agent-Id: $AGENT_ID" "$DOC/events/stream"
 curl -sS "$ORIGIN/v1/libraries/$LIBRARY_ENCODED/events/pending?after=0"
 ```
 

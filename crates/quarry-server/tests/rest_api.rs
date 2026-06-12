@@ -1130,6 +1130,135 @@ async fn agent_presence_records_status_by_document() {
     assert_eq!(presence[0]["path"], "live.md");
 }
 
+async fn presence_test_app(library: &str) -> (tempfile::TempDir, axum::Router) {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let library = store.create_library(library).await.unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "live.md",
+            b"hello".to_vec(),
+            serde_json::json!({"content_type":"text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    (root, router(store))
+}
+
+async fn post_presence(app: &axum::Router, library: &str, agent_id: &str, status: &str) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!(
+                    "/v1/libraries/{library}/documents/live.md/presence"
+                ))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("X-Agent-Id", agent_id)
+                .body(Body::from(
+                    serde_json::json!({"status": status}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+async fn list_presence(app: &axum::Router, library: &str) -> Vec<Value> {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v1/libraries/{library}/documents/live.md/presence"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    body["presence"].as_array().unwrap().clone()
+}
+
+#[tokio::test(start_paused = true)]
+async fn agent_presence_expires_after_ttl() {
+    let (_root, app) = presence_test_app("presence-ttl").await;
+
+    post_presence(&app, "presence-ttl", "agent-a", "thinking").await;
+    assert_eq!(list_presence(&app, "presence-ttl").await.len(), 1);
+
+    tokio::time::advance(Duration::from_secs(61)).await;
+    assert_eq!(list_presence(&app, "presence-ttl").await.len(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn agent_presence_repost_resets_ttl() {
+    let (_root, app) = presence_test_app("presence-refresh").await;
+
+    post_presence(&app, "presence-refresh", "agent-a", "thinking").await;
+    tokio::time::advance(Duration::from_secs(40)).await;
+    post_presence(&app, "presence-refresh", "agent-a", "acting").await;
+    tokio::time::advance(Duration::from_secs(40)).await;
+
+    let presence = list_presence(&app, "presence-refresh").await;
+    assert_eq!(presence.len(), 1);
+    assert_eq!(presence[0]["status"], "acting");
+}
+
+#[tokio::test(start_paused = true)]
+async fn event_stream_with_agent_id_keeps_presence_until_disconnect() {
+    let (_root, app) = presence_test_app("presence-stream").await;
+
+    let stream = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/presence-stream/documents/live.md/events/stream")
+                .header("X-Agent-Id", "agent-s")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stream.status(), StatusCode::OK);
+
+    let presence = list_presence(&app, "presence-stream").await;
+    assert_eq!(presence.len(), 1);
+    assert_eq!(presence[0]["agentId"], "agent-s");
+    assert_eq!(presence[0]["status"], "waiting");
+
+    // The held stream heartbeats presence past the TTL. The paused-clock
+    // current-thread runtime only polls the heartbeat task at explicit yield
+    // points, so advance in sub-TTL steps with yields in between.
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(40)).await;
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(40)).await;
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(40)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(list_presence(&app, "presence-stream").await.len(), 1);
+
+    drop(stream);
+    assert_eq!(list_presence(&app, "presence-stream").await.len(), 0);
+}
+
 #[tokio::test]
 async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
     let root = tempfile::tempdir().unwrap();

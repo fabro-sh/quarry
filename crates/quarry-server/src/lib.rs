@@ -131,13 +131,34 @@ impl AgentEventJournal {
     }
 }
 
+/// Presence entries expire unless refreshed: agents either re-POST `/presence`
+/// within this window or hold the document event stream open (which touches
+/// the entry every [`AGENT_PRESENCE_STREAM_HEARTBEAT`]).
+const AGENT_PRESENCE_TTL: Duration = Duration::from_secs(60);
+const AGENT_PRESENCE_STREAM_HEARTBEAT: Duration = Duration::from_secs(15);
+
+struct AgentPresenceSlot {
+    entry: AgentPresenceEntry,
+    touched: tokio::time::Instant,
+}
+
 #[derive(Clone, Default)]
 struct AgentPresenceRegistry {
-    entries: Arc<Mutex<HashMap<String, AgentPresenceEntry>>>,
+    entries: Arc<std::sync::Mutex<HashMap<String, AgentPresenceSlot>>>,
+}
+
+fn agent_presence_key(library: &str, path: &str, agent_id: &str) -> String {
+    format!("{library}\0{path}\0{agent_id}")
 }
 
 impl AgentPresenceRegistry {
-    async fn update(
+    fn live_entries(&self) -> std::sync::MutexGuard<'_, HashMap<String, AgentPresenceSlot>> {
+        let mut entries = self.entries.lock().expect("presence lock poisoned");
+        entries.retain(|_, slot| slot.touched.elapsed() <= AGENT_PRESENCE_TTL);
+        entries
+    }
+
+    fn update(
         &self,
         library: &str,
         path: &str,
@@ -155,13 +176,19 @@ impl AgentPresenceRegistry {
             by,
             updated_at: now_timestamp(),
         };
-        let key = format!("{}\0{}\0{}", entry.library, entry.path, entry.agent_id);
-        let mut entries = self.entries.lock().await;
-        entries.insert(key, entry.clone());
+        let key = agent_presence_key(library, path, &entry.agent_id);
+        let mut entries = self.live_entries();
+        entries.insert(
+            key,
+            AgentPresenceSlot {
+                entry: entry.clone(),
+                touched: tokio::time::Instant::now(),
+            },
+        );
         let presence = entries
             .values()
-            .filter(|other| other.library == library && other.path == path)
-            .cloned()
+            .filter(|slot| slot.entry.library == library && slot.entry.path == path)
+            .map(|slot| slot.entry.clone())
             .collect();
         AgentPresenceResponse {
             current: entry,
@@ -169,14 +196,90 @@ impl AgentPresenceRegistry {
         }
     }
 
-    async fn list(&self, library: &str, path: &str) -> AgentPresenceListResponse {
-        let entries = self.entries.lock().await;
-        let presence = entries
+    /// Refreshes an entry's TTL without changing its declared status, creating
+    /// a `waiting` entry for agents that connect before posting one.
+    fn touch(&self, library: &str, path: &str, document_id: &str, agent_id: &str) {
+        let key = agent_presence_key(library, path, agent_id);
+        let mut entries = self.live_entries();
+        let slot = entries.entry(key).or_insert_with(|| AgentPresenceSlot {
+            entry: AgentPresenceEntry {
+                library: library.to_string(),
+                path: path.to_string(),
+                document_id: document_id.to_string(),
+                agent_id: agent_id.to_string(),
+                status: "waiting".to_string(),
+                by: None,
+                updated_at: now_timestamp(),
+            },
+            touched: tokio::time::Instant::now(),
+        });
+        slot.entry.updated_at = now_timestamp();
+        slot.touched = tokio::time::Instant::now();
+    }
+
+    fn remove(&self, library: &str, path: &str, agent_id: &str) {
+        let key = agent_presence_key(library, path, agent_id);
+        let mut entries = self.entries.lock().expect("presence lock poisoned");
+        entries.remove(&key);
+    }
+
+    fn list(&self, library: &str, path: &str) -> AgentPresenceListResponse {
+        let presence = self
+            .live_entries()
             .values()
-            .filter(|entry| entry.library == library && entry.path == path)
-            .cloned()
+            .filter(|slot| slot.entry.library == library && slot.entry.path == path)
+            .map(|slot| slot.entry.clone())
             .collect();
         AgentPresenceListResponse { presence }
+    }
+}
+
+/// Marks an agent present for as long as a document event stream stays open:
+/// touches presence on connect and every heartbeat, then removes it (and stops
+/// the heartbeat) when the stream is dropped. Expiry via [`AGENT_PRESENCE_TTL`]
+/// remains the backstop if the drop never runs.
+struct PresenceStreamGuard {
+    registry: AgentPresenceRegistry,
+    library: String,
+    path: String,
+    agent_id: String,
+    heartbeat: tokio::task::JoinHandle<()>,
+}
+
+impl PresenceStreamGuard {
+    fn open(
+        registry: AgentPresenceRegistry,
+        library: String,
+        path: String,
+        document_id: String,
+        agent_id: String,
+    ) -> Self {
+        registry.touch(&library, &path, &document_id, &agent_id);
+        let heartbeat = tokio::spawn({
+            let registry = registry.clone();
+            let (library, path, agent_id) = (library.clone(), path.clone(), agent_id.clone());
+            async move {
+                loop {
+                    tokio::time::sleep(AGENT_PRESENCE_STREAM_HEARTBEAT).await;
+                    registry.touch(&library, &path, &document_id, &agent_id);
+                }
+            }
+        });
+        Self {
+            registry,
+            library,
+            path,
+            agent_id,
+            heartbeat,
+        }
+    }
+}
+
+impl Drop for PresenceStreamGuard {
+    fn drop(&mut self) {
+        self.heartbeat.abort();
+        self.registry
+            .remove(&self.library, &self.path, &self.agent_id);
     }
 }
 
@@ -960,13 +1063,14 @@ async fn events(
     State(state): State<AppState>,
     Query(query): Query<EventsQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    events_for_library(&state.store, &query.library, None).await
+    events_for_library(&state.store, &query.library, None, None).await
 }
 
 async fn events_for_library(
     store: &QuarryStore,
     library: &str,
     document_path: Option<String>,
+    presence_guard: Option<PresenceStreamGuard>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let library = store.get_library(library).await?;
     tracing::debug!(
@@ -978,8 +1082,14 @@ async fn events_for_library(
     );
     let receiver = store.subscribe_events();
     let stream = stream::unfold(
-        (receiver, library.id, library.slug, document_path),
-        |(mut receiver, library_id, library_slug, document_path)| async move {
+        (
+            receiver,
+            library.id,
+            library.slug,
+            document_path,
+            presence_guard,
+        ),
+        |(mut receiver, library_id, library_slug, document_path, presence_guard)| async move {
             loop {
                 match receiver.recv().await {
                     Ok(store_event)
@@ -1008,7 +1118,13 @@ async fn events_for_library(
                         let event = Event::default().event(event_type).data(payload.to_string());
                         return Some((
                             Ok(event),
-                            (receiver, library_id, library_slug, document_path),
+                            (
+                                receiver,
+                                library_id,
+                                library_slug,
+                                document_path,
+                                presence_guard,
+                            ),
                         ));
                     }
                     Ok(_) => continue,
@@ -1029,7 +1145,13 @@ async fn events_for_library(
                         let event = Event::default().event(event_type).data(payload.to_string());
                         return Some((
                             Ok(event),
-                            (receiver, library_id, library_slug, document_path),
+                            (
+                                receiver,
+                                library_id,
+                                library_slug,
+                                document_path,
+                                presence_guard,
+                            ),
                         ));
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
@@ -1875,6 +1997,7 @@ async fn get_document(
     State(state): State<AppState>,
     Query(query): Query<DocumentGetQuery>,
     Path((library, path)): Path<(String, String)>,
+    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     if let Some(path) = path.strip_suffix("/backlinks") {
         return json_response(
@@ -1906,18 +2029,27 @@ async fn get_document(
     }
     if let Some(path) = path.strip_suffix("/presence") {
         state.store.head_document(&library, path).await?;
-        return json_response(
-            StatusCode::OK,
-            &state.agent_presence.list(&library, path).await,
-        );
+        return json_response(StatusCode::OK, &state.agent_presence.list(&library, path));
     }
     if let Some(path) = path.strip_suffix("/events/stream") {
-        state.store.head_document(&library, path).await?;
-        return Ok(
-            events_for_library(&state.store, &library, Some(path.to_string()))
-                .await?
-                .into_response(),
-        );
+        let document = state.store.head_document(&library, path).await?;
+        let presence_guard = optional_header(&headers, "x-agent-id")?.map(|agent_id| {
+            PresenceStreamGuard::open(
+                state.agent_presence.clone(),
+                library.clone(),
+                path.to_string(),
+                document.id,
+                agent_id,
+            )
+        });
+        return Ok(events_for_library(
+            &state.store,
+            &library,
+            Some(path.to_string()),
+            presence_guard,
+        )
+        .await?
+        .into_response());
     }
     if let Some(path) = path.strip_suffix("/share") {
         return json_response(
@@ -2420,17 +2552,14 @@ async fn agent_presence_document(
     let document = state.store.head_document(library, path).await?;
     let agent_id = agent_id_from_headers_or_body(headers, request.agent_id.as_deref())?;
     let status = normalized_agent_status(&request.status)?;
-    Ok(state
-        .agent_presence
-        .update(
-            library,
-            path,
-            &document.id,
-            agent_id,
-            status,
-            request.by.filter(|by| !by.trim().is_empty()),
-        )
-        .await)
+    Ok(state.agent_presence.update(
+        library,
+        path,
+        &document.id,
+        agent_id,
+        status,
+        request.by.filter(|by| !by.trim().is_empty()),
+    ))
 }
 
 async fn agent_document_snapshot(

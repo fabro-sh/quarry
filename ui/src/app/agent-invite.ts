@@ -78,8 +78,8 @@ Document path: ${path}
    Discovery: ${discoveryOrigin}/.well-known/agent.json
 
 5. While working, monitor document activity.
-   Prefer GET ${documentApi}/events/stream
-   If you cannot keep a stream open, poll GET ${libraryApi}/events/pending?after=<last-seen-id>.
+   Prefer GET ${documentApi}/events/stream with header X-Agent-Id: <agent-id> — the open stream also keeps your presence fresh.
+   If you cannot keep a stream open, poll GET ${libraryApi}/events/pending?after=<last-seen-id> and re-POST ${documentApi}/presence at least once per minute while active (presence expires after 60 seconds).
    When an event arrives, re-read the block tree before replying or editing.
 
 6. Do not edit until the user gives further instructions.
