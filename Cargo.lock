@@ -1989,6 +1989,7 @@ dependencies = [
  "futures-util",
  "http",
  "mime_guess",
+ "percent-encoding",
  "pulldown-cmark",
  "quarry-collab-codec",
  "quarry-core",

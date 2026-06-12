@@ -19,6 +19,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use futures_util::{stream, Stream};
+use percent_encoding::percent_decode_str;
 use quarry_collab_codec::{
     review_markers, review_meta_with_inline_comment_bodies, ReviewMeta, ReviewMetaEntry,
     ReviewSuggestionKind as CodecReviewSuggestionKind,
@@ -3716,7 +3717,11 @@ fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<Str
 
 fn transaction_metadata_from_headers(headers: &HeaderMap) -> Result<TransactionMetadata, ApiError> {
     let mut metadata = TransactionMetadata {
-        actor: optional_header(headers, "x-quarry-transaction-actor")?,
+        // The browser cannot send non-Latin-1 header values, so the UI
+        // percent-encodes the actor's display name. Lossy decoding: bad
+        // attribution metadata must never fail a write.
+        actor: optional_header(headers, "x-quarry-transaction-actor")?
+            .map(|value| percent_decode_str(&value).decode_utf8_lossy().into_owned()),
         message: optional_header(headers, "x-quarry-transaction-message")?,
         ..TransactionMetadata::default()
     };

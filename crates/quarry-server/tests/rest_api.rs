@@ -2422,6 +2422,98 @@ async fn put_document_rejects_invalid_transaction_provenance_header() {
 }
 
 #[tokio::test]
+async fn put_document_decodes_percent_encoded_transaction_actor_header() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    store.create_library("actorheader").await.unwrap();
+    let app = router(store);
+
+    // The first PUT of a markdown document goes through the import path,
+    // which carries no transaction metadata — so each document is created
+    // first and the actor-carrying write is an update.
+    put_markdown(&app, "a.md", "# A\n", None).await;
+    put_markdown(&app, "b.md", "# B\n", None).await;
+    put_markdown(&app, "c.md", "# C\n", None).await;
+
+    // Percent-encoded UTF-8 name decodes before storage.
+    let version = put_markdown(&app, "a.md", "# A updated\n", Some("Jos%C3%A9")).await;
+    assert_eq!(
+        version_actor(&app, "a.md", &version).await,
+        serde_json::json!("José")
+    );
+
+    // Plain ASCII passes through unchanged.
+    let version = put_markdown(&app, "b.md", "# B updated\n", Some("Avery")).await;
+    assert_eq!(
+        version_actor(&app, "b.md", &version).await,
+        serde_json::json!("Avery")
+    );
+
+    // No header falls back to the gateway's surface label.
+    let version = put_markdown(&app, "c.md", "# C updated\n", None).await;
+    assert_eq!(
+        version_actor(&app, "c.md", &version).await,
+        serde_json::json!("rest")
+    );
+}
+
+/// PUTs markdown into the `actorheader` library, optionally with an
+/// `x-quarry-transaction-actor` header, returning the written version id.
+async fn put_markdown(
+    app: &axum::Router,
+    path: &str,
+    body: &str,
+    actor_header: Option<&str>,
+) -> String {
+    let mut request = Request::builder()
+        .method(Method::PUT)
+        .uri(format!("/v1/libraries/actorheader/documents/{path}"))
+        .header(header::CONTENT_TYPE, "text/markdown");
+    if let Some(actor) = actor_header {
+        request = request.header("x-quarry-transaction-actor", actor);
+    }
+    let response = app
+        .clone()
+        .oneshot(request.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let outcome: Value = response_json(response).await;
+    outcome["version"]["id"].as_str().unwrap().to_string()
+}
+
+/// The `"actor"` recorded for `version_id` of `path`, via GET `/versions`.
+async fn version_actor(app: &axum::Router, path: &str, version_id: &str) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v1/libraries/actorheader/documents/{path}/versions"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    body.as_array()
+        .unwrap()
+        .iter()
+        .find(|version| version["id"] == version_id)
+        .unwrap()["actor"]
+        .clone()
+}
+
+#[tokio::test]
 async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {
