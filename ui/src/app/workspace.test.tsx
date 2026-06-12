@@ -1325,7 +1325,10 @@ describe('Quarry Browser workspace', () => {
         return new Response('# Head', { headers: { ETag: '"head"', 'content-type': 'text/markdown' } });
       }
       if (url === '/v1/libraries/merge-lib/documents/conflict.md' && init?.method === 'PUT') {
-        expect(init.headers).toMatchObject({ 'If-Match': '"head"' });
+        expect(init.headers).toMatchObject({
+          'If-Match': '"head"',
+          'X-Quarry-Transaction-Actor': 'Avery',
+        });
         expect(init.body).toBe('# Ours');
         return json({ version: { id: 'merged' } }, { ETag: '"merged"' });
       }
@@ -1354,6 +1357,7 @@ describe('Quarry Browser workspace', () => {
       return new Response('not found', { status: 404 });
     });
     vi.stubGlobal('fetch', fetch);
+    localStorage.setItem('quarry:author', 'Avery');
 
     renderApp();
 

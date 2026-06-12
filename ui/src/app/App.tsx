@@ -117,6 +117,7 @@ import type {
   VersionDiff,
 } from '../api/generated/types';
 import type {
+  DocumentMutationOptions,
   GitExportResult,
   GitImportResult,
   GitPeer,
@@ -138,7 +139,7 @@ import {
 import { AgentAvatar } from '../features/agents/AgentAvatar';
 import { agentKind } from '../features/agents/agents';
 import { imageAssetPath, resolveImageSrc } from '../features/editor/image';
-import { loadAuthor, saveAuthor } from '../features/review/identity';
+import { DEFAULT_AUTHOR, loadAuthor, saveAuthor } from '../features/review/identity';
 import { CommentsPanel } from '../features/review/ui/CommentsPanel';
 import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../features/tree/tree-model';
 import { cn } from '../lib/utils';
@@ -346,7 +347,10 @@ function Workspace() {
   });
 
   function browserMutationOptions() {
-    return { originId: collabSessionIdRef.current };
+    return {
+      originId: collabSessionIdRef.current,
+      transactionActor: author === DEFAULT_AUTHOR ? undefined : author,
+    };
   }
 
   const clearDeletedDocumentCaches = useCallback(
@@ -1425,7 +1429,7 @@ function Workspace() {
         <ConflictMergeDialog
           activeLibrary={activeLibrary}
           conflict={mergeConflict}
-          originId={collabSessionIdRef.current}
+          mutationOptions={browserMutationOptions()}
           onClose={() => setMergeConflictId(null)}
         />
       ) : null}
@@ -2022,12 +2026,12 @@ function SettingsDialog({
 function ConflictMergeDialog({
   activeLibrary,
   conflict,
-  originId,
+  mutationOptions,
   onClose,
 }: {
   activeLibrary: string;
   conflict: ConflictRecord;
-  originId: string;
+  mutationOptions: DocumentMutationOptions;
   onClose: () => void;
 }) {
   const { mutate } = useSWRConfig();
@@ -2073,9 +2077,14 @@ function ConflictMergeDialog({
     setBusy(true);
     setError('');
     try {
-      await putDocument(activeLibrary, conflict.path, content, head.etag, head.contentType, {
-        originId,
-      });
+      await putDocument(
+        activeLibrary,
+        conflict.path,
+        content,
+        head.etag,
+        head.contentType,
+        mutationOptions
+      );
       await resolveConflict(activeLibrary, conflict.id);
       await refreshConflictState();
       onClose();
@@ -2090,7 +2099,7 @@ function ConflictMergeDialog({
     setBusy(true);
     setError('');
     try {
-      await deleteDocument(activeLibrary, conflict.path, { originId });
+      await deleteDocument(activeLibrary, conflict.path, mutationOptions);
       await resolveConflict(activeLibrary, conflict.id);
       await refreshConflictState();
       onClose();
