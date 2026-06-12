@@ -92,6 +92,28 @@ describe('Quarry API client', () => {
     );
   });
 
+  it('percent-encodes the transaction actor header on document saves', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ version: { id: 'v2' } }), {
+        headers: { ETag: '"v2"', 'content-type': 'application/json' },
+      })
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await putDocument('notes', 'a.md', 'next', '"v1"', 'text/markdown', {
+      transactionActor: 'José Avery',
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/v1/libraries/notes/documents/a.md',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Quarry-Transaction-Actor': 'Jos%C3%A9%20Avery',
+        }),
+      })
+    );
+  });
+
   it('stamps existing document saves with transaction metadata', async () => {
     const fetch = vi.fn(async () =>
       new Response(JSON.stringify({ version: { id: 'v2' } }), {
