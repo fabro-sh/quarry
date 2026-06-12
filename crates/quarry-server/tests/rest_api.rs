@@ -5403,6 +5403,34 @@ async fn session_checkpoint_attributes_awareness_author() {
     server.abort();
 }
 
+/// The abrupt tab-close case: the client never sends an awareness removal,
+/// so the author name survives into the final post-disconnect checkpoint
+/// (directly in awareness, or via the session's cached label).
+#[tokio::test]
+async fn final_checkpoint_after_disconnect_attributes_author() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "Disconnect target.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    send_awareness_name(&mut socket, &doc, "Avery").await;
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.insert(txn, 18, " Closed.");
+    })
+    .await;
+    socket.close(None).await.unwrap();
+
+    let markdown = wait_for_markdown_containing(&app, "live.md", "Closed.").await;
+    assert_eq!(markdown, "Disconnect target. Closed.\n");
+    let versions = raw_versions(&app, "live.md").await;
+    assert_eq!(
+        versions.as_array().unwrap()[0]["transaction_actor"],
+        "Avery"
+    );
+    server.abort();
+}
+
 #[tokio::test]
 async fn session_transaction_lands_in_live_doc_and_rows_before_ack() {
     let (_root, addr, app, store, server) = spawn_session_server().await;

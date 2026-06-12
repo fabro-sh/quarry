@@ -352,7 +352,10 @@ pub(crate) struct LiveSession {
     items: StdMutex<HashMap<String, BlockReviewItem>>,
     /// Last non-empty awareness author label, kept so the final checkpoint
     /// (which can run after the socket closed and awareness emptied) still
-    /// attributes correctly.
+    /// attributes correctly. Known race: if a client cleanly removes its
+    /// awareness state and disconnects before any checkpoint ever ran, the
+    /// final checkpoint falls back to "browser" — accepted, since the common
+    /// abrupt close keeps the state and any prior checkpoint primes the cache.
     live_actor: StdMutex<Option<String>>,
     subscribers: AtomicUsize,
 }
