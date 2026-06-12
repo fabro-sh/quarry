@@ -1,7 +1,7 @@
 // The free-form author label stamped on review items created in this editor.
 // Quarry has no user accounts; humans self-declare this value and agents write
 // their own `by:` label directly into the Markdown.
-const DEFAULT_AUTHOR = 'user';
+export const DEFAULT_AUTHOR = 'user';
 const AUTHOR_STORAGE_KEY = 'quarry:author';
 
 export function normalizeAuthor(value: string | null | undefined): string {
@@ -22,6 +22,13 @@ export function saveAuthor(value: string, storage?: Storage): string {
     else target.setItem(AUTHOR_STORAGE_KEY, author);
   }
   return author;
+}
+
+// True when the user explicitly chose a name (the raw key exists).
+// `loadAuthor()` cannot distinguish "never asked" from "chose the default".
+export function hasStoredAuthor(storage?: Storage): boolean {
+  const target = storage ?? (typeof window === 'undefined' ? undefined : window.localStorage);
+  return Boolean(target?.getItem(AUTHOR_STORAGE_KEY)?.trim());
 }
 
 export function currentAuthor(): string {

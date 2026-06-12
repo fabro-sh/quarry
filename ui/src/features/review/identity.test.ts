@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { currentAuthor, loadAuthor, normalizeAuthor, saveAuthor } from './identity';
+import {
+  currentAuthor,
+  DEFAULT_AUTHOR,
+  hasStoredAuthor,
+  loadAuthor,
+  normalizeAuthor,
+  saveAuthor,
+} from './identity';
 
 describe('currentAuthor', () => {
   beforeEach(() => {
@@ -8,6 +15,15 @@ describe('currentAuthor', () => {
 
   it('defaults to "user"', () => {
     expect(currentAuthor()).toBe('user');
+    expect(DEFAULT_AUTHOR).toBe('user');
+  });
+
+  it('reports whether an author was explicitly stored', () => {
+    expect(hasStoredAuthor()).toBe(false);
+    saveAuthor('Avery');
+    expect(hasStoredAuthor()).toBe(true);
+    saveAuthor('user');
+    expect(hasStoredAuthor()).toBe(false);
   });
 
   it('normalizes blank names to the default author', () => {
