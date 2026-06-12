@@ -139,7 +139,7 @@ import {
 import { AgentAvatar } from '../features/agents/AgentAvatar';
 import { agentKind } from '../features/agents/agents';
 import { imageAssetPath, resolveImageSrc } from '../features/editor/image';
-import { loadAuthor, saveAuthor, storedAuthor } from '../features/review/identity';
+import { hasStoredAuthor, loadAuthor, saveAuthor, storedAuthor } from '../features/review/identity';
 import { CommentsPanel } from '../features/review/ui/CommentsPanel';
 import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../features/tree/tree-model';
 import { cn } from '../lib/utils';
@@ -241,6 +241,7 @@ function Workspace() {
   });
   const [lastSyncResult, setLastSyncResult] = useState('');
   const [author, setAuthor] = useState(() => loadAuthor());
+  const [showOnboarding, setShowOnboarding] = useState(() => !hasStoredAuthor());
   const [theme, setTheme] = useState<ThemePreference>(() =>
     localStorage.getItem('quarry:theme') === 'light' ? 'light' : 'dark'
   );
@@ -1396,6 +1397,14 @@ function Workspace() {
         onCopied={() => setAddAgentModal((s) => ({ ...s, waitingForAgent: true }))}
       />
 
+      <OnboardingDialog
+        open={showOnboarding}
+        onSubmit={(name) => {
+          changeAuthor(name);
+          setShowOnboarding(false);
+        }}
+      />
+
       <SettingsDialog
         activeLibrary={activeLibrary}
         author={author}
@@ -1902,6 +1911,68 @@ async function copyText(text: string, promptLabel: string) {
   } catch {
     window.prompt(promptLabel, text);
   }
+}
+
+function OnboardingDialog({
+  open,
+  onSubmit,
+}: {
+  open: boolean;
+  onSubmit: (name: string) => void;
+}) {
+  // Required modal: Escape and click-outside are deliberately inert.
+  const dialogRef = useDialogFocusTrap(open, () => {});
+  const [draftName, setDraftName] = useState('');
+  const name = draftName.trim();
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/20 p-4">
+      <div
+        aria-label="Welcome to Quarry"
+        aria-modal="true"
+        className="mx-auto mt-[12vh] w-full max-w-md overflow-hidden rounded-md border border-line-strong bg-surface shadow-xl"
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <div className="space-y-4 p-6">
+          <h2 className="text-lg font-semibold text-ink">Welcome to Quarry</h2>
+          <p className="text-sm text-body">
+            Quarry is a local-first workspace for versioned documents. Every change you make is
+            kept with full history, alongside edits from agents and Git.
+          </p>
+          <div className="grid gap-1 text-sm">
+            <label className="grid gap-1">
+              <span className="text-muted">Your name</span>
+              <input
+                autoFocus
+                className="h-9 rounded-md border border-line bg-raised px-3 text-sm text-body outline-none focus:border-accent-line focus:ring-2 focus:ring-accent-ring"
+                maxLength={120}
+                onChange={(event) => setDraftName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && name) onSubmit(name);
+                }}
+                value={draftName}
+              />
+            </label>
+            <span className="text-xs text-muted">
+              Quarry records your name on every change you make, so history shows who did what.
+            </span>
+          </div>
+          <button
+            className={primaryButton}
+            disabled={!name}
+            onClick={() => onSubmit(name)}
+            type="button"
+          >
+            Get started
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function SettingsDialog({

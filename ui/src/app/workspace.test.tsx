@@ -96,12 +96,12 @@ describe('Quarry Browser workspace', () => {
         return new Response('# Live', { headers: { ETag: '"v-agent"', 'content-type': 'text/markdown' } });
       }
       if (url === '/v1/libraries/agent-lib/documents/folder/live.md/share' && init?.method === 'POST') {
-        expect(JSON.parse(String(init.body))).toMatchObject({ byHint: 'user', role: 'editor' });
+        expect(JSON.parse(String(init.body))).toMatchObject({ byHint: 'Tester', role: 'editor' });
         return json({
           id: 'invite-agent',
           document_id: 'doc-agent',
           role: 'editor',
-          by_hint: 'user',
+          by_hint: 'Tester',
           created_at: 'now',
           revoked_at: null,
         });
@@ -1359,7 +1359,7 @@ describe('Quarry Browser workspace', () => {
     vi.stubGlobal('fetch', fetch);
     localStorage.setItem('quarry:author', 'Avery');
 
-    renderApp();
+    renderApp({ seedAuthor: false });
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Conflict/ }));
     await userEvent.click(screen.getByRole('tab', { name: 'Versions' }));
@@ -1885,9 +1885,70 @@ describe('Quarry Browser workspace', () => {
     expect(downloadedText).toBe('---\ntitle: Readme\n---\n\n# Readme\nBody\n');
     click.mockRestore();
   });
+
+  it('requires a name on first run and stamps it into the author store', async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/v1/libraries') {
+        return json([{ id: 'lib-1', slug: 'notes', created_at: 'now', settings: {} }]);
+      }
+      if (url === '/v1/libraries/notes/documents') return json([]);
+      if (url === '/v1/libraries/notes/conflicts') return json([]);
+      if (url === '/v1/libraries/notes/git/peers') return json([]);
+      if (url.startsWith('/v1/libraries/notes/search')) return json({ results: [], cursor: null });
+      if (url.startsWith('/v1/libraries/notes/graph')) {
+        return json({ nodes: [], edges: [], truncated: false });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp({ seedAuthor: false });
+
+    const dialog = await screen.findByRole('dialog', { name: 'Welcome to Quarry' });
+    const getStarted = within(dialog).getByRole('button', { name: 'Get started' });
+    expect(getStarted).toBeDisabled();
+
+    // Whitespace does not count as a name.
+    await userEvent.type(within(dialog).getByLabelText('Your name'), '   ');
+    expect(getStarted).toBeDisabled();
+
+    await userEvent.clear(within(dialog).getByLabelText('Your name'));
+    await userEvent.type(within(dialog).getByLabelText('Your name'), '  Avery  ');
+    expect(getStarted).toBeEnabled();
+    await userEvent.click(getStarted);
+
+    expect(screen.queryByRole('dialog', { name: 'Welcome to Quarry' })).not.toBeInTheDocument();
+    expect(localStorage.getItem('quarry:author')).toBe('Avery');
+  });
+
+  it('does not show onboarding when an author is already stored', async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/v1/libraries') {
+        return json([{ id: 'lib-1', slug: 'notes', created_at: 'now', settings: {} }]);
+      }
+      if (url === '/v1/libraries/notes/documents') return json([]);
+      if (url === '/v1/libraries/notes/conflicts') return json([]);
+      if (url === '/v1/libraries/notes/git/peers') return json([]);
+      if (url.startsWith('/v1/libraries/notes/search')) return json({ results: [], cursor: null });
+      if (url.startsWith('/v1/libraries/notes/graph')) {
+        return json({ nodes: [], edges: [], truncated: false });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(screen.queryByRole('dialog', { name: 'Welcome to Quarry' })).not.toBeInTheDocument();
+  });
 });
 
-function renderApp() {
+function renderApp({ seedAuthor = true }: { seedAuthor?: boolean } = {}) {
+  // Most tests predate onboarding; a stored author keeps the modal away.
+  if (seedAuthor) localStorage.setItem('quarry:author', 'Tester');
   return render(
     <SWRConfig value={{ provider: () => new Map() }}>
       <App />
