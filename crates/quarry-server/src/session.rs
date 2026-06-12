@@ -1104,6 +1104,63 @@ pub(crate) fn doc_image(
 mod tests {
     use super::*;
     use quarry_collab_codec::SessionProjection;
+    use yrs::sync::awareness::{AwarenessUpdate, AwarenessUpdateEntry};
+
+    /// An awareness populated with the given client states, applied the same
+    /// way incoming websocket awareness messages are.
+    fn awareness_with_states<const N: usize>(states: [(u64, &str); N]) -> Awareness {
+        let clients = states
+            .into_iter()
+            .map(|(id, json)| {
+                (
+                    yrs::ClientID::new(id),
+                    AwarenessUpdateEntry {
+                        clock: 1,
+                        json: json.into(),
+                    },
+                )
+            })
+            .collect();
+        let mut awareness = Awareness::new(Doc::new());
+        awareness.apply_update(AwarenessUpdate { clients }).unwrap();
+        awareness
+    }
+
+    #[test]
+    fn awareness_actor_joins_distinct_names_sorted() {
+        let awareness = awareness_with_states([
+            (2, r##"{"data":{"name":"Blake","color":"#f00"}}"##),
+            (1, r##"{"data":{"name":"Avery","color":"#0f0"}}"##),
+        ]);
+        assert_eq!(awareness_actor(&awareness).as_deref(), Some("Avery, Blake"));
+    }
+
+    #[test]
+    fn awareness_actor_dedupes_duplicate_names() {
+        let awareness = awareness_with_states([
+            (1, r#"{"data":{"name":"Avery"}}"#),
+            (2, r#"{"data":{"name":"Avery"}}"#),
+        ]);
+        assert_eq!(awareness_actor(&awareness).as_deref(), Some("Avery"));
+    }
+
+    #[test]
+    fn awareness_actor_drops_blank_and_missing_names() {
+        let awareness = awareness_with_states([
+            (1, r#"{"data":{"name":"  "}}"#),
+            (2, r##"{"data":{"color":"#fff"}}"##),
+            (3, r#"{"selection":null}"#),
+            (4, r#"{"data":{"name":"Avery"}}"#),
+        ]);
+        assert_eq!(awareness_actor(&awareness).as_deref(), Some("Avery"));
+    }
+
+    #[test]
+    fn awareness_actor_is_none_without_any_names() {
+        assert_eq!(awareness_actor(&Awareness::new(Doc::new())), None);
+        let blank = awareness_with_states([(1, r#"{"data":{"name":" "}}"#)]);
+        assert_eq!(awareness_actor(&blank), None);
+    }
 
     /// Adapter whole-file writes lock every document they touch; the hub must
     /// not keep one entry per document forever. Uncontended, sessionless
