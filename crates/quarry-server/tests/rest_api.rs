@@ -4924,13 +4924,24 @@ async fn send_local_edit_unechoed(
 /// Publishes a slate-yjs-style awareness state carrying the author name,
 /// exactly as the Plate editor's cursor data does.
 async fn send_awareness_name(socket: &mut WsSocket, doc: &Doc, name: &str) {
+    let json = format!(r##"{{"data":{{"name":"{name}","color":"#8be9fd"}}}}"##);
+    send_awareness_state(socket, doc, 1, &json).await;
+}
+
+/// Withdraws this client's awareness state: the y-protocol `null` entry a
+/// client publishes on clean departure (clock bumped past the set above).
+async fn send_awareness_removal(socket: &mut WsSocket, doc: &Doc) {
+    send_awareness_state(socket, doc, 2, "null").await;
+}
+
+async fn send_awareness_state(socket: &mut WsSocket, doc: &Doc, clock: u32, json: &str) {
     use yrs::sync::awareness::{AwarenessUpdate, AwarenessUpdateEntry};
     let update = AwarenessUpdate {
         clients: std::collections::HashMap::from([(
             doc.client_id(),
             AwarenessUpdateEntry {
-                clock: 1,
-                json: format!(r##"{{"data":{{"name":"{name}","color":"#8be9fd"}}}}"##).into(),
+                clock,
+                json: json.into(),
             },
         )]),
     };
@@ -5423,6 +5434,45 @@ async fn final_checkpoint_after_disconnect_attributes_author() {
 
     let markdown = wait_for_markdown_containing(&app, "live.md", "Closed.").await;
     assert_eq!(markdown, "Disconnect target. Closed.\n");
+    let versions = raw_versions(&app, "live.md").await;
+    assert_eq!(
+        versions.as_array().unwrap()[0]["transaction_actor"],
+        "Avery"
+    );
+    server.abort();
+}
+
+/// Forces the `live_actor` cache path: after the named participant withdraws
+/// their awareness state, the next checkpoint observes a name-less awareness
+/// and must fall back to the label cached by the first checkpoint.
+#[tokio::test]
+async fn checkpoint_after_awareness_removal_uses_cached_author() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "Cache target.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    send_awareness_name(&mut socket, &doc, "Avery").await;
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.insert(txn, 13, " First.");
+    })
+    .await;
+    // A committed version containing the first edit can only come from
+    // `commit_doc_state`, which primes the cache while awareness still
+    // carries the name (single-socket ordering: the removal is sent later).
+    wait_for_markdown_containing(&app, "live.md", "First.").await;
+
+    send_awareness_removal(&mut socket, &doc).await;
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.insert(txn, 20, " Second.");
+    })
+    .await;
+    socket.close(None).await.unwrap();
+
+    let markdown = wait_for_markdown_containing(&app, "live.md", "Second.").await;
+    assert_eq!(markdown, "Cache target. First. Second.\n");
     let versions = raw_versions(&app, "live.md").await;
     assert_eq!(
         versions.as_array().unwrap()[0]["transaction_actor"],

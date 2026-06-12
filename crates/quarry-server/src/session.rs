@@ -350,12 +350,15 @@ pub(crate) struct LiveSession {
     committed_snapshot: StdMutex<Vec<u8>>,
     /// The full review item set as of the last seed/checkpoint/transaction.
     items: StdMutex<HashMap<String, BlockReviewItem>>,
-    /// Last non-empty awareness author label, kept so the final checkpoint
-    /// (which can run after the socket closed and awareness emptied) still
-    /// attributes correctly. Known race: if a client cleanly removes its
-    /// awareness state and disconnects before any checkpoint ever ran, the
-    /// final checkpoint falls back to "browser" — accepted, since the common
-    /// abrupt close keeps the state and any prior checkpoint primes the cache.
+    /// Last non-empty awareness author label, used by any checkpoint that
+    /// observes a name-less awareness: the final one after the socket closed
+    /// and awareness emptied, but also e.g. when a named participant leaves
+    /// cleanly while an unnamed one keeps editing — subsequent checkpoints
+    /// keep the last seen name until the session is dropped. Known gap: if a
+    /// client cleanly removes its awareness state and disconnects before any
+    /// checkpoint ever ran, the final checkpoint falls back to "browser" —
+    /// accepted, since the common abrupt close keeps the state and any prior
+    /// checkpoint primes the cache.
     live_actor: StdMutex<Option<String>>,
     subscribers: AtomicUsize,
 }
@@ -576,15 +579,13 @@ impl LiveSession {
         let now = now_timestamp();
         let items =
             reconcile_review_items(&self.document_id, &prior_items, &projection, &meta, &now);
-        if let Some(actor) = awareness_actor(awareness) {
-            *self.live_actor.lock().unwrap() = Some(actor);
-        }
-        let transaction_actor = self
-            .live_actor
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap_or_else(|| "browser".to_string());
+        let transaction_actor = {
+            let mut live_actor = self.live_actor.lock().unwrap();
+            if let Some(actor) = awareness_actor(awareness) {
+                *live_actor = Some(actor);
+            }
+            live_actor.clone().unwrap_or_else(|| "browser".to_string())
+        };
 
         for attempt in 0..CHECKPOINT_RETRY_LIMIT {
             let Some(head) = store.session_seed_state(&self.document_id).await? else {
