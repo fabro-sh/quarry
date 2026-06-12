@@ -430,6 +430,83 @@ git commit -m "feat(server): record transaction actor on delete, move, and resto
 
 ---
 
+### Task 2b: Actor on first import (document creation)
+
+Discovered during Task 1: the first PUT of a markdown document routes through
+`write_markdown_with`'s `NotFound` branch into
+`import_block_document_with_origin`, which never receives the
+`TransactionMetadata` — so newly created documents are unattributed no matter
+what header was sent. The UI's "New document" flow hits exactly this path.
+
+**Files:**
+- Modify: `crates/quarry-storage/src/blocks.rs` (`import_block_document` wrapper ~434, `import_block_document_with_origin` ~460)
+- Modify: `crates/quarry-server/src/markdown_write.rs` (`write_markdown_with` `NotFound` branch ~316)
+- Test: `crates/quarry-server/tests/rest_api.rs`
+
+- [ ] **Step 1: Write the failing test**
+
+Using the (now library-parameterized) helpers from Task 1:
+
+```rust
+#[tokio::test]
+async fn first_import_records_transaction_actor_header() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    store.create_library("actorcreate").await.unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/actorcreate/documents/fresh.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header("x-quarry-transaction-actor", "Avery")
+                .body(Body::from("# Fresh\n"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    assert_eq!(
+        latest_version_actor(&app, "actorcreate", "fresh.md").await,
+        "Avery"
+    );
+}
+```
+
+(Adapt the actor-lookup to whatever helper shape Task 1's review polish settled on.)
+
+- [ ] **Step 2: Run to verify failure** — actor is null on first import.
+
+- [ ] **Step 3: Implement**
+
+`import_block_document_with_origin` (blocks.rs ~460) gains a final
+`actor: Option<String>` parameter, passed as the fourth argument of its
+`insert_transaction_conn` call (currently `None`). The `import_block_document`
+wrapper (~434) passes `None`. In `markdown_write.rs`'s `NotFound` branch
+(~316), pass the write's transaction actor (`transaction.actor.clone()` from
+the `TransactionMetadata` already flowing through `write_markdown_with`).
+
+- [ ] **Step 4: Run the test and the existing suite** — `cargo test -p quarry-server --test rest_api` plus `cargo check --workspace`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/quarry-storage/src/blocks.rs crates/quarry-server/src/markdown_write.rs crates/quarry-server/tests/rest_api.rs
+git commit -m "feat(server): record transaction actor on first document import"
+```
+
+---
+
 ### Task 3: Session checkpoints attribute the awareness author
 
 Typing never touches REST: the server checkpoints live Yjs sessions with `transaction_actor: Some("browser")` hardcoded (`session.rs` ~581). The Plate editor already publishes the author into awareness cursor data (`{ data: { color, name } }` per client state — slate-yjs `cursorDataField` defaults to `"data"`). Derive the checkpoint actor from awareness, cache the last non-empty value (the final checkpoint can run after the socket closes and awareness empties), and fall back to `"browser"`.
