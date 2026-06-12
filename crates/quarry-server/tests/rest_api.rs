@@ -2434,9 +2434,9 @@ async fn put_document_decodes_percent_encoded_transaction_actor_header() {
     store.create_library("actorheader").await.unwrap();
     let app = router(store);
 
-    // The first PUT of a markdown document goes through the import path,
-    // which carries no transaction metadata — so each document is created
-    // first and the actor-carrying write is an update.
+    // Each document is created first so the actor-carrying write exercises
+    // the update path (first-import attribution is covered separately by
+    // first_import_records_transaction_actor_header).
     put_markdown(&app, "actorheader", "a.md", "# A\n", None).await;
     put_markdown(&app, "actorheader", "b.md", "# B\n", None).await;
     put_markdown(&app, "actorheader", "c.md", "# C\n", None).await;
@@ -2467,6 +2467,27 @@ async fn put_document_decodes_percent_encoded_transaction_actor_header() {
     assert_eq!(
         version_actor(&app, "actorheader", "c.md", &version).await,
         "rest"
+    );
+}
+
+#[tokio::test]
+async fn first_import_records_transaction_actor_header() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    store.create_library("actorcreate").await.unwrap();
+    let app = router(store);
+
+    let version = put_markdown(&app, "actorcreate", "fresh.md", "# Fresh\n", Some("Avery")).await;
+
+    assert_eq!(
+        version_actor(&app, "actorcreate", "fresh.md", &version).await,
+        "Avery"
     );
 }
 

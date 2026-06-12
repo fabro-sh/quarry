@@ -326,6 +326,7 @@ async fn write_markdown_with(
                     write.source.clone(),
                     WritePrecondition::IfNoneMatch,
                     origin_id,
+                    transaction.actor.clone(),
                 )
                 .await?;
             let canonical_body = canonical_body(state, &outcome.document.id).await?;

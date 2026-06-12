@@ -450,12 +450,14 @@ impl QuarryStore {
             source,
             precondition,
             None,
+            None,
         )
         .await
     }
 
     /// [`QuarryStore::import_block_document`] with an `origin_id` echoed on
-    /// the emitted `doc.changed` event (the Phase 4 first-import path).
+    /// the emitted `doc.changed` event (the Phase 4 first-import path) and
+    /// an optional `actor` recorded on the import transaction.
     #[allow(clippy::too_many_arguments)]
     pub async fn import_block_document_with_origin(
         &self,
@@ -467,6 +469,7 @@ impl QuarryStore {
         source: DocumentSource,
         precondition: WritePrecondition,
         origin_id: Option<String>,
+        actor: Option<String>,
     ) -> Result<WriteOutcome> {
         let path = normalize_path(path)?;
         if document_kind(&path, content_type) == DocumentKind::RawDocument {
@@ -496,7 +499,7 @@ impl QuarryStore {
                 &conn,
                 &library.id,
                 source,
-                None,
+                actor,
                 None,
                 serde_json::json!({ "mode": "block_import" }),
             )
