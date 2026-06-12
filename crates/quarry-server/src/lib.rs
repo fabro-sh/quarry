@@ -3718,8 +3718,8 @@ fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<Str
 fn transaction_metadata_from_headers(headers: &HeaderMap) -> Result<TransactionMetadata, ApiError> {
     let mut metadata = TransactionMetadata {
         // The browser cannot send non-Latin-1 header values, so the UI
-        // percent-encodes the actor's display name. Lossy decoding: bad
-        // attribution metadata must never fail a write.
+        // percent-encodes the actor's display name. Lossy decoding so a
+        // malformed encoding never fails the write.
         actor: optional_header(headers, "x-quarry-transaction-actor")?
             .map(|value| percent_decode_str(&value).decode_utf8_lossy().into_owned()),
         message: optional_header(headers, "x-quarry-transaction-message")?,

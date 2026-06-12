@@ -2437,43 +2437,51 @@ async fn put_document_decodes_percent_encoded_transaction_actor_header() {
     // The first PUT of a markdown document goes through the import path,
     // which carries no transaction metadata — so each document is created
     // first and the actor-carrying write is an update.
-    put_markdown(&app, "a.md", "# A\n", None).await;
-    put_markdown(&app, "b.md", "# B\n", None).await;
-    put_markdown(&app, "c.md", "# C\n", None).await;
+    put_markdown(&app, "actorheader", "a.md", "# A\n", None).await;
+    put_markdown(&app, "actorheader", "b.md", "# B\n", None).await;
+    put_markdown(&app, "actorheader", "c.md", "# C\n", None).await;
 
     // Percent-encoded UTF-8 name decodes before storage.
-    let version = put_markdown(&app, "a.md", "# A updated\n", Some("Jos%C3%A9")).await;
+    let version = put_markdown(
+        &app,
+        "actorheader",
+        "a.md",
+        "# A updated\n",
+        Some("Jos%C3%A9"),
+    )
+    .await;
     assert_eq!(
-        version_actor(&app, "a.md", &version).await,
-        serde_json::json!("José")
+        version_actor(&app, "actorheader", "a.md", &version).await,
+        "José"
     );
 
     // Plain ASCII passes through unchanged.
-    let version = put_markdown(&app, "b.md", "# B updated\n", Some("Avery")).await;
+    let version = put_markdown(&app, "actorheader", "b.md", "# B updated\n", Some("Avery")).await;
     assert_eq!(
-        version_actor(&app, "b.md", &version).await,
-        serde_json::json!("Avery")
+        version_actor(&app, "actorheader", "b.md", &version).await,
+        "Avery"
     );
 
     // No header falls back to the gateway's surface label.
-    let version = put_markdown(&app, "c.md", "# C updated\n", None).await;
+    let version = put_markdown(&app, "actorheader", "c.md", "# C updated\n", None).await;
     assert_eq!(
-        version_actor(&app, "c.md", &version).await,
-        serde_json::json!("rest")
+        version_actor(&app, "actorheader", "c.md", &version).await,
+        "rest"
     );
 }
 
-/// PUTs markdown into the `actorheader` library, optionally with an
+/// PUTs markdown into `library`, optionally with an
 /// `x-quarry-transaction-actor` header, returning the written version id.
 async fn put_markdown(
     app: &axum::Router,
+    library: &str,
     path: &str,
     body: &str,
     actor_header: Option<&str>,
 ) -> String {
     let mut request = Request::builder()
         .method(Method::PUT)
-        .uri(format!("/v1/libraries/actorheader/documents/{path}"))
+        .uri(format!("/v1/libraries/{library}/documents/{path}"))
         .header(header::CONTENT_TYPE, "text/markdown");
     if let Some(actor) = actor_header {
         request = request.header("x-quarry-transaction-actor", actor);
@@ -2489,15 +2497,13 @@ async fn put_markdown(
 }
 
 /// The `"actor"` recorded for `version_id` of `path`, via GET `/versions`.
-async fn version_actor(app: &axum::Router, path: &str, version_id: &str) -> Value {
+async fn version_actor(app: &axum::Router, library: &str, path: &str, version_id: &str) -> Value {
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri(format!(
-                    "/v1/libraries/actorheader/documents/{path}/versions"
-                ))
+                .uri(format!("/v1/libraries/{library}/documents/{path}/versions"))
                 .body(Body::empty())
                 .unwrap(),
         )
