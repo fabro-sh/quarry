@@ -5,15 +5,24 @@ import {
   BlockTransactionError,
   createCollabInvite,
   createDocument,
+  createTmpDocument,
   deleteDocument,
+  deleteTmpDocument,
   getDocument,
   getDocumentBlocks,
+  getTmpDocument,
   isTextContentType,
   moveDocument,
   listAgentPresence,
   postBlockTransaction,
   putDocument,
+  putTmpDocument,
   restoreVersion,
+  setDocumentTtl,
+  promoteTmpDocument,
+  setTmpDocumentTtl,
+  tmpDocumentVersion,
+  tmpVersions,
 } from './client';
 
 describe('Quarry API client', () => {
@@ -25,7 +34,13 @@ describe('Quarry API client', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
-        new Response('body', { headers: { ETag: '"v1"', 'x-quarry-document-id': 'doc-1' } })
+        new Response('body', {
+          headers: {
+            ETag: '"v1"',
+            'x-quarry-document-id': 'doc-1',
+            'x-quarry-expires-at': '2099-01-01T00:00:00Z',
+          },
+        })
       )
     );
 
@@ -33,6 +48,7 @@ describe('Quarry API client', () => {
       content: 'body',
       documentId: 'doc-1',
       etag: '"v1"',
+      expiresAt: '2099-01-01T00:00:00Z',
       path: 'a.md',
     });
   });
@@ -181,6 +197,157 @@ describe('Quarry API client', () => {
       expect.objectContaining({
         method: 'PUT',
         headers: expect.objectContaining({ 'If-None-Match': '*' }),
+      })
+    );
+  });
+
+  it('creates tmp documents through the tmp collection route', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ version: { id: 'v1' } }), {
+        status: 201,
+        headers: { ETag: '"v1"', 'content-type': 'application/json' },
+      })
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await createTmpDocument({ path: 'scratch/new.md', content: '# New', contentType: 'text/markdown' });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/v1/tmp/documents',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          path: 'scratch/new.md',
+          content: '# New',
+          content_type: 'text/markdown',
+          metadata: undefined,
+          expires_at: undefined,
+        }),
+      })
+    );
+  });
+
+  it('reads and saves tmp documents with tmp URLs and If-Match', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response('tmp body', {
+          headers: {
+            ETag: '"v1"',
+            'content-type': 'text/plain',
+            'x-quarry-document-id': 'tmp-1',
+            'x-quarry-expires-at': '2099-01-01T00:00:00Z',
+          },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: { id: 'v2' } }), {
+          headers: { ETag: '"v2"', 'content-type': 'application/json' },
+        })
+      );
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(getTmpDocument('scratch/note.txt')).resolves.toMatchObject({
+      content: 'tmp body',
+      documentId: 'tmp-1',
+      etag: '"v1"',
+      expiresAt: '2099-01-01T00:00:00Z',
+    });
+    await putTmpDocument('scratch/note.txt', 'next', '"v1"', 'text/plain');
+
+    expect(fetch).toHaveBeenNthCalledWith(1, '/v1/tmp/documents/scratch/note.txt');
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      '/v1/tmp/documents/scratch/note.txt',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: expect.objectContaining({ 'If-Match': '"v1"', 'content-type': 'text/plain' }),
+        body: 'next',
+      })
+    );
+  });
+
+  it('exposes tmp versions ttl delete and promote helpers', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true }), {
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await tmpVersions('scratch/note.txt');
+    await tmpDocumentVersion('scratch/note.txt', 'v1');
+    await setTmpDocumentTtl('scratch/note.txt', '2099-01-01T00:00:00Z');
+    await promoteTmpDocument('scratch/note.txt', {
+      library: 'notes',
+      path: 'promoted/note.txt',
+      ifMatch: 'v2',
+    });
+    await deleteTmpDocument('scratch/note.txt');
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      '/v1/tmp/documents/scratch/note.txt/versions',
+      undefined
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      '/v1/tmp/documents/scratch/note.txt/versions/v1',
+      undefined
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      '/v1/tmp/documents/scratch/note.txt/ttl',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ expires_at: '2099-01-01T00:00:00Z' }),
+      })
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      4,
+      '/v1/tmp/documents/scratch/note.txt/promote',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          library: 'notes',
+          path: 'promoted/note.txt',
+          if_match: 'v2',
+        }),
+      })
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      5,
+      '/v1/tmp/documents/scratch/note.txt',
+      expect.objectContaining({ method: 'DELETE' })
+    );
+  });
+
+  it('sets and clears library document TTLs', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ expires_at: null }), {
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await setDocumentTtl('notes', 'folder/live.md', '2099-01-01T00:00:00Z');
+    await setDocumentTtl('notes', 'folder/live.md', null);
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      '/v1/libraries/notes/documents/folder/live.md/ttl',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ expires_at: '2099-01-01T00:00:00Z' }),
+      })
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      '/v1/libraries/notes/documents/folder/live.md/ttl',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ expires_at: null }),
       })
     );
   });

@@ -24,6 +24,7 @@ export interface LoadedDocument {
   content: string;
   contentType: string;
   etag: string;
+  expiresAt?: string;
 }
 
 export interface SavedDocument {
@@ -36,6 +37,20 @@ export interface DocumentMutationOptions {
   transactionActor?: string;
   transactionMessage?: string;
   transactionProvenance?: Record<string, unknown>;
+}
+
+export interface CreateTmpDocumentRequest {
+  path?: string;
+  content?: string;
+  metadata?: Record<string, unknown>;
+  contentType?: string;
+  expiresAt?: string;
+}
+
+export interface PromoteTmpDocumentRequest {
+  library: string;
+  path: string;
+  ifMatch?: string;
 }
 
 export interface GitPeer {
@@ -125,6 +140,8 @@ export const createLibrary = (slug: string) =>
 export const listDocuments = (library: string) =>
   jsonRequest<DocumentListEntry[]>(`/v1/libraries/${segment(library)}/documents`);
 
+export const listTmpDocuments = () => jsonRequest<DocumentListEntry[]>('/v1/tmp/documents');
+
 export async function getDocument(library: string, path: string): Promise<LoadedDocument> {
   const response = await fetch(documentHref(library, path));
   await assertOk(response);
@@ -134,6 +151,42 @@ export async function getDocument(library: string, path: string): Promise<Loaded
     path,
     content: isTextContentType(contentType) ? await response.text() : '',
     contentType,
+    etag: response.headers.get('etag') ?? '',
+    expiresAt: response.headers.get('x-quarry-expires-at') ?? undefined,
+  };
+}
+
+export async function getTmpDocument(path: string): Promise<LoadedDocument> {
+  const response = await fetch(tmpDocumentHref(path));
+  await assertOk(response);
+  const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
+  return {
+    documentId: response.headers.get('x-quarry-document-id') ?? '',
+    path,
+    content: isTextContentType(contentType) ? await response.text() : '',
+    contentType,
+    etag: response.headers.get('etag') ?? '',
+    expiresAt: response.headers.get('x-quarry-expires-at') ?? undefined,
+  };
+}
+
+export async function createTmpDocument(
+  request: CreateTmpDocumentRequest = {}
+): Promise<SavedDocument> {
+  const response = await fetch('/v1/tmp/documents', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      path: request.path,
+      content: request.content,
+      content_type: request.contentType,
+      metadata: request.metadata,
+      expires_at: request.expiresAt,
+    }),
+  });
+  await assertOk(response);
+  return {
+    outcome: (await response.json()) as WriteOutcome,
     etag: response.headers.get('etag') ?? '',
   };
 }
@@ -151,6 +204,20 @@ export function putDocument(
     'content-type': contentType,
   });
   return writeDocument(library, path, content, headers);
+}
+
+export function putTmpDocument(
+  path: string,
+  content: string,
+  etag: string,
+  contentType = 'text/markdown',
+  options: DocumentMutationOptions = {}
+) {
+  const headers = mutationHeaders(options, {
+    'If-Match': etag,
+    'content-type': contentType,
+  });
+  return writeTmpDocument(path, content, headers);
 }
 
 export function createDocument(
@@ -208,6 +275,13 @@ export async function deleteDocument(
   });
 }
 
+export async function deleteTmpDocument(path: string, options: DocumentMutationOptions = {}) {
+  return jsonRequest(tmpDocumentHref(path), {
+    method: 'DELETE',
+    headers: mutationHeaders(options),
+  });
+}
+
 export const listConflicts = (library: string) =>
   jsonRequest<ConflictRecord[]>(`/v1/libraries/${segment(library)}/conflicts`);
 
@@ -258,6 +332,9 @@ export const versions = (library: string, path: string) =>
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/versions`
   );
 
+export const tmpVersions = (path: string) =>
+  jsonRequest<DocumentHistoryEntry[]>(`/v1/tmp/documents/${pathSegments(path)}/versions`);
+
 export const rawVersions = (library: string, path: string) =>
   jsonRequest<DocumentVersion[]>(
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/versions/raw`
@@ -267,6 +344,39 @@ export const documentVersion = (library: string, path: string, version: string) 
   jsonRequest<DocumentVersionContent>(
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/versions/${segment(version)}`
   );
+
+export const tmpDocumentVersion = (path: string, version: string) =>
+  jsonRequest<DocumentVersionContent>(
+    `/v1/tmp/documents/${pathSegments(path)}/versions/${segment(version)}`
+  );
+
+export const setTmpDocumentTtl = (path: string, expiresAt: string) =>
+  jsonRequest<{ expires_at: string | null }>(`/v1/tmp/documents/${pathSegments(path)}/ttl`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ expires_at: expiresAt }),
+  });
+
+export const setDocumentTtl = (library: string, path: string, expiresAt: string | null) =>
+  jsonRequest<{ expires_at: string | null }>(
+    `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/ttl`,
+    {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expires_at: expiresAt }),
+    }
+  );
+
+export const promoteTmpDocument = (path: string, request: PromoteTmpDocumentRequest) =>
+  jsonRequest<DocumentListEntry>(`/v1/tmp/documents/${pathSegments(path)}/promote`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      library: request.library,
+      path: request.path,
+      if_match: request.ifMatch,
+    }),
+  });
 
 export const diffVersion = (library: string, path: string, version: string, against?: string) =>
   jsonRequest<VersionDiff>(
@@ -421,6 +531,23 @@ async function writeDocument(
   };
 }
 
+async function writeTmpDocument(
+  path: string,
+  content: string,
+  headers: Record<string, string>
+): Promise<SavedDocument> {
+  const response = await fetch(tmpDocumentHref(path), {
+    method: 'PUT',
+    headers,
+    body: content,
+  });
+  await assertOk(response);
+  return {
+    outcome: (await response.json()) as WriteOutcome,
+    etag: response.headers.get('etag') ?? '',
+  };
+}
+
 function mutationHeaders(
   options: DocumentMutationOptions = {},
   headers: Record<string, string> = {}
@@ -466,6 +593,10 @@ async function readErrorPayload(response: Response) {
 
 export function documentHref(library: string, path: string) {
   return `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}`;
+}
+
+export function tmpDocumentHref(path: string) {
+  return `/v1/tmp/documents/${pathSegments(path)}`;
 }
 
 export function isTextContentType(contentType: string) {

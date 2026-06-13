@@ -33,6 +33,8 @@ use tokio::sync::{broadcast, Mutex, MutexGuard, OwnedMutexGuard};
 use turso::{params, Builder, Connection, Database, Row, Rows, Value};
 use uuid::Uuid;
 
+const TMP_TRANSACTION_LIBRARY_ID: &str = "__tmp__";
+
 #[derive(Clone, Debug)]
 pub struct StoreConfig {
     pub db_path: PathBuf,
@@ -45,6 +47,13 @@ pub struct TransactionMetadata {
     pub actor: Option<String>,
     pub message: Option<String>,
     pub provenance: JsonValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TmpTtl {
+    Default,
+    Unchanged,
+    ExpiresAt(String),
 }
 
 impl Default for TransactionMetadata {
@@ -542,9 +551,18 @@ impl QuarryStore {
             let mut document_rows = conn
                 .query(
                     "SELECT 1 FROM documents
-                     WHERE library_id = ?1 AND deleted_at IS NULL AND path LIKE ?2
+                     WHERE document_scope = 'library'
+                       AND library_id = ?1
+                       AND deleted_at IS NULL
+                       AND head_version_id IS NOT NULL
+                       AND (expires_at IS NULL OR expires_at > ?2)
+                       AND path LIKE ?3
                      LIMIT 1",
-                    params![library.id.clone(), format!("{from_prefix}%")],
+                    params![
+                        library.id.clone(),
+                        now_timestamp(),
+                        format!("{from_prefix}%")
+                    ],
                 )
                 .await
                 .map_err(map_turso_error)?;
@@ -950,6 +968,340 @@ impl QuarryStore {
         self.document_conn(&conn, &library.id, &path).await
     }
 
+    pub async fn put_tmp_document(
+        &self,
+        path: &str,
+        content: Vec<u8>,
+        metadata: JsonValue,
+        content_type: &str,
+        ttl: TmpTtl,
+        precondition: WritePrecondition,
+    ) -> Result<WriteOutcome> {
+        let path = normalize_path(path)?;
+        let _operation_guard = self.normal_write_gate().await;
+        let _guard = self.acquire_write_lock().await;
+        let conn = self.conn()?;
+        begin_immediate(&conn).await?;
+        let result = async {
+            self.check_tmp_precondition_conn(&conn, &path, &precondition)
+                .await?;
+            let expires_at = match ttl {
+                TmpTtl::Default => default_tmp_expires_at(),
+                TmpTtl::Unchanged => self
+                    .tmp_document_expires_at_conn(&conn, &path)
+                    .await?
+                    .unwrap_or_else(default_tmp_expires_at),
+                TmpTtl::ExpiresAt(expires_at) => expires_at,
+            };
+            let tx = insert_transaction_conn(
+                &conn,
+                TMP_TRANSACTION_LIBRARY_ID,
+                DocumentSource::Rest,
+                None,
+                None,
+                serde_json::json!({ "mode": "tmp_document" }),
+            )
+            .await?;
+            let (doc_id, old_version_id) =
+                ensure_tmp_document_conn(&conn, &path, &expires_at, &now_timestamp()).await?;
+            let version = self
+                .insert_version_conn(&conn, &doc_id, &tx.id, content, metadata, content_type)
+                .await?;
+            insert_change_conn(
+                &conn,
+                &tx.id,
+                &path,
+                ChangeType::Put,
+                old_version_id.as_deref(),
+                Some(&version.id),
+                None,
+            )
+            .await?;
+            publish_put_conn(&conn, &doc_id, &version.id).await?;
+            conn.execute(
+                "UPDATE documents SET expires_at = ?1 WHERE id = ?2",
+                params![expires_at, doc_id.clone()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+            commit_transaction_record_conn(&conn, &tx.id).await?;
+            let document = self.tmp_document_entry_conn(&conn, &path).await?;
+            let tx = self.transaction_conn(&conn, &tx.id).await?;
+            Ok(WriteOutcome {
+                document,
+                version,
+                transaction: tx,
+            })
+        }
+        .await;
+        finish_tx(&conn, result).await
+    }
+
+    pub async fn get_tmp_document(&self, path: &str) -> Result<Document> {
+        let path = normalize_path(path)?;
+        let conn = self.conn()?;
+        self.tmp_document_conn(&conn, &path).await
+    }
+
+    pub async fn head_tmp_document(&self, path: &str) -> Result<DocumentListEntry> {
+        let path = normalize_path(path)?;
+        let conn = self.conn()?;
+        self.tmp_document_entry_conn(&conn, &path).await
+    }
+
+    pub async fn list_tmp_documents(
+        &self,
+        prefix: Option<&str>,
+        limit: Option<u64>,
+    ) -> Result<Vec<DocumentListEntry>> {
+        let conn = self.conn()?;
+        let normalized_prefix = match prefix {
+            Some("") | None => None,
+            Some(prefix) => Some(normalize_prefix(prefix)?),
+        };
+        let now = now_timestamp();
+        let limit = limit.unwrap_or(1000).min(10_000) as i64;
+        let (sql, params) = if let Some(prefix) = normalized_prefix {
+            (
+                "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
+                 FROM documents d
+                 JOIN document_versions v ON v.id = d.head_version_id
+                 WHERE d.document_scope = 'tmp'
+                   AND d.library_id IS NULL
+                   AND d.deleted_at IS NULL
+                   AND d.head_version_id IS NOT NULL
+                   AND d.expires_at > ?1
+                   AND d.path LIKE ?2
+                 ORDER BY d.path LIMIT ?3",
+                vec![
+                    Value::Text(now),
+                    Value::Text(format!("{prefix}%")),
+                    Value::Integer(limit),
+                ],
+            )
+        } else {
+            (
+                "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
+                 FROM documents d
+                 JOIN document_versions v ON v.id = d.head_version_id
+                 WHERE d.document_scope = 'tmp'
+                   AND d.library_id IS NULL
+                   AND d.deleted_at IS NULL
+                   AND d.head_version_id IS NOT NULL
+                   AND d.expires_at > ?1
+                 ORDER BY d.path LIMIT ?2",
+                vec![Value::Text(now), Value::Integer(limit)],
+            )
+        };
+        let mut rows = conn.query(sql, params).await.map_err(map_turso_error)?;
+        let mut documents = Vec::new();
+        while let Some(row) = rows.next().await.map_err(map_turso_error)? {
+            documents.push(document_entry_from_row(&row)?);
+        }
+        Ok(documents)
+    }
+
+    pub async fn raw_tmp_version_history(&self, path: &str) -> Result<Vec<DocumentVersion>> {
+        let path = normalize_path(path)?;
+        let conn = self.conn()?;
+        let document_id = self
+            .tmp_document_id_conn(&conn, &path)
+            .await?
+            .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+        self.raw_version_history_for_document_conn(&conn, &document_id)
+            .await
+    }
+
+    pub async fn tmp_version_history(&self, path: &str) -> Result<Vec<DocumentHistoryEntry>> {
+        let raw = self.raw_tmp_version_history(path).await?;
+        Ok(group_version_history(raw))
+    }
+
+    pub async fn tmp_document_version(
+        &self,
+        path: &str,
+        version_id: &str,
+    ) -> Result<DocumentVersionContent> {
+        let path = normalize_path(path)?;
+        let conn = self.conn()?;
+        let document_id = self
+            .tmp_document_id_conn(&conn, &path)
+            .await?
+            .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+        let (version, content) = self
+            .version_content_conn(&conn, &document_id, version_id)
+            .await?;
+        Ok(DocumentVersionContent {
+            version,
+            content: String::from_utf8_lossy(&content).into_owned(),
+        })
+    }
+
+    pub async fn delete_tmp_document(&self, path: &str) -> Result<TransactionRecord> {
+        let path = normalize_path(path)?;
+        let _operation_guard = self.normal_write_gate().await;
+        let _guard = self.acquire_write_lock().await;
+        let conn = self.conn()?;
+        begin_immediate(&conn).await?;
+        let result = async {
+            let (doc_id, head_version_id) = self
+                .tmp_document_identity_conn(&conn, &path)
+                .await?
+                .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+            let tx = insert_transaction_conn(
+                &conn,
+                TMP_TRANSACTION_LIBRARY_ID,
+                DocumentSource::Rest,
+                None,
+                None,
+                serde_json::json!({ "mode": "tmp_document" }),
+            )
+            .await?;
+            insert_change_conn(
+                &conn,
+                &tx.id,
+                &path,
+                ChangeType::Delete,
+                head_version_id.as_deref(),
+                None,
+                None,
+            )
+            .await?;
+            conn.execute(
+                "UPDATE documents SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
+                params![now_timestamp(), doc_id],
+            )
+            .await
+            .map_err(map_turso_error)?;
+            commit_transaction_record_conn(&conn, &tx.id).await?;
+            self.transaction_conn(&conn, &tx.id).await
+        }
+        .await;
+        finish_tx(&conn, result).await
+    }
+
+    pub async fn set_tmp_document_ttl(
+        &self,
+        path: &str,
+        expires_at: Option<String>,
+    ) -> Result<DocumentListEntry> {
+        let Some(expires_at) = expires_at else {
+            return Err(QuarryError::InvalidInput(
+                "tmp document TTL cannot be removed".to_string(),
+            ));
+        };
+        let path = normalize_path(path)?;
+        let _operation_guard = self.normal_write_gate().await;
+        let _guard = self.acquire_write_lock().await;
+        let conn = self.conn()?;
+        begin_immediate(&conn).await?;
+        let result = async {
+            let (doc_id, _) = self
+                .tmp_document_identity_conn(&conn, &path)
+                .await?
+                .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+            conn.execute(
+                "UPDATE documents SET expires_at = ?1, updated_at = ?2 WHERE id = ?3",
+                params![expires_at, now_timestamp(), doc_id],
+            )
+            .await
+            .map_err(map_turso_error)?;
+            self.tmp_document_entry_any_conn(&conn, &path).await
+        }
+        .await;
+        finish_tx(&conn, result).await
+    }
+
+    pub async fn set_document_ttl(
+        &self,
+        library: &str,
+        path: &str,
+        expires_at: Option<String>,
+    ) -> Result<DocumentListEntry> {
+        let path = normalize_path(path)?;
+        let _operation_guard = self.normal_write_gate().await;
+        let _guard = self.acquire_write_lock().await;
+        let conn = self.conn()?;
+        begin_immediate(&conn).await?;
+        let result = async {
+            let library = self.require_library_conn(&conn, library).await?;
+            let doc_id = self
+                .library_document_id_any_conn(&conn, &library.id, &path)
+                .await?
+                .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+            conn.execute(
+                "UPDATE documents SET expires_at = ?1, updated_at = ?2 WHERE id = ?3",
+                vec![
+                    opt_value(expires_at),
+                    Value::Text(now_timestamp()),
+                    Value::Text(doc_id),
+                ],
+            )
+            .await
+            .map_err(map_turso_error)?;
+            self.document_entry_any_conn(&conn, &library.id, &path)
+                .await
+        }
+        .await;
+        finish_tx(&conn, result).await
+    }
+
+    pub async fn promote_tmp_document(
+        &self,
+        tmp_path: &str,
+        library: &str,
+        target_path: &str,
+        precondition: WritePrecondition,
+    ) -> Result<DocumentListEntry> {
+        let tmp_path = normalize_path(tmp_path)?;
+        let target_path = normalize_path(target_path)?;
+        let _operation_guard = self.normal_write_gate().await;
+        let _guard = self.acquire_write_lock().await;
+        let conn = self.conn()?;
+        begin_immediate(&conn).await?;
+        let result = async {
+            let library = self.require_library_conn(&conn, library).await?;
+            self.check_tmp_precondition_conn(&conn, &tmp_path, &precondition)
+                .await?;
+            if self
+                .document_identity_conn(&conn, &library.id, &target_path)
+                .await?
+                .is_some()
+            {
+                return Err(QuarryError::Conflict(format!(
+                    "{target_path} already exists"
+                )));
+            }
+            let (doc_id, _) = self
+                .tmp_document_identity_conn(&conn, &tmp_path)
+                .await?
+                .ok_or_else(|| QuarryError::NotFound(tmp_path.clone()))?;
+            conn.execute(
+                "UPDATE documents
+                 SET library_id = ?1,
+                     document_scope = 'library',
+                     path = ?2,
+                     expires_at = NULL,
+                     updated_at = ?3
+                 WHERE id = ?4",
+                params![
+                    library.id.clone(),
+                    target_path.clone(),
+                    now_timestamp(),
+                    doc_id
+                ],
+            )
+            .await
+            .map_err(map_turso_error)?;
+            ensure_path_inodes_conn(&conn, &library.id, &target_path).await?;
+            self.reindex_links_conn(&conn, &library.id).await?;
+            self.document_entry_conn(&conn, &library.id, &target_path)
+                .await
+        }
+        .await;
+        finish_tx(&conn, result).await
+    }
+
     pub async fn collab_document_seed(
         &self,
         document_id: &str,
@@ -1066,28 +1418,39 @@ impl QuarryStore {
             Some(prefix) => Some(normalize_prefix(prefix)?),
         };
         let limit = limit.unwrap_or(1000).min(10_000) as i64;
+        let now = now_timestamp();
 
         let (sql, params) = if let Some(prefix) = normalized_prefix {
             (
-                "SELECT d.id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.updated_at
+                "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
                  FROM documents d
                  JOIN document_versions v ON v.id = d.head_version_id
-                 WHERE d.library_id = ?1 AND d.deleted_at IS NULL AND d.head_version_id IS NOT NULL AND d.path LIKE ?2
-                 ORDER BY d.path LIMIT ?3",
+                 WHERE d.document_scope = 'library'
+                   AND d.library_id = ?1
+                   AND d.deleted_at IS NULL
+                   AND d.head_version_id IS NOT NULL
+                   AND (d.expires_at IS NULL OR d.expires_at > ?2)
+                   AND d.path LIKE ?3
+                 ORDER BY d.path LIMIT ?4",
                 vec![
                     Value::Text(library.id),
+                    Value::Text(now),
                     Value::Text(format!("{prefix}%")),
                     Value::Integer(limit),
                 ],
             )
         } else {
             (
-                "SELECT d.id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.updated_at
+                "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
                  FROM documents d
                  JOIN document_versions v ON v.id = d.head_version_id
-                 WHERE d.library_id = ?1 AND d.deleted_at IS NULL AND d.head_version_id IS NOT NULL
-                 ORDER BY d.path LIMIT ?2",
-                vec![Value::Text(library.id), Value::Integer(limit)],
+                 WHERE d.document_scope = 'library'
+                   AND d.library_id = ?1
+                   AND d.deleted_at IS NULL
+                   AND d.head_version_id IS NOT NULL
+                   AND (d.expires_at IS NULL OR d.expires_at > ?2)
+                 ORDER BY d.path LIMIT ?3",
+                vec![Value::Text(library.id), Value::Text(now), Value::Integer(limit)],
             )
         };
 
@@ -1552,6 +1915,15 @@ impl QuarryStore {
             .document_id_conn(&conn, &library.id, &path)
             .await?
             .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+        self.raw_version_history_for_document_conn(&conn, &document_id)
+            .await
+    }
+
+    async fn raw_version_history_for_document_conn(
+        &self,
+        conn: &Connection,
+        document_id: &str,
+    ) -> Result<Vec<DocumentVersion>> {
         let mut rows = conn
             .query(
                 "SELECT v.id, v.document_id, v.tx_id, v.content_hash, v.inline_content, v.metadata_json,
@@ -2654,9 +3026,19 @@ impl QuarryStore {
             .query(
                 "SELECT DISTINCT dv.content_hash
                  FROM document_versions dv
+                 JOIN documents d ON d.id = dv.document_id
                  JOIN transactions t ON t.id = dv.tx_id
-                 WHERE dv.content_hash IS NOT NULL AND t.state IN ('open', 'committed')",
-                (),
+                 WHERE dv.content_hash IS NOT NULL
+                   AND t.state IN ('open', 'committed')
+                   AND (
+                     t.state = 'open'
+                     OR (
+                       d.deleted_at IS NULL
+                       AND d.head_version_id IS NOT NULL
+                       AND (d.expires_at IS NULL OR d.expires_at > ?1)
+                     )
+                   )",
+                params![now_timestamp()],
             )
             .await
             .map_err(map_turso_error)?;
@@ -2679,7 +3061,7 @@ impl QuarryStore {
     async fn migrate(&self) -> Result<()> {
         let conn = self.conn()?;
         conn.execute_batch(SCHEMA).await.map_err(map_turso_error)?;
-        migrate_documents_active_path_uniqueness(&conn).await?;
+        migrate_documents_scope_ttl(&conn).await?;
         ensure_document_indexes_conn(&conn).await?;
         ensure_links_resolution_status_column(&conn).await?;
         // Sessions are discardable (recovery is reseed-from-rows); the legacy
@@ -2815,6 +3197,37 @@ impl QuarryStore {
         }
     }
 
+    async fn check_tmp_precondition_conn(
+        &self,
+        conn: &Connection,
+        path: &str,
+        precondition: &WritePrecondition,
+    ) -> Result<()> {
+        let current = self.tmp_document_identity_conn(conn, path).await?;
+        match precondition {
+            WritePrecondition::None => Ok(()),
+            WritePrecondition::IfNoneMatch => {
+                if current.is_some() {
+                    Err(QuarryError::PreconditionFailed(format!("{path} exists")))
+                } else {
+                    Ok(())
+                }
+            }
+            WritePrecondition::IfMatch(expected) => {
+                let actual = current
+                    .and_then(|(_, version)| version)
+                    .ok_or_else(|| QuarryError::PreconditionFailed(format!("{path} missing")))?;
+                if &actual == expected {
+                    Ok(())
+                } else {
+                    Err(QuarryError::PreconditionFailed(format!(
+                        "{path} head is {actual}, expected {expected}"
+                    )))
+                }
+            }
+        }
+    }
+
     async fn ensure_staged_head_unchanged_conn(
         &self,
         conn: &Connection,
@@ -2890,21 +3303,33 @@ impl QuarryStore {
         library_id: &str,
         path: &str,
     ) -> Result<Option<String>> {
+        let now = now_timestamp();
         let mut rows = conn
             .query(
                 "SELECT id FROM documents
-                 WHERE library_id = ?1 AND path = ?2 AND deleted_at IS NULL AND head_version_id IS NOT NULL
+                 WHERE document_scope = 'library'
+                   AND library_id = ?1
+                   AND path = ?2
+                   AND deleted_at IS NULL
+                   AND head_version_id IS NOT NULL
+                   AND (expires_at IS NULL OR expires_at > ?3)
                  LIMIT 1",
-                params![library_id.to_string(), path.to_string()],
+                params![library_id.to_string(), path.to_string(), now.clone()],
             )
             .await
             .map_err(map_turso_error)?;
-        Ok(rows
+        let id = rows
             .next()
             .await
             .map_err(map_turso_error)?
             .map(|row| text(&row, 0))
-            .transpose()?)
+            .transpose()?;
+        if id.is_some() {
+            return Ok(id);
+        }
+        self.error_if_library_document_expired_conn(conn, library_id, path, &now)
+            .await?;
+        Ok(None)
     }
 
     async fn document_identity_conn(
@@ -2913,19 +3338,195 @@ impl QuarryStore {
         library_id: &str,
         path: &str,
     ) -> Result<Option<(String, Option<String>)>> {
+        let now = now_timestamp();
         let mut rows = conn
             .query(
                 "SELECT id, head_version_id FROM documents
-                 WHERE library_id = ?1 AND path = ?2 AND deleted_at IS NULL AND head_version_id IS NOT NULL
+                 WHERE document_scope = 'library'
+                   AND library_id = ?1
+                   AND path = ?2
+                   AND deleted_at IS NULL
+                   AND head_version_id IS NOT NULL
+                   AND (expires_at IS NULL OR expires_at > ?3)
                  LIMIT 1",
-                params![library_id.to_string(), path.to_string()],
+                params![library_id.to_string(), path.to_string(), now.clone()],
             )
             .await
             .map_err(map_turso_error)?;
         if let Some(row) = rows.next().await.map_err(map_turso_error)? {
             Ok(Some((text(&row, 0)?, opt_text(&row, 1)?)))
         } else {
+            self.error_if_library_document_expired_conn(conn, library_id, path, &now)
+                .await?;
             Ok(None)
+        }
+    }
+
+    async fn library_document_id_any_conn(
+        &self,
+        conn: &Connection,
+        library_id: &str,
+        path: &str,
+    ) -> Result<Option<String>> {
+        let mut rows = conn
+            .query(
+                "SELECT id FROM documents
+                 WHERE document_scope = 'library'
+                   AND library_id = ?1
+                   AND path = ?2
+                   AND deleted_at IS NULL
+                   AND head_version_id IS NOT NULL
+                 LIMIT 1",
+                params![library_id.to_string(), path.to_string()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        rows.next()
+            .await
+            .map_err(map_turso_error)?
+            .map(|row| text(&row, 0))
+            .transpose()
+    }
+
+    async fn tmp_document_id_conn(&self, conn: &Connection, path: &str) -> Result<Option<String>> {
+        let now = now_timestamp();
+        let mut rows = conn
+            .query(
+                "SELECT id FROM documents
+                 WHERE document_scope = 'tmp'
+                   AND library_id IS NULL
+                   AND path = ?1
+                   AND deleted_at IS NULL
+                   AND head_version_id IS NOT NULL
+                   AND expires_at > ?2
+                 LIMIT 1",
+                params![path.to_string(), now.clone()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        let id = rows
+            .next()
+            .await
+            .map_err(map_turso_error)?
+            .map(|row| text(&row, 0))
+            .transpose()?;
+        if id.is_some() {
+            return Ok(id);
+        }
+        self.error_if_tmp_document_expired_conn(conn, path, &now)
+            .await?;
+        Ok(None)
+    }
+
+    async fn tmp_document_identity_conn(
+        &self,
+        conn: &Connection,
+        path: &str,
+    ) -> Result<Option<(String, Option<String>)>> {
+        let now = now_timestamp();
+        let mut rows = conn
+            .query(
+                "SELECT id, head_version_id FROM documents
+                 WHERE document_scope = 'tmp'
+                   AND library_id IS NULL
+                   AND path = ?1
+                   AND deleted_at IS NULL
+                   AND head_version_id IS NOT NULL
+                   AND expires_at > ?2
+                 LIMIT 1",
+                params![path.to_string(), now.clone()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        if let Some(row) = rows.next().await.map_err(map_turso_error)? {
+            Ok(Some((text(&row, 0)?, opt_text(&row, 1)?)))
+        } else {
+            self.error_if_tmp_document_expired_conn(conn, path, &now)
+                .await?;
+            Ok(None)
+        }
+    }
+
+    async fn tmp_document_expires_at_conn(
+        &self,
+        conn: &Connection,
+        path: &str,
+    ) -> Result<Option<String>> {
+        let mut rows = conn
+            .query(
+                "SELECT expires_at FROM documents
+                 WHERE document_scope = 'tmp'
+                   AND library_id IS NULL
+                   AND path = ?1
+                   AND deleted_at IS NULL
+                   AND head_version_id IS NOT NULL
+                   AND expires_at > ?2
+                 LIMIT 1",
+                params![path.to_string(), now_timestamp()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        rows.next()
+            .await
+            .map_err(map_turso_error)?
+            .map(|row| opt_text(&row, 0))
+            .transpose()
+            .map(Option::flatten)
+    }
+
+    async fn error_if_library_document_expired_conn(
+        &self,
+        conn: &Connection,
+        library_id: &str,
+        path: &str,
+        now: &str,
+    ) -> Result<()> {
+        let mut rows = conn
+            .query(
+                "SELECT expires_at FROM documents
+                 WHERE document_scope = 'library'
+                   AND library_id = ?1
+                   AND path = ?2
+                   AND deleted_at IS NULL
+                   AND head_version_id IS NOT NULL
+                   AND expires_at IS NOT NULL
+                   AND expires_at <= ?3
+                 LIMIT 1",
+                params![library_id.to_string(), path.to_string(), now.to_string()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        if rows.next().await.map_err(map_turso_error)?.is_some() {
+            Err(QuarryError::Gone(path.to_string()))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn error_if_tmp_document_expired_conn(
+        &self,
+        conn: &Connection,
+        path: &str,
+        now: &str,
+    ) -> Result<()> {
+        let mut rows = conn
+            .query(
+                "SELECT expires_at FROM documents
+                 WHERE document_scope = 'tmp'
+                   AND library_id IS NULL
+                   AND path = ?1
+                   AND deleted_at IS NULL
+                   AND head_version_id IS NOT NULL
+                   AND expires_at <= ?2
+                 LIMIT 1",
+                params![path.to_string(), now.to_string()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        if rows.next().await.map_err(map_turso_error)?.is_some() {
+            Err(QuarryError::Gone(path.to_string()))
+        } else {
+            Ok(())
         }
     }
 
@@ -2939,9 +3540,13 @@ impl QuarryStore {
                 "SELECT d.id, v.id, v.content_type, v.content_hash, v.inline_content
                  FROM documents d
                  JOIN document_versions v ON v.id = d.head_version_id
-                 WHERE d.id = ?1 AND d.deleted_at IS NULL AND d.head_version_id IS NOT NULL
+                 WHERE d.id = ?1
+                   AND d.document_scope = 'library'
+                   AND d.deleted_at IS NULL
+                   AND d.head_version_id IS NOT NULL
+                   AND (d.expires_at IS NULL OR d.expires_at > ?2)
                  LIMIT 1",
-                params![document_id.to_string()],
+                params![document_id.to_string(), now_timestamp()],
             )
             .await
             .map_err(map_turso_error)?;
@@ -3081,22 +3686,118 @@ impl QuarryStore {
         library_id: &str,
         path: &str,
     ) -> Result<DocumentListEntry> {
+        let now = now_timestamp();
         let mut rows = conn
             .query(
-                "SELECT d.id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.updated_at
+                "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
                  FROM documents d
                  JOIN document_versions v ON v.id = d.head_version_id
-                 WHERE d.library_id = ?1 AND d.path = ?2 AND d.deleted_at IS NULL AND d.head_version_id IS NOT NULL
+                 WHERE d.document_scope = 'library'
+                   AND d.library_id = ?1
+                   AND d.path = ?2
+                   AND d.deleted_at IS NULL
+                   AND d.head_version_id IS NOT NULL
+                   AND (d.expires_at IS NULL OR d.expires_at > ?3)
                  LIMIT 1",
-                params![library_id.to_string(), path.to_string()],
+                params![library_id.to_string(), path.to_string(), now.clone()],
             )
             .await
             .map_err(map_turso_error)?;
         if let Some(row) = rows.next().await.map_err(map_turso_error)? {
             document_entry_from_row(&row)
         } else {
+            self.error_if_library_document_expired_conn(conn, library_id, path, &now)
+                .await?;
             Err(QuarryError::NotFound(path.to_string()))
         }
+    }
+
+    async fn document_entry_any_conn(
+        &self,
+        conn: &Connection,
+        library_id: &str,
+        path: &str,
+    ) -> Result<DocumentListEntry> {
+        let mut rows = conn
+            .query(
+                "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
+                 FROM documents d
+                 JOIN document_versions v ON v.id = d.head_version_id
+                 WHERE d.document_scope = 'library'
+                   AND d.library_id = ?1
+                   AND d.path = ?2
+                   AND d.deleted_at IS NULL
+                   AND d.head_version_id IS NOT NULL
+                 LIMIT 1",
+                params![library_id.to_string(), path.to_string()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        rows.next()
+            .await
+            .map_err(map_turso_error)?
+            .map(|row| document_entry_from_row(&row))
+            .transpose()?
+            .ok_or_else(|| QuarryError::NotFound(path.to_string()))
+    }
+
+    async fn tmp_document_entry_conn(
+        &self,
+        conn: &Connection,
+        path: &str,
+    ) -> Result<DocumentListEntry> {
+        let now = now_timestamp();
+        let mut rows = conn
+            .query(
+                "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
+                 FROM documents d
+                 JOIN document_versions v ON v.id = d.head_version_id
+                 WHERE d.document_scope = 'tmp'
+                   AND d.library_id IS NULL
+                   AND d.path = ?1
+                   AND d.deleted_at IS NULL
+                   AND d.head_version_id IS NOT NULL
+                   AND d.expires_at > ?2
+                 LIMIT 1",
+                params![path.to_string(), now.clone()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        if let Some(row) = rows.next().await.map_err(map_turso_error)? {
+            document_entry_from_row(&row)
+        } else {
+            self.error_if_tmp_document_expired_conn(conn, path, &now)
+                .await?;
+            Err(QuarryError::NotFound(path.to_string()))
+        }
+    }
+
+    async fn tmp_document_entry_any_conn(
+        &self,
+        conn: &Connection,
+        path: &str,
+    ) -> Result<DocumentListEntry> {
+        let mut rows = conn
+            .query(
+                "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
+                 FROM documents d
+                 JOIN document_versions v ON v.id = d.head_version_id
+                 WHERE d.document_scope = 'tmp'
+                   AND d.library_id IS NULL
+                   AND d.path = ?1
+                   AND d.deleted_at IS NULL
+                   AND d.head_version_id IS NOT NULL
+                 LIMIT 1",
+                params![path.to_string()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        rows.next()
+            .await
+            .map_err(map_turso_error)?
+            .map(|row| document_entry_from_row(&row))
+            .transpose()?
+            .ok_or_else(|| QuarryError::NotFound(path.to_string()))
     }
 
     async fn document_entries_for_library_conn(
@@ -3107,12 +3808,16 @@ impl QuarryStore {
     ) -> Result<Vec<DocumentListEntry>> {
         let mut rows = conn
             .query(
-                "SELECT d.id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.updated_at
+                "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
                  FROM documents d
                  JOIN document_versions v ON v.id = d.head_version_id
-                 WHERE d.library_id = ?1 AND d.deleted_at IS NULL AND d.head_version_id IS NOT NULL
-                 ORDER BY d.path LIMIT ?2",
-                params![library_id.to_string(), limit],
+                 WHERE d.document_scope = 'library'
+                   AND d.library_id = ?1
+                   AND d.deleted_at IS NULL
+                   AND d.head_version_id IS NOT NULL
+                   AND (d.expires_at IS NULL OR d.expires_at > ?2)
+                 ORDER BY d.path LIMIT ?3",
+                params![library_id.to_string(), now_timestamp(), limit],
             )
             .await
             .map_err(map_turso_error)?;
@@ -3189,14 +3894,22 @@ impl QuarryStore {
                  LEFT JOIN documents td
                    ON td.library_id = l.library_id
                   AND td.id = l.target_doc_id
+                  AND td.document_scope = 'library'
                   AND td.deleted_at IS NULL
                   AND td.head_version_id IS NOT NULL
+                  AND (td.expires_at IS NULL OR td.expires_at > ?3)
                  WHERE l.library_id = ?1
                    AND l.src_doc_id = ?2
+                   AND sd.document_scope = 'library'
                    AND sd.deleted_at IS NULL
                    AND sd.head_version_id IS NOT NULL
+                   AND (sd.expires_at IS NULL OR sd.expires_at > ?3)
                  ORDER BY l.start_offset, l.end_offset, l.target_kind",
-                params![library_id.to_string(), source_doc_id.to_string()],
+                params![
+                    library_id.to_string(),
+                    source_doc_id.to_string(),
+                    now_timestamp()
+                ],
             )
             .await
             .map_err(map_turso_error)?;
@@ -3219,15 +3932,23 @@ impl QuarryStore {
                  LEFT JOIN documents td
                    ON td.library_id = l.library_id
                   AND td.id = l.target_doc_id
+                  AND td.document_scope = 'library'
                   AND td.deleted_at IS NULL
                   AND td.head_version_id IS NOT NULL
+                  AND (td.expires_at IS NULL OR td.expires_at > ?3)
                  WHERE l.library_id = ?1
                    AND l.target_doc_id = ?2
                    AND l.target_kind <> 'heading'
+                   AND sd.document_scope = 'library'
                    AND sd.deleted_at IS NULL
                    AND sd.head_version_id IS NOT NULL
+                   AND (sd.expires_at IS NULL OR sd.expires_at > ?3)
                  ORDER BY l.start_offset, l.end_offset, l.target_kind",
-                params![library_id.to_string(), target_doc_id.to_string()],
+                params![
+                    library_id.to_string(),
+                    target_doc_id.to_string(),
+                    now_timestamp()
+                ],
             )
             .await
             .map_err(map_turso_error)?;
@@ -3249,14 +3970,18 @@ impl QuarryStore {
                  LEFT JOIN documents td
                    ON td.library_id = l.library_id
                   AND td.id = l.target_doc_id
+                  AND td.document_scope = 'library'
                   AND td.deleted_at IS NULL
                   AND td.head_version_id IS NOT NULL
+                  AND (td.expires_at IS NULL OR td.expires_at > ?2)
                  WHERE l.library_id = ?1
                    AND l.target_kind <> 'heading'
+                   AND sd.document_scope = 'library'
                    AND sd.deleted_at IS NULL
                    AND sd.head_version_id IS NOT NULL
+                   AND (sd.expires_at IS NULL OR sd.expires_at > ?2)
                  ORDER BY sd.path, l.start_offset, l.end_offset, l.target_kind",
-                params![library_id.to_string()],
+                params![library_id.to_string(), now_timestamp()],
             )
             .await
             .map_err(map_turso_error)?;
@@ -3269,38 +3994,44 @@ impl QuarryStore {
         library_id: &str,
         path: &str,
     ) -> Result<Document> {
+        let now = now_timestamp();
         let mut rows = conn
             .query(
-                "SELECT d.id, d.library_id, d.path, d.created_at, d.updated_at,
+                "SELECT d.id, d.library_id, d.path, d.created_at, d.updated_at, d.expires_at,
                         v.id, v.document_id, v.tx_id, v.content_hash, v.inline_content,
                         v.metadata_json, v.content_type, v.byte_size, v.created_at
                  FROM documents d
                  JOIN document_versions v ON v.id = d.head_version_id
-                 WHERE d.library_id = ?1 AND d.path = ?2 AND d.deleted_at IS NULL AND d.head_version_id IS NOT NULL
+                 WHERE d.document_scope = 'library'
+                   AND d.library_id = ?1
+                   AND d.path = ?2
+                   AND d.deleted_at IS NULL
+                   AND d.head_version_id IS NOT NULL
+                   AND (d.expires_at IS NULL OR d.expires_at > ?3)
                  LIMIT 1",
-                params![library_id.to_string(), path.to_string()],
+                params![library_id.to_string(), path.to_string(), now.clone()],
             )
             .await
             .map_err(map_turso_error)?;
-        let row = rows
-            .next()
-            .await
-            .map_err(map_turso_error)?
-            .ok_or_else(|| QuarryError::NotFound(path.to_string()))?;
+        let Some(row) = rows.next().await.map_err(map_turso_error)? else {
+            self.error_if_library_document_expired_conn(conn, library_id, path, &now)
+                .await?;
+            return Err(QuarryError::NotFound(path.to_string()));
+        };
         let version = DocumentVersion {
-            id: text(&row, 5)?,
-            document_id: text(&row, 6)?,
-            tx_id: text(&row, 7)?,
+            id: text(&row, 6)?,
+            document_id: text(&row, 7)?,
+            tx_id: text(&row, 8)?,
             transaction_source: None,
             transaction_actor: None,
             transaction_message: None,
             transaction_provenance: None,
-            content_hash: opt_text(&row, 8)?,
-            inline_content: opt_blob(&row, 9)?,
-            metadata: serde_json::from_str(&text(&row, 10)?)?,
-            content_type: text(&row, 11)?,
-            byte_size: int(&row, 12)? as u64,
-            created_at: text(&row, 13)?,
+            content_hash: opt_text(&row, 9)?,
+            inline_content: opt_blob(&row, 10)?,
+            metadata: serde_json::from_str(&text(&row, 11)?)?,
+            content_type: text(&row, 12)?,
+            byte_size: int(&row, 13)? as u64,
+            created_at: text(&row, 14)?,
         };
         let content = match (&version.inline_content, &version.content_hash) {
             (Some(bytes), None) => bytes.clone(),
@@ -3314,11 +4045,75 @@ impl QuarryStore {
         };
         Ok(Document {
             id: text(&row, 0)?,
-            library_id: text(&row, 1)?,
+            library_id: opt_text(&row, 1)?,
             path: text(&row, 2)?,
             metadata: version.metadata.clone(),
             version,
             content,
+            expires_at: opt_text(&row, 5)?,
+            created_at: text(&row, 3)?,
+            updated_at: text(&row, 4)?,
+        })
+    }
+
+    async fn tmp_document_conn(&self, conn: &Connection, path: &str) -> Result<Document> {
+        let now = now_timestamp();
+        let mut rows = conn
+            .query(
+                "SELECT d.id, d.library_id, d.path, d.created_at, d.updated_at, d.expires_at,
+                        v.id, v.document_id, v.tx_id, v.content_hash, v.inline_content,
+                        v.metadata_json, v.content_type, v.byte_size, v.created_at
+                 FROM documents d
+                 JOIN document_versions v ON v.id = d.head_version_id
+                 WHERE d.document_scope = 'tmp'
+                   AND d.library_id IS NULL
+                   AND d.path = ?1
+                   AND d.deleted_at IS NULL
+                   AND d.head_version_id IS NOT NULL
+                   AND d.expires_at > ?2
+                 LIMIT 1",
+                params![path.to_string(), now.clone()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        let Some(row) = rows.next().await.map_err(map_turso_error)? else {
+            self.error_if_tmp_document_expired_conn(conn, path, &now)
+                .await?;
+            return Err(QuarryError::NotFound(path.to_string()));
+        };
+        let version = DocumentVersion {
+            id: text(&row, 6)?,
+            document_id: text(&row, 7)?,
+            tx_id: text(&row, 8)?,
+            transaction_source: None,
+            transaction_actor: None,
+            transaction_message: None,
+            transaction_provenance: None,
+            content_hash: opt_text(&row, 9)?,
+            inline_content: opt_blob(&row, 10)?,
+            metadata: serde_json::from_str(&text(&row, 11)?)?,
+            content_type: text(&row, 12)?,
+            byte_size: int(&row, 13)? as u64,
+            created_at: text(&row, 14)?,
+        };
+        let content = match (&version.inline_content, &version.content_hash) {
+            (Some(bytes), None) => bytes.clone(),
+            (None, Some(hash)) => self.cas.read(hash)?,
+            _ => {
+                return Err(QuarryError::Storage(format!(
+                    "version {} violates inline/CAS invariant",
+                    version.id
+                )))
+            }
+        };
+        Ok(Document {
+            id: text(&row, 0)?,
+            library_id: opt_text(&row, 1)?,
+            path: text(&row, 2)?,
+            metadata: version.metadata.clone(),
+            version,
+            content,
+            expires_at: opt_text(&row, 5)?,
             created_at: text(&row, 3)?,
             updated_at: text(&row, 4)?,
         })
@@ -3431,12 +4226,19 @@ CREATE TABLE IF NOT EXISTS libraries(
 
 CREATE TABLE IF NOT EXISTS documents(
   id TEXT PRIMARY KEY,
-  library_id TEXT NOT NULL,
+  library_id TEXT,
   path TEXT NOT NULL,
   head_version_id TEXT,
   deleted_at TEXT,
+  document_scope TEXT NOT NULL DEFAULT 'library',
+  expires_at TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  CHECK (document_scope IN ('library', 'tmp')),
+  CHECK (
+    (document_scope = 'library' AND library_id IS NOT NULL)
+    OR (document_scope = 'tmp' AND library_id IS NULL AND expires_at IS NOT NULL)
+  )
 );
 
 CREATE TABLE IF NOT EXISTS document_versions(
@@ -3612,12 +4414,6 @@ CREATE TABLE IF NOT EXISTS block_transactions(
   UNIQUE(document_id, client_tx_id)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_active_library_path
-  ON documents(library_id, path)
-  WHERE deleted_at IS NULL AND head_version_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_documents_library_path ON documents(library_id, path);
-CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at);
-CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents(updated_at);
 CREATE INDEX IF NOT EXISTS idx_versions_document ON document_versions(document_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_versions_content_type ON document_versions(content_type);
 CREATE INDEX IF NOT EXISTS idx_versions_created_at ON document_versions(created_at);
@@ -4275,6 +5071,60 @@ async fn delete_staged_change_conn(conn: &Connection, tx_id: &str, path: &str) -
     Ok(())
 }
 
+fn default_tmp_expires_at() -> String {
+    (Utc::now() + chrono::Duration::days(30)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+async fn error_if_library_document_expired(
+    conn: &Connection,
+    library_id: &str,
+    path: &str,
+    now: &str,
+) -> Result<()> {
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM documents
+             WHERE document_scope = 'library'
+               AND library_id = ?1
+               AND path = ?2
+               AND deleted_at IS NULL
+               AND head_version_id IS NOT NULL
+               AND expires_at IS NOT NULL
+               AND expires_at <= ?3
+             LIMIT 1",
+            params![library_id.to_string(), path.to_string(), now.to_string()],
+        )
+        .await
+        .map_err(map_turso_error)?;
+    if rows.next().await.map_err(map_turso_error)?.is_some() {
+        Err(QuarryError::Gone(path.to_string()))
+    } else {
+        Ok(())
+    }
+}
+
+async fn error_if_tmp_document_expired(conn: &Connection, path: &str, now: &str) -> Result<()> {
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM documents
+             WHERE document_scope = 'tmp'
+               AND library_id IS NULL
+               AND path = ?1
+               AND deleted_at IS NULL
+               AND head_version_id IS NOT NULL
+               AND expires_at <= ?2
+             LIMIT 1",
+            params![path.to_string(), now.to_string()],
+        )
+        .await
+        .map_err(map_turso_error)?;
+    if rows.next().await.map_err(map_turso_error)?.is_some() {
+        Err(QuarryError::Gone(path.to_string()))
+    } else {
+        Ok(())
+    }
+}
+
 async fn ensure_document_conn(
     conn: &Connection,
     library_id: &str,
@@ -4284,25 +5134,72 @@ async fn ensure_document_conn(
     let mut rows = conn
         .query(
             "SELECT id, head_version_id FROM documents
-             WHERE library_id = ?1 AND path = ?2 AND deleted_at IS NULL AND head_version_id IS NOT NULL
+             WHERE document_scope = 'library'
+               AND library_id = ?1
+               AND path = ?2
+               AND deleted_at IS NULL
+               AND head_version_id IS NOT NULL
+               AND (expires_at IS NULL OR expires_at > ?3)
              LIMIT 1",
-            params![library_id.to_string(), path.to_string()],
+            params![library_id.to_string(), path.to_string(), now.to_string()],
         )
         .await
         .map_err(map_turso_error)?;
     if let Some(row) = rows.next().await.map_err(map_turso_error)? {
         return Ok((text(&row, 0)?, opt_text(&row, 1)?));
     }
+    error_if_library_document_expired(conn, library_id, path, now).await?;
     let id = Uuid::new_v4().to_string();
     conn.execute(
         "INSERT INTO documents
-         (id, library_id, path, head_version_id, deleted_at, created_at, updated_at)
-         VALUES (?1, ?2, ?3, NULL, NULL, ?4, ?4)",
+         (id, library_id, path, head_version_id, deleted_at, created_at, updated_at, document_scope, expires_at)
+         VALUES (?1, ?2, ?3, NULL, NULL, ?4, ?4, 'library', NULL)",
         params![
             id.clone(),
             library_id.to_string(),
             path.to_string(),
             now.to_string()
+        ],
+    )
+    .await
+    .map_err(map_turso_error)?;
+    Ok((id, None))
+}
+
+async fn ensure_tmp_document_conn(
+    conn: &Connection,
+    path: &str,
+    expires_at: &str,
+    now: &str,
+) -> Result<(String, Option<String>)> {
+    let mut rows = conn
+        .query(
+            "SELECT id, head_version_id FROM documents
+             WHERE document_scope = 'tmp'
+               AND library_id IS NULL
+               AND path = ?1
+               AND deleted_at IS NULL
+               AND head_version_id IS NOT NULL
+               AND expires_at > ?2
+             LIMIT 1",
+            params![path.to_string(), now.to_string()],
+        )
+        .await
+        .map_err(map_turso_error)?;
+    if let Some(row) = rows.next().await.map_err(map_turso_error)? {
+        return Ok((text(&row, 0)?, opt_text(&row, 1)?));
+    }
+    error_if_tmp_document_expired(conn, path, now).await?;
+    let id = Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO documents
+         (id, library_id, path, head_version_id, deleted_at, created_at, updated_at, document_scope, expires_at)
+         VALUES (?1, NULL, ?2, NULL, NULL, ?3, ?3, 'tmp', ?4)",
+        params![
+            id.clone(),
+            path.to_string(),
+            now.to_string(),
+            expires_at.to_string()
         ],
     )
     .await
@@ -4566,13 +5463,15 @@ fn directory_metadata_from_row(row: &Row) -> Result<DirectoryMetadata> {
 fn document_entry_from_row(row: &Row) -> Result<DocumentListEntry> {
     Ok(DocumentListEntry {
         id: text(row, 0)?,
-        path: text(row, 1)?,
-        head_version_id: text(row, 2)?,
-        content_type: text(row, 3)?,
-        byte_size: int(row, 4)? as u64,
-        content_hash: opt_text(row, 5)?,
-        metadata: serde_json::from_str(&text(row, 6)?)?,
-        updated_at: text(row, 7)?,
+        library_id: opt_text(row, 1)?,
+        path: text(row, 2)?,
+        head_version_id: text(row, 3)?,
+        content_type: text(row, 4)?,
+        byte_size: int(row, 5)? as u64,
+        content_hash: opt_text(row, 6)?,
+        metadata: serde_json::from_str(&text(row, 7)?)?,
+        expires_at: opt_text(row, 8)?,
+        updated_at: text(row, 9)?,
     })
 }
 
@@ -4882,39 +5781,94 @@ async fn ensure_links_resolution_status_column(conn: &Connection) -> Result<()> 
     Ok(())
 }
 
-async fn migrate_documents_active_path_uniqueness(conn: &Connection) -> Result<()> {
-    if !documents_has_legacy_path_unique_conn(conn).await? {
+async fn migrate_documents_scope_ttl(conn: &Connection) -> Result<()> {
+    let columns = table_columns_conn(conn, "documents").await?;
+    let has_scope = columns.iter().any(|column| column.name == "document_scope");
+    let has_expires_at = columns.iter().any(|column| column.name == "expires_at");
+    let library_id_not_null = columns
+        .iter()
+        .find(|column| column.name == "library_id")
+        .is_some_and(|column| column.not_null);
+    if has_scope
+        && has_expires_at
+        && !library_id_not_null
+        && !documents_has_legacy_path_unique_conn(conn).await?
+    {
         return Ok(());
     }
 
     begin_immediate(conn).await?;
     let result = async {
+        let scope_expr = if has_scope {
+            "document_scope"
+        } else {
+            "'library'"
+        };
+        let expires_expr = if has_expires_at { "expires_at" } else { "NULL" };
+        let insert_sql = format!(
+            r#"
+            INSERT INTO documents
+              (id, library_id, path, head_version_id, deleted_at, created_at, updated_at, document_scope, expires_at)
+            SELECT id, library_id, path, head_version_id, deleted_at, created_at, updated_at,
+                   {scope_expr}, {expires_expr}
+            FROM documents_scope_ttl_migration;
+            "#
+        );
         conn.execute_batch(
             r#"
-            DROP TABLE IF EXISTS documents_legacy_unique;
-            ALTER TABLE documents RENAME TO documents_legacy_unique;
+            DROP TABLE IF EXISTS documents_scope_ttl_migration;
+            ALTER TABLE documents RENAME TO documents_scope_ttl_migration;
             CREATE TABLE documents(
               id TEXT PRIMARY KEY,
-              library_id TEXT NOT NULL,
+              library_id TEXT,
               path TEXT NOT NULL,
               head_version_id TEXT,
               deleted_at TEXT,
+              document_scope TEXT NOT NULL DEFAULT 'library',
+              expires_at TEXT,
               created_at TEXT NOT NULL,
-              updated_at TEXT NOT NULL
+              updated_at TEXT NOT NULL,
+              CHECK (document_scope IN ('library', 'tmp')),
+              CHECK (
+                (document_scope = 'library' AND library_id IS NOT NULL)
+                OR (document_scope = 'tmp' AND library_id IS NULL AND expires_at IS NOT NULL)
+              )
             );
-            INSERT INTO documents
-              (id, library_id, path, head_version_id, deleted_at, created_at, updated_at)
-            SELECT id, library_id, path, head_version_id, deleted_at, created_at, updated_at
-            FROM documents_legacy_unique;
-            DROP TABLE documents_legacy_unique;
             "#,
         )
         .await
         .map_err(map_turso_error)?;
+        conn.execute_batch(&insert_sql).await.map_err(map_turso_error)?;
+        conn.execute("DROP TABLE documents_scope_ttl_migration", ())
+            .await
+            .map_err(map_turso_error)?;
         Ok(())
     }
     .await;
     finish_tx(conn, result).await
+}
+
+struct TableColumn {
+    name: String,
+    not_null: bool,
+}
+
+async fn table_columns_conn(conn: &Connection, table: &str) -> Result<Vec<TableColumn>> {
+    let mut rows = conn
+        .query(
+            format!("PRAGMA table_info({})", quote_sql_string(table)),
+            (),
+        )
+        .await
+        .map_err(map_turso_error)?;
+    let mut columns = Vec::new();
+    while let Some(row) = rows.next().await.map_err(map_turso_error)? {
+        columns.push(TableColumn {
+            name: text(&row, 1)?,
+            not_null: int(&row, 3)? != 0,
+        });
+    }
+    Ok(columns)
 }
 
 async fn documents_has_legacy_path_unique_conn(conn: &Connection) -> Result<bool> {
@@ -4952,10 +5906,17 @@ async fn index_columns_conn(conn: &Connection, index_name: &str) -> Result<Vec<S
 async fn ensure_document_indexes_conn(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"
+        DROP INDEX IF EXISTS idx_documents_active_library_path;
+        DROP INDEX IF EXISTS idx_documents_active_tmp_path;
         CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_active_library_path
           ON documents(library_id, path)
-          WHERE deleted_at IS NULL AND head_version_id IS NOT NULL;
+          WHERE document_scope = 'library' AND deleted_at IS NULL AND head_version_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_active_tmp_path
+          ON documents(path)
+          WHERE document_scope = 'tmp' AND library_id IS NULL AND deleted_at IS NULL AND head_version_id IS NOT NULL;
         CREATE INDEX IF NOT EXISTS idx_documents_library_path ON documents(library_id, path);
+        CREATE INDEX IF NOT EXISTS idx_documents_scope_path ON documents(document_scope, path);
+        CREATE INDEX IF NOT EXISTS idx_documents_expires_at ON documents(expires_at);
         CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at);
         CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents(updated_at);
         "#,

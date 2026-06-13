@@ -71,6 +71,7 @@ import {
   createGitPeer,
   createLibrary,
   deleteDocument,
+  deleteTmpDocument,
   diffVersion,
   documentHref,
   documentVersion,
@@ -88,11 +89,18 @@ import {
   listLibraries,
   moveDocument,
   outgoingLinks,
+  promoteTmpDocument,
   putBinaryDocument,
   putDocument,
+  putTmpDocument,
   resolveConflict,
   restoreVersion,
   searchDocuments,
+  setTmpDocumentTtl,
+  tmpDocumentHref,
+  tmpDocumentVersion,
+  tmpVersions,
+  getTmpDocument,
   versions,
 } from '../api/client';
 import type {
@@ -137,6 +145,7 @@ import { cn } from '../lib/utils';
 import { buildAddAgentPrompt, buildTokenizedDocumentUrl } from './agent-invite';
 
 type EventState = 'idle' | 'connecting' | 'open' | 'polling' | 'error';
+type DocumentScope = 'library' | 'tmp';
 type ThemePreference = 'light' | 'dark';
 type TreeOpenState = Record<string, boolean>;
 type RightPaneTab = 'links' | 'versions' | 'comments';
@@ -202,6 +211,7 @@ function Workspace() {
     loadTreeOpenState(activeLibrary)
   );
   const [rightPaneTab, setRightPaneTab] = useState<RightPaneTab>(() => loadRightPaneTab(activeLibrary));
+  const [documentScope, setDocumentScope] = useState<DocumentScope>(routeSelection.scope);
   const [selectedPath, setSelectedPath] = useState(routeSelection.path ?? '');
   const [searchQuery, setSearchQuery] = useState('');
   const [content, setContent] = useState('');
@@ -245,6 +255,7 @@ function Workspace() {
   const contentRef = useRef(content);
   const openDocumentRef = useRef<(path: string) => void>(() => {});
   const loadedDocumentRef = useRef<{
+    scope: DocumentScope;
     library: string;
     path: string;
     etag: string;
@@ -274,6 +285,7 @@ function Workspace() {
     if (appliedRouteRef.current === location.pathname) return;
     appliedRouteRef.current = location.pathname;
     const selection = parseWorkspaceRoute(location.pathname);
+    setDocumentScope(selection.scope);
     if (selection.library) {
       setActiveLibrary(selection.library);
       setTreeOpenState(loadTreeOpenState(selection.library));
@@ -283,11 +295,12 @@ function Workspace() {
   }, [location.pathname]);
 
   useEffect(() => {
-    const nextPath = workspaceRoute(activeLibrary, selectedPath);
+    const nextPath =
+      documentScope === 'tmp' ? tmpWorkspaceRoute(selectedPath) : workspaceRoute(activeLibrary, selectedPath);
     if (nextPath && location.pathname !== nextPath) {
       navigate(nextPath, { replace: location.pathname === '/' });
     }
-  }, [activeLibrary, selectedPath, location.pathname, navigate]);
+  }, [activeLibrary, documentScope, selectedPath, location.pathname, navigate]);
 
   useEffect(() => {
     if (activeLibrary) {
@@ -343,6 +356,15 @@ function Workspace() {
         mutate(['/v1/versions', library, path], [], { revalidate: false }),
         mutate(['/v1/outgoing', library, path], { path, links: [] }, { revalidate: false }),
         mutate(['/v1/backlinks', library, path], { path, links: [] }, { revalidate: false }),
+      ]),
+    [mutate]
+  );
+
+  const clearTmpDocumentCaches = useCallback(
+    (path: string) =>
+      Promise.all([
+        mutate(['/v1/tmp-document', path], undefined, { revalidate: false }),
+        mutate(['/v1/tmp-versions', path], [], { revalidate: false }),
       ]),
     [mutate]
   );
@@ -592,25 +614,34 @@ function Workspace() {
     };
   }, [activeLibrary, clearDeletedDocumentCaches, mutate]);
 
+  const isTmpDocument = documentScope === 'tmp';
+  const isLibraryDocument = documentScope === 'library';
+
   const { data: documents = [] } = useSWR(
     activeLibrary ? ['/v1/documents', activeLibrary] : null,
     () => listDocuments(activeLibrary)
   );
   const { data: document } = useSWR(
-    activeLibrary && selectedPath ? ['/v1/document', activeLibrary, selectedPath] : null,
-    () => getDocument(activeLibrary, selectedPath),
+    selectedPath
+      ? isTmpDocument
+        ? ['/v1/tmp-document', selectedPath]
+        : activeLibrary
+          ? ['/v1/document', activeLibrary, selectedPath]
+          : null
+      : null,
+    () => (isTmpDocument ? getTmpDocument(selectedPath) : getDocument(activeLibrary, selectedPath)),
     { revalidateOnFocus: false }
   );
   const { data: search = { results: [], cursor: null } } = useSWR(
-    activeLibrary && searchQuery ? ['/v1/search', activeLibrary, searchQuery] : null,
+    isLibraryDocument && activeLibrary && searchQuery ? ['/v1/search', activeLibrary, searchQuery] : null,
     () => searchDocuments(activeLibrary, searchQuery)
   );
   const { data: outgoing = { path: selectedPath, links: [] } } = useSWR(
-    activeLibrary && selectedPath ? ['/v1/outgoing', activeLibrary, selectedPath] : null,
+    isLibraryDocument && activeLibrary && selectedPath ? ['/v1/outgoing', activeLibrary, selectedPath] : null,
     () => outgoingLinks(activeLibrary, selectedPath)
   );
   const { data: incoming = { path: selectedPath, links: [] } } = useSWR(
-    activeLibrary && selectedPath ? ['/v1/backlinks', activeLibrary, selectedPath] : null,
+    isLibraryDocument && activeLibrary && selectedPath ? ['/v1/backlinks', activeLibrary, selectedPath] : null,
     () => backlinks(activeLibrary, selectedPath)
   );
 
@@ -660,19 +691,32 @@ function Workspace() {
     [activeLibrary, mutate]
   );
   const { data: versionList = [] } = useSWR(
-    activeLibrary && selectedPath ? ['/v1/versions', activeLibrary, selectedPath] : null,
-    () => versions(activeLibrary, selectedPath)
+    selectedPath
+      ? isTmpDocument
+        ? ['/v1/tmp-versions', selectedPath]
+        : activeLibrary
+          ? ['/v1/versions', activeLibrary, selectedPath]
+          : null
+      : null,
+    () => (isTmpDocument ? tmpVersions(selectedPath) : versions(activeLibrary, selectedPath))
   );
   const headVersionId = versionList[0]?.latest_version_id;
   const { data: selectedVersionContent } = useSWR(
-    activeLibrary && selectedPath && selectedVersionId
-      ? ['/v1/version-content', activeLibrary, selectedPath, selectedVersionId]
+    selectedPath && selectedVersionId
+      ? isTmpDocument
+        ? ['/v1/tmp-version-content', selectedPath, selectedVersionId]
+        : activeLibrary
+          ? ['/v1/version-content', activeLibrary, selectedPath, selectedVersionId]
+          : null
       : null,
-    () => documentVersion(activeLibrary, selectedPath, selectedVersionId!)
+    () =>
+      isTmpDocument
+        ? tmpDocumentVersion(selectedPath, selectedVersionId!)
+        : documentVersion(activeLibrary, selectedPath, selectedVersionId!)
   );
   const selectedDiffAgainstVersionId = compareVersionId ?? headVersionId;
   const { data: selectedVersionDiff } = useSWR(
-    activeLibrary && selectedPath && selectedVersionId
+    isLibraryDocument && activeLibrary && selectedPath && selectedVersionId
       ? ['/v1/version-diff', activeLibrary, selectedPath, selectedVersionId, selectedDiffAgainstVersionId ?? '']
       : null,
     () => diffVersion(activeLibrary, selectedPath, selectedVersionId!, selectedDiffAgainstVersionId)
@@ -682,11 +726,11 @@ function Workspace() {
     [content, document?.content]
   );
   const { data: conflicts = [] } = useSWR(
-    activeLibrary ? ['/v1/conflicts', activeLibrary] : null,
+    isLibraryDocument && activeLibrary ? ['/v1/conflicts', activeLibrary] : null,
     () => listConflicts(activeLibrary)
   );
   const { data: gitPeers = [] } = useSWR(
-    activeLibrary ? ['/v1/git-peers', activeLibrary] : null,
+    isLibraryDocument && activeLibrary ? ['/v1/git-peers', activeLibrary] : null,
     () => listGitPeers(activeLibrary)
   );
 
@@ -694,13 +738,16 @@ function Workspace() {
     if (!document) return;
     const loadedDocument = loadedDocumentRef.current;
     const sameDocument =
-      loadedDocument?.library === activeLibrary && loadedDocument.path === selectedPath;
+      loadedDocument?.scope === documentScope &&
+      loadedDocument?.library === activeLibrary &&
+      loadedDocument.path === selectedPath;
     if (sameDocument) {
       // A head move on the open document (checkpoint, agent transaction,
       // whole-file merge). A session-backed editor already carries the
       // state through the live doc — its serialized mirror is fresher than
       // the refetched canonical content, so only the bookkeeping moves.
       loadedDocumentRef.current = {
+        scope: documentScope,
         library: activeLibrary,
         path: selectedPath,
         etag: document.etag,
@@ -713,6 +760,7 @@ function Workspace() {
     }
 
     loadedDocumentRef.current = {
+      scope: documentScope,
       library: activeLibrary,
       path: selectedPath,
       etag: document.etag,
@@ -724,7 +772,7 @@ function Workspace() {
     setSelectedVersionId(null);
     setCompareVersionId(null);
     setCurrentDiffOpen(false);
-  }, [activeLibrary, document, selectedPath]);
+  }, [activeLibrary, document, documentScope, selectedPath]);
 
   const tree = useMemo(
     () =>
@@ -741,9 +789,11 @@ function Workspace() {
   const activeLibraryRecord = libraries.find((library) => library.slug === activeLibrary);
   const selectedEntry = documents.find((entry) => entry.path === selectedPath);
   const loadedDocumentForSelection = document?.path === selectedPath ? document : undefined;
+  const tmpExpiresAt = isTmpDocument ? loadedDocumentForSelection?.expiresAt : undefined;
   const loadedDocumentContentType = loadedDocumentForSelection?.contentType;
   const selectedContentType = loadedDocumentContentType ?? selectedEntry?.content_type ?? contentType;
   const activeLoadedDocument =
+    loadedDocumentRef.current?.scope === documentScope &&
     loadedDocumentRef.current?.library === activeLibrary &&
     loadedDocumentRef.current.path === selectedPath
       ? loadedDocumentRef.current
@@ -757,7 +807,7 @@ function Workspace() {
   const layoutStorageKey = activeLibrary ? `quarry:layout:${activeLibrary}` : 'quarry:layout:workspace';
   const mergeConflict = conflicts.find((conflict) => conflict.id === mergeConflictId) ?? null;
   const { data: agentPresence = { presence: [] } } = useSWR(
-    activeLibrary && selectedPath && isTextContentType(selectedContentType)
+    isLibraryDocument && activeLibrary && selectedPath && isTextContentType(selectedContentType)
       ? ['/v1/agent-presence', activeLibrary, selectedPath]
       : null,
     () => listAgentPresence(activeLibrary, selectedPath),
@@ -767,14 +817,19 @@ function Workspace() {
   // orphaned/invalidated badges, diff3 conflict items). Refreshed by the
   // SSE classification above whenever the document changes.
   const { data: documentReview } = useSWR(
-    activeLibrary && selectedPath && isMarkdownDocument(selectedPath, selectedContentType)
+    isLibraryDocument && activeLibrary && selectedPath && isMarkdownDocument(selectedPath, selectedContentType)
       ? ['/v1/review', activeLibrary, selectedPath]
       : null,
     () => getDocumentReview(activeLibrary, selectedPath)
   );
 
   useEffect(() => {
-    if (selectedPath && collabDocumentId && isMarkdownDocument(selectedPath, selectedContentType)) {
+    if (
+      isLibraryDocument &&
+      selectedPath &&
+      collabDocumentId &&
+      isMarkdownDocument(selectedPath, selectedContentType)
+    ) {
       liveCollabSessionRef.current = {
         documentId: collabDocumentId,
         path: selectedPath,
@@ -783,7 +838,7 @@ function Workspace() {
       liveCollabSessionRef.current = null;
       setSaveState(null);
     }
-  }, [collabDocumentId, selectedContentType, selectedPath]);
+  }, [collabDocumentId, isLibraryDocument, selectedContentType, selectedPath]);
 
   const changeSaveState = useCallback((state: CollabSaveState) => {
     setSaveState(state);
@@ -798,6 +853,7 @@ function Workspace() {
 
   async function createNewDocument(defaultPath = 'untitled.md') {
     if (!activeLibrary) return;
+    setDocumentScope('library');
     const path = window.prompt('New document path', defaultPath);
     if (!path) return;
     const initialContent = '# Untitled\n';
@@ -815,7 +871,7 @@ function Workspace() {
   }
 
   async function createDocumentFromLink(link: DocumentLink) {
-    if (!activeLibrary) return;
+    if (!isLibraryDocument || !activeLibrary) return;
     const defaultPath = defaultDocumentPathForLink(link);
     const path = window.prompt('New document path', defaultPath);
     if (!path) return;
@@ -837,7 +893,7 @@ function Workspace() {
   }
 
   async function renameCurrent() {
-    if (!activeLibrary || !selectedPath) return;
+    if (!isLibraryDocument || !activeLibrary || !selectedPath) return;
     const toPath = window.prompt('Move document to path', selectedPath);
     if (!toPath || toPath === selectedPath) return;
     await moveDocument(activeLibrary, selectedPath, toPath, browserMutationOptions());
@@ -872,13 +928,71 @@ function Workspace() {
   };
 
   async function deleteCurrent() {
-    if (!activeLibrary || !selectedPath) return;
+    if (!selectedPath || (isLibraryDocument && !activeLibrary)) return;
     const deletingPath = selectedPath;
     if (!window.confirm(`Delete ${deletingPath}?`)) return;
-    await deleteDocument(activeLibrary, deletingPath, browserMutationOptions());
-    await clearDeletedDocumentCaches(activeLibrary, deletingPath);
-    await mutate(['/v1/documents', activeLibrary]);
+    if (isTmpDocument) {
+      await deleteTmpDocument(deletingPath, browserMutationOptions());
+      await clearTmpDocumentCaches(deletingPath);
+    } else {
+      await deleteDocument(activeLibrary, deletingPath, browserMutationOptions());
+      await clearDeletedDocumentCaches(activeLibrary, deletingPath);
+      await mutate(['/v1/documents', activeLibrary]);
+    }
     setSelectedPath('');
+  }
+
+  async function saveTmpCurrent() {
+    if (!isTmpDocument || !selectedPath || !etag) return;
+    const saved = await putTmpDocument(
+      selectedPath,
+      contentRef.current,
+      etag,
+      contentType,
+      browserMutationOptions()
+    );
+    const nextEtag = saved.etag || `"${saved.outcome.version.id}"`;
+    setEtag(nextEtag);
+    loadedDocumentRef.current = {
+      scope: 'tmp',
+      library: activeLibrary,
+      path: selectedPath,
+      etag: nextEtag,
+      documentId: saved.outcome.document.id,
+    };
+    await Promise.all([
+      mutate(['/v1/tmp-document', selectedPath]),
+      mutate(['/v1/tmp-versions', selectedPath]),
+    ]);
+  }
+
+  async function extendTmpTtl() {
+    if (!isTmpDocument || !selectedPath) return;
+    const defaultExpiry = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const expiresAt = window.prompt('Tmp document expiry', tmpExpiresAt ?? defaultExpiry);
+    if (!expiresAt) return;
+    await setTmpDocumentTtl(selectedPath, expiresAt);
+    await mutate(['/v1/tmp-document', selectedPath]);
+  }
+
+  async function promoteCurrentTmpDocument() {
+    if (!isTmpDocument || !selectedPath) return;
+    const library = window.prompt('Promote to library', activeLibrary);
+    if (!library) return;
+    const targetPath = window.prompt('Promote to path', selectedPath);
+    if (!targetPath) return;
+    await promoteTmpDocument(selectedPath, {
+      library,
+      path: targetPath,
+      ifMatch: etag.trim().replace(/^"|"$/g, ''),
+    });
+    await clearTmpDocumentCaches(selectedPath);
+    await mutate(['/v1/documents', library]);
+    setDocumentScope('library');
+    setActiveLibrary(library);
+    setTreeOpenState(loadTreeOpenState(library));
+    setRightPaneTab(loadRightPaneTab(library));
+    setSelectedPath(targetPath);
   }
 
   // Downloads serve the canonical export (frontmatter included) — the same
@@ -887,8 +1001,10 @@ function Workspace() {
   // Canonical reflects the last checkpoint; the save indicator already tells
   // the user whether their latest keystrokes are covered.
   async function downloadCurrentMarkdown() {
-    if (!activeLibrary || !selectedPath) return;
-    const response = await fetch(documentHref(activeLibrary, selectedPath));
+    if (!selectedPath || (isLibraryDocument && !activeLibrary)) return;
+    const response = await fetch(
+      isTmpDocument ? tmpDocumentHref(selectedPath) : documentHref(activeLibrary, selectedPath)
+    );
     if (!response.ok) return;
     const blob = await response.blob();
     const url = URL.createObjectURL(blob);
@@ -900,7 +1016,7 @@ function Workspace() {
   }
 
   async function shareCurrentDocument() {
-    if (!activeLibrary || !selectedPath) return;
+    if (!isLibraryDocument || !activeLibrary || !selectedPath) return;
     const token = await createCollabInvite(activeLibrary, selectedPath, {
       byHint: author,
       role: 'editor',
@@ -916,7 +1032,7 @@ function Workspace() {
   }
 
   async function openAddAgentModal() {
-    if (!activeLibrary || !selectedPath) return;
+    if (!isLibraryDocument || !activeLibrary || !selectedPath) return;
     const library = activeLibrary;
     const path = selectedPath;
     const knownAgentIds = agentPresence.presence.map((e) => e.agentId);
@@ -986,7 +1102,7 @@ function Workspace() {
   }
 
   async function restoreSelectedVersion(versionId: string) {
-    if (!activeLibrary || !selectedPath) return;
+    if (!isLibraryDocument || !activeLibrary || !selectedPath) return;
     const restored = await restoreVersion(activeLibrary, selectedPath, versionId, browserMutationOptions());
     setEtag(restored.etag || `"${restored.outcome.version.id}"`);
     setSelectedVersionId(null);
@@ -1001,13 +1117,14 @@ function Workspace() {
   }
 
   async function resolveOpenConflict(conflictId: string) {
-    if (!activeLibrary) return;
+    if (!isLibraryDocument || !activeLibrary) return;
     await resolveConflict(activeLibrary, conflictId);
     await mutate(['/v1/conflicts', activeLibrary]);
   }
 
   function openDocument(path: string) {
-    if (!path || path === selectedPath) return;
+    if (!path || (documentScope === 'library' && path === selectedPath)) return;
+    setDocumentScope('library');
     setSelectedPath(path);
   }
 
@@ -1048,6 +1165,7 @@ function Workspace() {
   }
 
   function changeActiveLibrary(slug: string) {
+    setDocumentScope('library');
     setActiveLibrary(slug);
     setTreeOpenState(loadTreeOpenState(slug));
     setRightPaneTab(loadRightPaneTab(slug));
@@ -1158,8 +1276,10 @@ function Workspace() {
             <div className="flex h-full min-h-0 flex-col">
               <DocumentToolbar
                 agentPresence={agentPresence.presence}
+                expiresAt={tmpExpiresAt}
                 isMarkdown={isMarkdownDocument(selectedPath, selectedContentType)}
                 isText={isTextContentType(selectedContentType)}
+                isTmp={isTmpDocument}
                 mode={editorMode}
                 onModeChange={setEditorMode}
                 path={selectedPath}
@@ -1167,7 +1287,10 @@ function Workspace() {
                 onAddAgent={() => void openAddAgentModal()}
                 onDelete={deleteCurrent}
                 onDownload={downloadCurrentMarkdown}
+                onExtendTtl={() => void extendTmpTtl()}
+                onPromote={() => void promoteCurrentTmpDocument()}
                 onRename={renameCurrent}
+                onSaveTmp={() => void saveTmpCurrent()}
                 onShare={() => void shareCurrentDocument()}
               />
               {selectedDocumentBodyReady ? (
@@ -1175,13 +1298,15 @@ function Workspace() {
                   activeLibrary={activeLibrary}
                   author={author}
                   byteSize={selectedEntry?.byte_size}
+                  collabEnabled={isLibraryDocument}
                   collabSessionId={collabSessionIdRef.current}
                   collabToken={routeCollabToken}
                   contentHash={selectedEntry?.content_hash}
                   content={content}
                   contentType={selectedContentType}
                   documentId={collabDocumentId}
-                  image={imageApi}
+                  href={isTmpDocument ? tmpDocumentHref(selectedPath) : documentHref(activeLibrary, selectedPath)}
+                  image={isLibraryDocument ? imageApi : undefined}
                   mode={editorMode}
                   path={selectedPath}
                   wikiLink={wikiLink}
@@ -1312,12 +1437,14 @@ function DocumentBody({
   activeLibrary,
   author,
   byteSize,
+  collabEnabled,
   collabSessionId,
   collabToken,
   contentHash,
   content,
   contentType,
   documentId,
+  href,
   image,
   mode,
   path,
@@ -1328,13 +1455,15 @@ function DocumentBody({
   activeLibrary: string;
   author: string;
   byteSize?: number;
+  collabEnabled: boolean;
   collabSessionId: string;
   collabToken?: string;
   contentHash?: string | null;
   content: string;
   contentType: string;
   documentId: string;
-  image: ImageApi;
+  href: string;
+  image?: ImageApi;
   mode: EditorMode;
   path: string;
   wikiLink: WikiLinkApi;
@@ -1345,7 +1474,7 @@ function DocumentBody({
   // documents are RawDocuments on the byte path: the browser shows their
   // source read-only (their write surfaces are files, Git, and agents).
   if (isMarkdownDocument(path, contentType)) {
-    const collab: CollabEditorConfig | undefined = documentId
+    const collab: CollabEditorConfig | undefined = collabEnabled && documentId
       ? {
           documentId,
           onSaveStateChange,
@@ -1375,7 +1504,7 @@ function DocumentBody({
       <ImagePreview
         byteSize={byteSize}
         contentType={contentType}
-        href={documentHref(activeLibrary, path)}
+        href={href}
         path={path}
       />
     );
@@ -1386,7 +1515,7 @@ function DocumentBody({
       byteSize={byteSize}
       contentHash={contentHash}
       contentType={contentType}
-      href={documentHref(activeLibrary, path)}
+      href={href}
       path={path}
     />
   );
@@ -2745,6 +2874,15 @@ function SaveStatusIndicator({ saveState }: { saveState: CollabSaveState }) {
   );
 }
 
+function TmpExpiryPill({ expiresAt }: { expiresAt?: string }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-line bg-raised px-2 py-1 text-xs text-muted">
+      <RotateCcw size={13} />
+      {expiresAt ? `Expires ${formatShortDateTime(expiresAt)}` : 'Tmp'}
+    </span>
+  );
+}
+
 const PRESENCE_AVATAR_CAP = 3;
 const presenceAvatar =
   'flex size-7 shrink-0 items-center justify-center rounded-full ring-2 ring-surface';
@@ -2875,8 +3013,10 @@ function DocumentModeSelect({
 
 function DocumentToolbar({
   agentPresence,
+  expiresAt,
   isMarkdown,
   isText,
+  isTmp,
   mode,
   onModeChange,
   path,
@@ -2884,12 +3024,17 @@ function DocumentToolbar({
   onAddAgent,
   onDelete,
   onDownload,
+  onExtendTtl,
+  onPromote,
   onRename,
+  onSaveTmp,
   onShare,
 }: {
   agentPresence: AgentPresenceEntry[];
+  expiresAt?: string;
   isMarkdown: boolean;
   isText: boolean;
+  isTmp: boolean;
   mode: EditorMode;
   onModeChange: (mode: EditorMode) => void;
   path: string;
@@ -2897,7 +3042,10 @@ function DocumentToolbar({
   onAddAgent: () => void;
   onDelete: () => void;
   onDownload: () => void;
+  onExtendTtl: () => void;
+  onPromote: () => void;
   onRename: () => void;
+  onSaveTmp: () => void;
   onShare: () => void;
 }) {
   return (
@@ -2912,9 +3060,16 @@ function DocumentToolbar({
           </span>
         ))}
       </h1>
-      {isMarkdown && saveState ? <SaveStatusIndicator saveState={saveState} /> : null}
-      {isMarkdown ? <AgentPresencePill presence={agentPresence} /> : null}
-      {isMarkdown ? (
+      {isTmp ? <TmpExpiryPill expiresAt={expiresAt} /> : null}
+      {isTmp && isMarkdown ? (
+        <button className={cn(primaryButton, 'px-2 sm:px-3')} onClick={onSaveTmp} type="button">
+          <Check size={15} />
+          <span className="hidden sm:inline">Save</span>
+        </button>
+      ) : null}
+      {!isTmp && isMarkdown && saveState ? <SaveStatusIndicator saveState={saveState} /> : null}
+      {!isTmp && isMarkdown ? <AgentPresencePill presence={agentPresence} /> : null}
+      {!isTmp && isMarkdown ? (
         <button
           aria-label="Add agent"
           className={cn(secondaryButton, 'px-2 sm:px-3')}
@@ -2940,20 +3095,35 @@ function DocumentToolbar({
           >
             {isText ? (
               <>
-                <DropdownMenu.Item className={menuItem} onSelect={onShare}>
-                  <Link2 className="shrink-0" size={15} />
-                  Copy invite link
-                </DropdownMenu.Item>
+                {!isTmp ? (
+                  <DropdownMenu.Item className={menuItem} onSelect={onShare}>
+                    <Link2 className="shrink-0" size={15} />
+                    Copy invite link
+                  </DropdownMenu.Item>
+                ) : null}
                 <DropdownMenu.Item className={menuItem} onSelect={onDownload}>
                   <Download className="shrink-0" size={15} />
                   Download as Markdown
                 </DropdownMenu.Item>
               </>
             ) : null}
-            <DropdownMenu.Item className={menuItem} onSelect={onRename}>
-              <FolderInput className="shrink-0" size={15} />
-              Move…
-            </DropdownMenu.Item>
+            {isTmp ? (
+              <>
+                <DropdownMenu.Item className={menuItem} onSelect={onExtendTtl}>
+                  <RotateCcw className="shrink-0" size={15} />
+                  Extend TTL…
+                </DropdownMenu.Item>
+                <DropdownMenu.Item className={menuItem} onSelect={onPromote}>
+                  <FolderInput className="shrink-0" size={15} />
+                  Promote…
+                </DropdownMenu.Item>
+              </>
+            ) : (
+              <DropdownMenu.Item className={menuItem} onSelect={onRename}>
+                <FolderInput className="shrink-0" size={15} />
+                Move…
+              </DropdownMenu.Item>
+            )}
             <DropdownMenu.Separator className="my-1 h-px bg-line" />
             <DropdownMenu.Item className={cn(menuItem, 'text-danger')} onSelect={onDelete}>
               <Trash2 className="shrink-0" size={15} />
@@ -3837,6 +4007,17 @@ function formatBytes(bytes: number) {
   return `${formatted} ${units[unitIndex]}`;
 }
 
+function formatShortDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+}
+
 function gitPeerRepo(peer: GitPeer) {
   return gitPeerConfig(peer, 'repo') || 'No repository path';
 }
@@ -3880,14 +4061,22 @@ function gitExportSummary(result: GitExportResult) {
 
 function parseWorkspaceRoute(pathname: string) {
   const segments = pathname.split('/').filter(Boolean);
+  if (segments[0] === 'tmp') {
+    return {
+      scope: 'tmp' as DocumentScope,
+      library: null,
+      path: segments.slice(1).map(safeDecodeSegment).join('/'),
+    };
+  }
   if (segments[0] !== 'lib' || !segments[1]) {
-    return { library: null, path: undefined };
+    return { scope: 'library' as DocumentScope, library: null, path: undefined };
   }
   const library = safeDecodeSegment(segments[1]);
   if (segments[2] !== 'documents') {
-    return { library, path: '' };
+    return { scope: 'library' as DocumentScope, library, path: '' };
   }
   return {
+    scope: 'library' as DocumentScope,
     library,
     path: segments.slice(3).map(safeDecodeSegment).join('/'),
   };
@@ -3898,6 +4087,11 @@ function workspaceRoute(library: string, path: string) {
   const libraryPath = `/lib/${encodeURIComponent(library)}`;
   if (!path) return libraryPath;
   return `${libraryPath}/documents/${path.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+function tmpWorkspaceRoute(path: string) {
+  if (!path) return '/tmp';
+  return `/tmp/${path.split('/').map(encodeURIComponent).join('/')}`;
 }
 
 function safeDecodeSegment(segment: string) {
