@@ -225,6 +225,19 @@ pub fn router_with_state(state: AppState) -> Router {
         .route("/v1/libraries", get(list_libraries).post(create_library))
         .route("/v1/libraries/{library}", get(get_library))
         .route("/v1/libraries/{library}/documents", get(list_documents))
+        .route(
+            "/v1/tmp/documents",
+            get(list_tmp_documents).post(create_tmp_document),
+        )
+        .route(
+            "/v1/tmp/documents/{*path}",
+            get(get_tmp_document)
+                .head(head_tmp_document)
+                .put(put_tmp_document)
+                .post(post_tmp_document_action)
+                .patch(patch_tmp_document_action)
+                .delete(delete_tmp_document),
+        )
         .route("/v1/libraries/{library}/search", get(search_documents))
         .route(
             "/v1/libraries/{library}/search/suggest",
@@ -537,6 +550,17 @@ async fn browser_asset(uri: Uri) -> Response {
         list_libraries,
         get_library,
         list_documents,
+        list_tmp_documents,
+        create_tmp_document,
+        get_tmp_document,
+        head_tmp_document,
+        put_tmp_document,
+        delete_tmp_document,
+        tmp_document_versions_openapi,
+        tmp_document_versions_raw_openapi,
+        tmp_document_version_openapi,
+        tmp_document_ttl_openapi,
+        tmp_document_promote_openapi,
         search_documents,
         suggest_documents,
         reindex_library,
@@ -561,6 +585,7 @@ async fn browser_asset(uri: Uri) -> Response {
         document_version_openapi,
         document_version_diff_openapi,
         document_version_restore_openapi,
+        document_ttl_openapi,
         head_document,
         put_document,
         post_document_action,
@@ -1462,6 +1487,296 @@ async fn list_documents(
     ))
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateTmpDocumentRequest {
+    pub path: Option<String>,
+    pub content: Option<String>,
+    pub metadata: Option<JsonValue>,
+    pub content_type: Option<String>,
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct TtlRequest {
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TtlResponse {
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PromoteTmpDocumentRequest {
+    pub library: String,
+    pub path: String,
+    pub if_match: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents",
+    params(("prefix" = Option<String>, Query), ("limit" = Option<u64>, Query)),
+    responses((status = 200, body = [DocumentListEntry]))
+)]
+async fn list_tmp_documents(
+    State(state): State<AppState>,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<Vec<DocumentListEntry>>, ApiError> {
+    Ok(Json(
+        state
+            .store
+            .list_tmp_documents(query.prefix.as_deref(), query.limit)
+            .await?,
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/tmp/documents",
+    request_body = CreateTmpDocumentRequest,
+    responses((status = 201, body = WriteOutcome))
+)]
+async fn create_tmp_document(
+    State(state): State<AppState>,
+    Json(request): Json<CreateTmpDocumentRequest>,
+) -> Result<Response, ApiError> {
+    let path = request
+        .path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .unwrap_or("untitled.md");
+    let content_type = request
+        .content_type
+        .as_deref()
+        .unwrap_or("text/markdown")
+        .to_string();
+    let mut metadata = request.metadata.unwrap_or_else(|| serde_json::json!({}));
+    if let JsonValue::Object(object) = &mut metadata {
+        object
+            .entry("content_type")
+            .or_insert_with(|| JsonValue::String(content_type.clone()));
+    }
+    let ttl = request
+        .expires_at
+        .map(quarry_storage::TmpTtl::ExpiresAt)
+        .unwrap_or(quarry_storage::TmpTtl::Default);
+    let outcome = state
+        .store
+        .put_tmp_document(
+            path,
+            request.content.unwrap_or_default().into_bytes(),
+            metadata,
+            &content_type,
+            ttl,
+            WritePrecondition::IfNoneMatch,
+        )
+        .await?;
+    json_with_etag(StatusCode::CREATED, &outcome, &outcome.version.id)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{path}",
+    params(("path" = String, Path)),
+    responses((status = 200, body = String), (status = 410, body = ErrorResponse))
+)]
+async fn get_tmp_document(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+) -> Result<Response, ApiError> {
+    if let Some(path) = path.strip_suffix("/versions/raw") {
+        return json_response(
+            StatusCode::OK,
+            &state.store.raw_tmp_version_history(path).await?,
+        );
+    }
+    if let Some(path) = path.strip_suffix("/versions") {
+        return json_response(
+            StatusCode::OK,
+            &state.store.tmp_version_history(path).await?,
+        );
+    }
+    if let Some((path, version)) = document_version_path(&path) {
+        return json_response(
+            StatusCode::OK,
+            &state.store.tmp_document_version(path, version).await?,
+        );
+    }
+    let document = state.store.get_tmp_document(&path).await?;
+    bytes_response_with_expiry(
+        StatusCode::OK,
+        document.content,
+        &document.version.content_type,
+        &document.version.id,
+        &document.id,
+        document.expires_at.as_deref(),
+    )
+}
+
+#[utoipa::path(
+    head,
+    path = "/v1/tmp/documents/{path}",
+    params(("path" = String, Path)),
+    responses((status = 200), (status = 410, body = ErrorResponse))
+)]
+async fn head_tmp_document(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+) -> Result<Response, ApiError> {
+    let document = state.store.head_tmp_document(&path).await?;
+    let mut response = Response::new(axum::body::Body::empty());
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::ETAG,
+        HeaderValue::from_str(&etag(&document.head_version_id)).unwrap(),
+    );
+    response.headers_mut().insert(
+        "x-quarry-document-id",
+        HeaderValue::from_str(&document.id).unwrap(),
+    );
+    if let Some(expires_at) = document.expires_at.as_deref() {
+        response.headers_mut().insert(
+            "x-quarry-expires-at",
+            HeaderValue::from_str(expires_at).unwrap(),
+        );
+    }
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&document.content_type)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    Ok(response)
+}
+
+#[utoipa::path(
+    put,
+    path = "/v1/tmp/documents/{path}",
+    params(("path" = String, Path)),
+    request_body = String,
+    responses((status = 200, body = WriteOutcome), (status = 412, body = ErrorResponse))
+)]
+async fn put_tmp_document(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(path): Path<String>,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    let content_type = content_type(&headers);
+    let metadata = metadata_from_headers(&headers, &content_type)?;
+    let outcome = state
+        .store
+        .put_tmp_document(
+            &path,
+            body.to_vec(),
+            metadata,
+            &content_type,
+            quarry_storage::TmpTtl::Unchanged,
+            precondition_from_headers(&headers)?,
+        )
+        .await?;
+    json_with_etag(StatusCode::OK, &outcome, &outcome.version.id)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/tmp/documents/{path}",
+    params(("path" = String, Path)),
+    responses((status = 200, body = TransactionRecord))
+)]
+async fn delete_tmp_document(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+) -> Result<Json<TransactionRecord>, ApiError> {
+    Ok(Json(state.store.delete_tmp_document(&path).await?))
+}
+
+async fn patch_tmp_document_action(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+    Json(request): Json<TtlRequest>,
+) -> Result<Response, ApiError> {
+    let Some(path) = path.strip_suffix("/ttl") else {
+        return Err(QuarryError::NotFound(path).into());
+    };
+    let entry = state
+        .store
+        .set_tmp_document_ttl(path, request.expires_at)
+        .await?;
+    json_response(
+        StatusCode::OK,
+        &TtlResponse {
+            expires_at: entry.expires_at,
+        },
+    )
+}
+
+async fn post_tmp_document_action(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+    Json(request): Json<PromoteTmpDocumentRequest>,
+) -> Result<Response, ApiError> {
+    let Some(path) = path.strip_suffix("/promote") else {
+        return Err(QuarryError::NotFound(path).into());
+    };
+    let precondition = request
+        .if_match
+        .map(WritePrecondition::IfMatch)
+        .unwrap_or(WritePrecondition::None);
+    let entry = state
+        .store
+        .promote_tmp_document(path, &request.library, &request.path, precondition)
+        .await?;
+    json_response(StatusCode::OK, &entry)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{path}/versions",
+    params(("path" = String, Path)),
+    responses((status = 200, body = [DocumentHistoryEntry]))
+)]
+#[allow(dead_code)]
+async fn tmp_document_versions_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{path}/versions/raw",
+    params(("path" = String, Path)),
+    responses((status = 200, body = [DocumentVersion]))
+)]
+#[allow(dead_code)]
+async fn tmp_document_versions_raw_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{path}/versions/{version}",
+    params(("path" = String, Path), ("version" = String, Path)),
+    responses((status = 200, body = DocumentVersionContent))
+)]
+#[allow(dead_code)]
+async fn tmp_document_version_openapi() {}
+
+#[utoipa::path(
+    patch,
+    path = "/v1/tmp/documents/{path}/ttl",
+    params(("path" = String, Path)),
+    request_body = TtlRequest,
+    responses((status = 200, body = TtlResponse), (status = 400, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn tmp_document_ttl_openapi() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/tmp/documents/{path}/promote",
+    params(("path" = String, Path)),
+    request_body = PromoteTmpDocumentRequest,
+    responses((status = 200, body = DocumentListEntry), (status = 409, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn tmp_document_promote_openapi() {}
+
 #[utoipa::path(
     get,
     path = "/v1/libraries/{library}/search",
@@ -1642,12 +1957,13 @@ async fn get_document(
     }
 
     let document = state.store.get_document(&library, &path).await?;
-    bytes_response(
+    bytes_response_with_expiry(
         StatusCode::OK,
         document.content,
         &document.version.content_type,
         &document.version.id,
         &document.id,
+        document.expires_at.as_deref(),
     )
 }
 
@@ -1819,6 +2135,12 @@ async fn head_document(
         "x-quarry-document-id",
         HeaderValue::from_str(&document.id).unwrap(),
     );
+    if let Some(expires_at) = document.expires_at.as_deref() {
+        response.headers_mut().insert(
+            "x-quarry-expires-at",
+            HeaderValue::from_str(expires_at).unwrap(),
+        );
+    }
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_str(&document.content_type)
@@ -1899,6 +2221,21 @@ async fn patch_document_metadata(
     Path((library, path)): Path<(String, String)>,
     Json(patch): Json<JsonValue>,
 ) -> Result<Response, ApiError> {
+    if let Some(path) = path.strip_suffix("/ttl") {
+        let request: TtlRequest = serde_json::from_value(patch)
+            .map_err(|error| QuarryError::InvalidPath(format!("invalid ttl request: {error}")))?;
+        let entry = state
+            .store
+            .set_document_ttl(&library, path, request.expires_at)
+            .await?;
+        return json_response(
+            StatusCode::OK,
+            &TtlResponse {
+                expires_at: entry.expires_at,
+            },
+        );
+    }
+
     let Some(path) = path.strip_suffix("/metadata") else {
         return Err(QuarryError::InvalidPath(
             "metadata patch endpoint must end with /metadata".to_string(),
@@ -1938,6 +2275,16 @@ async fn patch_document_metadata(
         .await?;
     json_with_etag(StatusCode::OK, &outcome, &outcome.version.id)
 }
+
+#[utoipa::path(
+    patch,
+    path = "/v1/libraries/{library}/documents/{path}/ttl",
+    params(("library" = String, Path), ("path" = String, Path)),
+    request_body = TtlRequest,
+    responses((status = 200, body = TtlResponse), (status = 410, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn document_ttl_openapi() {}
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct MoveRequest {
@@ -2890,6 +3237,7 @@ impl From<QuarryError> for ApiError {
     fn from(value: QuarryError) -> Self {
         let status = match &value {
             QuarryError::NotFound(_) => StatusCode::NOT_FOUND,
+            QuarryError::Gone(_) => StatusCode::GONE,
             QuarryError::PreconditionFailed(_) => StatusCode::PRECONDITION_FAILED,
             QuarryError::Conflict(_) => StatusCode::CONFLICT,
             QuarryError::Busy(_) => StatusCode::SERVICE_UNAVAILABLE,
@@ -2950,6 +3298,7 @@ impl IntoResponse for ApiError {
 fn api_error_reason_code(status: StatusCode) -> &'static str {
     match status {
         StatusCode::NOT_FOUND => "not_found",
+        StatusCode::GONE => "gone",
         StatusCode::PRECONDITION_FAILED => "precondition_failed",
         StatusCode::CONFLICT => "conflict",
         StatusCode::SERVICE_UNAVAILABLE => "busy",
@@ -3439,6 +3788,24 @@ fn bytes_response(
         "x-quarry-document-id",
         HeaderValue::from_str(document_id).unwrap(),
     );
+    Ok(response)
+}
+
+fn bytes_response_with_expiry(
+    status: StatusCode,
+    content: Vec<u8>,
+    content_type: &str,
+    version_id: &str,
+    document_id: &str,
+    expires_at: Option<&str>,
+) -> Result<Response, ApiError> {
+    let mut response = bytes_response(status, content, content_type, version_id, document_id)?;
+    if let Some(expires_at) = expires_at {
+        response.headers_mut().insert(
+            "x-quarry-expires-at",
+            HeaderValue::from_str(expires_at).unwrap(),
+        );
+    }
     Ok(response)
 }
 

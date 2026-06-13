@@ -3,7 +3,7 @@ use quarry_core::{
 };
 use quarry_storage::{
     group_version_history, BlockMutationCommit, BlockMutationOutcome, BlockReviewKind,
-    BlockReviewState, NewBlockReviewItem, QuarryStore, StoreConfig, StoreEventKind,
+    BlockReviewState, NewBlockReviewItem, QuarryStore, StoreConfig, StoreEventKind, TmpTtl,
     TransactionMetadata,
 };
 use std::time::Duration;
@@ -2273,6 +2273,176 @@ async fn opening_old_schema_migrates_documents_to_active_path_uniqueness() {
     let conn = db.connect().unwrap();
     let document_indexes = index_names(&conn, "documents").await;
     assert!(document_indexes.contains("idx_documents_active_library_path"));
+}
+
+#[tokio::test]
+async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+
+    let tmp = store
+        .put_tmp_document(
+            "scratch/note.md",
+            b"draft one".to_vec(),
+            serde_json::json!({"title":"Scratch"}),
+            "text/markdown",
+            TmpTtl::Default,
+            WritePrecondition::IfNoneMatch,
+        )
+        .await
+        .unwrap();
+    assert!(tmp.document.expires_at.is_some());
+    assert_eq!(tmp.document.library_id, None);
+
+    let listed = store.list_tmp_documents(None, None).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].path, "scratch/note.md");
+    assert!(listed[0].expires_at.is_some());
+
+    let updated = store
+        .put_tmp_document(
+            "scratch/note.md",
+            b"draft two".to_vec(),
+            serde_json::json!({"title":"Scratch"}),
+            "text/markdown",
+            TmpTtl::Unchanged,
+            WritePrecondition::IfMatch(tmp.version.id.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.document.id, tmp.document.id);
+    assert_ne!(updated.version.id, tmp.version.id);
+
+    let raw_versions = store
+        .raw_tmp_version_history("scratch/note.md")
+        .await
+        .unwrap();
+    assert_eq!(raw_versions.len(), 2);
+    let first_version_id = tmp.version.id.clone();
+    let first = store
+        .tmp_document_version("scratch/note.md", &first_version_id)
+        .await
+        .unwrap();
+    assert_eq!(first.content, "draft one");
+
+    let library = store.create_library("promoted").await.unwrap();
+    store
+        .promote_tmp_document(
+            "scratch/note.md",
+            &library.slug,
+            "notes/scratch.md",
+            WritePrecondition::IfMatch(updated.version.id.clone()),
+        )
+        .await
+        .unwrap();
+
+    assert!(store.get_tmp_document("scratch/note.md").await.is_err());
+    let promoted = store
+        .get_document(&library.slug, "notes/scratch.md")
+        .await
+        .unwrap();
+    assert_eq!(promoted.id, tmp.document.id);
+    assert_eq!(promoted.content, b"draft two");
+    assert_eq!(
+        store
+            .raw_version_history(&library.slug, "notes/scratch.md")
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn expired_documents_are_gone_and_excluded_from_live_queries() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+
+    store
+        .put_tmp_document(
+            "expired.md",
+            b"old".to_vec(),
+            serde_json::json!({}),
+            "text/plain",
+            TmpTtl::Default,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    store
+        .set_tmp_document_ttl("expired.md", Some("2000-01-01T00:00:00Z".to_string()))
+        .await
+        .unwrap();
+    let err = store.get_tmp_document("expired.md").await.unwrap_err();
+    assert!(matches!(err, QuarryError::Gone(_)));
+    assert!(store
+        .list_tmp_documents(None, None)
+        .await
+        .unwrap()
+        .is_empty());
+
+    let library = store.create_library("ttl").await.unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "gone.md",
+            b"old".to_vec(),
+            serde_json::json!({}),
+            "text/plain",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    store
+        .set_document_ttl(
+            &library.slug,
+            "gone.md",
+            Some("2000-01-01T00:00:00Z".to_string()),
+        )
+        .await
+        .unwrap();
+    let err = store
+        .get_document(&library.slug, "gone.md")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, QuarryError::Gone(_)));
+    assert!(store
+        .list_documents(&library.slug, None, None)
+        .await
+        .unwrap()
+        .is_empty());
+
+    store
+        .set_document_ttl(&library.slug, "gone.md", None)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get_document(&library.slug, "gone.md")
+            .await
+            .unwrap()
+            .content,
+        b"old"
+    );
+
+    let err = store
+        .set_tmp_document_ttl("expired.md", None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, QuarryError::InvalidInput(_)));
 }
 
 #[tokio::test]

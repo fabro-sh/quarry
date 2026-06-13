@@ -16,6 +16,8 @@ pub enum QuarryError {
     InvalidInput(String),
     #[error("not found: {0}")]
     NotFound(String),
+    #[error("gone: {0}")]
+    Gone(String),
     #[error("precondition failed: {0}")]
     PreconditionFailed(String),
     #[error("conflict: {0}")]
@@ -178,12 +180,14 @@ pub struct DocumentHistoryEntry {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct Document {
     pub id: String,
-    pub library_id: String,
+    pub library_id: Option<String>,
     pub path: String,
     pub version: DocumentVersion,
     #[schema(value_type = String, format = Binary)]
     pub content: Vec<u8>,
     pub metadata: JsonValue,
+    #[serde(default)]
+    pub expires_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -191,12 +195,16 @@ pub struct Document {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct DocumentListEntry {
     pub id: String,
+    #[serde(default)]
+    pub library_id: Option<String>,
     pub path: String,
     pub head_version_id: String,
     pub content_type: String,
     pub byte_size: u64,
     pub content_hash: Option<String>,
     pub metadata: JsonValue,
+    #[serde(default)]
+    pub expires_at: Option<String>,
     pub updated_at: String,
 }
 
