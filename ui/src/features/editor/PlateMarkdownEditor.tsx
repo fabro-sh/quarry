@@ -75,6 +75,7 @@ import {
   ListOrdered,
   ListTodo,
   MessageSquarePlus,
+  MoreHorizontal,
   Pilcrow,
   Quote,
   SquareCode,
@@ -949,16 +950,11 @@ function FloatingFormatToolbar({
       <MarkButton label="Strikethrough" nodeType={KEYS.strikethrough}>
         <Strikethrough size={15} />
       </MarkButton>
-      <MarkButton label="Superscript" nodeType={KEYS.sup}>
-        <Superscript size={15} />
-      </MarkButton>
-      <MarkButton label="Subscript" nodeType={KEYS.sub}>
-        <Subscript size={15} />
-      </MarkButton>
       <MarkButton label="Inline code" nodeType={KEYS.code}>
         <Code size={15} />
       </MarkButton>
       <LinkButton />
+      <MoreMarksButton />
       <div aria-hidden="true" className="mx-0.5 h-5 w-px bg-line" />
       <ListButton label="Bullet list" nodeType={KEYS.ul}>
         <List size={15} />
@@ -1272,6 +1268,68 @@ function MarkButton({
     >
       {children}
     </button>
+  );
+}
+
+// Less-common inline marks (super/subscript) live behind a "…" overflow so the
+// toolbar's primary marks stay uncluttered. Mirrors TurnIntoButton's dropdown.
+function MoreMarksButton() {
+  return (
+    <DropdownMenu.Root modal={false}>
+      <DropdownMenu.Trigger asChild>
+        <button
+          aria-label="More formatting"
+          className="inline-flex size-7 items-center justify-center rounded text-muted transition-colors hover:bg-well hover:text-body"
+          title="More"
+          type="button"
+        >
+          <MoreHorizontal size={15} />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="start"
+          className="z-50 min-w-40 rounded-md border border-line bg-raised p-1 shadow-lg"
+          sideOffset={6}
+        >
+          <MarkMenuItem label="Superscript" nodeType={KEYS.sup}>
+            <Superscript size={15} />
+          </MarkMenuItem>
+          <MarkMenuItem label="Subscript" nodeType={KEYS.sub}>
+            <Subscript size={15} />
+          </MarkMenuItem>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+function MarkMenuItem({
+  label,
+  nodeType,
+  children,
+}: {
+  label: string;
+  nodeType: string;
+  children: ReactNode;
+}) {
+  const state = useMarkToolbarButtonState({ nodeType });
+  const { props } = useMarkToolbarButton(state);
+  return (
+    <DropdownMenu.CheckboxItem
+      checked={state.pressed}
+      className={cn(
+        'flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-body outline-none select-none data-highlighted:bg-well',
+        state.pressed && 'text-accent-ink'
+      )}
+      onSelect={() => props.onClick()}
+    >
+      <span className="shrink-0 text-muted">{children}</span>
+      {label}
+      <DropdownMenu.ItemIndicator className="ms-auto">
+        <Check size={14} />
+      </DropdownMenu.ItemIndicator>
+    </DropdownMenu.CheckboxItem>
   );
 }
 

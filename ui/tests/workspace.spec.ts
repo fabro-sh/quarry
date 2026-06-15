@@ -59,6 +59,7 @@ interface MockVersion {
 test.describe('Quarry Browser smoke flows', () => {
   test.beforeEach(async ({ page }) => {
     await disableEventSource(page);
+    await seedAuthor(page);
   });
 
 
@@ -1382,16 +1383,22 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(editor).toContainText('Format me');
 
     await page.getByText('Format me', { exact: false }).click({ clickCount: 3 });
-    const superscript = page.getByRole('button', { name: 'Superscript' });
-    await superscript.click();
-    await expect(superscript).toHaveAttribute('aria-pressed', 'true');
+    // Superscript and subscript now live behind the "…" overflow menu.
+    await page.getByRole('button', { name: 'More formatting' }).click();
+    await page.getByRole('menuitemcheckbox', { name: 'Superscript' }).click();
+    await expect(editor.locator('sup')).toContainText('Format me');
 
-    // Toggling superscript off then subscript on (they're mutually exclusive marks).
+    // Reopening the menu reflects the active mark; toggle superscript back off.
+    await page.getByRole('button', { name: 'More formatting' }).click();
+    const superscript = page.getByRole('menuitemcheckbox', { name: 'Superscript' });
+    await expect(superscript).toHaveAttribute('aria-checked', 'true');
     await superscript.click();
-    const subscript = page.getByRole('button', { name: 'Subscript' });
-    await subscript.click();
-    await expect(subscript).toHaveAttribute('aria-pressed', 'true');
-    await expect(editor).toContainText('Format me');
+
+    // Subscript and superscript are mutually exclusive marks.
+    await page.getByRole('button', { name: 'More formatting' }).click();
+    await page.getByRole('menuitemcheckbox', { name: 'Subscript' }).click();
+    await expect(editor.locator('sub')).toContainText('Format me');
+    await expect(editor.locator('sup')).toHaveCount(0);
   });
 
   test('turns a paragraph into a to-do from the floating toolbar', async ({ page }) => {
@@ -1718,6 +1725,14 @@ test.describe('Quarry Browser smoke flows', () => {
     expect(api.saveHeaders).toContain('"head"');
   });
 });
+
+// Seed a stored author so the onboarding dialog (shown when no author is set)
+// doesn't gate the workspace these flows exercise.
+async function seedAuthor(page: Page, name = 'Tester') {
+  await page.addInitScript((author) => {
+    window.localStorage.setItem('quarry:author', author);
+  }, name);
+}
 
 async function disableEventSource(page: Page) {
   await page.addInitScript(() => {
