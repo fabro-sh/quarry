@@ -139,6 +139,7 @@ import { mermaidMdRules, MERMAID_KEY } from './mermaid';
 import { MermaidPlugin } from './mermaid-block';
 import { tableMdRules, turnIntoTable } from './table';
 import { TableKit } from './table-element';
+import { TocSidebar } from './toc-sidebar';
 import { wikiLinkMdRules } from './wiki-link';
 import { WikiLinkPlugin, WikiLinkProvider, type WikiLinkApi } from './wiki-link-element';
 import { startCommentDraft } from '../review/comment-draft';
@@ -277,6 +278,17 @@ const BlockDraggable: RenderNodeWrapper = (props) => {
   return (childProps) => <DraggableBlock {...childProps} />;
 };
 
+// Headings render as plain <hN> by default, which carry no DOM id. The TOC
+// sidebar's scroll-spy reads the active heading from `entry.target.id`, so we
+// stamp each heading's node id onto the element. The `slate-hN` class (added
+// upstream by Plate's render pipeline, see styles.css) flows through
+// `attributes.className`, so appearance is unchanged.
+const makeHeadingElement = (as: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') =>
+  function HeadingElement({ attributes, ...props }: PlateElementProps) {
+    const id = typeof props.element.id === 'string' ? props.element.id : undefined;
+    return <PlateElement as={as} attributes={{ ...attributes, id }} {...props} />;
+  };
+
 const plateMarkdownPlugins = [
   ParagraphPlugin,
   // Always keep an editable paragraph at the end, so there's a line to type on
@@ -284,12 +296,12 @@ const plateMarkdownPlugins = [
   // which would otherwise leave the document with no place to continue writing.
   // The trailing paragraph is stripped on serialize (stripTrailingEmptyParagraphs).
   TrailingBlockPlugin,
-  H1Plugin,
-  H2Plugin,
-  H3Plugin,
-  H4Plugin,
-  H5Plugin,
-  H6Plugin,
+  H1Plugin.withComponent(makeHeadingElement('h1')),
+  H2Plugin.withComponent(makeHeadingElement('h2')),
+  H3Plugin.withComponent(makeHeadingElement('h3')),
+  H4Plugin.withComponent(makeHeadingElement('h4')),
+  H5Plugin.withComponent(makeHeadingElement('h5')),
+  H6Plugin.withComponent(makeHeadingElement('h6')),
   BlockquotePlugin,
   CodeBlockPlugin.withComponent(CodeBlockElement),
   CodeLinePlugin,
@@ -461,6 +473,10 @@ export function PlateMarkdownEditor({
   }, [collabCursorName, collabDocumentId, collabEnabled, collabSessionId, collabToken]);
   const editor = usePlateEditor(
     {
+      // Stamp a stable id onto every node up front (not just first/last). The
+      // TOC sidebar's scroll-spy correlates the active heading by DOM id, so
+      // headings need ids even before they're edited.
+      nodeId: { normalizeInitialValue: true },
       plugins: editorPlugins as never,
       skipInitialization: collabEnabled,
       value: collabEnabled ? undefined : (initialValueRef.current as never),
@@ -770,11 +786,18 @@ export function PlateMarkdownEditor({
             onSuggestionResolved={publishResolvedSuggestion}
           />
         )}
-        <PlateContainer
+        <div
           className="relative flex h-full min-h-0"
           data-collab-save-state={collabEnabled ? collabState : undefined}
         >
-          <div
+          {/*
+            PlateContainer is the editor's scroll column. It registers the
+            editor's containerRef, which the TOC sidebar reads via useScrollRef()
+            to drive scroll-spy and click-to-scroll — so the scroller must be
+            this element, not an ancestor. ReviewRail is a separate, fixed
+            sibling that scrolls independently.
+          */}
+          <PlateContainer
             className="relative min-w-0 flex-1 overflow-auto"
             onClick={(event) => {
               // Clicking anywhere in the document that isn't a comment or
@@ -784,6 +807,7 @@ export function PlateMarkdownEditor({
               }
             }}
           >
+            <TocSidebar topOffset={48} />
             <PlateContent
               aria-label="Plate markdown editor"
               className="min-h-full w-full pt-12 pb-8 pl-[max(2rem,calc((100%-68ch)/2))] pr-[max(1rem,calc((100%-68ch)/2))] text-[15px] leading-7 text-ink outline-none [&_[data-slate-placeholder=true]]:text-faint"
@@ -791,12 +815,12 @@ export function PlateMarkdownEditor({
               placeholder="Write markdown…"
               spellCheck={false}
             />
-          </div>
+          </PlateContainer>
           <ReviewRail
             editor={editor}
             onSuggestionResolved={publishResolvedSuggestion}
           />
-        </PlateContainer>
+        </div>
       </Plate>
      </ImageProvider>
     </WikiLinkProvider>

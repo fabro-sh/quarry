@@ -38,6 +38,9 @@ describe('PlateMarkdownEditor serialization work', () => {
     const { rerender } = render(
       <PlateMarkdownEditor content="# Guide\n" mode="editing" onChange={vi.fn()} />
     );
+    // Let mount-time work settle (e.g. node-id normalization) before sampling
+    // the baseline, so we measure only what the rerender itself triggers.
+    await act(async () => {});
     const callsAfterMount = vi.mocked(reviewToMarkdown).mock.calls.length;
 
     rerender(<PlateMarkdownEditor content="# Guide\n" mode="editing" onChange={vi.fn()} />);

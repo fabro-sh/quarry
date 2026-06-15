@@ -43,6 +43,32 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   });
 }
 
+if (typeof globalThis.IntersectionObserver === 'undefined') {
+  // The TOC sidebar's scroll-spy constructs an IntersectionObserver on mount;
+  // jsdom doesn't provide one. A no-op observer is enough — tests don't drive
+  // real scrolling, and active-heading tracking is exercised in the browser.
+  class TestIntersectionObserver implements IntersectionObserver {
+    readonly root = null;
+    readonly rootMargin = '';
+    readonly thresholds = [];
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+    takeRecords(): IntersectionObserverEntry[] {
+      return [];
+    }
+  }
+
+  Object.defineProperty(globalThis, 'IntersectionObserver', {
+    configurable: true,
+    value: TestIntersectionObserver,
+  });
+  Object.defineProperty(window, 'IntersectionObserver', {
+    configurable: true,
+    value: TestIntersectionObserver,
+  });
+}
+
 if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !== 'function') {
   Object.defineProperty(Element.prototype, 'scrollIntoView', {
     configurable: true,
