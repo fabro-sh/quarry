@@ -1,5 +1,5 @@
 import type { PlateEditor } from 'platejs/react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { cancelCommentDraft, commitCommentDraft } from '../comment-draft';
 
@@ -9,6 +9,14 @@ import { cancelCommentDraft, commitCommentDraft } from '../comment-draft';
 // bare draft never reaches the saved Markdown.
 export function DraftCommentComposer({ editor, anchorText }: { editor: PlateEditor; anchorText: string }) {
   const [body, setBody] = useState('');
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const focusInput = () => inputRef.current?.focus({ preventScroll: true });
+    focusInput();
+    const frame = window.requestAnimationFrame(focusInput);
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
 
   function submit() {
     const text = body.trim();
@@ -43,6 +51,7 @@ export function DraftCommentComposer({ editor, anchorText }: { editor: PlateEdit
             }
           }}
           placeholder="Comment…"
+          ref={inputRef}
           value={body}
         />
         <div className="flex justify-end gap-2">

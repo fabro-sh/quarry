@@ -178,6 +178,9 @@ test.describe('Review rail', () => {
     await page.getByTestId('comment-button').click();
 
     await expect(page.getByTestId('draft-composer')).toBeVisible();
+    await expect(page.getByTestId('draft-input')).toBeFocused();
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+    await expect(page.getByTestId('draft-input')).toBeFocused();
     await expect(page.getByTestId('comment-card')).toHaveCount(0);
 
     // Nothing is committed while drafting: the draft mark is local-transient
