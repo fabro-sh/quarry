@@ -672,8 +672,9 @@ export function PlateMarkdownEditor({
     if (!doc) return;
     let disposed = false;
 
-    const publishFromSharedDoc = () => {
+    const publishFromSharedDoc = (_update: Uint8Array, origin: unknown) => {
       if (disposed) return;
+      if (!shouldMirrorSharedDocUpdate(editor, origin)) return;
       // Bump the value revision synchronously: the deferred timer below can
       // be cancelled by an effect re-run racing this update (the remote
       // change itself re-renders the app), and a missed bump leaves
@@ -791,6 +792,10 @@ export function PlateMarkdownEditor({
 
 export function shouldSkipUnhydratedCollabPublish(nextMarkdown: string, lastMarkdown: string) {
   return nextMarkdown.trim() === '' && lastMarkdown.trim() !== '';
+}
+
+export function shouldMirrorSharedDocUpdate(editor: PlateEditor, origin: unknown) {
+  return !YjsEditor.isYjsEditor(editor) || !editor.isLocalOrigin(origin);
 }
 
 function ReviewDocBridge({

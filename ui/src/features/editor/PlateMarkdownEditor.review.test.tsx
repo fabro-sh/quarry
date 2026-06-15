@@ -2,12 +2,18 @@ import { render, screen } from '@testing-library/react';
 import { SuggestionPlugin } from '@platejs/suggestion/react';
 import { slateToDeterministicYjsState } from '@platejs/yjs';
 import { YjsPlugin } from '@platejs/yjs/react';
-import { slateNodesToInsertDelta, yTextToSlateElement } from '@slate-yjs/core';
-import { ParagraphPlugin, createPlateEditor } from 'platejs/react';
+import {
+  slateNodesToInsertDelta,
+  withYjs,
+  yTextToSlateElement,
+  type YjsEditor as SlateYjsEditor,
+} from '@slate-yjs/core';
+import { ParagraphPlugin, createPlateEditor, type PlateEditor } from 'platejs/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   collabYjsInitOptions,
   PlateMarkdownEditor,
+  shouldMirrorSharedDocUpdate,
   shouldSkipUnhydratedCollabPublish,
 } from './PlateMarkdownEditor';
 import { reviewKit } from './review-kit';
@@ -179,6 +185,19 @@ describe('PlateMarkdownEditor collaboration lifecycle', () => {
     expect(shouldSkipUnhydratedCollabPublish('\n', '# Guide\n')).toBe(true);
     expect(shouldSkipUnhydratedCollabPublish('# Guide\n', '# Guide\n')).toBe(false);
     expect(shouldSkipUnhydratedCollabPublish('\n', '\n')).toBe(false);
+  });
+
+  it('does not mirror local Yjs transactions through the external update bridge', () => {
+    const editor = withYjs(
+      createPlateEditor({
+        plugins: [ParagraphPlugin],
+        value: [{ type: 'p', children: [{ text: 'Guide' }] }],
+      }) as never,
+      new Y.Doc().get('content', Y.XmlText)
+    ) as PlateEditor & SlateYjsEditor;
+
+    expect(shouldMirrorSharedDocUpdate(editor, editor.localOrigin)).toBe(false);
+    expect(shouldMirrorSharedDocUpdate(editor, 'remote-provider')).toBe(true);
   });
 });
 
