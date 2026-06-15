@@ -27,7 +27,9 @@ export function TocSidebar({
 
   return (
     <div className={cn('sticky top-0 left-0 z-10', className)}>
-      <div className="group absolute top-0 left-0 z-10 max-h-[400px]">
+      {/* top-12 mirrors PlateContent's pt-12 so the rail top-aligns with the
+          first line of document content rather than the scroller's top edge. */}
+      <div className="group absolute top-12 left-0 z-10 max-h-[400px]">
         <div className="relative z-10 ml-2.5 flex flex-col justify-center pl-2 pb-3">
           {/* Collapsed tick-marks — always visible. */}
           <div className="flex flex-col gap-3 pb-3 pr-5">
