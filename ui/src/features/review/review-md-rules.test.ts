@@ -1,6 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { createSlateEditor } from 'platejs';
+import { describe, expect, it, vi } from 'vitest';
 import { serializeReviewBody } from './review-md-rules';
 import { emptyReviewMeta } from './rfm-types';
+
+vi.mock('platejs', async () => {
+  const actual = await vi.importActual<typeof import('platejs')>('platejs');
+  return {
+    ...actual,
+    createSlateEditor: vi.fn(actual.createSlateEditor),
+  };
+});
 
 describe('serializeReviewBody', () => {
   it('emits an insert suggestion as {++text++}{#id}', () => {
@@ -28,5 +37,17 @@ describe('serializeReviewBody', () => {
     const value = [{ type: 'p', children: [{ text: 'see ' }, { text: 'here', comment: true, comment_c1: true }] }];
     const meta = { comments: { c1: { by: 'user', at: 'x', body: 'fix this' } }, suggestions: {} };
     expect(serializeReviewBody(value, meta)).toBe('see {==here==}{>>fix this<<}{#c1}');
+  });
+
+  it('reuses the serializer editor for equivalent review metadata', () => {
+    const id = `cache-${Date.now()}`;
+    const value = [{ type: 'p', children: [{ text: 'see ' }, { text: 'here', comment: true, [`comment_${id}`]: true }] }];
+    const meta = () => ({ comments: { [id]: { by: 'user', at: 'x', body: 'same' } }, suggestions: {} });
+    vi.mocked(createSlateEditor).mockClear();
+
+    expect(serializeReviewBody(value, meta())).toBe(`see {==here==}{>>same<<}{#${id}}`);
+    expect(serializeReviewBody(value, meta())).toBe(`see {==here==}{>>same<<}{#${id}}`);
+
+    expect(createSlateEditor).toHaveBeenCalledTimes(1);
   });
 });

@@ -101,7 +101,7 @@ import {
   type TLinkElement,
   type TListElement,
 } from 'platejs';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import remarkGfm from 'remark-gfm';
 import * as Y from 'yjs';
@@ -414,13 +414,17 @@ export function PlateMarkdownEditor({
   );
 
   const initialValueRef = useRef<PlateValue | null>(null);
+  const initialSerializedRef = useRef<string | null>(null);
+  const initialReviewMetaRef = useRef<ReviewMeta | null>(null);
+  const initialReviewStoreHydratedRef = useRef(false);
   if (!initialValueRef.current) {
     const { value, meta } = markdownToReview(content);
     initialValueRef.current = value as PlateValue;
-    storeHydrate(meta);
+    initialSerializedRef.current = serializeWithMeta(value as PlateValue, meta);
+    initialReviewMetaRef.current = meta;
   }
   const lastContentRef = useRef(content);
-  const lastSerializedRef = useRef(serialize(initialValueRef.current));
+  const lastSerializedRef = useRef(initialSerializedRef.current ?? '');
   const reviewResolutionPublishTimerRef = useRef<number | null>(null);
   const yjsChangeFallbackTimerRef = useRef<number | null>(null);
   const [collabInitTick, setCollabInitTick] = useState(0);
@@ -462,6 +466,14 @@ export function PlateMarkdownEditor({
     },
     [collabDocumentId, collabEpoch]
   );
+
+  useLayoutEffect(() => {
+    if (initialReviewStoreHydratedRef.current) return;
+    const meta = initialReviewMetaRef.current;
+    if (!meta) return;
+    initialReviewStoreHydratedRef.current = true;
+    storeHydrate(meta);
+  }, [storeHydrate]);
 
   // Set the suggesting author before any suggesting can happen; withSuggestion
   // normalizes away suggestion marks that lack a currentUserId.
