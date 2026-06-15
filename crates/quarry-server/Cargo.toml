@@ -4,9 +4,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[features]
-bundle_ui = ["dep:rust-embed"]
-
 [dependencies]
 axum.workspace = true
 blake3.workspace = true
@@ -22,7 +19,7 @@ quarry-collab-codec.workspace = true
 quarry-git.workspace = true
 quarry-storage.workspace = true
 regex.workspace = true
-rust-embed = { workspace = true, optional = true }
+rust-embed = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

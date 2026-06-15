@@ -8,9 +8,6 @@ license.workspace = true
 name = "quarry"
 path = "src/main.rs"
 
-[features]
-bundle_ui = ["quarry-cli/bundle_ui"]
-
 [dependencies]
 anyhow.workspace = true
 quarry-cli.workspace = true

@@ -671,7 +671,7 @@ The Quarry server should serve the SPA in production builds.
 
 Requirements:
 
-- Feature-gated browser bundling, for example `bundle_ui`.
+- The browser bundle is always compiled into the binary (no Cargo feature gate); serving is gated at runtime by whether the embed contains `index.html`. A `ui/dist/.gitkeep` keeps the embed folder present so the binary builds even when the UI hasn't been built, in which case the server logs a warning and runs API-only (returning `503` to browser navigations).
 
 - Vite production build outputs to `ui/dist`.
 

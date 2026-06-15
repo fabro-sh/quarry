@@ -25,6 +25,15 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build browser bundle
+        working-directory: ui
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
       - name: Build release binary
         run: cargo build --release -p quarry --target x86_64-unknown-linux-gnu
 

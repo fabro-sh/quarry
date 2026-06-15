@@ -4,7 +4,8 @@ target/
 *.lockfile
 *.tsbuildinfo
 ui/node_modules/
-ui/dist/
+ui/dist/*
+!ui/dist/.gitkeep
 ui/test-results/
 logs
 mnt
