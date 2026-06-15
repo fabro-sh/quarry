@@ -45,6 +45,8 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use utoipa::{OpenApi, ToSchema};
 use uuid::Uuid;
 
@@ -54,10 +56,12 @@ pub struct AppState {
     sessions: session::SessionHub,
     agent_events: AgentEventJournal,
     agent_presence: AgentPresenceRegistry,
+    shutdown: CancellationToken,
 }
 
 const AGENT_EVENT_JOURNAL_CAPACITY: usize = 4096;
 const REQUEST_ID_HEADER: &str = "x-quarry-request-id";
+const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Default)]
 struct AgentEventJournal {
@@ -78,25 +82,31 @@ struct LoggedStoreEvent {
 }
 
 impl AgentEventJournal {
-    fn spawn_ingest(&self, store: QuarryStore) {
+    fn spawn_ingest(&self, store: QuarryStore, shutdown: CancellationToken) -> JoinHandle<()> {
         let journal = self.clone();
         let mut receiver = store.subscribe_events();
         tokio::spawn(async move {
             loop {
-                match receiver.recv().await {
-                    Ok(event) => journal.push(event).await,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                        tracing::warn!(
-                            event = "sse.stream.lagged",
-                            stream = "agent_event_journal",
-                            skipped,
-                            "agent event journal lagged"
-                        );
+                tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => return,
+                    received = receiver.recv() => {
+                        match received {
+                            Ok(event) => journal.push(event).await,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                                tracing::warn!(
+                                    event = "sse.stream.lagged",
+                                    stream = "agent_event_journal",
+                                    skipped,
+                                    "agent event journal lagged"
+                                );
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                        }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 }
             }
-        });
+        })
     }
 
     async fn push(&self, event: StoreEvent) {
@@ -289,14 +299,22 @@ impl Drop for PresenceStreamGuard {
 /// through the gateway and the session mode switch (one owning process per
 /// database; out-of-process writers cannot open the store at all).
 pub fn app_state(store: QuarryStore) -> AppState {
+    let shutdown = CancellationToken::new();
     let agent_events = AgentEventJournal::default();
-    agent_events.spawn_ingest(store.clone());
+    agent_events.spawn_ingest(store.clone(), shutdown.clone());
     let sessions = session::SessionHub::new(store.clone());
     AppState {
         store,
         sessions,
         agent_events,
         agent_presence: AgentPresenceRegistry::default(),
+        shutdown,
+    }
+}
+
+impl AppState {
+    fn shutdown_token(&self) -> CancellationToken {
+        self.shutdown.clone()
     }
 }
 
@@ -499,10 +517,12 @@ where
         %addr,
         "quarry REST server listening"
     );
+    let shutdown_token = state.shutdown_token();
     let (shutdown_started_tx, shutdown_started_rx) = tokio::sync::oneshot::channel::<()>();
     let server = axum::serve(listener, router_with_state(state))
         .with_graceful_shutdown(async move {
             shutdown.await;
+            shutdown_token.cancel();
             let _ = shutdown_started_tx.send(());
         })
         .into_future();
@@ -512,13 +532,13 @@ where
     tokio::select! {
         result = &mut server => result,
         _ = &mut shutdown_started_rx => {
-            match tokio::time::timeout(Duration::from_secs(10), &mut server).await {
+            match tokio::time::timeout(SHUTDOWN_GRACE_PERIOD, &mut server).await {
                 Ok(result) => result,
                 Err(_) => {
                     tracing::warn!(
                         event = "shutdown.timeout",
-                        timeout_ms = 10_000_u64,
-                        "quarry REST server did not finish graceful shutdown within 10 seconds"
+                        timeout_ms = SHUTDOWN_GRACE_PERIOD.as_millis() as u64,
+                        "quarry REST server did not finish graceful shutdown within grace period"
                     );
                     Ok(())
                 }
@@ -1049,8 +1069,12 @@ async fn collab_websocket(
     Path(document_id): Path<String>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
+    let shutdown = state.shutdown_token();
     ws.on_upgrade(move |socket| async move {
-        state.sessions.serve_socket(document_id, socket).await;
+        state
+            .sessions
+            .serve_socket(document_id, socket, shutdown)
+            .await;
     })
 }
 
@@ -1064,7 +1088,14 @@ async fn events(
     State(state): State<AppState>,
     Query(query): Query<EventsQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    events_for_library(&state.store, &query.library, None, None).await
+    events_for_library(
+        &state.store,
+        &query.library,
+        None,
+        None,
+        state.shutdown_token(),
+    )
+    .await
 }
 
 async fn events_for_library(
@@ -1072,6 +1103,7 @@ async fn events_for_library(
     library: &str,
     document_path: Option<String>,
     presence_guard: Option<PresenceStreamGuard>,
+    shutdown: CancellationToken,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let library = store.get_library(library).await?;
     tracing::debug!(
@@ -1089,80 +1121,98 @@ async fn events_for_library(
             library.slug,
             document_path,
             presence_guard,
+            shutdown,
         ),
-        |(mut receiver, library_id, library_slug, document_path, presence_guard)| async move {
+        |(mut receiver, library_id, library_slug, document_path, presence_guard, shutdown)| async move {
             loop {
-                match receiver.recv().await {
-                    Ok(store_event)
-                        if store_event.library_id == library_id
-                            && event_matches_document_filter(
-                                &store_event,
-                                document_path.as_deref(),
-                            ) =>
-                    {
-                        let event_type = store_event_type(&store_event);
-                        let payload = store_event_payload(&library_slug, &event_type, &store_event);
-                        tracing::debug!(
-                            event = "sse.event.sent",
-                            library = %library_slug,
-                            library_id = %library_id,
-                            sse_event = %event_type,
-                            path = store_event.path.as_deref().unwrap_or(""),
-                            new_path = store_event.new_path.as_deref().unwrap_or(""),
-                            tx_id = store_event.tx_id.as_deref().unwrap_or(""),
-                            doc_id = store_event.doc_id.as_deref().unwrap_or(""),
-                            version_id = store_event.version_id.as_deref().unwrap_or(""),
-                            conflict_id = store_event.conflict_id.as_deref().unwrap_or(""),
-                            origin_id = store_event.origin_id.as_deref().unwrap_or(""),
-                            "SSE event sent"
-                        );
-                        let event = Event::default().event(event_type).data(payload.to_string());
-                        return Some((
-                            Ok(event),
-                            (
-                                receiver,
-                                library_id,
-                                library_slug,
-                                document_path,
-                                presence_guard,
-                            ),
-                        ));
-                    }
-                    Ok(_) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                        tracing::warn!(
-                            event = "sse.stream.lagged",
-                            library = %library_slug,
-                            library_id = %library_id,
-                            skipped,
-                            "SSE stream lagged"
-                        );
-                        let event_type = "stream.lagged".to_string();
-                        let payload = serde_json::json!({
-                            "type": event_type,
-                            "library": library_slug,
-                            "skipped": skipped
-                        });
-                        let event = Event::default().event(event_type).data(payload.to_string());
-                        return Some((
-                            Ok(event),
-                            (
-                                receiver,
-                                library_id,
-                                library_slug,
-                                document_path,
-                                presence_guard,
-                            ),
-                        ));
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => {
                         tracing::debug!(
                             event = "sse.stream.closed",
                             library = %library_slug,
                             library_id = %library_id,
-                            "SSE stream closed"
+                            reason_code = "shutdown",
+                            "SSE stream closed for shutdown"
                         );
                         return None;
+                    }
+                    received = receiver.recv() => {
+                        match received {
+                            Ok(store_event)
+                                if store_event.library_id == library_id
+                                    && event_matches_document_filter(
+                                        &store_event,
+                                        document_path.as_deref(),
+                                    ) =>
+                            {
+                                let event_type = store_event_type(&store_event);
+                                let payload = store_event_payload(&library_slug, &event_type, &store_event);
+                                tracing::debug!(
+                                    event = "sse.event.sent",
+                                    library = %library_slug,
+                                    library_id = %library_id,
+                                    sse_event = %event_type,
+                                    path = store_event.path.as_deref().unwrap_or(""),
+                                    new_path = store_event.new_path.as_deref().unwrap_or(""),
+                                    tx_id = store_event.tx_id.as_deref().unwrap_or(""),
+                                    doc_id = store_event.doc_id.as_deref().unwrap_or(""),
+                                    version_id = store_event.version_id.as_deref().unwrap_or(""),
+                                    conflict_id = store_event.conflict_id.as_deref().unwrap_or(""),
+                                    origin_id = store_event.origin_id.as_deref().unwrap_or(""),
+                                    "SSE event sent"
+                                );
+                                let event = Event::default().event(event_type).data(payload.to_string());
+                                return Some((
+                                    Ok(event),
+                                    (
+                                        receiver,
+                                        library_id,
+                                        library_slug,
+                                        document_path,
+                                        presence_guard,
+                                        shutdown,
+                                    ),
+                                ));
+                            }
+                            Ok(_) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                                tracing::warn!(
+                                    event = "sse.stream.lagged",
+                                    library = %library_slug,
+                                    library_id = %library_id,
+                                    skipped,
+                                    "SSE stream lagged"
+                                );
+                                let event_type = "stream.lagged".to_string();
+                                let payload = serde_json::json!({
+                                    "type": event_type,
+                                    "library": library_slug,
+                                    "skipped": skipped
+                                });
+                                let event = Event::default().event(event_type).data(payload.to_string());
+                                return Some((
+                                    Ok(event),
+                                    (
+                                        receiver,
+                                        library_id,
+                                        library_slug,
+                                        document_path,
+                                        presence_guard,
+                                        shutdown,
+                                    ),
+                                ));
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                tracing::debug!(
+                                    event = "sse.stream.closed",
+                                    library = %library_slug,
+                                    library_id = %library_id,
+                                    "SSE stream closed"
+                                );
+                                return None;
+                            }
+                        }
                     }
                 }
             }
@@ -2048,6 +2098,7 @@ async fn get_document(
             &library,
             Some(path.to_string()),
             presence_guard,
+            state.shutdown_token(),
         )
         .await?
         .into_response());
@@ -3477,7 +3528,26 @@ fn metadata_from_headers(headers: &HeaderMap, content_type: &str) -> Result<Json
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::{to_bytes, Body};
+    use axum::http::Method;
     use axum::response::IntoResponse;
+    use quarry_core::{DocumentSource, WritePrecondition};
+    use quarry_storage::StoreConfig;
+    use tokio::time::timeout;
+    use tokio_util::sync::CancellationToken;
+    use tower::ServiceExt;
+
+    async fn test_store() -> (tempfile::TempDir, QuarryStore) {
+        let root = tempfile::tempdir().unwrap();
+        let store = QuarryStore::open(StoreConfig {
+            db_path: root.path().join("quarry.db"),
+            cas_path: root.path().join("cas"),
+            lock_path: None,
+        })
+        .await
+        .unwrap();
+        (root, store)
+    }
 
     #[test]
     fn busy_errors_map_to_service_unavailable_with_retry_after() {
@@ -3504,6 +3574,107 @@ mod tests {
             "public, max-age=31536000, immutable"
         );
         assert_eq!(browser_cache_control("favicon.ico"), "public, max-age=300");
+    }
+
+    #[tokio::test]
+    async fn sse_events_stream_completes_after_shutdown_cancellation() {
+        let (_root, store) = test_store().await;
+        store.create_library("events-shutdown").await.unwrap();
+        let state = app_state(store);
+        let app = router_with_state(state.clone());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/v1/events?library=events-shutdown")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        state.shutdown_token().cancel();
+        timeout(
+            Duration::from_secs(1),
+            to_bytes(response.into_body(), usize::MAX),
+        )
+        .await
+        .expect("SSE body should complete after shutdown")
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn document_sse_shutdown_drops_presence_guard() {
+        let (_root, store) = test_store().await;
+        let library = store.create_library("doc-sse-shutdown").await.unwrap();
+        store
+            .put_document(
+                &library.slug,
+                "live.md",
+                b"hello".to_vec(),
+                serde_json::json!({"content_type":"text/markdown"}),
+                "text/markdown",
+                DocumentSource::Rest,
+                WritePrecondition::None,
+            )
+            .await
+            .unwrap();
+        let state = app_state(store);
+        let app = router_with_state(state.clone());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/v1/libraries/doc-sse-shutdown/documents/live.md/events/stream")
+                    .header("X-Agent-Id", "agent-s")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            state
+                .agent_presence
+                .list("doc-sse-shutdown", "live.md")
+                .presence
+                .len(),
+            1
+        );
+
+        state.shutdown_token().cancel();
+        timeout(
+            Duration::from_secs(1),
+            to_bytes(response.into_body(), usize::MAX),
+        )
+        .await
+        .expect("document SSE body should complete after shutdown")
+        .unwrap();
+        assert_eq!(
+            state
+                .agent_presence
+                .list("doc-sse-shutdown", "live.md")
+                .presence
+                .len(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_event_journal_ingest_exits_after_shutdown_cancellation() {
+        let (_root, store) = test_store().await;
+        let journal = AgentEventJournal::default();
+        let shutdown = CancellationToken::new();
+        let ingest = journal.spawn_ingest(store, shutdown.clone());
+
+        shutdown.cancel();
+        timeout(Duration::from_secs(1), ingest)
+            .await
+            .expect("journal ingest should exit after shutdown")
+            .unwrap();
     }
 
     #[test]

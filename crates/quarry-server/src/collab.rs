@@ -20,6 +20,7 @@ use std::task::{Context, Poll};
 use tokio::select;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use yrs::sync::{DefaultProtocol, Error, Protocol};
 use yrs::updates::encoder::Encode;
 
@@ -34,6 +35,7 @@ pub(crate) async fn serve_session_socket(
     session: &LiveSession,
     socket: WebSocket,
     collab_session_id: &str,
+    shutdown: CancellationToken,
 ) -> Result<(), Error> {
     let (sink, stream) = socket.split();
     let sink = Arc::new(Mutex::new(AxumSink::from(sink)));
@@ -112,7 +114,7 @@ pub(crate) async fn serve_session_socket(
         sink_task,
         stream_task,
     };
-    subscription.completed().await
+    subscription.completed(shutdown).await
 }
 
 #[derive(Debug)]
@@ -122,8 +124,10 @@ struct Subscription {
 }
 
 impl Subscription {
-    async fn completed(mut self) -> Result<(), Error> {
+    async fn completed(mut self, shutdown: CancellationToken) -> Result<(), Error> {
         let result = select! {
+            biased;
+            _ = shutdown.cancelled() => return Ok(()),
             sink = &mut self.sink_task => sink,
             stream = &mut self.stream_task => stream,
         };

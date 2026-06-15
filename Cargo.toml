@@ -40,6 +40,7 @@ serde_yaml = "0.9"
 tempfile = "3.12"
 thiserror = "2.0"
 tokio = { version = "1.40", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = "0.7"
 tower = { version = "0.5", features = ["util"] }
 tokio-tungstenite = "0.29"
 tracing = "0.1"

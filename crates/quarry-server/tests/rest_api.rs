@@ -3,7 +3,7 @@ use axum::http::{header, Method, Request, StatusCode};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use quarry_collab_codec::{xmltext_to_slate, Node};
 use quarry_core::DocumentSource;
-use quarry_server::router;
+use quarry_server::{app_state, router, router_with_state, serve_state_with_shutdown};
 use quarry_storage::{QuarryStore, StoreConfig, StoreEvent, StoreEventKind};
 use serde_json::Value;
 use tokio::time::{timeout, Duration};
@@ -4865,6 +4865,59 @@ async fn spawn_session_server() -> (
     (root, addr, app, store, server)
 }
 
+async fn spawn_shutdown_session_server() -> (
+    tempfile::TempDir,
+    std::net::SocketAddr,
+    axum::Router,
+    QuarryStore,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<std::io::Result<()>>,
+) {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let state = app_state(store.clone());
+    let app = router_with_state(state.clone());
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries",
+            serde_json::json!({"slug": "blocks"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = probe.local_addr().unwrap();
+    drop(probe);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(serve_state_with_shutdown(state, addr, async {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+    (root, addr, app, store, shutdown_tx, server)
+}
+
+async fn wait_for_server(addr: std::net::SocketAddr) {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            match tokio::net::TcpStream::connect(addr).await {
+                Ok(_) => break,
+                Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+    })
+    .await
+    .expect("server did not start listening");
+}
+
 type WsSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -5044,6 +5097,39 @@ async fn session_seeds_from_rows_and_final_checkpoint_persists_typing() {
     assert_eq!(tree["blocks"][0]["text"], "Hello session. Typed live.");
 
     server.abort();
+}
+
+#[tokio::test]
+async fn shutdown_closes_live_collab_socket_and_runs_final_checkpoint() {
+    let (_root, addr, app, store, shutdown, server) = spawn_shutdown_session_server().await;
+    put_block_markdown(&app, "live.md", "Shutdown target.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.insert(txn, 16, " Preserved.");
+    })
+    .await;
+
+    shutdown.send(()).unwrap();
+    let next = timeout(Duration::from_secs(1), socket.next())
+        .await
+        .expect("collab socket should close promptly after shutdown");
+    assert!(matches!(
+        next,
+        None | Some(Ok(TungsteniteMessage::Close(_))) | Some(Err(_))
+    ));
+
+    let markdown = wait_for_markdown_containing(&app, "live.md", "Preserved.").await;
+    assert_eq!(markdown, "Shutdown target. Preserved.\n");
+    let tree = get_block_tree(&app, "live.md").await;
+    assert_eq!(tree["blocks"][0]["text"], "Shutdown target. Preserved.");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server should finish after cooperative shutdown")
+        .unwrap()
+        .unwrap();
 }
 
 /// Phase 5 checkpoint-ack protocol: a custom `MSG_QUARRY_CHECKPOINT` frame

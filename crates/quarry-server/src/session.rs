@@ -110,6 +110,7 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use yrs::encoding::write::Write;
 use yrs::sync::Awareness;
@@ -233,7 +234,12 @@ impl SessionHub {
         }
     }
 
-    pub(crate) async fn serve_socket(&self, document_id: String, socket: WebSocket) {
+    pub(crate) async fn serve_socket(
+        &self,
+        document_id: String,
+        socket: WebSocket,
+        shutdown: CancellationToken,
+    ) {
         let collab_session_id = Uuid::new_v4().to_string();
         let entry = self.entry(&document_id).await;
         let session = {
@@ -278,7 +284,7 @@ impl SessionHub {
             "collab socket opened"
         );
 
-        let result = serve_session_socket(&session, socket, &collab_session_id).await;
+        let result = serve_session_socket(&session, socket, &collab_session_id, shutdown).await;
         match result {
             Ok(()) => tracing::debug!(
                 event = "collab.socket.closed",
