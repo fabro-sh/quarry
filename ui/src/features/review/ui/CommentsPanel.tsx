@@ -73,7 +73,12 @@ function CommentItem({ comment }: { comment: AgentReviewComment }) {
       onMouseLeave={() => useReviewStore.getState().setHoverId(null)}
     >
       <div className="flex items-start justify-between gap-2">
-        <ReviewAuthorHeader at={comment.at} by={comment.by} resolved={resolved} />
+        <ReviewAuthorHeader
+          at={comment.at}
+          by={comment.by}
+          editedAt={comment.editedAt}
+          resolved={resolved}
+        />
         <span className="flex items-center gap-1">
           <StatusBadge status={comment.status} />
           {resolved ? (
@@ -97,7 +102,7 @@ function CommentItem({ comment }: { comment: AgentReviewComment }) {
         <div className="mt-3 flex flex-col gap-3 border-l border-line pl-3">
           {comment.replies.map((reply) => (
             <div key={reply.id}>
-              <ReviewAuthorHeader at={reply.at} by={reply.by} />
+              <ReviewAuthorHeader at={reply.at} by={reply.by} editedAt={reply.editedAt} />
               <p className="mt-1 text-sm whitespace-pre-wrap text-body">{reply.body}</p>
             </div>
           ))}

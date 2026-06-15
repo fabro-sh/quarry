@@ -4,6 +4,8 @@ export interface ReviewMetaEntry {
   by: string;
   /** ISO 8601 timestamp. */
   at: string;
+  /** ISO 8601 timestamp for the latest body edit. */
+  editedAt?: string;
   /** Markdown body — used by replies and by comments not stored inline. */
   body?: string;
   /** Parent id (this entry is a reply to that id). */

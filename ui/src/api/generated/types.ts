@@ -198,6 +198,7 @@ export interface AgentReviewReply {
   status: string;
   by: string;
   at: string;
+  editedAt: string | null;
   body: string;
 }
 
@@ -206,6 +207,7 @@ export interface AgentReviewComment {
   status: string;
   by: string;
   at: string;
+  editedAt: string | null;
   ref: AgentBlockRef;
   quote: string;
   body: string;
@@ -335,6 +337,7 @@ export type BlockTransactionOp =
   | { op: 'set_link'; block_id: string; start: number; end: number; url: string | null }
   | { op: 'comment.add'; block_id: string; start: number; end: number; body: string; quote?: string }
   | { op: 'comment.reply'; item_id: string; body: string }
+  | { op: 'comment.edit'; item_id: string; body: string }
   | { op: 'comment.resolve'; item_id: string }
   | { op: 'comment.delete'; item_id: string }
   | {

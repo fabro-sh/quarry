@@ -39,6 +39,7 @@ const SUGGESTED_META: MockRoomReviewMeta = {
 
 test.describe('Review rail', () => {
   test.beforeEach(async ({ page }) => {
+    await seedAuthor(page);
     await disableEventSource(page);
   });
 
@@ -290,6 +291,12 @@ test.describe('Review rail', () => {
     await expect(mark).toHaveAttribute('data-hover', 'true');
   });
 });
+
+async function seedAuthor(page: Page, name = 'Tester') {
+  await page.addInitScript((author) => {
+    window.localStorage.setItem('quarry:author', author);
+  }, name);
+}
 
 async function disableEventSource(page: Page) {
   await page.addInitScript(() => {

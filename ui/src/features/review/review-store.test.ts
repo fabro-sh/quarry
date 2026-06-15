@@ -4,6 +4,7 @@ import {
   addReply,
   buildThreads,
   deleteComment,
+  editComment,
   mergeReviewMetaPatch,
   removeSuggestion,
   resolveComment,
@@ -32,6 +33,15 @@ describe('review-store reducers', () => {
     meta = resolveComment(meta, 'c1', 'done');
     expect(meta.comments.c1.status).toBe('resolved');
     expect(meta.comments.c1.resolved).toBe('done');
+  });
+
+  it('editComment updates the body and editedAt without mutating the input meta', () => {
+    const original = addComment(emptyReviewMeta(), 'c1', { by: 'user', at, body: 'before' });
+    const editedAt = '2026-01-01T00:01:00.000Z';
+    const next = editComment(original, 'c1', 'after', editedAt);
+
+    expect(next.comments.c1).toEqual({ by: 'user', at, body: 'after', editedAt });
+    expect(original.comments.c1).toEqual({ by: 'user', at, body: 'before' });
   });
 
   it('deleteComment removes a comment and its replies', () => {

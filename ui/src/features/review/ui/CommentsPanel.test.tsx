@@ -13,12 +13,18 @@ import { CommentsPanel } from './CommentsPanel';
 
 const at = '2026-01-01T00:00:00.000Z';
 
-function comment(id: string, body: string, status = 'open'): AgentReviewComment {
+function comment(
+  id: string,
+  body: string,
+  status = 'open',
+  editedAt: string | null = null
+): AgentReviewComment {
   return {
     id,
     status,
     by: 'user',
     at,
+    editedAt,
     ref: { ordinal: 0 },
     quote: 'quoted text',
     body,
@@ -109,6 +115,32 @@ describe('CommentsPanel', () => {
     const item = screen.getByTestId('comments-panel-item');
     expect(item).toHaveAttribute('data-status', 'orphaned');
     expect(within(item).getByTestId('review-status-badge')).toHaveTextContent(/orphaned/i);
+  });
+
+  it('shows edited indicators for edited comments and replies', () => {
+    render(
+      <CommentsPanel
+        review={review({
+          comments: [
+            {
+              ...comment('c1', 'edited note', 'open', '2026-01-01T00:03:00.000Z'),
+              replies: [
+                {
+                  id: 'r1',
+                  status: 'open',
+                  by: 'agent',
+                  at,
+                  editedAt: '2026-01-01T00:04:00.000Z',
+                  body: 'edited reply',
+                },
+              ],
+            },
+          ],
+        })}
+      />
+    );
+
+    expect(screen.getAllByText('edited')).toHaveLength(2);
   });
 
   it('badges invalidated suggestions and shows their replacement preview', () => {

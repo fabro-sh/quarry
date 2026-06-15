@@ -267,6 +267,68 @@ describe('CommentThreadCard', () => {
     expect(JSON.stringify(editor.children)).not.toContain('comment_c1');
   });
 
+  it('edits the root comment body inline', async () => {
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Comment actions' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Edit' }));
+    const editor = screen.getByRole('textbox', { name: 'Edit comment' });
+    const save = screen.getByRole('button', { name: 'Save edit' });
+
+    expect(editor).toHaveValue('Please tighten this paragraph.');
+    expect(save).toBeDisabled();
+
+    await userEvent.clear(editor);
+    await userEvent.type(editor, 'Please make this more specific.');
+    await userEvent.click(save);
+
+    const comment = useReviewStore.getState().getMeta().comments.c1;
+    expect(comment.body).toBe('Please make this more specific.');
+    expect(comment.editedAt).toEqual(expect.any(String));
+  });
+
+  it('cancels a root comment edit without changing the body', async () => {
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Comment actions' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Edit' }));
+    const editor = screen.getByRole('textbox', { name: 'Edit comment' });
+    await userEvent.clear(editor);
+    await userEvent.type(editor, 'draft edit');
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel edit' }));
+
+    expect(useReviewStore.getState().getMeta().comments.c1.body).toBe('Please tighten this paragraph.');
+    expect(screen.queryByRole('textbox', { name: 'Edit comment' })).not.toBeInTheDocument();
+  });
+
+  it('blocks empty and unchanged root comment edits', async () => {
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Comment actions' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Edit' }));
+    const editor = screen.getByRole('textbox', { name: 'Edit comment' });
+    const save = screen.getByRole('button', { name: 'Save edit' });
+
+    expect(save).toBeDisabled();
+    await userEvent.clear(editor);
+    await userEvent.type(editor, '   ');
+    expect(save).toBeDisabled();
+  });
+
+  it('edits a reply body inline', async () => {
+    render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Edit reply' }));
+    const editor = screen.getByRole('textbox', { name: 'Edit reply' });
+    await userEvent.clear(editor);
+    await userEvent.type(editor, 'Updated reply.');
+    await userEvent.click(screen.getByRole('button', { name: 'Save edit' }));
+
+    const reply = useReviewStore.getState().getMeta().comments.c2;
+    expect(reply.body).toBe('Updated reply.');
+    expect(reply.editedAt).toEqual(expect.any(String));
+  });
+
   it('shows a Resolved badge and hides the resolve checkbox when resolved', () => {
     let meta = addComment(emptyReviewMeta(), 'c1', { by: 'reviewer', at, body: 'Done already.' });
     meta = { comments: { c1: { ...meta.comments.c1, status: 'resolved' } }, suggestions: {} };

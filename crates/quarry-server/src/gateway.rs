@@ -71,6 +71,10 @@
 //!   missing key would silently erase the block's content).
 //! - `set_link` replaces every link range that intersects `[start, end)`;
 //!   `url: null` just removes them. Partial overlaps are not trimmed.
+//! - `comment.edit` updates the body and `updated_at` of an open comment root
+//!   or reply. It never rewrites anchors, quotes, authors, creation
+//!   timestamps, replies, or document text. Suggestion/conflict ids are
+//!   `ANCHOR_NOT_FOUND`; non-open comments are `INVALID_TRANSACTION`.
 //! - `suggestion.accept` applies the stored replacement to the anchored range
 //!   through the same minimal-diff rules, resolves the suggestion, and
 //!   re-anchors it on the replacement text. `suggestion.reject` resolves
@@ -122,6 +126,8 @@
 //! `contentHash` is omitted, and each item additionally carries
 //! `anchor: {blockId, startOffset, endOffset}`. Resolved items are filtered
 //! unless `includeResolved`; orphaned and invalidated items always show.
+//! Comments and replies include `editedAt` when `updated_at != created_at`,
+//! otherwise `null`.
 //! `conflict`-kind rows (Phase 4) project as `conflicts[]` with
 //! `afterBlockId` (`null` = document start) and the base/incoming/canonical
 //! Markdown payloads. Documents without rows keep the legacy
@@ -490,6 +496,11 @@ pub(crate) enum BlockOp {
     },
     #[serde(rename = "comment.reply")]
     CommentReply {
+        item_id: String,
+        body: String,
+    },
+    #[serde(rename = "comment.edit")]
+    CommentEdit {
         item_id: String,
         body: String,
     },
@@ -1294,6 +1305,18 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
             });
             Ok(())
         }
+        BlockOp::CommentEdit { item_id, body } => {
+            let target = require_open_comment_for_edit(ctx, item_id)?;
+            let target_id = target.id.clone();
+            for item in &mut ctx.items {
+                if item.id == target_id {
+                    item.body = Some(body.clone());
+                    item.updated_at = ctx.now.clone();
+                    break;
+                }
+            }
+            Ok(())
+        }
         BlockOp::CommentResolve { item_id } => {
             let _ = require_resolvable(ctx, item_id)?;
             let now = ctx.now.clone();
@@ -1600,6 +1623,27 @@ fn require_comment<'a>(
         .iter()
         .find(|item| item.id == item_id && item.kind == BlockReviewKind::Comment)
         .ok_or_else(|| anchor_not_found(item_id))
+}
+
+fn require_open_comment_for_edit<'a>(
+    ctx: &'a ApplyContext,
+    item_id: &str,
+) -> Result<&'a BlockReviewItem, GatewayError> {
+    let item = require_comment(ctx, item_id)?;
+    if item.state != BlockReviewState::Open {
+        return Err(GatewayError::invalid(format!(
+            "comment {item_id} is not open"
+        )));
+    }
+    if let Some(parent_id) = item.parent_item_id.as_deref() {
+        let parent = require_comment(ctx, parent_id)?;
+        if parent.state != BlockReviewState::Open {
+            return Err(GatewayError::invalid(format!(
+                "comment {item_id} belongs to a non-open thread"
+            )));
+        }
+    }
+    Ok(item)
 }
 
 /// Conflict review items resolve and delete with the comment vocabulary
@@ -2409,6 +2453,9 @@ pub(crate) fn review_response_from_rows(
             .unwrap_or_default()
     };
     let by = |item: &BlockReviewItem| item.author.clone().unwrap_or_else(|| "unknown".to_string());
+    let edited_at = |item: &BlockReviewItem| {
+        (item.updated_at != item.created_at).then(|| item.updated_at.clone())
+    };
 
     let comments = items
         .iter()
@@ -2419,6 +2466,7 @@ pub(crate) fn review_response_from_rows(
             status: item.state.as_str().to_string(),
             by: by(item),
             at: item.created_at.clone(),
+            edited_at: edited_at(item),
             block_ref: block_ref(item),
             quote: quote(item),
             body: item.body.clone().unwrap_or_default(),
@@ -2430,6 +2478,7 @@ pub(crate) fn review_response_from_rows(
                     status: reply.state.as_str().to_string(),
                     by: by(reply),
                     at: reply.created_at.clone(),
+                    edited_at: edited_at(reply),
                     body: reply.body.clone().unwrap_or_default(),
                 })
                 .collect(),

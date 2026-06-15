@@ -1326,6 +1326,7 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
     assert!(!docs.contains("list_item"));
     assert!(!docs.contains("image_embed"));
     assert!(docs.contains("comment.reply"));
+    assert!(docs.contains("comment.edit"));
     assert!(docs.contains("suggestion.accept"));
     assert!(docs.contains("conflict"));
     assert!(docs.contains("GET $DOC/review"));
@@ -1412,6 +1413,11 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
         .unwrap()
         .iter()
         .any(|operation| operation == "comment.add"));
+    assert!(body["transaction_operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|operation| operation == "comment.edit"));
     assert!(body["transaction_operations"]
         .as_array()
         .unwrap()
@@ -3382,6 +3388,40 @@ where
     .unwrap();
 }
 
+async fn wait_for_yjs_review_entry<S>(
+    socket: &mut S,
+    doc: &Doc,
+    section: &str,
+    id: &str,
+    matches: impl Fn(&Value) -> bool,
+) -> Value
+where
+    S: Stream<Item = Result<TungsteniteMessage, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    if let Some(entry) = review_entry_from_doc(doc, section, id) {
+        if matches(&entry) {
+            return entry;
+        }
+    }
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let message = socket.next().await.unwrap().unwrap();
+            let TungsteniteMessage::Binary(bytes) = message else {
+                continue;
+            };
+            apply_yjs_message(doc, bytes.as_ref());
+            let Some(entry) = review_entry_from_doc(doc, section, id) else {
+                continue;
+            };
+            if matches(&entry) {
+                break entry;
+            }
+        }
+    })
+    .await
+    .unwrap()
+}
+
 async fn wait_for_yjs_plain_text<S>(socket: &mut S, doc: &Doc, expected: &str)
 where
     S: Stream<Item = Result<TungsteniteMessage, tokio_tungstenite::tungstenite::Error>> + Unpin,
@@ -4001,6 +4041,191 @@ async fn block_transaction_comment_lifecycle_projects_from_rows() {
     .await;
     let review = get_block_review(&app, "doc.md", true).await;
     assert!(review["comments"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn block_transaction_comment_edit_updates_body_and_edited_at() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Discuss this sentence.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-comment",
+            serde_json::json!([{
+                "op": "comment.add",
+                "block_id": block_id,
+                "start": 8,
+                "end": 12,
+                "body": "original note"
+            }]),
+        ),
+    )
+    .await;
+    let before = get_block_review(&app, "doc.md", false).await;
+    let comment = &before["comments"][0];
+    assert!(comment["editedAt"].is_null());
+    let comment_id = comment["id"].as_str().unwrap().to_string();
+    let created_at = comment["at"].as_str().unwrap().to_string();
+    let anchor = comment["anchor"].clone();
+    let quote = comment["quote"].clone();
+
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-edit-comment",
+            serde_json::json!([{
+                "op": "comment.edit",
+                "item_id": comment_id,
+                "body": "edited note"
+            }]),
+        ),
+    )
+    .await;
+
+    let review = get_block_review(&app, "doc.md", false).await;
+    let edited = &review["comments"][0];
+    assert_eq!(edited["body"], "edited note");
+    assert_eq!(edited["at"], created_at);
+    assert_ne!(edited["editedAt"], Value::Null);
+    assert_ne!(edited["editedAt"], edited["at"]);
+    assert_eq!(edited["anchor"], anchor);
+    assert_eq!(edited["quote"], quote);
+}
+
+#[tokio::test]
+async fn block_transaction_comment_edit_updates_reply_without_changing_root() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Discuss this sentence.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-comment",
+            serde_json::json!([{
+                "op": "comment.add",
+                "block_id": block_id,
+                "start": 8,
+                "end": 12,
+                "body": "root note"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "doc.md", false).await;
+    let root_id = review["comments"][0]["id"].as_str().unwrap().to_string();
+    let root_at = review["comments"][0]["at"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-reply",
+            serde_json::json!([{
+                "op": "comment.reply",
+                "item_id": root_id,
+                "body": "reply note"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "doc.md", false).await;
+    let reply_id = review["comments"][0]["replies"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let reply_at = review["comments"][0]["replies"][0]["at"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-edit-reply",
+            serde_json::json!([{
+                "op": "comment.edit",
+                "item_id": reply_id,
+                "body": "edited reply"
+            }]),
+        ),
+    )
+    .await;
+
+    let review = get_block_review(&app, "doc.md", false).await;
+    let root = &review["comments"][0];
+    let reply = &root["replies"][0];
+    assert_eq!(root["body"], "root note");
+    assert_eq!(root["at"], root_at);
+    assert!(root["editedAt"].is_null());
+    assert_eq!(reply["body"], "edited reply");
+    assert_eq!(reply["at"], reply_at);
+    assert_ne!(reply["editedAt"], Value::Null);
+    assert_ne!(reply["editedAt"], reply["at"]);
+}
+
+#[tokio::test]
+async fn block_transaction_comment_edit_rejects_non_open_comments() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Discuss this sentence.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-comment",
+            serde_json::json!([{
+                "op": "comment.add",
+                "block_id": block_id,
+                "start": 8,
+                "end": 12,
+                "body": "root note"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "doc.md", false).await;
+    let comment_id = review["comments"][0]["id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-resolve",
+            serde_json::json!([{ "op": "comment.resolve", "item_id": comment_id }]),
+        ),
+    )
+    .await;
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-edit-resolved",
+            serde_json::json!([{
+                "op": "comment.edit",
+                "item_id": comment_id,
+                "body": "should not land"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    let review = get_block_review(&app, "doc.md", true).await;
+    assert_eq!(review["comments"][0]["body"], "root note");
 }
 
 #[tokio::test]
@@ -5926,6 +6151,27 @@ async fn session_review_transaction_renders_marks_and_meta_for_browsers() {
     let entry = review_entry_from_doc(&doc, "comments", &comment_id).unwrap();
     assert_eq!(entry["body"], "Live comment.");
 
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    commit_block_transaction(
+        &app,
+        "live.md",
+        block_tx(
+            "tx-edit-live-comment",
+            serde_json::json!([{
+                "op": "comment.edit",
+                "item_id": comment_id,
+                "body": "Edited live comment."
+            }]),
+        ),
+    )
+    .await;
+    let entry = wait_for_yjs_review_entry(&mut socket, &doc, "comments", &comment_id, |entry| {
+        entry["body"] == "Edited live comment." && entry["editedAt"].as_str().is_some()
+    })
+    .await;
+    assert_eq!(entry["body"], "Edited live comment.");
+    assert_ne!(entry["editedAt"], entry["at"]);
+
     socket.close(None).await.unwrap();
     server.abort();
 }
@@ -5985,6 +6231,73 @@ async fn browser_created_comment_checkpoints_into_review_rows() {
     assert_eq!(comment["anchor"]["startOffset"], 8);
     assert_eq!(comment["anchor"]["endOffset"], 16);
     assert_eq!(comment["quote"], "comments");
+    server.abort();
+}
+
+#[tokio::test]
+async fn browser_review_map_body_edit_checkpoints_into_review_rows() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "Browser edits comments.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+    let tree = get_block_tree(&app, "live.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "live.md",
+        block_tx(
+            "tx-comment",
+            serde_json::json!([{
+                "op": "comment.add",
+                "block_id": block_id,
+                "start": 8,
+                "end": 13,
+                "body": "Original browser-visible body"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "live.md", false).await;
+    let comment = &review["comments"][0];
+    let comment_id = comment["id"].as_str().unwrap().to_string();
+    let created_at = comment["at"].as_str().unwrap().to_string();
+    let edited_at = "2026-06-09T00:05:00.000Z";
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    wait_for_yjs_comment_mark(&mut socket, &doc, &comment_id).await;
+    let meta_json = serde_json::json!({
+        "by": "Agent One",
+        "at": created_at,
+        "body": "Edited from browser map",
+        "editedAt": edited_at
+    })
+    .to_string();
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let review = txn.get_or_insert_map(REVIEW_ROOT);
+        let comments: yrs::MapRef = review.get_or_init(txn, "comments");
+        comments.insert(
+            txn,
+            comment_id.as_str(),
+            yrs::Any::from_json(&meta_json).unwrap(),
+        );
+    })
+    .await;
+    socket.close(None).await.unwrap();
+
+    let review = timeout(Duration::from_secs(5), async {
+        loop {
+            let review = get_block_review(&app, "live.md", false).await;
+            let comment = &review["comments"][0];
+            if comment["body"] == "Edited from browser map" {
+                break review;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(review["comments"][0]["body"], "Edited from browser map");
+    assert_eq!(review["comments"][0]["editedAt"], edited_at);
     server.abort();
 }
 
@@ -6088,6 +6401,44 @@ async fn conflict_items_persist_project_and_resolve_without_mutating_the_documen
         get_document_markdown(&app, "conf.md").await,
         markdown_before
     );
+}
+
+#[tokio::test]
+async fn comment_edit_on_conflict_id_returns_anchor_not_found() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "conf-edit.md", "Alpha.\n").await;
+
+    commit_block_transaction(
+        &app,
+        "conf-edit.md",
+        block_tx(
+            "tx-conflict",
+            serde_json::json!([{
+                "op": "conflict.add",
+                "base_markdown": "Alpha.\n",
+                "incoming_markdown": "Incoming.\n",
+                "canonical_markdown": "Alpha.\n"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "conf-edit.md", false).await;
+    let conflict_id = review["conflicts"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "conf-edit.md",
+        block_tx(
+            "tx-edit-conflict",
+            serde_json::json!([{
+                "op": "comment.edit",
+                "item_id": conflict_id,
+                "body": "not a comment"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "ANCHOR_NOT_FOUND", false);
 }
 
 #[tokio::test]

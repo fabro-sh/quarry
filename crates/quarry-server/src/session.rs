@@ -850,6 +850,7 @@ pub(crate) fn review_meta_for_items(items: &[BlockReviewItem]) -> ReviewMeta {
         let entry = ReviewMetaEntry {
             by: item.author.clone().unwrap_or_else(|| "unknown".to_string()),
             at: item.created_at.clone(),
+            edited_at: edited_at_for_item(item),
             body: item.body.clone(),
             re: item.parent_item_id.clone(),
             status: (item.state == BlockReviewState::Resolved).then(|| "resolved".to_string()),
@@ -868,6 +869,10 @@ pub(crate) fn review_meta_for_items(items: &[BlockReviewItem]) -> ReviewMeta {
         comments,
         suggestions,
     }
+}
+
+fn edited_at_for_item(item: &BlockReviewItem) -> Option<String> {
+    (item.updated_at != item.created_at).then(|| item.updated_at.clone())
 }
 
 /// Merges the checkpoint projection back into the full review item set:
@@ -938,7 +943,14 @@ fn reconcile_review_items(
                     updated.state = BlockReviewState::Orphaned;
                 }
                 if updated != *item {
-                    updated.updated_at = now.to_string();
+                    let body_changed = updated.body != item.body;
+                    updated.updated_at = if body_changed {
+                        entry
+                            .and_then(|entry| entry.edited_at.clone())
+                            .unwrap_or_else(|| now.to_string())
+                    } else {
+                        now.to_string()
+                    };
                 }
                 items.insert(id.clone(), updated);
             }
@@ -975,6 +987,13 @@ fn reconcile_review_items(
         let quote = texts
             .get(anchor.block_id.as_str())
             .map(|text| utf16_slice_clamped(text, anchor.start, anchor.end));
+        let created_at = meta_entry
+            .map(|entry| entry.at.clone())
+            .filter(|at| !at.is_empty())
+            .unwrap_or_else(|| now.to_string());
+        let updated_at = meta_entry
+            .and_then(|entry| entry.edited_at.clone())
+            .unwrap_or_else(|| created_at.clone());
         items.insert(
             anchor.id.clone(),
             BlockReviewItem {
@@ -1000,11 +1019,8 @@ fn reconcile_review_items(
                 context_before: None,
                 context_after: None,
                 parent_item_id: None,
-                created_at: meta_entry
-                    .map(|entry| entry.at.clone())
-                    .filter(|at| !at.is_empty())
-                    .unwrap_or_else(|| now.to_string()),
-                updated_at: now.to_string(),
+                created_at,
+                updated_at,
             },
         );
     }
@@ -1018,6 +1034,15 @@ fn reconcile_review_items(
             continue;
         };
         let prior_reply = prior.get(id);
+        let created_at = prior_reply
+            .map(|item| item.created_at.clone())
+            .or_else(|| Some(entry.at.clone()).filter(|at| !at.is_empty()))
+            .unwrap_or_else(|| now.to_string());
+        let updated_at = entry
+            .edited_at
+            .clone()
+            .or_else(|| prior_reply.map(|item| item.updated_at.clone()))
+            .unwrap_or_else(|| created_at.clone());
         let reply = BlockReviewItem {
             id: id.clone(),
             document_id: document_id.to_string(),
@@ -1033,12 +1058,19 @@ fn reconcile_review_items(
             context_before: None,
             context_after: None,
             parent_item_id: Some(parent_id.clone()),
-            created_at: prior_reply
-                .map(|item| item.created_at.clone())
-                .or_else(|| Some(entry.at.clone()).filter(|at| !at.is_empty()))
-                .unwrap_or_else(|| now.to_string()),
-            updated_at: now.to_string(),
+            created_at,
+            updated_at,
         };
+        let mut reply = reply;
+        if entry.edited_at.is_none() {
+            if let Some(prior_reply) = prior_reply {
+                let mut comparable = reply.clone();
+                comparable.updated_at = prior_reply.updated_at.clone();
+                if comparable != *prior_reply {
+                    reply.updated_at = now.to_string();
+                }
+            }
+        }
         items.insert(id.clone(), reply);
     }
 
@@ -1330,6 +1362,7 @@ mod tests {
             ReviewMetaEntry {
                 by: "Blair".to_string(),
                 at: "2026-06-09T00:30:00.000Z".to_string(),
+                edited_at: None,
                 body: Some("A reply".to_string()),
                 re: Some("c1".to_string()),
                 status: None,

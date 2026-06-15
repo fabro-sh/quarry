@@ -1,5 +1,5 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import { Check, MoreHorizontal, Trash2 } from 'lucide-react';
+import { Check, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
 import { nanoid } from 'nanoid';
 import type { PlateEditor } from 'platejs/react';
 import { useEffect, useRef, useState } from 'react';
@@ -14,11 +14,66 @@ import { ReviewAuthorHeader } from './ReviewAuthorHeader';
 const menuItem =
   'flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-body outline-none hover:bg-well data-highlighted:bg-well';
 
+function CommentEditForm({
+  label,
+  original,
+  onCancel,
+  onSave,
+}: {
+  label: string;
+  original: string;
+  onCancel: () => void;
+  onSave: (body: string) => void;
+}) {
+  const [value, setValue] = useState(original);
+  const body = value.trim();
+  const disabled = body.length === 0 || body === original.trim();
+
+  return (
+    <div className="mt-2 flex flex-col gap-2">
+      <textarea
+        aria-label={label}
+        autoFocus
+        className="min-h-20 w-full resize-y rounded-md border border-line bg-raised px-2.5 py-2 text-sm text-ink outline-none focus:border-accent"
+        onChange={(event) => setValue(event.target.value)}
+        onClick={(event) => event.stopPropagation()}
+        value={value}
+      />
+      <div className="flex items-center justify-end gap-2">
+        <button
+          aria-label="Cancel edit"
+          className="rounded-md px-2 py-1.5 text-sm font-medium text-muted transition-colors hover:text-body"
+          onClick={(event) => {
+            event.stopPropagation();
+            onCancel();
+          }}
+          type="button"
+        >
+          Cancel
+        </button>
+        <button
+          aria-label="Save edit"
+          className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-accent transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={disabled}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (!disabled) onSave(body);
+          }}
+          type="button"
+        >
+          Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; editor: PlateEditor }) {
   const activeId = useReviewStore((state) => state.activeId);
   const hoverId = useReviewStore((state) => state.hoverId);
   const setHoverId = useReviewStore((state) => state.setHoverId);
   const [draft, setDraft] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [replyFocused, setReplyFocused] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -52,6 +107,11 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
     setDraft('');
   }
 
+  function saveEdit(id: string, body: string) {
+    applyReviewMutation((meta) => editComment(meta, id, body, new Date().toISOString()));
+    setEditingId(null);
+  }
+
   function resolve() {
     applyReviewMutation((meta) => resolveComment(meta, thread.id));
   }
@@ -77,7 +137,12 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
       ref={ref}
     >
       <div className="flex items-start justify-between gap-2">
-        <ReviewAuthorHeader by={thread.entry.by} at={thread.entry.at} resolved={resolved} />
+        <ReviewAuthorHeader
+          by={thread.entry.by}
+          at={thread.entry.at}
+          editedAt={thread.entry.editedAt}
+          resolved={resolved}
+        />
         <div
           className={cn(
             'flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100',
@@ -116,6 +181,18 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
                 onClick={(event) => event.stopPropagation()}
                 sideOffset={6}
               >
+                {!resolved && rootHasBody ? (
+                  <DropdownMenu.Item
+                    className={menuItem}
+                    onSelect={() => {
+                      setEditingId(thread.id);
+                      setMenuOpen(false);
+                    }}
+                  >
+                    <Pencil className="shrink-0" size={15} />
+                    Edit
+                  </DropdownMenu.Item>
+                ) : null}
                 <DropdownMenu.Item className={cn(menuItem, 'text-danger')} onSelect={discard}>
                   <Trash2 className="shrink-0" size={15} />
                   Delete
@@ -126,14 +203,53 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
         </div>
       </div>
 
-      {rootHasBody ? <p className="mt-2 text-sm whitespace-pre-wrap text-body">{thread.entry.body}</p> : null}
+      {rootHasBody ? (
+        editingId === thread.id ? (
+          <CommentEditForm
+            label="Edit comment"
+            onCancel={() => setEditingId(null)}
+            onSave={(body) => saveEdit(thread.id, body)}
+            original={thread.entry.body ?? ''}
+          />
+        ) : (
+          <p className="mt-2 text-sm whitespace-pre-wrap text-body">{thread.entry.body}</p>
+        )
+      ) : null}
 
       {thread.replies.length > 0 ? (
         <div className="mt-3 flex flex-col gap-3 border-l border-line pl-3">
           {thread.replies.map((reply) => (
-            <div key={reply.id}>
-              <ReviewAuthorHeader by={reply.entry.by} at={reply.entry.at} />
-              <p className="mt-1 text-sm whitespace-pre-wrap text-body">{reply.entry.body ?? ''}</p>
+            <div className="group/reply" key={reply.id}>
+              <div className="flex items-start justify-between gap-2">
+                <ReviewAuthorHeader
+                  by={reply.entry.by}
+                  at={reply.entry.at}
+                  editedAt={reply.entry.editedAt}
+                />
+                {!resolved && reply.entry.status !== 'resolved' ? (
+                  <button
+                    aria-label="Edit reply"
+                    className="flex size-7 shrink-0 items-center justify-center rounded text-faint opacity-0 outline-none transition-colors hover:bg-well hover:text-body group-hover/reply:opacity-100 focus-visible:opacity-100"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setEditingId(reply.id);
+                    }}
+                    type="button"
+                  >
+                    <Pencil size={15} />
+                  </button>
+                ) : null}
+              </div>
+              {editingId === reply.id ? (
+                <CommentEditForm
+                  label="Edit reply"
+                  onCancel={() => setEditingId(null)}
+                  onSave={(body) => saveEdit(reply.id, body)}
+                  original={reply.entry.body ?? ''}
+                />
+              ) : (
+                <p className="mt-1 text-sm whitespace-pre-wrap text-body">{reply.entry.body ?? ''}</p>
+              )}
             </div>
           ))}
         </div>

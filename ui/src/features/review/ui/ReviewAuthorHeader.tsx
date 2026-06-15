@@ -8,10 +8,12 @@ import { firstWord, formatRelativeTime, initials } from '../format';
 export function ReviewAuthorHeader({
   by,
   at,
+  editedAt,
   resolved,
 }: {
   by: string;
   at: string;
+  editedAt?: string | null;
   resolved?: boolean;
 }) {
   return (
@@ -23,7 +25,14 @@ export function ReviewAuthorHeader({
       />
       <div className="flex min-w-0 flex-col">
         <span className="truncate text-sm font-medium leading-tight text-ink" title={by}>{firstWord(by)}</span>
-        <span className="text-[11px] leading-tight text-faint">{formatRelativeTime(at)}</span>
+        <span className="flex items-center gap-1 text-[11px] leading-tight text-faint">
+          <span>{formatRelativeTime(at)}</span>
+          {editedAt ? (
+            <span className="text-muted" title={`Edited ${formatRelativeTime(editedAt)}`}>
+              edited
+            </span>
+          ) : null}
+        </span>
       </div>
       {resolved ? <span className="ml-1 text-[11px] font-medium text-muted">Resolved</span> : null}
     </div>

@@ -39,6 +39,25 @@ describe('review Yjs document binding', () => {
     expect(useReviewStore.getState().getMeta().comments.c1).toEqual({ by: 'user', at, body: 'hello' });
   });
 
+  it('round-trips editedAt through the shared review map', () => {
+    const doc = new Y.Doc();
+    const meta: ReviewMeta = {
+      comments: {
+        c1: {
+          by: 'user',
+          at,
+          body: 'edited body',
+          editedAt: '2026-01-01T00:02:00.000Z',
+        },
+      },
+      suggestions: {},
+    };
+
+    reconcileReviewMap(doc.getMap(REVIEW_ROOT), meta);
+
+    expect(metaFromReviewMap(doc.getMap(REVIEW_ROOT))).toEqual(meta);
+  });
+
   it('converges review metadata between synced Yjs documents', () => {
     const a = new Y.Doc();
     const b = new Y.Doc();

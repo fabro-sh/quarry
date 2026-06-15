@@ -118,6 +118,7 @@ function reviewMetaEntryFromValue(value: unknown): ReviewMetaEntry | null {
   if (!isRecord(value)) return null;
   if (typeof value.by !== 'string' || typeof value.at !== 'string') return null;
   const entry: ReviewMetaEntry = { by: value.by, at: value.at };
+  if (typeof value.editedAt === 'string') entry.editedAt = value.editedAt;
   if (typeof value.body === 'string') entry.body = value.body;
   if (typeof value.re === 'string') entry.re = value.re;
   if (value.status === 'resolved') entry.status = 'resolved';
@@ -180,6 +181,7 @@ function stableEntries(entries: Record<string, ReviewMetaEntry>): Record<string,
 
 function stableEntry(entry: ReviewMetaEntry): ReviewMetaEntry {
   const stable: ReviewMetaEntry = { by: entry.by, at: entry.at };
+  if (entry.editedAt !== undefined) stable.editedAt = entry.editedAt;
   if (entry.body !== undefined) stable.body = entry.body;
   if (entry.re !== undefined) stable.re = entry.re;
   if (entry.status === 'resolved') stable.status = 'resolved';

@@ -232,6 +232,8 @@ as one atomic batch:
 - `comment.add` — `{block_id, start, end, body, quote?}`. `quote` is an
   optional copy of the anchored text for display.
 - `comment.reply` — `{item_id, body}`.
+- `comment.edit` — `{item_id, body}`. Edits open comment roots or replies
+  only; resolved, orphaned, suggestion, and conflict ids are rejected.
 - `comment.resolve` / `comment.delete` — `{item_id}`. Resolving never rewrites
   document text.
 - `suggestion.add` — `{block_id, start, end, replacement, body?, quote?}`.
@@ -264,6 +266,9 @@ A full review as one transaction:
 
 For a tight word-level redline, anchor only the words that change rather than
 the whole sentence.
+
+`GET /review` returns `editedAt` on comments and replies when the latest row
+timestamp differs from the creation timestamp; otherwise it is `null`.
 
 ## Whole-Document Markdown Writes
 

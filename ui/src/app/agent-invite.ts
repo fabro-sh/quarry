@@ -84,7 +84,7 @@ Document path: ${path}
 
 6. Do not edit until the user gives further instructions.
    For surgical edits and review operations, POST ${documentApi}/transactions with {"client_tx_id":"<unique-id>","base_clock":"<document_clock>","actor":{"kind":"agent","id":"<agent-id>"},"ops":[...]}.
-   Ops: insert_block, delete_block, move_block, replace_block_content, set_block_attrs, mark/link ops, comment.add, comment.reply, comment.resolve, comment.delete, suggestion.add, suggestion.accept, suggestion.reject.
+   Ops: insert_block, delete_block, move_block, replace_block_content, set_block_attrs, mark/link ops, comment.add, comment.reply, comment.edit, comment.resolve, comment.delete, suggestion.add, suggestion.accept, suggestion.reject.
    To author or restructure the whole document, instead PUT ${documentApi} with a plain Markdown body and header If-Match: "<document_clock>" — concurrent edits diff3-merge rather than being overwritten (details in the skill).
    To read existing comments, suggestions, and merge conflicts, GET ${documentApi}/review.
    Errors are typed {code, retryable, message}; when retryable, refresh GET ${documentApi}/blocks and resubmit with the new document_clock.`;

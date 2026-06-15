@@ -38,11 +38,11 @@ export function addReply(meta: ReviewMeta, id: string, fields: { parentId: strin
   return next;
 }
 
-export function editComment(meta: ReviewMeta, id: string, body: string): ReviewMeta {
+export function editComment(meta: ReviewMeta, id: string, body: string, editedAt?: string): ReviewMeta {
   const existing = meta.comments[id];
   if (!existing) return meta;
   const next = cloneMeta(meta);
-  next.comments[id] = { ...existing, body };
+  next.comments[id] = { ...existing, body, ...(editedAt ? { editedAt } : {}) };
   return next;
 }
 

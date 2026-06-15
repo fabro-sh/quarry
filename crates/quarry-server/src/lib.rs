@@ -1080,6 +1080,7 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
                 "set_link",
                 "comment.add",
                 "comment.reply",
+                "comment.edit",
                 "comment.resolve",
                 "comment.delete",
                 "suggestion.add",
@@ -1670,6 +1671,8 @@ pub struct AgentReviewComment {
     pub status: String,
     pub by: String,
     pub at: String,
+    #[serde(rename = "editedAt")]
+    pub edited_at: Option<String>,
     #[serde(rename = "ref")]
     pub block_ref: AgentBlockRef,
     pub quote: String,
@@ -1687,6 +1690,8 @@ pub struct AgentReviewReply {
     pub status: String,
     pub by: String,
     pub at: String,
+    #[serde(rename = "editedAt")]
+    pub edited_at: Option<String>,
     pub body: String,
 }
 
@@ -2857,6 +2862,7 @@ fn agent_review_comments(
                 status: review_entry_status(entry),
                 by: entry.by.clone(),
                 at: entry.at.clone(),
+                edited_at: entry.edited_at.clone(),
                 block_ref: marker.block_ref.clone(),
                 quote: marker.quote.clone(),
                 body: entry.body.clone().unwrap_or_else(|| marker.body.clone()),
@@ -2887,6 +2893,7 @@ fn agent_review_replies_by_parent(
                 status: review_entry_status(entry),
                 by: entry.by.clone(),
                 at: entry.at.clone(),
+                edited_at: entry.edited_at.clone(),
                 body: entry.body.clone().unwrap_or_default(),
             });
     }

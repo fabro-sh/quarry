@@ -183,6 +183,7 @@ Review ops (same envelope, freely mixable with edit ops):
 |---|---|
 | `comment.add` | `{block_id, start, end, body, quote?}` |
 | `comment.reply` | `{item_id, body}` |
+| `comment.edit` | `{item_id, body}` — open comment roots/replies only |
 | `comment.resolve` / `comment.delete` | `{item_id}` |
 | `suggestion.add` | `{block_id, start, end, replacement, body?, quote?}` |
 | `suggestion.accept` | `{item_id}` — applies the replacement |

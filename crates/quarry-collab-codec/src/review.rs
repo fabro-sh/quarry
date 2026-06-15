@@ -57,6 +57,8 @@ pub struct ReviewMetaEntry {
     pub by: String,
     #[serde(default)]
     pub at: String,
+    #[serde(rename = "editedAt", skip_serializing_if = "Option::is_none")]
+    pub edited_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -284,6 +286,7 @@ fn fallback_review_entry(body: Option<String>) -> ReviewMetaEntry {
     ReviewMetaEntry {
         by: unknown_review_author(),
         at: String::new(),
+        edited_at: None,
         body,
         re: None,
         status: None,
@@ -613,6 +616,7 @@ mod tests {
             ReviewMetaEntry {
                 by: by.to_string(),
                 at: at.to_string(),
+                edited_at: None,
                 body: None,
                 re: None,
                 status: None,
@@ -877,6 +881,7 @@ mod tests {
             Some(&ReviewMetaEntry {
                 by: "unknown".to_string(),
                 at: String::new(),
+                edited_at: None,
                 body: Some("Needs work".to_string()),
                 re: None,
                 status: None,
@@ -894,6 +899,7 @@ mod tests {
             Some(&ReviewMetaEntry {
                 by: "unknown".to_string(),
                 at: String::new(),
+                edited_at: None,
                 body: None,
                 re: None,
                 status: None,

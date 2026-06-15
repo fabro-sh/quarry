@@ -847,6 +847,7 @@ fn review_meta_map_round_trips_through_the_doc() {
             ReviewMetaEntry {
                 by: "user".to_string(),
                 at: "2026-06-09T00:00:00.000Z".to_string(),
+                edited_at: None,
                 body: Some("Check this".to_string()),
                 re: None,
                 status: None,
@@ -860,6 +861,7 @@ fn review_meta_map_round_trips_through_the_doc() {
             ReviewMetaEntry {
                 by: "ai:codex".to_string(),
                 at: "2026-06-09T00:00:01.000Z".to_string(),
+                edited_at: None,
                 body: None,
                 re: None,
                 status: None,
