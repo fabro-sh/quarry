@@ -3252,7 +3252,8 @@
           "ref",
           "quote",
           "content",
-          "preview"
+          "preview",
+          "replies"
         ],
         "properties": {
           "anchor": {
@@ -3289,6 +3290,12 @@
           },
           "ref": {
             "$ref": "#/components/schemas/AgentBlockRef"
+          },
+          "replies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentReviewReply"
+            }
           },
           "status": {
             "type": "string"

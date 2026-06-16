@@ -74,7 +74,8 @@ function collectIds(nodes: Descendant[], live: LiveIds): void {
 function pruneMeta(meta: ReviewMeta, live: LiveIds): ReviewMeta {
   const comments: Record<string, ReviewMetaEntry> = {};
   for (const [id, entry] of Object.entries(meta.comments)) {
-    const parentLive = entry.re !== undefined && live.comments.has(entry.re);
+    const parentLive =
+      entry.re !== undefined && (live.comments.has(entry.re) || live.suggestions.has(entry.re));
     if (live.comments.has(id) || parentLive) comments[id] = entry;
   }
   const suggestions: Record<string, ReviewMetaEntry> = {};

@@ -9,7 +9,7 @@
 //! exact Slate tree. This module is the Rust port of that read path, pinned to
 //! the TS oracle by the `fixtures/slate-yjs-compat` review fixtures.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -232,7 +232,7 @@ pub fn review_markers(markdown: &str) -> ReviewMarkers {
 
 fn normalize_review_meta(markers: &ReviewMarkers, raw_meta: ReviewMeta) -> ReviewMeta {
     let mut comments = BTreeMap::new();
-    let mut live_comment_ids = std::collections::BTreeSet::new();
+    let mut live_comment_ids = BTreeSet::new();
     for marker in &markers.comments {
         if !live_comment_ids.insert(marker.id.clone()) {
             continue;
@@ -249,19 +249,26 @@ fn normalize_review_meta(markers: &ReviewMarkers, raw_meta: ReviewMeta) -> Revie
         comments.insert(marker.id.clone(), entry);
     }
 
+    let live_suggestion_ids = markers
+        .suggestions
+        .iter()
+        .map(|marker| marker.id.clone())
+        .collect::<BTreeSet<_>>();
     for (id, entry) in &raw_meta.comments {
         let Some(parent_id) = entry.re.as_deref() else {
             continue;
         };
-        if live_comment_ids.contains(parent_id) && !comments.contains_key(id) {
+        if (live_comment_ids.contains(parent_id) || live_suggestion_ids.contains(parent_id))
+            && !comments.contains_key(id)
+        {
             comments.insert(id.clone(), entry.clone());
         }
     }
 
     let mut suggestions = BTreeMap::new();
-    let mut live_suggestion_ids = std::collections::BTreeSet::new();
+    let mut emitted_suggestion_ids = BTreeSet::new();
     for marker in &markers.suggestions {
-        if !live_suggestion_ids.insert(marker.id.clone()) {
+        if !emitted_suggestion_ids.insert(marker.id.clone()) {
             continue;
         }
         let entry = raw_meta
@@ -919,6 +926,25 @@ mod tests {
         assert!(!document.meta.comments.contains_key("c2"));
         assert!(!document.meta.comments.contains_key("r2"));
         assert!(document.meta.suggestions.is_empty());
+    }
+
+    #[test]
+    fn canonical_review_document_preserves_replies_to_live_suggestions() {
+        let document = parse_review_document(
+            "Use {~~rough~>specific~~}{#s1} wording.\n\n---\ncomments:\n  r1:\n    at: \"2026-01-01T00:05:00.000Z\"\n    body: Why this wording?\n    by: user\n    re: s1\n  r2:\n    at: \"2026-01-01T00:06:00.000Z\"\n    body: Dead reply.\n    by: user\n    re: s2\nsuggestions:\n  s1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: AI\n  s2:\n    at: \"2026-01-01T00:01:00.000Z\"\n    by: AI\n",
+        );
+
+        assert!(document.meta.suggestions.contains_key("s1"));
+        assert!(!document.meta.suggestions.contains_key("s2"));
+        assert_eq!(
+            document
+                .meta
+                .comments
+                .get("r1")
+                .and_then(|entry| entry.re.as_deref()),
+            Some("s1")
+        );
+        assert!(!document.meta.comments.contains_key("r2"));
     }
 
     #[test]

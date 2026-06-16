@@ -1707,6 +1707,7 @@ pub struct AgentReviewSuggestion {
     pub quote: String,
     pub content: String,
     pub preview: AgentSuggestionPreview,
+    pub replies: Vec<AgentReviewReply>,
     /// Row-anchored position; present only when the document has canonical
     /// block rows (the Phase 2 review projection).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2767,7 +2768,7 @@ fn agent_review_response_from_markdown(
     let (_, meta) = review_meta_with_inline_comment_bodies(&markdown);
     let markers = agent_review_markers(&blocks);
     let comments = agent_review_comments(&markers.comments, &meta, include_resolved);
-    let suggestions = agent_review_suggestions(&markers.suggestions, &meta);
+    let suggestions = agent_review_suggestions(&markers.suggestions, &meta, include_resolved);
     AgentReviewResponse {
         document_id,
         base_token,
@@ -2903,7 +2904,9 @@ fn agent_review_replies_by_parent(
 fn agent_review_suggestions(
     markers: &[ReviewSuggestionMarker],
     meta: &ReviewMeta,
+    include_resolved: bool,
 ) -> Vec<AgentReviewSuggestion> {
+    let mut replies = agent_review_replies_by_parent(meta, include_resolved);
     markers
         .iter()
         .filter_map(|marker| {
@@ -2921,6 +2924,7 @@ fn agent_review_suggestions(
                 quote: marker.quote.clone(),
                 content: marker.content.clone(),
                 preview: marker.preview.clone(),
+                replies: replies.remove(&marker.id).unwrap_or_default(),
                 anchor: None,
             })
         })

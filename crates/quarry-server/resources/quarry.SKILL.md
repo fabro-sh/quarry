@@ -182,12 +182,12 @@ Review ops (same envelope, freely mixable with edit ops):
 | op | shape |
 |---|---|
 | `comment.add` | `{block_id, start, end, body, quote?}` |
-| `comment.reply` | `{item_id, body}` |
+| `comment.reply` | `{item_id, body}` — targets an open comment thread or open suggestion |
 | `comment.edit` | `{item_id, body}` — open comment roots/replies only |
 | `comment.resolve` / `comment.delete` | `{item_id}` |
 | `suggestion.add` | `{block_id, start, end, replacement, body?, quote?}` |
-| `suggestion.accept` | `{item_id}` — applies the replacement |
-| `suggestion.reject` | `{item_id}` — resolves without changing text |
+| `suggestion.accept` | `{item_id}` — applies the replacement and deletes suggestion replies |
+| `suggestion.reject` | `{item_id}` — resolves without changing text and deletes suggestion replies |
 
 Anchors are `{block_id, start, end}` offsets into the block's `text`; `quote`
 is an optional copy of the anchored text for display. An empty `replacement`

@@ -231,7 +231,8 @@ as one atomic batch:
 
 - `comment.add` — `{block_id, start, end, body, quote?}`. `quote` is an
   optional copy of the anchored text for display.
-- `comment.reply` — `{item_id, body}`.
+- `comment.reply` — `{item_id, body}`. `item_id` may be an open comment
+  thread, an existing reply in that thread, or an open suggestion.
 - `comment.edit` — `{item_id, body}`. Edits open comment roots or replies
   only; resolved, orphaned, suggestion, and conflict ids are rejected.
 - `comment.resolve` / `comment.delete` — `{item_id}`. Resolving never rewrites
@@ -240,10 +241,10 @@ as one atomic batch:
   `replacement` replaces the anchored range when accepted; an empty
   `replacement` proposes a deletion; a collapsed range (`start == end`)
   proposes an insertion.
-- `suggestion.accept` — `{item_id}`. Applies the replacement and resolves the
-  suggestion.
-- `suggestion.reject` — `{item_id}`. Resolves without changing text (also the
-  way to dismiss an orphaned/invalidated suggestion).
+- `suggestion.accept` — `{item_id}`. Applies the replacement, resolves the
+  suggestion, and deletes its replies.
+- `suggestion.reject` — `{item_id}`. Resolves without changing text and deletes
+  its replies (also the way to dismiss an orphaned/invalidated suggestion).
 - `conflict.add` — reconciler plumbing that records a merge-conflict review
   item without mutating the document; agents normally only read these via
   `GET /review` and resolve them with `comment.resolve` / `comment.delete`.

@@ -154,13 +154,15 @@ describe('accept/reject suggestions', () => {
 
   it('accepts a substitution in serialized Markdown and drops its metadata', () => {
     const markdown =
-      'Use {~~rough~>specific~~}{#s1} wording.\n\n---\nsuggestions:\n  s1:\n    by: AI\n    at: "2026-01-01T00:00:00.000Z"\n  s2:\n    by: user\n    at: "2026-01-02T00:00:00.000Z"\n';
+      'Use {~~rough~>specific~~}{#s1} wording.\n\n---\ncomments:\n  r1:\n    by: user\n    at: "2026-01-01T00:05:00.000Z"\n    body: Why this wording?\n    re: s1\n  r2:\n    by: user\n    at: "2026-01-02T00:05:00.000Z"\n    body: Keep this reply.\n    re: s2\nsuggestions:\n  s1:\n    by: AI\n    at: "2026-01-01T00:00:00.000Z"\n  s2:\n    by: user\n    at: "2026-01-02T00:00:00.000Z"\n';
 
     const resolved = resolveSuggestionInMarkdown(markdown, 's1', 'accept');
 
     expect(resolved).toContain('Use specific wording.');
     expect(resolved).not.toContain('s1:');
+    expect(resolved).not.toContain('r1:');
     expect(resolved).toContain('s2:');
+    expect(resolved).toContain('r2:');
   });
 
   it('rejects an insertion in serialized Markdown', () => {

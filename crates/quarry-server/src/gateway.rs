@@ -1275,7 +1275,7 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
             Ok(())
         }
         BlockOp::CommentReply { item_id, body } => {
-            let target = require_comment(ctx, item_id)?;
+            let target = require_reply_target(ctx, item_id)?;
             let root_id = target.parent_item_id.clone().unwrap_or(target.id.clone());
             let root = ctx
                 .items
@@ -1283,6 +1283,7 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
                 .find(|item| item.id == root_id)
                 .ok_or_else(|| anchor_not_found(&root_id))?
                 .clone();
+            require_open_reply_root(&root, &root_id)?;
             let reply_id = ctx.minted.mint();
             require_unused_item_id(ctx, &reply_id)?;
             ctx.items.push(BlockReviewItem {
@@ -1393,6 +1394,8 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
                     item.updated_at = now.clone();
                 }
             }
+            ctx.items
+                .retain(|item| item.parent_item_id.as_deref() != Some(item_id));
             Ok(())
         }
         BlockOp::SuggestionReject { item_id } => {
@@ -1410,6 +1413,8 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
                     item.updated_at = now.clone();
                 }
             }
+            ctx.items
+                .retain(|item| item.parent_item_id.as_deref() != Some(item_id));
             Ok(())
         }
         BlockOp::ConflictAdd {
@@ -1625,6 +1630,44 @@ fn require_comment<'a>(
         .ok_or_else(|| anchor_not_found(item_id))
 }
 
+fn require_reply_target<'a>(
+    ctx: &'a ApplyContext,
+    item_id: &str,
+) -> Result<&'a BlockReviewItem, GatewayError> {
+    let item = ctx
+        .items
+        .iter()
+        .find(|item| {
+            item.id == item_id
+                && matches!(
+                    item.kind,
+                    BlockReviewKind::Comment | BlockReviewKind::Suggestion
+                )
+        })
+        .ok_or_else(|| anchor_not_found(item_id))?;
+    if item.state != BlockReviewState::Open {
+        return Err(GatewayError::invalid(format!(
+            "review item {item_id} is not open"
+        )));
+    }
+    Ok(item)
+}
+
+fn require_open_reply_root(root: &BlockReviewItem, root_id: &str) -> Result<(), GatewayError> {
+    if !matches!(
+        root.kind,
+        BlockReviewKind::Comment | BlockReviewKind::Suggestion
+    ) {
+        return Err(anchor_not_found(root_id));
+    }
+    if root.state != BlockReviewState::Open {
+        return Err(GatewayError::invalid(format!(
+            "review thread {root_id} is not open"
+        )));
+    }
+    Ok(())
+}
+
 fn require_open_comment_for_edit<'a>(
     ctx: &'a ApplyContext,
     item_id: &str,
@@ -1636,12 +1679,20 @@ fn require_open_comment_for_edit<'a>(
         )));
     }
     if let Some(parent_id) = item.parent_item_id.as_deref() {
-        let parent = require_comment(ctx, parent_id)?;
-        if parent.state != BlockReviewState::Open {
-            return Err(GatewayError::invalid(format!(
-                "comment {item_id} belongs to a non-open thread"
-            )));
-        }
+        let parent = ctx
+            .items
+            .iter()
+            .find(|parent| {
+                parent.id == parent_id
+                    && matches!(
+                        parent.kind,
+                        BlockReviewKind::Comment | BlockReviewKind::Suggestion
+                    )
+            })
+            .ok_or_else(|| anchor_not_found(parent_id))?;
+        require_open_reply_root(parent, parent_id).map_err(|_| {
+            GatewayError::invalid(format!("comment {item_id} belongs to a non-open thread"))
+        })?;
     }
     Ok(item)
 }
@@ -2456,6 +2507,27 @@ pub(crate) fn review_response_from_rows(
     let edited_at = |item: &BlockReviewItem| {
         (item.updated_at != item.created_at).then(|| item.updated_at.clone())
     };
+    let mut replies_by_parent: HashMap<String, Vec<AgentReviewReply>> = HashMap::new();
+    for reply in items
+        .iter()
+        .filter(|item| item.kind == BlockReviewKind::Comment)
+        .filter(|item| include_resolved || item.state != BlockReviewState::Resolved)
+    {
+        let Some(parent_id) = reply.parent_item_id.as_deref() else {
+            continue;
+        };
+        replies_by_parent
+            .entry(parent_id.to_string())
+            .or_default()
+            .push(AgentReviewReply {
+                id: reply.id.clone(),
+                status: reply.state.as_str().to_string(),
+                by: by(reply),
+                at: reply.created_at.clone(),
+                edited_at: edited_at(reply),
+                body: reply.body.clone().unwrap_or_default(),
+            });
+    }
 
     let comments = items
         .iter()
@@ -2470,18 +2542,7 @@ pub(crate) fn review_response_from_rows(
             block_ref: block_ref(item),
             quote: quote(item),
             body: item.body.clone().unwrap_or_default(),
-            replies: items
-                .iter()
-                .filter(|reply| reply.parent_item_id.as_deref() == Some(item.id.as_str()))
-                .map(|reply| AgentReviewReply {
-                    id: reply.id.clone(),
-                    status: reply.state.as_str().to_string(),
-                    by: by(reply),
-                    at: reply.created_at.clone(),
-                    edited_at: edited_at(reply),
-                    body: reply.body.clone().unwrap_or_default(),
-                })
-                .collect(),
+            replies: replies_by_parent.remove(&item.id).unwrap_or_default(),
             anchor: anchor(item),
         })
         .collect();
@@ -2509,6 +2570,7 @@ pub(crate) fn review_response_from_rows(
                     before: anchored_text(item).unwrap_or_else(|| quote(item)),
                     after: replacement,
                 },
+                replies: replies_by_parent.remove(&item.id).unwrap_or_default(),
                 anchor: anchor(item),
             }
         })

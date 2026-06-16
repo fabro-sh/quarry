@@ -226,6 +226,7 @@ export interface AgentReviewSuggestion {
   quote: string;
   content: string;
   preview: AgentSuggestionPreview;
+  replies: AgentReviewReply[];
   /** Row-anchored position; present when the document has canonical block rows. */
   anchor?: BlockReviewAnchor | null;
 }

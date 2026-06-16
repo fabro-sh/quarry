@@ -61,11 +61,7 @@ export function resolveSuggestionInMarkdown(
   if (nextBody === null) return null;
 
   if (!meta) return nextBody.endsWith('\n') ? nextBody : `${nextBody}\n`;
-  const nextMeta = {
-    comments: { ...meta.comments },
-    suggestions: { ...meta.suggestions },
-  };
-  delete nextMeta.suggestions[id];
+  const nextMeta = removeSuggestion(meta, id);
   const endmatter = serializeReviewMeta(nextMeta);
   return endmatter ? `${nextBody}\n\n---\n${endmatter}` : `${nextBody}\n`;
 }

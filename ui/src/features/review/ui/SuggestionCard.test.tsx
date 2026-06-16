@@ -17,11 +17,13 @@ const insert: TResolvedSuggestion = {
 
 describe('SuggestionCard', () => {
   beforeEach(() => {
+    useReviewStore.getState().hydrate({ comments: {}, suggestions: {} });
     useReviewStore.getState().setActiveId(null);
     useReviewStore.getState().setHoverId(null);
   });
 
   afterEach(() => {
+    useReviewStore.getState().hydrate({ comments: {}, suggestions: {} });
     useReviewStore.getState().setActiveId(null);
     useReviewStore.getState().setHoverId(null);
   });
@@ -66,6 +68,37 @@ describe('SuggestionCard', () => {
     expect(screen.getByText('Replace:')).toBeInTheDocument();
     expect(screen.getByText('old')).toBeInTheDocument();
     expect(screen.getByText('new')).toBeInTheDocument();
+  });
+
+  it('renders existing replies and adds a new reply through the composer', async () => {
+    useReviewStore.getState().hydrate({
+      comments: {
+        r1: {
+          at: '2026-01-01T00:05:00.000Z',
+          body: 'Why this wording?',
+          by: 'reviewer',
+          re: 's1',
+        },
+      },
+      suggestions: { s1: { at: '2026-01-01T00:00:00.000Z', by: 'AI' } },
+    });
+    const user = userEvent.setup();
+
+    render(<SuggestionCard suggestion={insert} onAccept={vi.fn()} onReject={vi.fn()} />);
+
+    expect(screen.getByText('Why this wording?')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('suggestion-card'));
+    await user.type(screen.getByLabelText('Reply'), 'Because it is clearer.');
+    await user.click(screen.getByRole('button', { name: 'Submit reply' }));
+
+    const replies = Object.values(useReviewStore.getState().getMeta().comments).filter(
+      (entry) => entry.re === 's1'
+    );
+    expect(replies.map((reply) => reply.body)).toEqual([
+      'Why this wording?',
+      'Because it is clearer.',
+    ]);
   });
 
   it('reflects the active id with data-active and the active ring', () => {

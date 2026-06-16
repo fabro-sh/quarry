@@ -18,6 +18,32 @@ describe('rfm-codec round-trip', () => {
     expect(out).toContain('{~~rough~>specific~~}{#s1}');
   });
 
+  it('round-trips a suggestion reply while the suggestion marker exists', () => {
+    const md =
+      'Use {~~rough~>specific~~}{#s1} wording.\n\n---\ncomments:\n  r1:\n    at: "2026-01-01T00:05:00.000Z"\n    body: Why this wording?\n    by: user\n    re: s1\nsuggestions:\n  s1:\n    at: "2026-01-01T00:00:00.000Z"\n    by: AI\n';
+    const { value, meta } = markdownToReview(md);
+
+    expect(meta.comments.r1).toEqual({
+      at: '2026-01-01T00:05:00.000Z',
+      body: 'Why this wording?',
+      by: 'user',
+      re: 's1',
+    });
+
+    const out = reviewToMarkdown(value, meta);
+    expect(out).toContain('re: s1');
+    expect(out).toContain('body: Why this wording?');
+  });
+
+  it('prunes suggestion replies when the suggestion marker is gone', () => {
+    const md =
+      'Use rough wording.\n\n---\ncomments:\n  r1:\n    at: "2026-01-01T00:05:00.000Z"\n    body: Why this wording?\n    by: user\n    re: s1\nsuggestions:\n  s1:\n    at: "2026-01-01T00:00:00.000Z"\n    by: AI\n';
+    const { value, meta } = markdownToReview(md);
+
+    expect(meta.comments).toEqual({});
+    expect(reviewToMarkdown(value, meta)).not.toContain('r1:');
+  });
+
   it('is idempotent: parse→serialize→parse→serialize is stable', () => {
     const md = 'Use {~~rough~>specific~~}{#s1} wording.\n\n---\nsuggestions:\n  s1:\n    at: "2026-01-01T00:00:00.000Z"\n    by: AI\n';
     const r1 = markdownToReview(md);

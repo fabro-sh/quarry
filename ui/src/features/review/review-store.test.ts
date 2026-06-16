@@ -131,10 +131,13 @@ describe('review-store reducers', () => {
     });
   });
 
-  it('removeSuggestion deletes one suggestion entry without touching the rest', () => {
+  it('removeSuggestion deletes one suggestion entry and its replies without touching the rest', () => {
     const meta = removeSuggestion(
       {
-        comments: {},
+        comments: {
+          r1: { by: 'user', at, body: 'question', re: 's1' },
+          r2: { by: 'user', at, body: 'keep', re: 's2' },
+        },
         suggestions: {
           s1: { by: 'AI', at },
           s2: { by: 'user', at },
@@ -144,6 +147,7 @@ describe('review-store reducers', () => {
     );
 
     expect(meta.suggestions).toEqual({ s2: { by: 'user', at } });
+    expect(meta.comments).toEqual({ r2: { by: 'user', at, body: 'keep', re: 's2' } });
   });
 });
 

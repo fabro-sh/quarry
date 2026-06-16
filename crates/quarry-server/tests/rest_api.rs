@@ -782,7 +782,7 @@ async fn agent_review_lists_open_comments_replies_and_suggestions() {
     .await
     .unwrap();
     let library = store.create_library("agentreviewread").await.unwrap();
-    let markdown = "Alpha {==target==}{>>Needs work.<<}{#c1} and {==done==}{>>Fixed.<<}{#c2}.\n\nUse {~~old~>new~~}{#s1} wording and `{++literal++}{#s_code}`.\n\n```text\n{==ignored==}{>>Nope<<}{#c_code}\n{--gone--}{#s_code2}\n```\n\n---\ncomments:\n  c1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user:a\n  c2:\n    at: \"2026-01-02T00:00:00.000Z\"\n    by: user:b\n    status: resolved\n  c_code:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: user:code\n  r1:\n    at: \"2026-01-01T01:00:00.000Z\"\n    body: Reply body.\n    by: ai:codex\n    re: c1\nsuggestions:\n  s1:\n    at: \"2026-01-03T00:00:00.000Z\"\n    by: ai:codex\n  s_code:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: ai:code\n  s_code2:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: ai:code\n";
+    let markdown = "Alpha {==target==}{>>Needs work.<<}{#c1} and {==done==}{>>Fixed.<<}{#c2}.\n\nUse {~~old~>new~~}{#s1} wording and `{++literal++}{#s_code}`.\n\n```text\n{==ignored==}{>>Nope<<}{#c_code}\n{--gone--}{#s_code2}\n```\n\n---\ncomments:\n  c1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user:a\n  c2:\n    at: \"2026-01-02T00:00:00.000Z\"\n    by: user:b\n    status: resolved\n  c_code:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: user:code\n  r1:\n    at: \"2026-01-01T01:00:00.000Z\"\n    body: Reply body.\n    by: ai:codex\n    re: c1\n  r2:\n    at: \"2026-01-03T01:00:00.000Z\"\n    body: Suggestion reply.\n    by: user:a\n    re: s1\nsuggestions:\n  s1:\n    at: \"2026-01-03T00:00:00.000Z\"\n    by: ai:codex\n  s_code:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: ai:code\n  s_code2:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: ai:code\n";
     let written = store
         .put_document(
             &library.slug,
@@ -853,6 +853,11 @@ async fn agent_review_lists_open_comments_replies_and_suggestions() {
     assert_eq!(
         body["suggestions"][0]["preview"],
         serde_json::json!({"before": "old", "after": "new"})
+    );
+    assert_eq!(body["suggestions"][0]["replies"][0]["id"], "r2");
+    assert_eq!(
+        body["suggestions"][0]["replies"][0]["body"],
+        "Suggestion reply."
     );
 
     let response = app
@@ -4175,6 +4180,93 @@ async fn block_transaction_comment_edit_updates_reply_without_changing_root() {
 }
 
 #[tokio::test]
+async fn block_transaction_comment_reply_targets_open_suggestion_and_edit_updates_reply() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Make this better.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-suggest",
+            serde_json::json!([{
+                "op": "suggestion.add",
+                "block_id": block_id,
+                "start": 10,
+                "end": 16,
+                "replacement": "great"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "doc.md", false).await;
+    let suggestion_id = review["suggestions"][0]["id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-reply",
+            serde_json::json!([{
+                "op": "comment.reply",
+                "item_id": suggestion_id,
+                "body": "why this wording?"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "doc.md", false).await;
+    assert!(review["comments"].as_array().unwrap().is_empty());
+    let reply = &review["suggestions"][0]["replies"][0];
+    assert_eq!(reply["body"], "why this wording?");
+    assert_eq!(reply["status"], "open");
+    let reply_id = reply["id"].as_str().unwrap().to_string();
+    let reply_at = reply["at"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-nested-reply",
+            serde_json::json!([{
+                "op": "comment.reply",
+                "item_id": reply_id,
+                "body": "second reply"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "doc.md", false).await;
+    let replies = review["suggestions"][0]["replies"].as_array().unwrap();
+    assert_eq!(replies.len(), 2);
+    assert_eq!(replies[1]["body"], "second reply");
+
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-edit-reply",
+            serde_json::json!([{
+                "op": "comment.edit",
+                "item_id": reply_id,
+                "body": "edited wording question"
+            }]),
+        ),
+    )
+    .await;
+
+    let review = get_block_review(&app, "doc.md", false).await;
+    let reply = &review["suggestions"][0]["replies"][0];
+    assert_eq!(reply["body"], "edited wording question");
+    assert_eq!(reply["at"], reply_at);
+    assert_ne!(reply["editedAt"], Value::Null);
+    assert_ne!(reply["editedAt"], reply["at"]);
+}
+
+#[tokio::test]
 async fn block_transaction_comment_edit_rejects_non_open_comments() {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Discuss this sentence.\n").await;
@@ -4258,6 +4350,25 @@ async fn block_transaction_suggestion_accept_applies_replacement_and_resolves() 
     assert_eq!(suggestion["preview"]["after"], "great");
     let suggestion_id = suggestion["id"].as_str().unwrap().to_string();
 
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-reply",
+            serde_json::json!([{
+                "op": "comment.reply",
+                "item_id": suggestion_id,
+                "body": "why this replacement?"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "doc.md", false).await;
+    assert_eq!(
+        review["suggestions"][0]["replies"][0]["body"],
+        "why this replacement?"
+    );
+
     let ack = commit_block_transaction(
         &app,
         "doc.md",
@@ -4279,6 +4390,10 @@ async fn block_transaction_suggestion_accept_applies_replacement_and_resolves() 
     assert!(review["suggestions"].as_array().unwrap().is_empty());
     let review = get_block_review(&app, "doc.md", true).await;
     assert_eq!(review["suggestions"][0]["status"], "resolved");
+    assert!(review["suggestions"][0]["replies"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 
     // Accepting again: already resolved.
     let (status, body) = post_block_transaction(
@@ -4322,6 +4437,25 @@ async fn block_transaction_suggestion_reject_resolves_without_changing_text() {
         &app,
         "doc.md",
         block_tx(
+            "tx-reply",
+            serde_json::json!([{
+                "op": "comment.reply",
+                "item_id": suggestion_id,
+                "body": "please explain"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "doc.md", false).await;
+    assert_eq!(
+        review["suggestions"][0]["replies"][0]["body"],
+        "please explain"
+    );
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
             "tx-reject",
             serde_json::json!([{ "op": "suggestion.reject", "item_id": suggestion_id }]),
         ),
@@ -4333,6 +4467,25 @@ async fn block_transaction_suggestion_reject_resolves_without_changing_text() {
     );
     let review = get_block_review(&app, "doc.md", true).await;
     assert_eq!(review["suggestions"][0]["status"], "resolved");
+    assert!(review["suggestions"][0]["replies"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-reply-resolved",
+            serde_json::json!([{
+                "op": "comment.reply",
+                "item_id": suggestion_id,
+                "body": "too late"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
 }
 
 #[tokio::test]

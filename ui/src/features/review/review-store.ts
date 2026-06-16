@@ -80,6 +80,9 @@ export function removeSuggestion(meta: ReviewMeta, id: string): ReviewMeta {
   if (!meta.suggestions[id]) return meta;
   const next = cloneMeta(meta);
   delete next.suggestions[id];
+  for (const [key, entry] of Object.entries(next.comments)) {
+    if (entry.re === id) delete next.comments[key];
+  }
   return next;
 }
 

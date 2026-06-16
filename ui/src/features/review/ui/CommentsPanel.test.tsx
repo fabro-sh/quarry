@@ -154,6 +154,7 @@ describe('CommentsPanel', () => {
       quote: 'rough',
       content: 'specific',
       preview: { before: 'rough', after: 'specific' },
+      replies: [],
     };
     render(<CommentsPanel review={review({ suggestions: [suggestion] })} />);
 
