@@ -2,9 +2,9 @@ use quarry_core::{
     DocumentSource, DocumentVersion, QuarryError, WritePrecondition, INLINE_CONTENT_THRESHOLD,
 };
 use quarry_storage::{
-    group_version_history, BlockMutationCommit, BlockMutationOutcome, BlockReviewKind,
-    BlockReviewState, NewBlockReviewItem, QuarryStore, StoreConfig, StoreEventKind, TmpTtl,
-    TransactionMetadata,
+    group_version_history, BlockMutationCommit, BlockMutationOutcome, BlockReviewItem,
+    BlockReviewKind, BlockReviewState, NewBlockReviewItem, QuarryStore, StoreConfig,
+    StoreEventKind, TmpTtl, TransactionMetadata,
 };
 use std::time::Duration;
 
@@ -3415,6 +3415,102 @@ async fn block_mutation_commit_rejects_open_review_items_with_dead_anchors() {
         .await
         .unwrap_err();
     assert!(matches!(error, QuarryError::InvalidInput(_)));
+}
+
+#[tokio::test]
+async fn block_mutation_commit_accepts_replies_to_collapsed_insertion_suggestions() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+    let library = store
+        .create_library("insertion-reply-anchor")
+        .await
+        .unwrap();
+    store
+        .import_block_document(
+            &library.slug,
+            "doc.md",
+            "Type here.\n",
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let state = store
+        .block_mutation_state(&library.slug, "doc.md", "ctx-1")
+        .await
+        .unwrap();
+    let block_id = state.rows[0].block_id.clone();
+    let now = "2026-06-16T00:00:00.000Z".to_string();
+    let insertion_suggestion = BlockReviewItem {
+        id: "s1".to_string(),
+        document_id: state.document_id.clone(),
+        block_id: block_id.clone(),
+        kind: BlockReviewKind::Suggestion,
+        start_offset: 4,
+        end_offset: 4,
+        body: None,
+        replacement: Some(" inserted".to_string()),
+        author: Some("agent".to_string()),
+        state: BlockReviewState::Open,
+        quote: Some(String::new()),
+        context_before: None,
+        context_after: None,
+        parent_item_id: None,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+    };
+    let reply = BlockReviewItem {
+        id: "r1".to_string(),
+        document_id: state.document_id.clone(),
+        block_id,
+        kind: BlockReviewKind::Comment,
+        start_offset: 4,
+        end_offset: 4,
+        body: Some("Why this insertion?".to_string()),
+        replacement: None,
+        author: Some("reviewer".to_string()),
+        state: BlockReviewState::Open,
+        quote: Some(String::new()),
+        context_before: None,
+        context_after: None,
+        parent_item_id: Some("s1".to_string()),
+        created_at: now.clone(),
+        updated_at: now,
+    };
+
+    let outcome = store
+        .commit_block_mutation(
+            &library.slug,
+            BlockMutationCommit {
+                document_id: state.document_id.clone(),
+                expected_head_version_id: state.head_version_id.clone(),
+                client_tx_id: "ctx-2".to_string(),
+                actor_kind: "browser_session".to_string(),
+                actor_id: None,
+                transaction_actor: Some("browser".to_string()),
+                transaction_message: Some("Live session edits".to_string()),
+                transaction_provenance: None,
+                origin_id: None,
+                source: DocumentSource::Rest,
+                recorded_ops: serde_json::json!({}),
+                metadata: state.metadata.clone(),
+                content_type: state.content_type.clone(),
+                rows: state.rows.clone(),
+                review_items: vec![insertion_suggestion, reply],
+                normalized_markdown: "Type here.\n".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(outcome, BlockMutationOutcome::Applied { .. }));
+
+    let items = store
+        .list_block_review_items(&state.document_id)
+        .await
+        .unwrap();
+    assert!(items.iter().any(|item| item.id == "r1"));
 }
 
 /// `put_block_review_item` accepts the gateway's conflict shape (Phase 4):

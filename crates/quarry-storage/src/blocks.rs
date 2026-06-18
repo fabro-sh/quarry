@@ -1446,13 +1446,14 @@ async fn document_head_conn(
 /// Internal invariant check before a mutation commit: every review item must
 /// either anchor a live block with in-range boundary-aligned offsets, or be a
 /// dead anchor (any non-open state) — open items never reference missing
-/// blocks, and a collapsed range is only legal once the anchor is dead
-/// (orphaned, invalidated, or resolved-with-empty-replacement).
+/// blocks, and a collapsed range is only legal for insertions or their replies.
 fn validate_review_items_against_rows(rows: &[BlockRow], items: &[BlockReviewItem]) -> Result<()> {
     let texts: HashMap<&str, &str> = rows
         .iter()
         .map(|row| (row.block_id.as_str(), row.text.as_str()))
         .collect();
+    let items_by_id: HashMap<&str, &BlockReviewItem> =
+        items.iter().map(|item| (item.id.as_str(), item)).collect();
     for item in items {
         if item.kind == BlockReviewKind::Conflict {
             // Conflict items (Phase 4) anchor by `after_block_id` in
@@ -1480,17 +1481,15 @@ fn validate_review_items_against_rows(rows: &[BlockRow], items: &[BlockReviewIte
                 item.id, item.start_offset, item.end_offset, item.block_id
             )));
         }
-        // A collapsed range is only meaningful for an open INSERTION
-        // suggestion (the live-session "type in suggesting mode" shape):
-        // nothing is anchored, but the replacement text is the proposal.
-        let insertion_suggestion = item.kind == BlockReviewKind::Suggestion
-            && item
-                .replacement
-                .as_deref()
-                .is_some_and(|replacement| !replacement.is_empty());
+        // A collapsed range is meaningful for an open INSERTION suggestion
+        // (the live-session "type in suggesting mode" shape): nothing is
+        // anchored, but the replacement text is the proposal. Replies to that
+        // suggestion inherit the same collapsed anchor.
+        let collapsed_insertion_reply = is_reply_to_open_insertion_suggestion(item, &items_by_id);
         if item.start_offset == item.end_offset
             && item.state == BlockReviewState::Open
-            && !insertion_suggestion
+            && !is_open_insertion_suggestion(item)
+            && !collapsed_insertion_reply
         {
             return Err(QuarryError::InvalidInput(format!(
                 "open review item {} has a collapsed range",
@@ -1499,6 +1498,37 @@ fn validate_review_items_against_rows(rows: &[BlockRow], items: &[BlockReviewIte
         }
     }
     Ok(())
+}
+
+fn is_open_insertion_suggestion(item: &BlockReviewItem) -> bool {
+    item.kind == BlockReviewKind::Suggestion
+        && item.state == BlockReviewState::Open
+        && item.start_offset == item.end_offset
+        && item
+            .replacement
+            .as_deref()
+            .is_some_and(|replacement| !replacement.is_empty())
+}
+
+fn is_reply_to_open_insertion_suggestion(
+    item: &BlockReviewItem,
+    items_by_id: &HashMap<&str, &BlockReviewItem>,
+) -> bool {
+    if item.kind != BlockReviewKind::Comment || item.parent_item_id.is_none() {
+        return false;
+    }
+    let Some(parent) = item
+        .parent_item_id
+        .as_deref()
+        .and_then(|parent_id| items_by_id.get(parent_id))
+    else {
+        return false;
+    };
+    is_open_insertion_suggestion(parent)
+        && parent.document_id == item.document_id
+        && parent.block_id == item.block_id
+        && parent.start_offset == item.start_offset
+        && parent.end_offset == item.end_offset
 }
 
 async fn block_transaction_conn(
