@@ -777,6 +777,45 @@ fn reconcile_keeps_foreign_scaffold_blocks_in_place() {
     assert_eq!(project(&children).rows, desired_rows);
 }
 
+/// Regression: a document that begins as a lone heading carries the editor's
+/// trailing scaffold paragraph at index 1, directly after the heading. A
+/// whole-document edit that retitles the heading and inserts body content
+/// makes `reconcile_session_children` insert the new blocks PAST the foreign
+/// scaffold, stranding it between the heading and the body. A trailing-only
+/// strip would leave the stranded scaffold as a spurious empty paragraph after
+/// the heading — one accumulates per checkpoint. The projection must drop the
+/// scaffold wherever it lands, not only at the document's trailing edge.
+#[test]
+fn reconcile_drops_scaffold_stranded_after_a_lone_heading() {
+    // The doc started as just "# Untitled"; the live editor appended a
+    // trailing scaffold paragraph after the lone heading.
+    let rows = vec![block("b-heading", None, 0, "h1", "Untitled")];
+    let doc = seeded_doc(&rows, &[]);
+    {
+        let mut txn = doc.transact_mut();
+        let root = content_root_mut(&mut txn);
+        let scaffold = Node::element(
+            "p",
+            [("id".to_string(), json!("plate-scaffold"))]
+                .into_iter()
+                .collect(),
+            vec![Node::text("", Attrs::new())],
+        );
+        apply_built(&mut txn, &root, 1, std::slice::from_ref(&scaffold));
+    }
+
+    // A whole-document edit retitles the heading and inserts a body paragraph.
+    let desired_rows = vec![
+        block("b-heading", None, 0, "h1", "Building a Linux PC"),
+        block("b-intro", None, 1, "p", "Linux is an excellent choice."),
+    ];
+    reconcile(&doc, &doc_image(&rows, &[]), &doc_image(&desired_rows, &[]));
+
+    // The checkpoint must project exactly the heading and the intro — the
+    // stranded scaffold paragraph must NOT survive as content between them.
+    assert_eq!(project(&doc_children(&doc)).rows, desired_rows);
+}
+
 #[test]
 fn reconcile_overlays_new_review_marks_onto_an_existing_block() {
     let rows = vec![block("b1", None, 0, "p", "Comment on this text.")];

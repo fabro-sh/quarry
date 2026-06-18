@@ -73,8 +73,9 @@
 //!
 //! Block identity rides as the `id` element attribute. The projection keeps
 //! existing ids and mints fresh ones for browser-created blocks that lack
-//! one (or that duplicate an id already seen). Trailing empty paragraphs —
-//! the editor's runtime scaffold — are stripped, ignoring their runtime id.
+//! one (or that duplicate an id already seen). Empty paragraphs — the
+//! editor's runtime scaffold — are stripped wherever they appear, ignoring
+//! their runtime id.
 //! A leaf block containing inline elements the row model cannot represent
 //! (wikilinks, inline images) degrades to a `raw_markdown` row that
 //! preserves the block's Markdown source and its id; review marks inside
@@ -460,22 +461,26 @@ pub fn project_session_nodes(
     children: &[Node],
     mut mint_id: impl FnMut() -> String,
 ) -> Result<SessionProjection, Unsupported> {
-    let children = strip_trailing_scaffold(children);
     let mut projection = SessionProjection {
         rows: Vec::new(),
         anchors: Vec::new(),
         dropped_marks: BTreeSet::new(),
     };
     let mut taken = HashSet::new();
-    for (position, child) in children.iter().enumerate() {
+    let mut position = 0;
+    for child in children {
+        if is_scaffold_paragraph(child) {
+            continue;
+        }
         collect_block(
             child,
             None,
-            position as u32,
+            position,
             &mut mint_id,
             &mut taken,
             &mut projection,
         )?;
+        position += 1;
     }
     if projection.rows.is_empty() {
         projection.rows.push(BlockRow {
@@ -492,16 +497,10 @@ pub fn project_session_nodes(
     Ok(projection)
 }
 
-/// Trailing empty paragraphs are the editor's runtime scaffold; their runtime
-/// `id` attribute does not make them content.
-fn strip_trailing_scaffold(children: &[Node]) -> &[Node] {
-    let mut end = children.len();
-    while end > 1 && is_scaffold_paragraph(&children[end - 1]) {
-        end -= 1;
-    }
-    &children[..end]
-}
-
+/// An empty paragraph is the editor's runtime scaffold; its runtime `id`
+/// attribute does not make it content. Reconciliation can strand the scaffold
+/// between content blocks, so the projection drops it wherever it appears, not
+/// only at the document's trailing edge.
 fn is_scaffold_paragraph(node: &Node) -> bool {
     match node {
         Node::Element {
