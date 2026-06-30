@@ -47,6 +47,11 @@ export interface CreateTmpDocumentRequest {
   expiresAt?: string;
 }
 
+export interface Capabilities {
+  tmp_documents: boolean;
+  lib_documents: boolean;
+}
+
 export interface PromoteTmpDocumentRequest {
   library: string;
   path: string;
@@ -125,6 +130,20 @@ export class BlockTransactionError extends ApiError {
   ) {
     super(message, status, payload);
     this.name = 'BlockTransactionError';
+  }
+}
+
+export const legacyCapabilities: Capabilities = {
+  tmp_documents: true,
+  lib_documents: true,
+};
+
+export async function getCapabilities() {
+  try {
+    return await jsonRequest<Capabilities>('/v1/capabilities');
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return legacyCapabilities;
+    throw error;
   }
 }
 

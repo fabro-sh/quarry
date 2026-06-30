@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["tmp-documents"]
+tmp-documents = []
+lib-documents = []
+
 [dependencies]
 axum.workspace = true
 blake3.workspace = true

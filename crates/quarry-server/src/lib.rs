@@ -338,26 +338,53 @@ pub fn router_with_state(state: AppState) -> Router {
         .route("/agent-docs", get(agent_docs))
         .route("/.well-known/agent.json", get(agent_discovery))
         .route("/v1/health", get(health))
+        .route("/v1/capabilities", get(capabilities))
         .route("/v1/openapi.json", get(openapi_json))
-        .route("/v1/admin/gc", post(admin_gc))
+        .route("/v1/admin/gc", post(admin_gc));
+    let router = install_tmp_document_routes(router);
+    let router = install_library_document_routes(router);
+    let router = router.fallback(get(browser_asset));
+
+    let router = router.layer(middleware::from_fn(request_tracing_middleware));
+
+    router.with_state(state)
+}
+
+fn install_tmp_document_routes(router: Router<AppState>) -> Router<AppState> {
+    if !cfg!(feature = "tmp-documents") {
+        return router;
+    }
+
+    let tmp_document_route = get(get_tmp_document)
+        .head(head_tmp_document)
+        .put(put_tmp_document)
+        .patch(patch_tmp_document_action)
+        .delete(delete_tmp_document);
+    let tmp_document_route = if cfg!(all(feature = "tmp-documents", feature = "lib-documents")) {
+        tmp_document_route.post(post_tmp_document_action)
+    } else {
+        tmp_document_route
+    };
+
+    router
+        .route(
+            "/v1/tmp/documents",
+            get(list_tmp_documents).post(create_tmp_document),
+        )
+        .route("/v1/tmp/documents/{*path}", tmp_document_route)
+}
+
+fn install_library_document_routes(router: Router<AppState>) -> Router<AppState> {
+    if !cfg!(feature = "lib-documents") {
+        return router;
+    }
+
+    router
         .route("/v1/events", get(events))
         .route("/v1/collab/{document_id}", get(collab_websocket))
         .route("/v1/libraries", get(list_libraries).post(create_library))
         .route("/v1/libraries/{library}", get(get_library))
         .route("/v1/libraries/{library}/documents", get(list_documents))
-        .route(
-            "/v1/tmp/documents",
-            get(list_tmp_documents).post(create_tmp_document),
-        )
-        .route(
-            "/v1/tmp/documents/{*path}",
-            get(get_tmp_document)
-                .head(head_tmp_document)
-                .put(put_tmp_document)
-                .post(post_tmp_document_action)
-                .patch(patch_tmp_document_action)
-                .delete(delete_tmp_document),
-        )
         .route("/v1/libraries/{library}/search", get(search_documents))
         .route(
             "/v1/libraries/{library}/search/suggest",
@@ -424,13 +451,7 @@ pub fn router_with_state(state: AppState) -> Router {
         .route(
             "/v1/libraries/{library}/conflicts/{conflict}/resolve",
             post(resolve_conflict),
-        );
-
-    let router = router.fallback(get(browser_asset));
-
-    let router = router.layer(middleware::from_fn(request_tracing_middleware));
-
-    router.with_state(state)
+        )
 }
 
 async fn request_tracing_middleware(request: Request, next: Next) -> Response {
@@ -750,6 +771,7 @@ fn browser_ui_not_built() -> Response {
 #[openapi(
     paths(
         health,
+        capabilities,
         openapi_json,
         admin_gc,
         events,
@@ -818,6 +840,7 @@ fn browser_ui_not_built() -> Response {
     ),
     components(schemas(
         CreateLibraryRequest,
+        Capabilities,
         BeginTransactionRequest,
         ErrorResponse,
         MoveRequest,
@@ -884,6 +907,21 @@ struct ApiDoc;
 
 const QUARRY_SKILL_MD: &str = include_str!("../resources/quarry.SKILL.md");
 const AGENT_DOCS_MD: &str = include_str!("../resources/agent-docs.md");
+
+#[derive(Debug, Serialize, ToSchema)]
+struct Capabilities {
+    tmp_documents: bool,
+    lib_documents: bool,
+}
+
+impl Capabilities {
+    fn current() -> Self {
+        Self {
+            tmp_documents: cfg!(feature = "tmp-documents"),
+            lib_documents: cfg!(feature = "lib-documents"),
+        }
+    }
+}
 
 #[derive(Debug, Serialize)]
 struct AgentDiscovery {
@@ -1143,9 +1181,34 @@ async fn health() -> Json<JsonValue> {
     Json(serde_json::json!({"ok": true, "service": "quarry"}))
 }
 
+#[utoipa::path(get, path = "/v1/capabilities", responses((status = 200, body = Capabilities)))]
+async fn capabilities() -> Json<Capabilities> {
+    Json(Capabilities::current())
+}
+
 #[utoipa::path(get, path = "/v1/openapi.json", responses((status = 200, body = JsonValue)))]
 async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
-    Json(ApiDoc::openapi())
+    Json(active_openapi())
+}
+
+fn active_openapi() -> utoipa::openapi::OpenApi {
+    let mut openapi = ApiDoc::openapi();
+    openapi
+        .paths
+        .paths
+        .retain(|path, _| openapi_path_enabled(path));
+    openapi
+}
+
+fn openapi_path_enabled(path: &str) -> bool {
+    if path.starts_with("/v1/tmp/documents") {
+        return cfg!(feature = "tmp-documents")
+            && (path != "/v1/tmp/documents/{path}/promote" || cfg!(feature = "lib-documents"));
+    }
+    if path == "/v1/events" || path.starts_with("/v1/libraries") || path.starts_with("/v1/collab") {
+        return cfg!(feature = "lib-documents");
+    }
+    true
 }
 
 async fn collab_websocket(
@@ -3622,13 +3685,18 @@ fn metadata_from_headers(headers: &HeaderMap, content_type: &str) -> Result<Json
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "lib-documents")]
     use axum::body::{to_bytes, Body};
+    #[cfg(feature = "lib-documents")]
     use axum::http::Method;
     use axum::response::IntoResponse;
-    use quarry_core::{DocumentSource, WritePrecondition};
+    use quarry_core::DocumentSource;
+    #[cfg(feature = "lib-documents")]
+    use quarry_core::WritePrecondition;
     use quarry_storage::StoreConfig;
     use tokio::time::timeout;
     use tokio_util::sync::CancellationToken;
+    #[cfg(feature = "lib-documents")]
     use tower::ServiceExt;
 
     async fn test_store() -> (tempfile::TempDir, QuarryStore) {
@@ -3738,6 +3806,7 @@ mod tests {
         assert!(!accepts_html(&HeaderMap::new()));
     }
 
+    #[cfg(feature = "lib-documents")]
     #[tokio::test]
     async fn sse_events_stream_completes_after_shutdown_cancellation() {
         let (_root, store) = test_store().await;
@@ -3767,6 +3836,7 @@ mod tests {
         .unwrap();
     }
 
+    #[cfg(feature = "lib-documents")]
     #[tokio::test]
     async fn document_sse_shutdown_drops_presence_guard() {
         let (_root, store) = test_store().await;

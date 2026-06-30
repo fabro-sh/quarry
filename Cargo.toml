@@ -58,5 +58,5 @@ quarry-collab-codec = { path = "crates/quarry-collab-codec" }
 quarry-storage = { path = "crates/quarry-storage" }
 quarry-git = { path = "crates/quarry-git" }
 quarry-fuse = { path = "crates/quarry-fuse" }
-quarry-server = { path = "crates/quarry-server" }
-quarry-cli = { path = "crates/quarry-cli" }
+quarry-server = { path = "crates/quarry-server", default-features = false }
+quarry-cli = { path = "crates/quarry-cli", default-features = false }

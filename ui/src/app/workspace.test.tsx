@@ -370,6 +370,57 @@ describe('Quarry Browser workspace', () => {
     );
   });
 
+  it('uses the tmp workspace and hides library controls when library documents are disabled', async () => {
+    window.history.pushState({}, '', '/tmp/scratch/note.md');
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/v1/capabilities') {
+        return json({ tmp_documents: true, lib_documents: false });
+      }
+      if (url === '/v1/tmp/documents') {
+        return json([
+          {
+            id: 'tmp-1',
+            path: 'scratch/note.md',
+            head_version_id: 'tmp-v1',
+            content_type: 'text/markdown',
+            byte_size: 6,
+            metadata: { title: 'Scratch note' },
+            updated_at: 'now',
+          },
+        ]);
+      }
+      if (url === '/v1/tmp/documents/scratch/note.md') {
+        return new Response('# Tmp\n', {
+          headers: {
+            ETag: '"tmp-v1"',
+            'content-type': 'text/markdown',
+            'x-quarry-document-id': 'tmp-1',
+            'x-quarry-expires-at': '2099-01-01T00:00:00Z',
+          },
+        });
+      }
+      if (url === '/v1/tmp/documents/scratch/note.md/versions') return json([]);
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Tmp'));
+
+    expect(window.location.pathname).toBe('/tmp/scratch/note.md');
+    expect(fetch).not.toHaveBeenCalledWith('/v1/libraries', undefined);
+    expect(screen.queryByLabelText('Document tree')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Document details')).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Library switcher' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add agent' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Versions' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Expires/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+  });
+
   it('does not mount a routed editor before the document body loads', async () => {
     window.history.pushState({}, '', '/lib/race-lib/documents/deep.md');
     let resolveDocument: () => void = () => {};

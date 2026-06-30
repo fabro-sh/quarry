@@ -2,6 +2,7 @@ use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "lib-documents")]
 #[test]
 fn cli_default_debug_logs_stay_on_stderr_and_stdout_stays_payload_only() {
     let temp = tempfile::tempdir().unwrap();
@@ -96,6 +97,7 @@ fn cli_default_debug_logs_stay_on_stderr_and_stdout_stays_payload_only() {
     assert_eq!(resolved["status"], "resolved");
 }
 
+#[cfg(feature = "lib-documents")]
 #[test]
 fn cli_conflict_resolve_rejects_conflicts_from_another_library() {
     let temp = tempfile::tempdir().unwrap();
@@ -172,6 +174,7 @@ fn cli_conflict_resolve_rejects_conflicts_from_another_library() {
     assert_eq!(resolved["status"], "resolved");
 }
 
+#[cfg(feature = "lib-documents")]
 #[test]
 fn cli_backup_restore_reproduces_document_content() {
     let temp = tempfile::tempdir().unwrap();
@@ -221,6 +224,7 @@ fn cli_backup_restore_reproduces_document_content() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "hello from cli\n");
 }
 
+#[cfg(feature = "lib-documents")]
 #[test]
 fn cli_backup_restore_preserves_metadata_versions_and_cas_content() {
     let temp = tempfile::tempdir().unwrap();
@@ -301,6 +305,7 @@ fn cli_backup_restore_preserves_metadata_versions_and_cas_content() {
     });
 }
 
+#[cfg(feature = "lib-documents")]
 #[test]
 fn cli_can_create_and_list_git_peers() {
     let temp = tempfile::tempdir().unwrap();
@@ -406,6 +411,7 @@ fn serve_sigterm_exits_and_removes_lock_file() {
     );
 }
 
+#[cfg(feature = "lib-documents")]
 fn run_quarry<const N: usize>(args: [&str; N]) {
     let output = quarry_command().args(args).output().unwrap();
     assert!(
@@ -452,6 +458,7 @@ fn wait_for_tcp(addr: std::net::SocketAddr, timeout: Duration) {
 /// Phase 4: `quarry put` for Markdown reconciles via diff3 (two-way: the CLI
 /// process owns the database, so the base is the current canonical state).
 /// Content normalizes once and round-trips; raw files keep exact bytes.
+#[cfg(feature = "lib-documents")]
 #[test]
 fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() {
     let temp = tempfile::tempdir().unwrap();

@@ -1,5 +1,8 @@
-use quarry_server::{app_state, serve_state_with_shutdown, serve_with_shutdown};
+use quarry_server::serve_with_shutdown;
+#[cfg(feature = "lib-documents")]
+use quarry_server::{app_state, serve_state_with_shutdown};
 use quarry_storage::{QuarryStore, StoreConfig};
+#[cfg(feature = "lib-documents")]
 use tokio::io::AsyncWriteExt;
 use tokio::time::{timeout, Duration};
 
@@ -35,6 +38,7 @@ async fn serve_with_shutdown_exits_and_releases_store_lock() {
 }
 
 #[tokio::test]
+#[cfg(feature = "lib-documents")]
 async fn serve_state_with_shutdown_abandons_pending_request_after_grace_period() {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {
@@ -82,6 +86,7 @@ async fn serve_state_with_shutdown_abandons_pending_request_after_grace_period()
         .unwrap();
 }
 
+#[cfg(feature = "lib-documents")]
 async fn wait_for_server(addr: std::net::SocketAddr) {
     timeout(Duration::from_secs(2), async {
         loop {

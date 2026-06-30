@@ -65,17 +65,18 @@ import {
   ApiPreconditionError,
   type AgentPresenceEntry,
   backlinks,
-  getDocumentReview,
   createCollabInvite,
   createDocument,
   createGitPeer,
-  createLibrary,
+  createTmpDocument,
   deleteDocument,
   deleteTmpDocument,
   diffVersion,
   documentHref,
   documentVersion,
+  getCapabilities,
   getDocument,
+  getDocumentReview,
   gitExport,
   gitImport,
   gitPull,
@@ -87,6 +88,7 @@ import {
   listDocuments,
   listGitPeers,
   listLibraries,
+  listTmpDocuments,
   moveDocument,
   outgoingLinks,
   promoteTmpDocument,
@@ -210,7 +212,14 @@ function Workspace() {
     [location.search]
   );
   const { mutate } = useSWRConfig();
-  const { data: libraries = [] } = useSWR('/v1/libraries', listLibraries);
+  const { data: capabilities } = useSWR('/v1/capabilities', getCapabilities);
+  const capabilitiesLoaded = Boolean(capabilities);
+  const tmpDocumentsEnabled = capabilities?.tmp_documents ?? false;
+  const libDocumentsEnabled = capabilities?.lib_documents ?? false;
+  const { data: libraries = [] } = useSWR(
+    libDocumentsEnabled ? '/v1/libraries' : null,
+    listLibraries
+  );
   const [activeLibrary, setActiveLibrary] = useState<string>(() => {
     return routeSelection.library ?? localStorage.getItem('quarry:active-library') ?? '';
   });
@@ -275,6 +284,7 @@ function Workspace() {
   const appliedRouteRef = useRef(location.pathname);
 
   useEffect(() => {
+    if (!libDocumentsEnabled) return;
     if (!activeLibrary && libraries.length >= 1) {
       const nextLibrary = orderLibrariesByRecent(libraries, '')[0]?.slug ?? libraries[0].slug;
       setActiveLibrary(nextLibrary);
@@ -287,7 +297,23 @@ function Workspace() {
       setTreeOpenState(loadTreeOpenState(nextLibrary));
       setRightPaneTab(loadRightPaneTab(nextLibrary));
     }
-  }, [activeLibrary, libraries]);
+  }, [activeLibrary, libDocumentsEnabled, libraries]);
+
+  useEffect(() => {
+    if (!capabilitiesLoaded) return;
+    if (documentScope === 'library' && !libDocumentsEnabled && tmpDocumentsEnabled) {
+      setDocumentScope('tmp');
+      setActiveLibrary('');
+      setSelectedPath('');
+      navigate('/tmp', { replace: true });
+    }
+  }, [
+    capabilitiesLoaded,
+    documentScope,
+    libDocumentsEnabled,
+    navigate,
+    tmpDocumentsEnabled,
+  ]);
 
   useEffect(() => {
     if (appliedRouteRef.current === location.pathname) return;
@@ -303,22 +329,34 @@ function Workspace() {
   }, [location.pathname]);
 
   useEffect(() => {
+    if (!capabilitiesLoaded) return;
+    if (documentScope === 'library' && !libDocumentsEnabled) return;
+    if (documentScope === 'tmp' && !tmpDocumentsEnabled) return;
     const nextPath =
       documentScope === 'tmp' ? tmpWorkspaceRoute(selectedPath) : workspaceRoute(activeLibrary, selectedPath);
     if (nextPath && location.pathname !== nextPath) {
       navigate(nextPath, { replace: location.pathname === '/' });
     }
-  }, [activeLibrary, documentScope, selectedPath, location.pathname, navigate]);
+  }, [
+    activeLibrary,
+    capabilitiesLoaded,
+    documentScope,
+    libDocumentsEnabled,
+    location.pathname,
+    navigate,
+    selectedPath,
+    tmpDocumentsEnabled,
+  ]);
 
   useEffect(() => {
-    if (activeLibrary) {
+    if (libDocumentsEnabled && activeLibrary) {
       localStorage.setItem('quarry:active-library', activeLibrary);
       persistRecentLibrary(
         activeLibrary,
         libraries.map((library) => library.slug)
       );
     }
-  }, [activeLibrary, libraries]);
+  }, [activeLibrary, libDocumentsEnabled, libraries]);
 
   useEffect(() => {
     localStorage.setItem('quarry:theme', theme);
@@ -434,7 +472,7 @@ function Workspace() {
   }, []);
 
   useEffect(() => {
-    if (!activeLibrary) {
+    if (!libDocumentsEnabled || !activeLibrary) {
       setEventState('idle');
       return;
     }
@@ -623,20 +661,28 @@ function Workspace() {
       source.close();
       stopPollingFallback();
     };
-  }, [activeLibrary, clearDeletedDocumentCaches, mutate]);
+  }, [activeLibrary, clearDeletedDocumentCaches, libDocumentsEnabled, mutate]);
 
   const isTmpDocument = documentScope === 'tmp';
   const isLibraryDocument = documentScope === 'library';
+  const tmpOnlyMode = tmpDocumentsEnabled && !libDocumentsEnabled;
 
-  const { data: documents = [] } = useSWR(
-    activeLibrary ? ['/v1/documents', activeLibrary] : null,
+  const { data: libraryDocuments = [] } = useSWR(
+    libDocumentsEnabled && activeLibrary ? ['/v1/documents', activeLibrary] : null,
     () => listDocuments(activeLibrary)
   );
+  const { data: tmpDocuments = [] } = useSWR(
+    tmpDocumentsEnabled ? ['/v1/tmp-documents'] : null,
+    listTmpDocuments
+  );
+  const documents = isTmpDocument ? tmpDocuments : libraryDocuments;
   const { data: document } = useSWR(
     selectedPath
       ? isTmpDocument
-        ? ['/v1/tmp-document', selectedPath]
-        : activeLibrary
+        ? tmpDocumentsEnabled
+          ? ['/v1/tmp-document', selectedPath]
+          : null
+        : libDocumentsEnabled && activeLibrary
           ? ['/v1/document', activeLibrary, selectedPath]
           : null
       : null,
@@ -644,15 +690,21 @@ function Workspace() {
     { revalidateOnFocus: false }
   );
   const { data: search = { results: [], cursor: null } } = useSWR(
-    isLibraryDocument && activeLibrary && searchQuery ? ['/v1/search', activeLibrary, searchQuery] : null,
+    libDocumentsEnabled && isLibraryDocument && activeLibrary && searchQuery
+      ? ['/v1/search', activeLibrary, searchQuery]
+      : null,
     () => searchDocuments(activeLibrary, searchQuery)
   );
   const { data: outgoing = { path: selectedPath, links: [] } } = useSWR(
-    isLibraryDocument && activeLibrary && selectedPath ? ['/v1/outgoing', activeLibrary, selectedPath] : null,
+    libDocumentsEnabled && isLibraryDocument && activeLibrary && selectedPath
+      ? ['/v1/outgoing', activeLibrary, selectedPath]
+      : null,
     () => outgoingLinks(activeLibrary, selectedPath)
   );
   const { data: incoming = { path: selectedPath, links: [] } } = useSWR(
-    isLibraryDocument && activeLibrary && selectedPath ? ['/v1/backlinks', activeLibrary, selectedPath] : null,
+    libDocumentsEnabled && isLibraryDocument && activeLibrary && selectedPath
+      ? ['/v1/backlinks', activeLibrary, selectedPath]
+      : null,
     () => backlinks(activeLibrary, selectedPath)
   );
 
@@ -702,10 +754,12 @@ function Workspace() {
     [activeLibrary, mutate]
   );
   const { data: versionList = [] } = useSWR(
-    selectedPath
+    !tmpOnlyMode && selectedPath
       ? isTmpDocument
-        ? ['/v1/tmp-versions', selectedPath]
-        : activeLibrary
+        ? tmpDocumentsEnabled
+          ? ['/v1/tmp-versions', selectedPath]
+          : null
+        : libDocumentsEnabled && activeLibrary
           ? ['/v1/versions', activeLibrary, selectedPath]
           : null
       : null,
@@ -715,8 +769,10 @@ function Workspace() {
   const { data: selectedVersionContent } = useSWR(
     selectedPath && selectedVersionId
       ? isTmpDocument
-        ? ['/v1/tmp-version-content', selectedPath, selectedVersionId]
-        : activeLibrary
+        ? tmpDocumentsEnabled
+          ? ['/v1/tmp-version-content', selectedPath, selectedVersionId]
+          : null
+        : libDocumentsEnabled && activeLibrary
           ? ['/v1/version-content', activeLibrary, selectedPath, selectedVersionId]
           : null
       : null,
@@ -727,7 +783,7 @@ function Workspace() {
   );
   const selectedDiffAgainstVersionId = compareVersionId ?? headVersionId;
   const { data: selectedVersionDiff } = useSWR(
-    isLibraryDocument && activeLibrary && selectedPath && selectedVersionId
+    libDocumentsEnabled && isLibraryDocument && activeLibrary && selectedPath && selectedVersionId
       ? ['/v1/version-diff', activeLibrary, selectedPath, selectedVersionId, selectedDiffAgainstVersionId ?? '']
       : null,
     () => diffVersion(activeLibrary, selectedPath, selectedVersionId!, selectedDiffAgainstVersionId)
@@ -737,11 +793,11 @@ function Workspace() {
     [content, document?.content]
   );
   const { data: conflicts = [] } = useSWR(
-    isLibraryDocument && activeLibrary ? ['/v1/conflicts', activeLibrary] : null,
+    libDocumentsEnabled && isLibraryDocument && activeLibrary ? ['/v1/conflicts', activeLibrary] : null,
     () => listConflicts(activeLibrary)
   );
   const { data: gitPeers = [] } = useSWR(
-    isLibraryDocument && activeLibrary ? ['/v1/git-peers', activeLibrary] : null,
+    libDocumentsEnabled && isLibraryDocument && activeLibrary ? ['/v1/git-peers', activeLibrary] : null,
     () => listGitPeers(activeLibrary)
   );
 
@@ -818,7 +874,11 @@ function Workspace() {
   const layoutStorageKey = activeLibrary ? `quarry:layout:${activeLibrary}` : 'quarry:layout:workspace';
   const mergeConflict = conflicts.find((conflict) => conflict.id === mergeConflictId) ?? null;
   const { data: agentPresence = { presence: [] } } = useSWR(
-    isLibraryDocument && activeLibrary && selectedPath && isTextContentType(selectedContentType)
+    libDocumentsEnabled &&
+      isLibraryDocument &&
+      activeLibrary &&
+      selectedPath &&
+      isTextContentType(selectedContentType)
       ? ['/v1/agent-presence', activeLibrary, selectedPath]
       : null,
     () => listAgentPresence(activeLibrary, selectedPath),
@@ -828,7 +888,11 @@ function Workspace() {
   // orphaned/invalidated badges, diff3 conflict items). Refreshed by the
   // SSE classification above whenever the document changes.
   const { data: documentReview } = useSWR(
-    isLibraryDocument && activeLibrary && selectedPath && isMarkdownDocument(selectedPath, selectedContentType)
+    libDocumentsEnabled &&
+      isLibraryDocument &&
+      activeLibrary &&
+      selectedPath &&
+      isMarkdownDocument(selectedPath, selectedContentType)
       ? ['/v1/review', activeLibrary, selectedPath]
       : null,
     () => getDocumentReview(activeLibrary, selectedPath)
@@ -836,6 +900,7 @@ function Workspace() {
 
   useEffect(() => {
     if (
+      libDocumentsEnabled &&
       isLibraryDocument &&
       selectedPath &&
       collabDocumentId &&
@@ -849,7 +914,7 @@ function Workspace() {
       liveCollabSessionRef.current = null;
       setSaveState(null);
     }
-  }, [collabDocumentId, isLibraryDocument, selectedContentType, selectedPath]);
+  }, [collabDocumentId, isLibraryDocument, libDocumentsEnabled, selectedContentType, selectedPath]);
 
   const changeSaveState = useCallback((state: CollabSaveState) => {
     setSaveState(state);
@@ -863,7 +928,7 @@ function Workspace() {
   }
 
   async function createNewDocument(defaultPath = 'untitled.md') {
-    if (!activeLibrary) return;
+    if (!libDocumentsEnabled || !activeLibrary) return;
     setDocumentScope('library');
     const path = window.prompt('New document path', defaultPath);
     if (!path) return;
@@ -881,8 +946,46 @@ function Workspace() {
     setSelectedPath(path);
   }
 
+  async function createNewTmpDocument(defaultPath = 'scratch/untitled.md') {
+    if (!tmpDocumentsEnabled) return;
+    setDocumentScope('tmp');
+    const path = window.prompt('New tmp document path', defaultPath);
+    if (!path) return;
+    const initialContent = '# Untitled\n';
+    const initialContentType = 'text/markdown';
+    const created = await createTmpDocument({
+      path,
+      content: initialContent,
+      contentType: initialContentType,
+    });
+    const createdEtag = created.etag || `"${created.outcome.version.id}"`;
+    await Promise.all([
+      mutate(
+        ['/v1/tmp-document', path],
+        {
+          content: initialContent,
+          contentType: initialContentType,
+          documentId: created.outcome.document?.id ?? '',
+          etag: createdEtag,
+          path,
+        },
+        { revalidate: false }
+      ),
+      mutate(['/v1/tmp-versions', path], [historyEntryFromVersion(created.outcome.version)], {
+        revalidate: false,
+      }),
+      mutate(['/v1/tmp-documents']),
+    ]);
+    setSelectedPath(path);
+  }
+
+  async function createVisibleDocument(defaultPath = 'untitled.md') {
+    if (isTmpDocument || !libDocumentsEnabled) await createNewTmpDocument(defaultPath);
+    else await createNewDocument(defaultPath);
+  }
+
   async function createDocumentFromLink(link: DocumentLink) {
-    if (!isLibraryDocument || !activeLibrary) return;
+    if (!libDocumentsEnabled || !isLibraryDocument || !activeLibrary) return;
     const defaultPath = defaultDocumentPathForLink(link);
     const path = window.prompt('New document path', defaultPath);
     if (!path) return;
@@ -904,7 +1007,7 @@ function Workspace() {
   }
 
   async function renameCurrent() {
-    if (!isLibraryDocument || !activeLibrary || !selectedPath) return;
+    if (!libDocumentsEnabled || !isLibraryDocument || !activeLibrary || !selectedPath) return;
     const toPath = window.prompt('Move document to path', selectedPath);
     if (!toPath || toPath === selectedPath) return;
     await moveDocument(activeLibrary, selectedPath, toPath, browserMutationOptions());
@@ -913,7 +1016,7 @@ function Workspace() {
   }
 
   async function moveDocumentPath(fromPath: string) {
-    if (!activeLibrary) return;
+    if (!libDocumentsEnabled || !activeLibrary) return;
     const toPath = window.prompt('Move document to path', fromPath);
     if (!toPath || toPath === fromPath) return;
     await moveDocument(activeLibrary, fromPath, toPath, browserMutationOptions());
@@ -922,7 +1025,7 @@ function Workspace() {
   }
 
   const moveDroppedTreeDocuments: MoveHandler<TreeNode> = async ({ dragNodes, parentNode }) => {
-    if (!activeLibrary) return;
+    if (!libDocumentsEnabled || !activeLibrary || isTmpDocument) return;
     const parent = parentNode?.data ?? null;
     const moves = dragNodes
       .map((node) => node.data)
@@ -945,6 +1048,7 @@ function Workspace() {
     if (isTmpDocument) {
       await deleteTmpDocument(deletingPath, browserMutationOptions());
       await clearTmpDocumentCaches(deletingPath);
+      await mutate(['/v1/tmp-documents']);
     } else {
       await deleteDocument(activeLibrary, deletingPath, browserMutationOptions());
       await clearDeletedDocumentCaches(activeLibrary, deletingPath);
@@ -987,7 +1091,7 @@ function Workspace() {
   }
 
   async function promoteCurrentTmpDocument() {
-    if (!isTmpDocument || !selectedPath) return;
+    if (!libDocumentsEnabled || !isTmpDocument || !selectedPath) return;
     const library = window.prompt('Promote to library', activeLibrary);
     if (!library) return;
     const targetPath = window.prompt('Promote to path', selectedPath);
@@ -1027,7 +1131,7 @@ function Workspace() {
   }
 
   async function shareCurrentDocument() {
-    if (!isLibraryDocument || !activeLibrary || !selectedPath) return;
+    if (!libDocumentsEnabled || !isLibraryDocument || !activeLibrary || !selectedPath) return;
     const token = await createCollabInvite(activeLibrary, selectedPath, {
       byHint: author,
       role: 'editor',
@@ -1043,7 +1147,7 @@ function Workspace() {
   }
 
   async function openAddAgentModal() {
-    if (!isLibraryDocument || !activeLibrary || !selectedPath) return;
+    if (!libDocumentsEnabled || !isLibraryDocument || !activeLibrary || !selectedPath) return;
     const library = activeLibrary;
     const path = selectedPath;
     const knownAgentIds = agentPresence.presence.map((e) => e.agentId);
@@ -1104,7 +1208,7 @@ function Workspace() {
   }, [agentPresence.presence, addAgentModal.waitingForAgent, addAgentModal.knownAgentIds]);
 
   async function deleteDocumentPath(path: string) {
-    if (!activeLibrary) return;
+    if (!libDocumentsEnabled || !activeLibrary) return;
     if (!window.confirm(`Delete ${path}?`)) return;
     await deleteDocument(activeLibrary, path, browserMutationOptions());
     await clearDeletedDocumentCaches(activeLibrary, path);
@@ -1113,7 +1217,7 @@ function Workspace() {
   }
 
   async function restoreSelectedVersion(versionId: string) {
-    if (!isLibraryDocument || !activeLibrary || !selectedPath) return;
+    if (!libDocumentsEnabled || !isLibraryDocument || !activeLibrary || !selectedPath) return;
     const restored = await restoreVersion(activeLibrary, selectedPath, versionId, browserMutationOptions());
     setEtag(restored.etag || `"${restored.outcome.version.id}"`);
     setSelectedVersionId(null);
@@ -1128,14 +1232,15 @@ function Workspace() {
   }
 
   async function resolveOpenConflict(conflictId: string) {
-    if (!isLibraryDocument || !activeLibrary) return;
+    if (!libDocumentsEnabled || !isLibraryDocument || !activeLibrary) return;
     await resolveConflict(activeLibrary, conflictId);
     await mutate(['/v1/conflicts', activeLibrary]);
   }
 
   function openDocument(path: string) {
     if (!path || (documentScope === 'library' && path === selectedPath)) return;
-    setDocumentScope('library');
+    if (isTmpDocument || !libDocumentsEnabled) setDocumentScope('tmp');
+    else setDocumentScope('library');
     setSelectedPath(path);
   }
 
@@ -1157,17 +1262,26 @@ function Workspace() {
 
   async function createTreeDocument(node: TreeNode) {
     closeTreeContextMenu();
-    await createNewDocument(defaultChildDocumentPath(node));
+    await createVisibleDocument(defaultChildDocumentPath(node));
   }
 
   async function moveTreeDocument(node: TreeNode) {
     closeTreeContextMenu();
-    if (node.kind === 'document') await moveDocumentPath(node.path);
+    if (libDocumentsEnabled && node.kind === 'document') await moveDocumentPath(node.path);
   }
 
   async function deleteTreeDocument(node: TreeNode) {
     closeTreeContextMenu();
-    if (node.kind === 'document') await deleteDocumentPath(node.path);
+    if (node.kind !== 'document') return;
+    if (isTmpDocument) {
+      if (!window.confirm(`Delete ${node.path}?`)) return;
+      await deleteTmpDocument(node.path, browserMutationOptions());
+      await clearTmpDocumentCaches(node.path);
+      await mutate(['/v1/tmp-documents']);
+      if (selectedPath === node.path) setSelectedPath('');
+    } else {
+      await deleteDocumentPath(node.path);
+    }
   }
 
   function copyTreePath(node: TreeNode) {
@@ -1176,6 +1290,7 @@ function Workspace() {
   }
 
   function changeActiveLibrary(slug: string) {
+    if (!libDocumentsEnabled) return;
     setDocumentScope('library');
     setActiveLibrary(slug);
     setTreeOpenState(loadTreeOpenState(slug));
@@ -1229,6 +1344,7 @@ function Workspace() {
   }
 
   function copyFuseMountCommand() {
+    if (!libDocumentsEnabled || !activeLibrary) return;
     void copyText(
       `mkdir -p ${activeLibrary} && quarry mount ${activeLibrary} ${activeLibrary}`,
       'FUSE mount command'
@@ -1249,44 +1365,53 @@ function Workspace() {
         data-layout-storage-key={layoutStorageKey}
         direction="horizontal"
       >
-        <Panel
-          className={cn(!resizingPanels && 'transition-[flex] duration-200 ease-out')}
-          collapsedSize={3}
-          collapsible
-          defaultSize={22}
-          minSize={16}
-          onCollapse={() => setLeftCollapsed(true)}
-          onExpand={() => setLeftCollapsed(false)}
-          ref={leftPanelRef}
-        >
-          <LeftPane
-            active={activeLibraryRecord}
-            collapsed={leftCollapsed}
-            libraries={libraries}
-            onCreate={() => void createNewDocument()}
-            onCreateChild={(node) => void createNewDocument(defaultChildDocumentPath(node))}
-            onLibraryChange={changeActiveLibrary}
-            onMove={moveDroppedTreeDocuments}
-            onOpen={openDocument}
-            onOpenContextMenu={openTreeContextMenu}
-            onRename={moveDocumentPath}
-            onSearchChange={setSearchQuery}
-            onToggleCollapsed={toggleLeftPane}
-            searchQuery={searchQuery}
-            searchResults={search.results}
-            selectedPath={selectedPath}
-            tree={tree}
-            treeKey={activeLibrary}
-            treeOpenState={treeOpenState}
-            onTreeToggle={changeTreeOpenState}
-          />
-        </Panel>
-        <PanelResizeHandle className="w-px bg-line" onDragging={setResizingPanels} />
-        <Panel defaultSize={54} minSize={35}>
+        {!tmpOnlyMode ? (
+          <>
+            <Panel
+              className={cn(!resizingPanels && 'transition-[flex] duration-200 ease-out')}
+              collapsedSize={3}
+              collapsible
+              defaultSize={22}
+              minSize={16}
+              onCollapse={() => setLeftCollapsed(true)}
+              onExpand={() => setLeftCollapsed(false)}
+              ref={leftPanelRef}
+            >
+              <LeftPane
+                active={activeLibraryRecord}
+                canMoveDocuments={libDocumentsEnabled && isLibraryDocument}
+                collapsed={leftCollapsed}
+                heading={isTmpDocument ? 'Tmp documents' : 'Documents'}
+                libraryControlsEnabled={libDocumentsEnabled}
+                libraries={libraries}
+                onCreate={() => void createVisibleDocument()}
+                onCreateChild={(node) => void createVisibleDocument(defaultChildDocumentPath(node))}
+                onLibraryChange={changeActiveLibrary}
+                onMove={moveDroppedTreeDocuments}
+                onOpen={openDocument}
+                onOpenContextMenu={openTreeContextMenu}
+                onRename={moveDocumentPath}
+                onSearchChange={setSearchQuery}
+                onToggleCollapsed={toggleLeftPane}
+                searchEnabled={libDocumentsEnabled && isLibraryDocument}
+                searchQuery={searchQuery}
+                searchResults={search.results}
+                selectedPath={selectedPath}
+                tree={tree}
+                treeKey={activeLibrary}
+                treeOpenState={treeOpenState}
+                onTreeToggle={changeTreeOpenState}
+              />
+            </Panel>
+            <PanelResizeHandle className="w-px bg-line" onDragging={setResizingPanels} />
+          </>
+        ) : null}
+        <Panel defaultSize={tmpOnlyMode ? 100 : 54} minSize={tmpOnlyMode ? 100 : 35}>
           {selectedPath ? (
             <div className="flex h-full min-h-0 flex-col">
               <DocumentToolbar
                 agentPresence={agentPresence.presence}
+                canPromote={libDocumentsEnabled}
                 expiresAt={tmpExpiresAt}
                 isMarkdown={isMarkdownDocument(selectedPath, selectedContentType)}
                 isText={isTextContentType(selectedContentType)}
@@ -1329,58 +1454,64 @@ function Workspace() {
               )}
             </div>
           ) : (
-            <EmptyDocument />
+            <EmptyDocument treeHidden={tmpOnlyMode} />
           )}
         </Panel>
-        <PanelResizeHandle className="w-px bg-line" onDragging={setResizingPanels} />
-        <Panel
-          className={cn(!resizingPanels && 'transition-[flex] duration-200 ease-out')}
-          collapsedSize={3}
-          collapsible
-          defaultSize={24}
-          minSize={18}
-          onCollapse={() => setRightCollapsed(true)}
-          onExpand={() => setRightCollapsed(false)}
-          ref={rightPanelRef}
-        >
-          <RightPane
-            activeTab={rightPaneTab}
-            activeLibrary={activeLibrary}
-            collapsed={rightCollapsed}
-            onToggleCollapsed={toggleRightPane}
-            conflicts={conflicts}
-            currentDiffOpen={currentDiffOpen}
-            currentEditorDiff={currentEditorDiff}
-            compareVersionId={compareVersionId}
-            incoming={incoming.links}
-            onCompareVersionChange={setCompareVersionId}
-            onCreateDocumentFromLink={createDocumentFromLink}
-            onDiffCurrent={diffCurrentEditor}
-            onOpenDocument={openDocument}
-            onOpenConflict={setMergeConflictId}
-            onResolveConflict={resolveOpenConflict}
-            onRestoreVersion={restoreSelectedVersion}
-            onViewVersion={viewSelectedVersion}
-            outgoing={outgoing.links}
-            review={documentReview}
-            selectedVersionContent={selectedVersionContent}
-            selectedVersionDiff={selectedVersionDiff}
-            selectedVersionId={selectedVersionId}
-            onTabChange={changeRightPaneTab}
-            versions={versionList}
-          />
-        </Panel>
+        {!tmpOnlyMode ? (
+          <>
+            <PanelResizeHandle className="w-px bg-line" onDragging={setResizingPanels} />
+            <Panel
+              className={cn(!resizingPanels && 'transition-[flex] duration-200 ease-out')}
+              collapsedSize={3}
+              collapsible
+              defaultSize={24}
+              minSize={18}
+              onCollapse={() => setRightCollapsed(true)}
+              onExpand={() => setRightCollapsed(false)}
+              ref={rightPanelRef}
+            >
+              <RightPane
+                activeTab={rightPaneTab}
+                activeLibrary={activeLibrary}
+                collapsed={rightCollapsed}
+                libraryControlsEnabled={libDocumentsEnabled && isLibraryDocument}
+                onToggleCollapsed={toggleRightPane}
+                conflicts={conflicts}
+                currentDiffOpen={currentDiffOpen}
+                currentEditorDiff={currentEditorDiff}
+                compareVersionId={compareVersionId}
+                incoming={incoming.links}
+                onCompareVersionChange={setCompareVersionId}
+                onCreateDocumentFromLink={createDocumentFromLink}
+                onDiffCurrent={diffCurrentEditor}
+                onOpenDocument={openDocument}
+                onOpenConflict={setMergeConflictId}
+                onResolveConflict={resolveOpenConflict}
+                onRestoreVersion={restoreSelectedVersion}
+                onViewVersion={viewSelectedVersion}
+                outgoing={outgoing.links}
+                review={documentReview}
+                selectedVersionContent={selectedVersionContent}
+                selectedVersionDiff={selectedVersionDiff}
+                selectedVersionId={selectedVersionId}
+                onTabChange={changeRightPaneTab}
+                versions={versionList}
+              />
+            </Panel>
+          </>
+        ) : null}
       </PanelGroup>
 
       <CommandPalette
         activeLibrary={activeLibrary}
         documents={documents}
+        libraryControlsEnabled={libDocumentsEnabled && isLibraryDocument}
         open={paletteOpen}
         query={paletteQuery}
         selectedPath={selectedPath}
         onClose={closePalette}
         onCopyFuseMount={copyFuseMountCommand}
-        onCreate={() => void createNewDocument()}
+        onCreate={() => void createVisibleDocument()}
         onDelete={deleteCurrent}
         onDownload={downloadCurrentMarkdown}
         onOpenGit={() => setGitOpen(true)}
@@ -1432,6 +1563,7 @@ function Workspace() {
       />
 
       <TreeContextMenu
+        canMoveDocuments={libDocumentsEnabled && isLibraryDocument}
         menu={treeMenu}
         onClose={closeTreeContextMenu}
         onCopyPath={copyTreePath}
@@ -1656,6 +1788,7 @@ function BinaryPreview({
 function CommandPalette({
   activeLibrary,
   documents,
+  libraryControlsEnabled,
   open,
   query,
   selectedPath,
@@ -1675,6 +1808,7 @@ function CommandPalette({
 }: {
   activeLibrary: string;
   documents: DocumentListEntry[];
+  libraryControlsEnabled: boolean;
   open: boolean;
   query: string;
   selectedPath: string;
@@ -1731,7 +1865,7 @@ function CommandPalette({
             />
             <kbd className="rounded border border-line px-1.5 py-0.5 text-xs text-muted">Esc</kbd>
           </div>
-          {trimmedQuery ? (
+          {trimmedQuery && libraryControlsEnabled ? (
             <div className="border-b border-line p-2">
               <button
                 className={`${commandItem} w-full text-left hover:bg-accent-tint focus:bg-accent-tint`}
@@ -1780,15 +1914,17 @@ function CommandPalette({
                 <span className="min-w-0 flex-1 truncate">Download as Markdown</span>
                 {selectedPath ? <span className="shrink-0 truncate text-xs text-muted">{selectedPath}</span> : null}
               </Command.Item>
-              <Command.Item
-                className={commandItem}
-                disabled={!selectedPath}
-                value="rename move current document"
-                onSelect={() => run(onMove)}
-              >
-                <span className="min-w-0 flex-1 truncate">Move current document</span>
-                {selectedPath ? <span className="shrink-0 truncate text-xs text-muted">{selectedPath}</span> : null}
-              </Command.Item>
+              {libraryControlsEnabled ? (
+                <Command.Item
+                  className={commandItem}
+                  disabled={!selectedPath}
+                  value="rename move current document"
+                  onSelect={() => run(onMove)}
+                >
+                  <span className="min-w-0 flex-1 truncate">Move current document</span>
+                  {selectedPath ? <span className="shrink-0 truncate text-xs text-muted">{selectedPath}</span> : null}
+                </Command.Item>
+              ) : null}
               <Command.Item
                 className={commandItem}
                 disabled={!selectedPath}
@@ -1797,17 +1933,21 @@ function CommandPalette({
               >
                 <span className="min-w-0 flex-1 truncate">Delete current document</span>
               </Command.Item>
-              <Command.Item className={commandItem} value="sync git pull push peers" onSelect={() => run(onOpenGit)}>
-                <span className="min-w-0 flex-1 truncate">Sync with Git peer</span>
-              </Command.Item>
-              <Command.Item
-                className={commandItem}
-                value="fuse mount filesystem copy linux"
-                onSelect={() => run(onCopyFuseMount)}
-              >
-                <span className="min-w-0 flex-1 truncate">Copy FUSE mount command</span>
-                <span className="shrink-0 truncate text-xs text-muted">{activeLibrary}</span>
-              </Command.Item>
+              {libraryControlsEnabled ? (
+                <>
+                  <Command.Item className={commandItem} value="sync git pull push peers" onSelect={() => run(onOpenGit)}>
+                    <span className="min-w-0 flex-1 truncate">Sync with Git peer</span>
+                  </Command.Item>
+                  <Command.Item
+                    className={commandItem}
+                    value="fuse mount filesystem copy linux"
+                    onSelect={() => run(onCopyFuseMount)}
+                  >
+                    <span className="min-w-0 flex-1 truncate">Copy FUSE mount command</span>
+                    <span className="shrink-0 truncate text-xs text-muted">{activeLibrary}</span>
+                  </Command.Item>
+                </>
+              ) : null}
               <Command.Item
                 className={commandItem}
                 value="theme dark light mode appearance toggle"
@@ -2576,9 +2716,13 @@ function findTreeNodeByPath(nodes: TreeNode[], path: string): TreeNode | null {
 
 function LeftPane({
   active,
+  canMoveDocuments,
   collapsed,
+  heading,
+  libraryControlsEnabled,
   libraries,
   searchQuery,
+  searchEnabled,
   searchResults,
   selectedPath,
   tree,
@@ -2596,9 +2740,13 @@ function LeftPane({
   onTreeToggle,
 }: {
   active?: LibraryType;
+  canMoveDocuments: boolean;
   collapsed: boolean;
+  heading: string;
+  libraryControlsEnabled: boolean;
   libraries: LibraryType[];
   searchQuery: string;
+  searchEnabled: boolean;
   searchResults: SearchResult[];
   selectedPath: string;
   tree: TreeNode[];
@@ -2685,7 +2833,7 @@ function LeftPane({
     if ((event.key === 'Enter' || event.key === ' ') && row.dataset.treeKind === 'document') {
       event.preventDefault();
       onOpen(path);
-    } else if (event.key === 'F2' && row.dataset.treeKind === 'document') {
+    } else if (canMoveDocuments && event.key === 'F2' && row.dataset.treeKind === 'document') {
       event.preventDefault();
       onRename(path);
     } else if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
@@ -2707,52 +2855,56 @@ function LeftPane({
 
   return (
     <aside aria-label="Document tree" className="flex h-full min-h-0 flex-col border-r border-line bg-surface">
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3">
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger asChild>
+      {libraryControlsEnabled ? (
+        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3">
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <button
+                aria-label="Library switcher"
+                className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-line-strong bg-raised pl-2.5 pr-2 text-sm font-medium text-body transition-colors hover:bg-well"
+                role="combobox"
+                type="button"
+              >
+                <Library className="shrink-0 text-muted" size={15} />
+                <span className="min-w-0 flex-1 truncate text-left">{active?.slug ?? 'Select library…'}</span>
+                <ChevronDown className="shrink-0 text-muted" size={14} />
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                align="start"
+                className="z-50 min-w-[var(--radix-dropdown-menu-trigger-width)] rounded-md border border-line bg-raised p-1 shadow-lg"
+                sideOffset={6}
+              >
+                {libraries.map((library) => (
+                  <DropdownMenu.Item
+                    className={cn(menuItem, 'justify-between', library.slug === active?.slug && 'text-accent-ink')}
+                    key={library.id}
+                    onSelect={() => onLibraryChange(library.slug)}
+                  >
+                    <span className="truncate">{library.slug}</span>
+                    {library.slug === active?.slug ? <Check className="shrink-0 text-accent-ink" size={15} /> : null}
+                  </DropdownMenu.Item>
+                ))}
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        </div>
+      ) : null}
+      <div className="flex h-10 shrink-0 items-center justify-between pr-2 pl-3">
+        <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-faint">{heading}</span>
+        <div className="flex items-center gap-0.5">
+          {searchEnabled ? (
             <button
-              aria-label="Library switcher"
-              className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-line-strong bg-raised pl-2.5 pr-2 text-sm font-medium text-body transition-colors hover:bg-well"
-              role="combobox"
+              aria-expanded={searchOpen}
+              aria-label="Search"
+              className={cn(ghostIconButton, 'size-7', searchOpen && 'bg-well text-body')}
+              onClick={toggleSearch}
               type="button"
             >
-              <Library className="shrink-0 text-muted" size={15} />
-              <span className="min-w-0 flex-1 truncate text-left">{active?.slug ?? 'Select library…'}</span>
-              <ChevronDown className="shrink-0 text-muted" size={14} />
+              <Search size={15} />
             </button>
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              align="start"
-              className="z-50 min-w-[var(--radix-dropdown-menu-trigger-width)] rounded-md border border-line bg-raised p-1 shadow-lg"
-              sideOffset={6}
-            >
-              {libraries.map((library) => (
-                <DropdownMenu.Item
-                  className={cn(menuItem, 'justify-between', library.slug === active?.slug && 'text-accent-ink')}
-                  key={library.id}
-                  onSelect={() => onLibraryChange(library.slug)}
-                >
-                  <span className="truncate">{library.slug}</span>
-                  {library.slug === active?.slug ? <Check className="shrink-0 text-accent-ink" size={15} /> : null}
-                </DropdownMenu.Item>
-              ))}
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
-      </div>
-      <div className="flex h-10 shrink-0 items-center justify-between pr-2 pl-3">
-        <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-faint">Documents</span>
-        <div className="flex items-center gap-0.5">
-          <button
-            aria-expanded={searchOpen}
-            aria-label="Search"
-            className={cn(ghostIconButton, 'size-7', searchOpen && 'bg-well text-body')}
-            onClick={toggleSearch}
-            type="button"
-          >
-            <Search size={15} />
-          </button>
+          ) : null}
           <button aria-label="Create document" className={cn(ghostIconButton, 'size-7')} onClick={onCreate} type="button">
             <FilePlus2 size={15} />
           </button>
@@ -2766,7 +2918,7 @@ function LeftPane({
           </button>
         </div>
       </div>
-      {searchOpen ? (
+      {searchEnabled && searchOpen ? (
         <div className="px-3 pb-2">
           <label className="flex h-8 items-center gap-2 rounded-md border border-line-strong bg-raised px-2.5 text-sm transition-colors focus-within:border-accent focus-within:ring-2 focus-within:ring-accent-tint">
             <Search className="shrink-0 text-muted" size={15} />
@@ -2834,7 +2986,7 @@ function LeftPane({
           indent={16}
           initialOpenState={treeOpenState}
           key={treeKey}
-          disableDrag={(node) => node.kind === 'folder'}
+          disableDrag={(node) => !canMoveDocuments || node.kind === 'folder'}
           onMove={onMove}
           onActivate={(node) => {
             if (node.data.kind === 'folder') node.toggle();
@@ -2882,6 +3034,7 @@ function LeftPane({
 }
 
 function TreeContextMenu({
+  canMoveDocuments,
   menu,
   onClose,
   onCopyPath,
@@ -2889,6 +3042,7 @@ function TreeContextMenu({
   onDeleteDocument,
   onMoveDocument,
 }: {
+  canMoveDocuments: boolean;
   menu: TreeMenuState | null;
   onClose: () => void;
   onCopyPath: (node: TreeNode) => void;
@@ -2914,9 +3068,11 @@ function TreeContextMenu({
         </button>
         {menu.node.kind === 'document' ? (
           <>
-            <button className={treeMenuItem} role="menuitem" type="button" onClick={() => onMoveDocument(menu.node)}>
-              Move
-            </button>
+            {canMoveDocuments ? (
+              <button className={treeMenuItem} role="menuitem" type="button" onClick={() => onMoveDocument(menu.node)}>
+                Move
+              </button>
+            ) : null}
             <button className={cn(treeMenuItem, 'text-warn-ink')} role="menuitem" type="button" onClick={() => onDeleteDocument(menu.node)}>
               Delete
             </button>
@@ -3102,6 +3258,7 @@ function DocumentModeSelect({
 
 function DocumentToolbar({
   agentPresence,
+  canPromote,
   expiresAt,
   isMarkdown,
   isText,
@@ -3120,6 +3277,7 @@ function DocumentToolbar({
   onShare,
 }: {
   agentPresence: AgentPresenceEntry[];
+  canPromote: boolean;
   expiresAt?: string;
   isMarkdown: boolean;
   isText: boolean;
@@ -3202,10 +3360,12 @@ function DocumentToolbar({
                   <RotateCcw className="shrink-0" size={15} />
                   Extend TTL…
                 </DropdownMenu.Item>
-                <DropdownMenu.Item className={menuItem} onSelect={onPromote}>
-                  <FolderInput className="shrink-0" size={15} />
-                  Promote…
-                </DropdownMenu.Item>
+                {canPromote ? (
+                  <DropdownMenu.Item className={menuItem} onSelect={onPromote}>
+                    <FolderInput className="shrink-0" size={15} />
+                    Promote…
+                  </DropdownMenu.Item>
+                ) : null}
               </>
             ) : (
               <DropdownMenu.Item className={menuItem} onSelect={onRename}>
@@ -3229,6 +3389,7 @@ function RightPane({
   activeTab,
   activeLibrary,
   collapsed,
+  libraryControlsEnabled,
   compareVersionId,
   conflicts,
   currentDiffOpen,
@@ -3254,6 +3415,7 @@ function RightPane({
   activeTab: RightPaneTab;
   activeLibrary: string;
   collapsed: boolean;
+  libraryControlsEnabled: boolean;
   compareVersionId: string | null;
   conflicts: ConflictRecord[];
   currentDiffOpen: boolean;
@@ -3276,8 +3438,11 @@ function RightPane({
   onTabChange: (tab: RightPaneTab) => void;
   versions: DocumentHistoryEntry[];
 }) {
-  const selectedTab = rightPaneTabs.some((tab) => tab.key === activeTab) ? activeTab : 'links';
-  const selectedTabLabel = rightPaneTabs.find((tab) => tab.key === selectedTab)?.label ?? 'Links';
+  const visibleTabs = libraryControlsEnabled
+    ? rightPaneTabs
+    : rightPaneTabs.filter((tab) => tab.key === 'versions');
+  const selectedTab = visibleTabs.some((tab) => tab.key === activeTab) ? activeTab : visibleTabs[0]?.key ?? 'versions';
+  const selectedTabLabel = visibleTabs.find((tab) => tab.key === selectedTab)?.label ?? 'Versions';
 
   if (collapsed) {
     return (
@@ -3313,7 +3478,7 @@ function RightPane({
           className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
           role="tablist"
         >
-          {rightPaneTabs.map((tab) => (
+          {visibleTabs.map((tab) => (
           <button
             aria-controls={`right-pane-panel-${tab.key}`}
             aria-selected={selectedTab === tab.key}
@@ -3339,7 +3504,7 @@ function RightPane({
         id={`right-pane-panel-${selectedTab}`}
         role="tabpanel"
       >
-        {selectedTab === 'links' ? (
+        {libraryControlsEnabled && selectedTab === 'links' ? (
           <>
             <h2 className={rightHeading}>
               <Link2 size={14} />
@@ -3363,9 +3528,15 @@ function RightPane({
         ) : null}
         {selectedTab === 'versions' ? (
           <>
-            <h2 className={rightHeading}>Conflicts</h2>
-            <ConflictList conflicts={conflicts} onOpen={onOpenConflict} onResolve={onResolveConflict} />
-            <h2 className={cn(rightHeading, 'mt-6')}>Versions</h2>
+            {libraryControlsEnabled ? (
+              <>
+                <h2 className={rightHeading}>Conflicts</h2>
+                <ConflictList conflicts={conflicts} onOpen={onOpenConflict} onResolve={onResolveConflict} />
+                <h2 className={cn(rightHeading, 'mt-6')}>Versions</h2>
+              </>
+            ) : (
+              <h2 className={rightHeading}>Versions</h2>
+            )}
             <button className={`${secondaryButton} mb-2 w-full justify-center`} onClick={onDiffCurrent} type="button">
               Diff editor against latest
             </button>
@@ -3387,7 +3558,7 @@ function RightPane({
             />
           </>
         ) : null}
-        {selectedTab === 'comments' ? (
+        {libraryControlsEnabled && selectedTab === 'comments' ? (
           <>
             <h2 className={rightHeading}>{selectedTabLabel}</h2>
             <CommentsPanel review={review} />
@@ -3808,7 +3979,7 @@ function isDocumentLink(link: DocumentLink) {
   );
 }
 
-function EmptyDocument() {
+function EmptyDocument({ treeHidden }: { treeHidden: boolean }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 bg-surface px-6 text-center">
       <div className="flex size-12 items-center justify-center rounded-xl bg-well text-faint">
@@ -3816,13 +3987,23 @@ function EmptyDocument() {
       </div>
       <div>
         <p className="text-sm font-medium text-body">No document open</p>
-        <p className="mt-1 text-sm text-muted">
-          Select a document from the tree, or press{' '}
-          <kbd className="rounded border border-line-strong bg-raised px-1.5 py-0.5 font-mono text-xs text-body">
-            ⌘K
-          </kbd>{' '}
-          to search.
-        </p>
+        {treeHidden ? (
+          <p className="mt-1 text-sm text-muted">
+            Press{' '}
+            <kbd className="rounded border border-line-strong bg-raised px-1.5 py-0.5 font-mono text-xs text-body">
+              ⌘K
+            </kbd>{' '}
+            to open or create a tmp document.
+          </p>
+        ) : (
+          <p className="mt-1 text-sm text-muted">
+            Select a document from the tree, or press{' '}
+            <kbd className="rounded border border-line-strong bg-raised px-1.5 py-0.5 font-mono text-xs text-body">
+              ⌘K
+            </kbd>{' '}
+            to search.
+          </p>
+        )}
       </div>
     </div>
   );

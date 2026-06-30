@@ -1,3 +1,5 @@
+#![cfg(feature = "lib-documents")]
+
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Method, Request, StatusCode};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
@@ -510,6 +512,7 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
     assert!(openapi["paths"]["/v1/libraries/{library}/git/peers"]["get"].is_object());
 }
 
+#[cfg(feature = "tmp-documents")]
 #[tokio::test]
 async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
     let root = tempfile::tempdir().unwrap();

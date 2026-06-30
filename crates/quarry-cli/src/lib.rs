@@ -1,12 +1,22 @@
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
+#[cfg(feature = "lib-documents")]
+use anyhow::{bail, Context};
 use clap::{Args, Parser, Subcommand};
+#[cfg(feature = "lib-documents")]
 use quarry_core::{DocumentSource, WritePrecondition};
+#[cfg(feature = "lib-documents")]
 use quarry_fuse::mount_library_with_shutdown;
+#[cfg(feature = "lib-documents")]
 use quarry_git::{
     export_worktree, import_worktree, pull_peer, push_peer, sync_peer, GitExportOptions,
 };
-use quarry_server::{serve, serve_state_with_shutdown, shutdown_signal};
-use quarry_storage::{BlockMarkdownWrite, BlockWriteBase, DocumentKind, QuarryStore, StoreConfig};
+use quarry_server::serve;
+#[cfg(feature = "lib-documents")]
+use quarry_server::{serve_state_with_shutdown, shutdown_signal};
+#[cfg(feature = "lib-documents")]
+use quarry_storage::{BlockMarkdownWrite, BlockWriteBase, DocumentKind};
+use quarry_storage::{QuarryStore, StoreConfig};
+#[cfg(feature = "lib-documents")]
 use serde_json::json;
 use std::fs;
 use std::net::SocketAddr;
@@ -116,19 +126,33 @@ pub struct Cli {
 enum Command {
     Init(InitCommand),
     Serve(ServeCommand),
+    #[cfg(feature = "lib-documents")]
     Mount(MountCommand),
+    #[cfg(feature = "lib-documents")]
     Get(DocumentPathCommand),
+    #[cfg(feature = "lib-documents")]
     Put(PutCommand),
+    #[cfg(feature = "lib-documents")]
     List(ListCommand),
+    #[cfg(feature = "lib-documents")]
     Share(ShareCommand),
+    #[cfg(feature = "lib-documents")]
     Move(MoveCommand),
+    #[cfg(feature = "lib-documents")]
     Delete(DocumentPathCommand),
+    #[cfg(feature = "lib-documents")]
     Tx(TxCommand),
+    #[cfg(feature = "lib-documents")]
     Git(GitCommand),
+    #[cfg(feature = "lib-documents")]
     Conflicts(ConflictsCommand),
     Gc,
-    Backup { destination: PathBuf },
-    Restore { source: PathBuf },
+    Backup {
+        destination: PathBuf,
+    },
+    Restore {
+        source: PathBuf,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -148,6 +172,7 @@ struct ServeCommand {
     addr: SocketAddr,
 }
 
+#[cfg(feature = "lib-documents")]
 #[derive(Debug, Args)]
 struct MountCommand {
     library: String,
@@ -160,12 +185,14 @@ struct MountCommand {
     serve_addr: Option<SocketAddr>,
 }
 
+#[cfg(feature = "lib-documents")]
 #[derive(Debug, Args)]
 struct DocumentPathCommand {
     library: String,
     path: String,
 }
 
+#[cfg(feature = "lib-documents")]
 #[derive(Debug, Args)]
 struct PutCommand {
     library: String,
@@ -173,6 +200,7 @@ struct PutCommand {
     file: PathBuf,
 }
 
+#[cfg(feature = "lib-documents")]
 #[derive(Debug, Args)]
 struct ListCommand {
     library: String,
@@ -181,6 +209,7 @@ struct ListCommand {
     prefix: Option<String>,
 }
 
+#[cfg(feature = "lib-documents")]
 #[derive(Debug, Args)]
 struct ShareCommand {
     library: String,
@@ -193,6 +222,7 @@ struct ShareCommand {
     by: Option<String>,
 }
 
+#[cfg(feature = "lib-documents")]
 #[derive(Debug, Args)]
 struct MoveCommand {
     library: String,
@@ -200,12 +230,14 @@ struct MoveCommand {
     to_path: String,
 }
 
+#[cfg(feature = "lib-documents")]
 #[derive(Debug, Args)]
 struct TxCommand {
     #[command(subcommand)]
     command: TxSubcommand,
 }
 
+#[cfg(feature = "lib-documents")]
 #[derive(Debug, Subcommand)]
 enum TxSubcommand {
     Begin { library: String },
@@ -213,12 +245,14 @@ enum TxSubcommand {
     Rollback { tx: String },
 }
 
+#[cfg(feature = "lib-documents")]
 #[derive(Debug, Args)]
 struct GitCommand {
     #[command(subcommand)]
     command: GitSubcommand,
 }
 
+#[cfg(feature = "lib-documents")]
 #[derive(Debug, Subcommand)]
 enum GitSubcommand {
     Peer(GitPeerCommand),
@@ -248,12 +282,14 @@ enum GitSubcommand {
     },
 }
 
+#[cfg(feature = "lib-documents")]
 #[derive(Debug, Args)]
 struct GitPeerCommand {
     #[command(subcommand)]
     command: GitPeerSubcommand,
 }
 
+#[cfg(feature = "lib-documents")]
 #[derive(Debug, Subcommand)]
 enum GitPeerSubcommand {
     Add {
@@ -269,12 +305,14 @@ enum GitPeerSubcommand {
     },
 }
 
+#[cfg(feature = "lib-documents")]
 #[derive(Debug, Args)]
 struct ConflictsCommand {
     #[command(subcommand)]
     command: ConflictsSubcommand,
 }
 
+#[cfg(feature = "lib-documents")]
 #[derive(Debug, Subcommand)]
 enum ConflictsSubcommand {
     List { library: String },
@@ -296,6 +334,7 @@ pub async fn run() -> Result<()> {
             serve(store, command.addr).await?;
             Ok(())
         }
+        #[cfg(feature = "lib-documents")]
         Command::Mount(command) => {
             let store = open_at(&cli.root, None, None).await?;
             // ONE state for the mount and the optional embedded server, so
@@ -342,12 +381,14 @@ pub async fn run() -> Result<()> {
             }
             Ok(())
         }
+        #[cfg(feature = "lib-documents")]
         Command::Get(command) => {
             let store = open_at(&cli.root, None, None).await?;
             let document = store.get_document(&command.library, &command.path).await?;
             print!("{}", String::from_utf8_lossy(&document.content));
             Ok(())
         }
+        #[cfg(feature = "lib-documents")]
         Command::Put(command) => {
             let store = open_at(&cli.root, None, None).await?;
             ensure_library(&store, &command.library).await?;
@@ -403,6 +444,7 @@ pub async fn run() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&outcome)?);
             Ok(())
         }
+        #[cfg(feature = "lib-documents")]
         Command::List(command) => {
             let store = open_at(&cli.root, None, None).await?;
             let documents = store
@@ -411,6 +453,7 @@ pub async fn run() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&documents)?);
             Ok(())
         }
+        #[cfg(feature = "lib-documents")]
         Command::Share(command) => {
             let store = open_at(&cli.root, None, None).await?;
             let token = store
@@ -424,6 +467,7 @@ pub async fn run() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&token)?);
             Ok(())
         }
+        #[cfg(feature = "lib-documents")]
         Command::Move(command) => {
             let store = open_at(&cli.root, None, None).await?;
             let tx = store
@@ -437,6 +481,7 @@ pub async fn run() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&tx)?);
             Ok(())
         }
+        #[cfg(feature = "lib-documents")]
         Command::Delete(command) => {
             let store = open_at(&cli.root, None, None).await?;
             let tx = store
@@ -445,8 +490,11 @@ pub async fn run() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&tx)?);
             Ok(())
         }
+        #[cfg(feature = "lib-documents")]
         Command::Tx(command) => run_tx(&cli.root, command).await,
+        #[cfg(feature = "lib-documents")]
         Command::Git(command) => run_git(&cli.root, command).await,
+        #[cfg(feature = "lib-documents")]
         Command::Conflicts(command) => run_conflicts(&cli.root, command).await,
         Command::Gc => {
             let store = open_at(&cli.root, None, None).await?;
@@ -473,6 +521,7 @@ fn init_tracing() {
     logging::init();
 }
 
+#[cfg(feature = "lib-documents")]
 async fn wait_for_shutdown(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
     while !*shutdown_rx.borrow_and_update() {
         if shutdown_rx.changed().await.is_err() {
@@ -481,6 +530,7 @@ async fn wait_for_shutdown(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) 
     }
 }
 
+#[cfg(feature = "lib-documents")]
 async fn run_tx(root: &Path, command: TxCommand) -> Result<()> {
     let store = open_at(root, None, None).await?;
     match command.command {
@@ -513,6 +563,7 @@ async fn run_tx(root: &Path, command: TxCommand) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "lib-documents")]
 async fn run_git(root: &Path, command: GitCommand) -> Result<()> {
     let store = open_at(root, None, None).await?;
     // Markdown sync/import writes reconcile through the gateway writer
@@ -577,6 +628,7 @@ async fn run_git(root: &Path, command: GitCommand) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "lib-documents")]
 async fn run_git_peer(store: &QuarryStore, command: GitPeerCommand) -> Result<()> {
     match command.command {
         GitPeerSubcommand::Add {
@@ -608,6 +660,7 @@ async fn run_git_peer(store: &QuarryStore, command: GitPeerCommand) -> Result<()
     Ok(())
 }
 
+#[cfg(feature = "lib-documents")]
 async fn run_conflicts(root: &Path, command: ConflictsCommand) -> Result<()> {
     let store = open_at(root, None, None).await?;
     match command.command {
@@ -632,6 +685,7 @@ async fn run_conflicts(root: &Path, command: ConflictsCommand) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "lib-documents")]
 async fn ensure_library(store: &QuarryStore, library: &str) -> Result<()> {
     if store.get_library(library).await.is_err() {
         store.create_library(library).await?;
@@ -745,6 +799,29 @@ mod tests {
         assert_eq!(command.addr, "127.0.0.1:9000".parse().unwrap());
     }
 
+    #[cfg(not(feature = "lib-documents"))]
+    #[test]
+    fn library_document_commands_are_hidden_without_lib_documents() {
+        for args in [
+            vec!["quarry", "mount", "notes", "/tmp/quarry-mount"],
+            vec!["quarry", "get", "notes", "live.md"],
+            vec!["quarry", "put", "notes", "live.md", "/tmp/live.md"],
+            vec!["quarry", "list", "notes"],
+            vec!["quarry", "share", "notes", "live.md"],
+            vec!["quarry", "move", "notes", "old.md", "new.md"],
+            vec!["quarry", "delete", "notes", "live.md"],
+            vec!["quarry", "tx", "begin", "notes"],
+            vec!["quarry", "git", "peer", "list", "notes"],
+            vec!["quarry", "conflicts", "list", "notes"],
+        ] {
+            assert!(
+                Cli::try_parse_from(args.clone()).is_err(),
+                "{args:?} should require lib-documents"
+            );
+        }
+    }
+
+    #[cfg(feature = "lib-documents")]
     #[test]
     fn mount_can_expose_rest_api_from_same_process() {
         let cli = Cli::try_parse_from([
@@ -762,6 +839,7 @@ mod tests {
         assert_eq!(command.serve_addr, Some("127.0.0.1:9000".parse().unwrap()));
     }
 
+    #[cfg(feature = "lib-documents")]
     #[test]
     fn share_command_mints_editor_tokens_by_default() {
         let cli =
