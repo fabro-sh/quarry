@@ -1925,6 +1925,92 @@ describe('Quarry Browser workspace', () => {
     click.mockRestore();
   });
 
+  it('copies the selected library document raw link from the toolbar menu', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/v1/libraries') {
+        return json([{ id: 'lib-copy', slug: 'copy-lib', created_at: 'now', settings: {} }]);
+      }
+      if (url === '/v1/libraries/copy-lib/documents') {
+        return json([
+          {
+            id: 'doc-copy',
+            path: 'notes/raw.md',
+            head_version_id: 'v-copy',
+            content_type: 'text/markdown',
+            byte_size: 8,
+            metadata: { title: 'Raw Link' },
+            updated_at: 'now',
+          },
+        ]);
+      }
+      if (url === '/v1/libraries/copy-lib/documents/notes/raw.md') {
+        return new Response('# Raw\n', { headers: { ETag: '"v-copy"', 'content-type': 'text/markdown' } });
+      }
+      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) {
+        return json({ path: 'notes/raw.md', links: [] });
+      }
+      if (url.endsWith('/versions')) return json([]);
+      if (url.startsWith('/v1/libraries/copy-lib/graph')) return json({ nodes: [], edges: [], truncated: false });
+      if (url === '/v1/libraries/copy-lib/conflicts') return json([]);
+      if (url === '/v1/libraries/copy-lib/git/peers') return json([]);
+      if (url.startsWith('/v1/libraries/copy-lib/search')) return json({ results: [], cursor: null });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    await userEvent.click(await screen.findByRole('treeitem', { name: /Raw Link/ }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Document actions' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Copy raw link' }));
+
+    expect(writeText).toHaveBeenCalledWith('http://127.0.0.1/v1/libraries/copy-lib/documents/notes/raw.md');
+  });
+
+  it('copies the selected tmp document raw link from the toolbar menu', async () => {
+    const secret = '72cb58585aa73e35758bc1141f79e32e';
+    window.history.pushState({}, '', `/tmp/${secret}`);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/v1/libraries') return json([]);
+      if (url === `/v1/tmp/documents/${secret}`) {
+        return new Response('# Tmp\n', {
+          headers: {
+            ETag: '"tmp-copy"',
+            'content-type': 'text/markdown',
+            'x-quarry-document-id': 'tmp-copy',
+            'x-quarry-expires-at': '2099-01-01T00:00:00Z',
+          },
+        });
+      }
+      if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
+        return json({ documentId: 'tmp-copy', comments: [], suggestions: [], conflicts: [] });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    expect(await screen.findByRole('button', { name: 'Document mode' })).toHaveTextContent('Editing');
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Document actions' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Copy raw link' }));
+
+    expect(writeText).toHaveBeenCalledWith(`http://127.0.0.1/v1/tmp/documents/${secret}`);
+  });
+
   it('shows Upload Markdown for markdown documents and hides it for raw text documents', async () => {
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

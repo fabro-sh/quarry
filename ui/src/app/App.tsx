@@ -1107,6 +1107,15 @@ function Workspace() {
     URL.revokeObjectURL(url);
   }
 
+  function copyCurrentRawLink() {
+    if (!selectedPath || (isLibraryDocument && !activeLibrary)) return;
+    const relativeHref = isTmpDocument
+      ? tmpDocumentHref(selectedPath)
+      : documentHref(activeLibrary, selectedPath);
+    const rawLink = new URL(relativeHref, window.location.origin).toString();
+    void copyText(rawLink, 'Raw document link');
+  }
+
   function startUploadMarkdown() {
     if (!selectedPath || !selectedIsMarkdown) return;
     if (isLibraryDocument && !activeLibrary) return;
@@ -1456,6 +1465,7 @@ function Workspace() {
                 onAddAgent={() => void openAddAgentModal()}
                 onDelete={deleteCurrent}
                 onDownload={downloadCurrentMarkdown}
+                onCopyRawLink={copyCurrentRawLink}
                 onPromote={() => void promoteCurrentTmpDocument()}
                 onRename={renameCurrent}
                 onUploadMarkdown={startUploadMarkdown}
@@ -3314,6 +3324,7 @@ function DocumentToolbar({
   saveState,
   onAddAgent,
   onDelete,
+  onCopyRawLink,
   onDownload,
   onPromote,
   onRename,
@@ -3330,6 +3341,7 @@ function DocumentToolbar({
   saveState: CollabSaveState | null;
   onAddAgent: () => void;
   onDelete: () => void;
+  onCopyRawLink: () => void;
   onDownload: () => void;
   onPromote: () => void;
   onRename: () => void;
@@ -3377,6 +3389,10 @@ function DocumentToolbar({
             className="z-50 min-w-40 rounded-md border border-line bg-raised p-1 shadow-lg"
             sideOffset={6}
           >
+            <DropdownMenu.Item className={menuItem} onSelect={onCopyRawLink}>
+              <Copy className="shrink-0" size={15} />
+              Copy raw link
+            </DropdownMenu.Item>
             {isText ? (
               <DropdownMenu.Item className={menuItem} onSelect={onDownload}>
                 <Download className="shrink-0" size={15} />
