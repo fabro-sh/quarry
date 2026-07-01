@@ -8,9 +8,12 @@ use quarry_core::DocumentSource;
 use quarry_server::{app_state, router, router_with_state, serve_state_with_shutdown};
 use quarry_storage::{QuarryStore, StoreConfig, StoreEvent, StoreEventKind};
 use serde_json::Value;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
 use tokio::time::{timeout, Duration};
 use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
 use tower::ServiceExt;
+use tracing_subscriber::fmt::MakeWriter;
 use yrs::sync::{Message as YMessage, SyncMessage};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
@@ -88,6 +91,84 @@ async fn rest_api_attaches_and_preserves_request_ids() {
         .await
         .unwrap();
     assert_eq!(response.headers()["x-quarry-request-id"], supplied);
+}
+
+#[cfg(feature = "tmp-documents")]
+#[tokio::test(flavor = "current_thread")]
+async fn request_tracing_redacts_tmp_capability_paths_without_redacting_library_paths() {
+    let (logs, _guard) = capture_debug_logs();
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/tmp/documents",
+            serde_json::json!({
+                "content": "tmp presence",
+                "content_type": "text/plain"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created: Value = response_json(response).await;
+    let secret = created["document"]["path"].as_str().unwrap().to_string();
+
+    logs.clear();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/tmp/documents/{secret}/presence"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let output = logs.output();
+    assert!(
+        !output.contains(&secret),
+        "request logs must not contain tmp secret:\n{output}"
+    );
+    assert!(
+        output.contains("<tmp-secret>") || output.contains("/v1/tmp/documents/{*path}"),
+        "request logs should retain useful route context:\n{output}"
+    );
+
+    let library_secret_like_path = "0123456789abcdefABCDEF0123456789";
+    logs.clear();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v1/libraries/missing/documents/{library_secret_like_path}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let output = logs.output();
+    assert!(
+        output.contains(&format!(
+            "/v1/libraries/missing/documents/{library_secret_like_path}"
+        )),
+        "ordinary library paths should remain visible in request logs:\n{output}"
+    );
 }
 
 fn assert_schema_enum_contains(openapi: &Value, schema: &Value, expected: &[&str]) {
@@ -169,6 +250,58 @@ fn ops_request(base_token: impl serde::Serialize, operation: Value) -> Value {
         "baseToken": base_token,
         "operations": [operation]
     })
+}
+
+#[derive(Clone, Default)]
+struct CapturedLogs {
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+impl CapturedLogs {
+    fn clear(&self) {
+        self.buffer.lock().unwrap().clear();
+    }
+
+    fn output(&self) -> String {
+        String::from_utf8(self.buffer.lock().unwrap().clone()).unwrap()
+    }
+}
+
+struct CapturedLogWriter {
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+impl Write for CapturedLogWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.buffer.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'writer> MakeWriter<'writer> for CapturedLogs {
+    type Writer = CapturedLogWriter;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        CapturedLogWriter {
+            buffer: self.buffer.clone(),
+        }
+    }
+}
+
+fn capture_debug_logs() -> (CapturedLogs, tracing::dispatcher::DefaultGuard) {
+    let logs = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::new("quarry_server=debug"))
+        .with_writer(logs.clone())
+        .with_ansi(false)
+        .with_target(false)
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    (logs, guard)
 }
 
 #[tokio::test]
@@ -1258,6 +1391,65 @@ async fn tmp_agent_presence_omits_capability_path() {
     assert_eq!(presence["presence"][0]["agentId"], "agent-tmp");
     assert!(presence["presence"][0].get("path").is_none());
     assert!(presence["presence"][0].get("library").is_none());
+}
+
+#[cfg(feature = "tmp-documents")]
+#[tokio::test(flavor = "current_thread")]
+async fn tmp_sse_logging_redacts_capability_path() {
+    let (logs, _guard) = capture_debug_logs();
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/tmp/documents",
+            serde_json::json!({
+                "content": "tmp stream",
+                "content_type": "text/markdown"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created: Value = response_json(response).await;
+    let secret = created["document"]["path"].as_str().unwrap().to_string();
+    let document_id = created["document"]["id"].as_str().unwrap().to_string();
+
+    logs.clear();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/tmp/documents/{secret}/events/stream"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let output = logs.output();
+    assert!(
+        !output.contains(&secret),
+        "tmp SSE logs must not contain tmp secret:\n{output}"
+    );
+    assert!(
+        output.contains("sse.stream.opened"),
+        "tmp SSE open event should still be logged:\n{output}"
+    );
+    assert!(
+        output.contains("scope=tmp") && output.contains(&document_id),
+        "tmp SSE logs should keep scope and document id diagnostics:\n{output}"
+    );
 }
 
 async fn presence_test_app(library: &str) -> (tempfile::TempDir, axum::Router) {
@@ -7377,6 +7569,72 @@ async fn tmp_markdown_put_lands_in_an_active_session_as_a_collaborator_edit() {
     assert_eq!(after["blocks"][0]["text"], "Uploaded first.");
     assert_eq!(after["blocks"][1]["text"], "Uploaded second.");
     wait_for_yjs_plain_text(&mut socket, &doc, "Uploaded first.Uploaded second.").await;
+
+    socket.close(None).await.unwrap();
+    server.abort();
+}
+
+#[cfg(feature = "tmp-documents")]
+#[tokio::test(flavor = "current_thread")]
+async fn tmp_session_and_markdown_write_logs_do_not_emit_capability_secret() {
+    let (logs, _guard) = capture_debug_logs();
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/tmp/documents",
+            serde_json::json!({
+                "content": "Seeded first.\n\nSeeded second.\n",
+                "content_type": "text/markdown",
+                "expires_at": "2099-01-01T00:00:00Z"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created = response_json(response).await;
+    let secret = created["document"]["path"].as_str().unwrap().to_string();
+    let tree = get_tmp_block_tree(&app, &secret).await;
+    let clock = tree["document_clock"].as_str().unwrap().to_string();
+    let document_id = store.head_tmp_document(&secret).await.unwrap().id;
+
+    logs.clear();
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    assert_eq!(yjs_plain_text(&doc), "Seeded first.Seeded second.");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/tmp/documents/{secret}"))
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header(header::IF_MATCH, format!("\"{clock}\""))
+                .body(Body::from("Uploaded first.\n\nUploaded second.\n"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let output = logs.output();
+    assert!(
+        !output.contains(&secret),
+        "tmp session/write logs must not contain tmp secret:\n{output}"
+    );
+    assert!(
+        output.contains("collab.session.seeded"),
+        "session seed event should still be logged:\n{output}"
+    );
+    assert!(
+        output.contains("document.block_write.started"),
+        "tmp markdown write event should still be logged:\n{output}"
+    );
+    assert!(
+        output.contains("scope=tmp") && output.contains(&document_id),
+        "tmp logs should retain scope and document id diagnostics:\n{output}"
+    );
 
     socket.close(None).await.unwrap();
     server.abort();

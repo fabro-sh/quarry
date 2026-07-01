@@ -1,0 +1,136 @@
+use std::borrow::Cow;
+
+pub(crate) const TMP_SECRET_PLACEHOLDER: &str = "<tmp-secret>";
+
+const TMP_BROWSER_PREFIX: &str = "/tmp/";
+const TMP_COLLAB_PREFIX: &str = "/v1/tmp/collab/";
+const TMP_DOCUMENT_PREFIX: &str = "/v1/tmp/documents/";
+
+pub(crate) fn redact_path(path: &str) -> Cow<'_, str> {
+    [TMP_DOCUMENT_PREFIX, TMP_COLLAB_PREFIX, TMP_BROWSER_PREFIX]
+        .into_iter()
+        .find_map(|prefix| redact_segment_after_prefix(path, prefix))
+        .map_or(Cow::Borrowed(path), Cow::Owned)
+}
+
+pub(crate) fn redact_tmp_document_identifier(identifier: &str) -> Cow<'_, str> {
+    if is_tmp_capability_secret(identifier) {
+        Cow::Borrowed(TMP_SECRET_PLACEHOLDER)
+    } else {
+        Cow::Borrowed(identifier)
+    }
+}
+
+fn redact_segment_after_prefix(path: &str, prefix: &str) -> Option<String> {
+    let suffix = path.strip_prefix(prefix)?;
+    let secret = suffix.as_bytes().get(..32)?;
+    if !secret.iter().all(u8::is_ascii_hexdigit) {
+        return None;
+    }
+    if suffix
+        .as_bytes()
+        .get(32)
+        .is_some_and(|byte| !matches!(byte, b'/' | b'?' | b'#'))
+    {
+        return None;
+    }
+
+    let mut redacted = String::with_capacity(path.len() + TMP_SECRET_PLACEHOLDER.len() - 32);
+    redacted.push_str(prefix);
+    redacted.push_str(TMP_SECRET_PLACEHOLDER);
+    redacted.push_str(&suffix[32..]);
+    Some(redacted)
+}
+
+fn is_tmp_capability_secret(identifier: &str) -> bool {
+    identifier.len() == 32 && identifier.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SECRET: &str = "0123456789abcdefABCDEF0123456789";
+
+    #[test]
+    fn redacts_browser_tmp_routes() {
+        assert_eq!(redact_path(&format!("/tmp/{SECRET}")), "/tmp/<tmp-secret>");
+        assert_eq!(
+            redact_path(&format!("/tmp/{SECRET}/preview")),
+            "/tmp/<tmp-secret>/preview"
+        );
+    }
+
+    #[test]
+    fn redacts_rest_tmp_document_routes_with_suffixes() {
+        assert_eq!(
+            redact_path(&format!("/v1/tmp/documents/{SECRET}")),
+            "/v1/tmp/documents/<tmp-secret>"
+        );
+        assert_eq!(
+            redact_path(&format!("/v1/tmp/documents/{SECRET}/presence")),
+            "/v1/tmp/documents/<tmp-secret>/presence"
+        );
+        assert_eq!(
+            redact_path(&format!("/v1/tmp/documents/{SECRET}/events/stream")),
+            "/v1/tmp/documents/<tmp-secret>/events/stream"
+        );
+    }
+
+    #[test]
+    fn redacts_tmp_collab_routes() {
+        assert_eq!(
+            redact_path(&format!("/v1/tmp/collab/{SECRET}/content")),
+            "/v1/tmp/collab/<tmp-secret>/content"
+        );
+    }
+
+    #[test]
+    fn redacts_query_or_fragment_terminated_tmp_secrets() {
+        assert_eq!(
+            redact_path(&format!("/v1/tmp/documents/{SECRET}?after=0")),
+            "/v1/tmp/documents/<tmp-secret>?after=0"
+        );
+        assert_eq!(
+            redact_path(&format!("/v1/tmp/documents/{SECRET}#events")),
+            "/v1/tmp/documents/<tmp-secret>#events"
+        );
+    }
+
+    #[test]
+    fn leaves_invalid_or_non_tmp_paths_unchanged() {
+        assert_eq!(
+            redact_path("/v1/tmp/documents/not-a-capability-secret/presence"),
+            "/v1/tmp/documents/not-a-capability-secret/presence"
+        );
+        assert_eq!(
+            redact_path("/v1/tmp/documents/0123456789abcdefABCDEF0123456789x"),
+            "/v1/tmp/documents/0123456789abcdefABCDEF0123456789x"
+        );
+        assert_eq!(
+            redact_path("/v1/documents/0123456789abcdefABCDEF0123456789"),
+            "/v1/documents/0123456789abcdefABCDEF0123456789"
+        );
+    }
+
+    #[test]
+    fn leaves_library_document_paths_unchanged() {
+        assert_eq!(
+            redact_path(&format!("/v1/libraries/lib/documents/{SECRET}")),
+            format!("/v1/libraries/lib/documents/{SECRET}")
+        );
+        assert_eq!(
+            redact_path(&format!("/v1/libraries/lib/documents/folder/{SECRET}.md")),
+            format!("/v1/libraries/lib/documents/folder/{SECRET}.md")
+        );
+    }
+
+    #[test]
+    fn redacts_bare_identifier_only_when_tmp_scope_is_known() {
+        assert_eq!(redact_tmp_document_identifier(SECRET), "<tmp-secret>");
+        assert_eq!(
+            redact_tmp_document_identifier("scratch/note.txt"),
+            "scratch/note.txt"
+        );
+    }
+}

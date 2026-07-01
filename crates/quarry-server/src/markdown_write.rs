@@ -45,6 +45,7 @@ use crate::gateway::{
     self, BlockOp, BlockTransactionActor, GatewayError, GatewayErrorCode, GatewayFailure,
     TransactionContext, TransactionPlan, TransactionReply, TransactionSettings,
 };
+use crate::log_redaction;
 use crate::AppState;
 use axum::http::StatusCode;
 use quarry_collab_codec::{
@@ -366,20 +367,16 @@ async fn write_markdown_with(
         .unwrap_or("text/markdown")
         .to_string();
     gateway::require_block_document(&write.path, &content_type)?;
-    tracing::debug!(
-        event = "document.block_write.started",
-        scope = %write.scope.event_library_id(),
-        path = %write.path,
-        surface = %write.surface,
-        content_bytes = write.markdown.len(),
-        "reconciled markdown write started"
-    );
 
     // First import: the document does not exist yet — every block takes a
     // fresh id through the Phase 1 import path.
     let document = match document_for_scope(state, &write.scope, &write.path).await {
-        Ok(document) => document,
+        Ok(document) => {
+            log_block_write_started(&write, Some(&document.id));
+            document
+        }
         Err(QuarryError::NotFound(_)) => {
+            log_block_write_started(&write, None);
             let outcome = match &write.scope {
                 DocumentScopeRef::Library { slug } => {
                     state
@@ -578,6 +575,33 @@ async fn canonical_body(state: &AppState, document_id: &str) -> Result<String, G
     block_rows_to_markdown(&rows).map_err(|unsupported| {
         GatewayFailure::Api(QuarryError::UnsupportedMarkdown(unsupported).into())
     })
+}
+
+fn log_block_write_started(write: &BlockMarkdownWrite, document_id: Option<&str>) {
+    match &write.scope {
+        DocumentScopeRef::Library { .. } => {
+            tracing::debug!(
+                event = "document.block_write.started",
+                scope = %write.scope.event_library_id(),
+                path = %write.path,
+                document_id = %document_id.unwrap_or(""),
+                surface = %write.surface,
+                content_bytes = write.markdown.len(),
+                "reconciled markdown write started"
+            );
+        }
+        DocumentScopeRef::Tmp => {
+            tracing::debug!(
+                event = "document.block_write.started",
+                scope = %"tmp",
+                path = %log_redaction::redact_tmp_document_identifier(&write.path),
+                document_id = %document_id.unwrap_or(""),
+                surface = %write.surface,
+                content_bytes = write.markdown.len(),
+                "reconciled markdown write started"
+            );
+        }
+    }
 }
 
 async fn document_for_scope(

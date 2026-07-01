@@ -1,5 +1,6 @@
 mod collab;
 mod gateway;
+mod log_redaction;
 mod markdown_write;
 mod session;
 
@@ -473,7 +474,7 @@ async fn request_tracing_middleware(request: Request, next: Next) -> Response {
         .unwrap_or_else(|| HeaderValue::from_str(&Uuid::new_v4().to_string()).unwrap());
     let request_id = request_id_header.to_str().unwrap_or_default().to_string();
     let method = request.method().clone();
-    let path = request.uri().path().to_string();
+    let path = log_redaction::redact_path(request.uri().path()).into_owned();
     let matched_route = request
         .extensions()
         .get::<MatchedPath>()
@@ -1536,27 +1537,34 @@ async fn events_for_library(
 async fn events_for_tmp_document(
     store: &QuarryStore,
     document_path: String,
+    document_id: String,
     presence_guard: Option<PresenceStreamGuard>,
     shutdown: CancellationToken,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     tracing::debug!(
         event = "sse.stream.opened",
-        scope = "tmp",
-        path = %document_path,
+        scope = %"tmp",
+        document_id = %document_id,
         "tmp SSE stream opened"
     );
     let store_receiver = store.subscribe_events();
     let stream = stream::unfold(
-        (store_receiver, document_path, presence_guard, shutdown),
-        |(mut store_receiver, document_path, presence_guard, shutdown)| async move {
+        (
+            store_receiver,
+            document_path,
+            document_id,
+            presence_guard,
+            shutdown,
+        ),
+        |(mut store_receiver, document_path, document_id, presence_guard, shutdown)| async move {
             loop {
                 tokio::select! {
                     biased;
                     _ = shutdown.cancelled() => {
                         tracing::debug!(
                             event = "sse.stream.closed",
-                            scope = "tmp",
-                            path = %document_path,
+                            scope = %"tmp",
+                            document_id = %document_id,
                             reason_code = "shutdown",
                             "tmp SSE stream closed for shutdown"
                         );
@@ -1581,6 +1589,7 @@ async fn events_for_tmp_document(
                                     (
                                         store_receiver,
                                         document_path,
+                                        document_id,
                                         presence_guard,
                                         shutdown,
                                     ),
@@ -1590,7 +1599,7 @@ async fn events_for_tmp_document(
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                                 tracing::warn!(
                                     event = "sse.stream.lagged",
-                                    scope = "tmp",
+                                    scope = %"tmp",
                                     skipped,
                                     "tmp SSE stream lagged"
                                 );
@@ -1606,6 +1615,7 @@ async fn events_for_tmp_document(
                                     (
                                         store_receiver,
                                         document_path,
+                                        document_id,
                                         presence_guard,
                                         shutdown,
                                     ),
@@ -2216,18 +2226,20 @@ async fn get_tmp_document(
     }
     if let Some(path) = path.strip_suffix("/events/stream") {
         let document = state.store.head_tmp_document(path).await?;
+        let document_id = document.id.clone();
         let presence_guard = optional_header(&headers, "x-agent-id")?.map(|agent_id| {
             PresenceStreamGuard::open(
                 state.agent_presence.clone(),
                 None,
                 path.to_string(),
-                document.id,
+                document_id.clone(),
                 agent_id,
             )
         });
         return Ok(events_for_tmp_document(
             &state.store,
             path.to_string(),
+            document_id,
             presence_guard,
             state.shutdown_token(),
         )
@@ -4159,19 +4171,25 @@ fn metadata_from_headers(headers: &HeaderMap, content_type: &str) -> Result<Json
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
-    #[cfg(feature = "lib-documents")]
+    #[cfg(any(feature = "lib-documents", feature = "tmp-documents"))]
     use axum::body::{to_bytes, Body};
-    #[cfg(feature = "lib-documents")]
+    #[cfg(any(feature = "lib-documents", feature = "tmp-documents"))]
     use axum::http::Method;
     use axum::response::IntoResponse;
     use quarry_core::DocumentSource;
     #[cfg(feature = "lib-documents")]
     use quarry_core::WritePrecondition;
     use quarry_storage::StoreConfig;
+    #[cfg(feature = "tmp-documents")]
+    use std::io::Write;
+    #[cfg(feature = "tmp-documents")]
+    use std::sync::{Arc, Mutex};
     use tokio::time::timeout;
     use tokio_util::sync::CancellationToken;
-    #[cfg(feature = "lib-documents")]
+    #[cfg(any(feature = "lib-documents", feature = "tmp-documents"))]
     use tower::ServiceExt;
+    #[cfg(feature = "tmp-documents")]
+    use tracing_subscriber::fmt::MakeWriter;
 
     async fn test_store() -> (tempfile::TempDir, QuarryStore) {
         let root = tempfile::tempdir().unwrap();
@@ -4183,6 +4201,64 @@ mod tests {
         .await
         .unwrap();
         (root, store)
+    }
+
+    #[cfg(feature = "tmp-documents")]
+    #[derive(Clone, Default)]
+    struct CapturedLogs {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    #[cfg(feature = "tmp-documents")]
+    impl CapturedLogs {
+        fn clear(&self) {
+            self.buffer.lock().unwrap().clear();
+        }
+
+        fn output(&self) -> String {
+            String::from_utf8(self.buffer.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    #[cfg(feature = "tmp-documents")]
+    struct CapturedLogWriter {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    #[cfg(feature = "tmp-documents")]
+    impl Write for CapturedLogWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.buffer.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "tmp-documents")]
+    impl<'writer> MakeWriter<'writer> for CapturedLogs {
+        type Writer = CapturedLogWriter;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            CapturedLogWriter {
+                buffer: self.buffer.clone(),
+            }
+        }
+    }
+
+    #[cfg(feature = "tmp-documents")]
+    fn capture_debug_logs() -> (CapturedLogs, tracing::dispatcher::DefaultGuard) {
+        let logs = CapturedLogs::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new("quarry_server=debug"))
+            .with_writer(logs.clone())
+            .with_ansi(false)
+            .with_target(false)
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        (logs, guard)
     }
 
     #[test]
@@ -4391,6 +4467,62 @@ mod tests {
                 .presence
                 .len(),
             0
+        );
+    }
+
+    #[cfg(feature = "tmp-documents")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn tmp_sse_shutdown_log_omits_capability_path() {
+        let (logs, _guard) = capture_debug_logs();
+        let (_root, store) = test_store().await;
+        let state = app_state(store.clone());
+        let app = router_with_state(state.clone());
+        let outcome = store
+            .create_tmp_document(
+                b"hello".to_vec(),
+                serde_json::json!({"content_type":"text/markdown"}),
+                "text/markdown",
+                quarry_storage::TmpTtl::Default,
+            )
+            .await
+            .unwrap();
+        let secret = outcome.document.path;
+        let document_id = outcome.document.id;
+
+        logs.clear();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/v1/tmp/documents/{secret}/events/stream"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        state.shutdown_token().cancel();
+        timeout(
+            Duration::from_secs(1),
+            to_bytes(response.into_body(), usize::MAX),
+        )
+        .await
+        .expect("tmp SSE body should complete after shutdown")
+        .unwrap();
+
+        let output = logs.output();
+        assert!(
+            !output.contains(&secret),
+            "tmp SSE shutdown logs must not contain tmp secret:\n{output}"
+        );
+        assert!(
+            output.contains("sse.stream.closed"),
+            "tmp SSE close event should still be logged:\n{output}"
+        );
+        assert!(
+            output.contains("scope=tmp") && output.contains(&document_id),
+            "tmp SSE close logs should keep scope and document id diagnostics:\n{output}"
         );
     }
 

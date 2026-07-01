@@ -505,16 +505,31 @@ impl LiveSession {
         };
         *session.checkpoint_task.lock().unwrap() = Some(checkpoint_task);
 
-        tracing::debug!(
-            event = "collab.session.seeded",
-            %document_id,
-            scope = %session.scope_label(),
-            path = %seed.path,
-            head_version_id = %seed.head_version_id,
-            blocks = seed.rows.len(),
-            review_items = seed.review_items.len(),
-            "collab session seeded from block rows"
-        );
+        match &session.scope {
+            DocumentScopeRef::Library { .. } => {
+                tracing::debug!(
+                    event = "collab.session.seeded",
+                    %document_id,
+                    scope = %session.scope_label(),
+                    path = %seed.path,
+                    head_version_id = %seed.head_version_id,
+                    blocks = seed.rows.len(),
+                    review_items = seed.review_items.len(),
+                    "collab session seeded from block rows"
+                );
+            }
+            DocumentScopeRef::Tmp => {
+                tracing::debug!(
+                    event = "collab.session.seeded",
+                    %document_id,
+                    scope = %"tmp",
+                    head_version_id = %seed.head_version_id,
+                    blocks = seed.rows.len(),
+                    review_items = seed.review_items.len(),
+                    "collab session seeded from block rows"
+                );
+            }
+        }
         Ok(Some(session))
     }
 
