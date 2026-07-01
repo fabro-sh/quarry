@@ -69,10 +69,9 @@ and keep slash separators: `notes/Project%20Plan.md`.
 
 Tmp Markdown documents support the same block reads, semantic transactions,
 comments, suggestions, presence, and document event streams as library
-Markdown documents. Tmp docs also expose `$DOC/share` for invite creation and
-`$DOC/handoff` for browser-to-agent handoff signals. They remain temporary
-documents: they do not have library search, graph, Git, backlinks, promote
-from library routes, or library pending-event polling.
+Markdown documents. Tmp docs also expose `$DOC/share` for invite creation.
+They remain temporary documents: they do not have library search, graph, Git,
+backlinks, promote from library routes, or library pending-event polling.
 
 ## Auth And Locator Tokens
 
@@ -429,20 +428,6 @@ curl -sS -X POST "$ORIGIN/v1/libraries/$LIBRARY_ENCODED/events/ack" \
 Tmp documents do not currently expose a pending-events poll route. Keep the
 tmp document stream open while active, or re-POST `$DOC/presence` at least once
 per minute and re-read `$DOC/blocks` after the user asks you to continue.
-
-### Tmp Handoff
-
-When a browser user clicks `Handoff to Agent`, tmp document streams receive a
-`handoff.requested` event:
-
-```text
-event: handoff.requested
-data: {"type":"handoff.requested","documentId":"doc_123","path":"scratch/live.md","senderDisplayName":"Bea","clientSessionId":"browser-session","checkpointVersionId":"version_123","message":"I'm done"}
-```
-
-Treat handoff as a wake signal, not as persistence. The browser only sends it
-after local edits are checkpointed; after receiving it, re-read `$DOC/blocks`
-and continue from the checkpoint named by `checkpointVersionId` when present.
 
 ## Errors And Retry Rules
 

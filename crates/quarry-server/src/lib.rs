@@ -44,7 +44,7 @@ use std::future::{Future, IntoFuture};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use utoipa::{OpenApi, ToSchema};
@@ -56,7 +56,6 @@ pub struct AppState {
     sessions: session::SessionHub,
     agent_events: AgentEventJournal,
     agent_presence: AgentPresenceRegistry,
-    handoff_events: HandoffEventBus,
     shutdown: CancellationToken,
 }
 
@@ -140,28 +139,6 @@ impl AgentEventJournal {
         let mut acks = self.acks.lock().await;
         let ack = acks.entry(agent_id).or_insert(0);
         *ack = (*ack).max(event_id);
-    }
-}
-
-#[derive(Clone)]
-struct HandoffEventBus {
-    tx: broadcast::Sender<HandoffResponse>,
-}
-
-impl Default for HandoffEventBus {
-    fn default() -> Self {
-        let (tx, _) = broadcast::channel(1024);
-        Self { tx }
-    }
-}
-
-impl HandoffEventBus {
-    fn subscribe(&self) -> broadcast::Receiver<HandoffResponse> {
-        self.tx.subscribe()
-    }
-
-    fn publish(&self, event: HandoffResponse) {
-        let _ = self.tx.send(event);
     }
 }
 
@@ -336,7 +313,6 @@ pub fn app_state(store: QuarryStore) -> AppState {
         sessions,
         agent_events,
         agent_presence: AgentPresenceRegistry::default(),
-        handoff_events: HandoffEventBus::default(),
         shutdown,
     }
 }
@@ -832,7 +808,6 @@ fn browser_ui_not_built() -> Response {
         tmp_document_events_stream_openapi,
         tmp_document_share_openapi,
         tmp_document_share_create_openapi,
-        tmp_document_handoff_openapi,
         tmp_agent_presence_list_openapi,
         tmp_agent_presence_openapi,
         search_documents,
@@ -915,8 +890,6 @@ fn browser_ui_not_built() -> Response {
         AgentEventRecord,
         AgentEventsAckRequest,
         AgentEventsAckResponse,
-        HandoffRequest,
-        HandoffResponse,
         gateway::BlockTreeResponse,
         gateway::BlockNodePayload,
         gateway::BlockMarkRunPayload,
@@ -1026,8 +999,6 @@ struct AgentDiscoveryRouteHints {
     tmp_events_stream: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tmp_share: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tmp_handoff: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1164,10 +1135,6 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
             "tmp_share_list",
             discovery_endpoint("GET", "/v1/tmp/documents/{path}/share", &api_base),
         );
-        endpoints.insert(
-            "tmp_handoff",
-            discovery_endpoint("POST", "/v1/tmp/documents/{path}/handoff", &api_base),
-        );
     }
     endpoints.insert(
         "openapi",
@@ -1202,7 +1169,7 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
         capabilities.extend(["library_documents", "snapshot", "events_pending"]);
     }
     if tmp_documents_enabled {
-        capabilities.extend(["tmp_documents", "share", "handoff"]);
+        capabilities.extend(["tmp_documents", "share"]);
     }
     let library_route = |suffix: &str| {
         if lib_documents_enabled {
@@ -1294,7 +1261,6 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
                 tmp_review: tmp_route("/review"),
                 tmp_events_stream: tmp_route("/events/stream"),
                 tmp_share: tmp_route("/share"),
-                tmp_handoff: tmp_route("/handoff"),
             },
             endpoints,
         },
@@ -1539,7 +1505,6 @@ async fn events_for_library(
 
 async fn events_for_tmp_document(
     store: &QuarryStore,
-    handoff_events: HandoffEventBus,
     document_path: String,
     presence_guard: Option<PresenceStreamGuard>,
     shutdown: CancellationToken,
@@ -1551,16 +1516,9 @@ async fn events_for_tmp_document(
         "tmp SSE stream opened"
     );
     let store_receiver = store.subscribe_events();
-    let handoff_receiver = handoff_events.subscribe();
     let stream = stream::unfold(
-        (
-            store_receiver,
-            handoff_receiver,
-            document_path,
-            presence_guard,
-            shutdown,
-        ),
-        |(mut store_receiver, mut handoff_receiver, document_path, presence_guard, shutdown)| async move {
+        (store_receiver, document_path, presence_guard, shutdown),
+        |(mut store_receiver, document_path, presence_guard, shutdown)| async move {
             loop {
                 tokio::select! {
                     biased;
@@ -1573,54 +1531,6 @@ async fn events_for_tmp_document(
                             "tmp SSE stream closed for shutdown"
                         );
                         return None;
-                    }
-                    received = handoff_receiver.recv() => {
-                        match received {
-                            Ok(handoff) if handoff.path == document_path => {
-                                let event_type = handoff.event.clone();
-                                let payload = handoff_event_payload(&handoff);
-                                let event = Event::default().event(event_type).data(payload.to_string());
-                                return Some((
-                                    Ok(event),
-                                    (
-                                        store_receiver,
-                                        handoff_receiver,
-                                        document_path,
-                                        presence_guard,
-                                        shutdown,
-                                    ),
-                                ));
-                            }
-                            Ok(_) => continue,
-                            Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                                tracing::warn!(
-                                    event = "sse.stream.lagged",
-                                    scope = "tmp",
-                                    stream = "handoff",
-                                    skipped,
-                                    "tmp handoff SSE stream lagged"
-                                );
-                                let event_type = "stream.lagged".to_string();
-                                let payload = serde_json::json!({
-                                    "type": event_type,
-                                    "library": "tmp",
-                                    "stream": "handoff",
-                                    "skipped": skipped
-                                });
-                                let event = Event::default().event(event_type).data(payload.to_string());
-                                return Some((
-                                    Ok(event),
-                                    (
-                                        store_receiver,
-                                        handoff_receiver,
-                                        document_path,
-                                        presence_guard,
-                                        shutdown,
-                                    ),
-                                ));
-                            }
-                            Err(broadcast::error::RecvError::Closed) => return None,
-                        }
                     }
                     received = store_receiver.recv() => {
                         match received {
@@ -1635,7 +1545,6 @@ async fn events_for_tmp_document(
                                     Ok(event),
                                     (
                                         store_receiver,
-                                        handoff_receiver,
                                         document_path,
                                         presence_guard,
                                         shutdown,
@@ -1661,7 +1570,6 @@ async fn events_for_tmp_document(
                                     Ok(event),
                                     (
                                         store_receiver,
-                                        handoff_receiver,
                                         document_path,
                                         presence_guard,
                                         shutdown,
@@ -1680,19 +1588,6 @@ async fn events_for_tmp_document(
             .interval(Duration::from_secs(15))
             .text("keepalive"),
     ))
-}
-
-fn handoff_event_payload(handoff: &HandoffResponse) -> JsonValue {
-    let mut payload = serde_json::to_value(handoff).unwrap_or_else(|_| {
-        serde_json::json!({
-            "event": "handoff.requested",
-            "path": handoff.path,
-        })
-    });
-    if let Some(object) = payload.as_object_mut() {
-        object.insert("type".to_string(), JsonValue::from(handoff.event.clone()));
-    }
-    payload
 }
 
 fn event_matches_document_filter(event: &StoreEvent, document_path: Option<&str>) -> bool {
@@ -1936,36 +1831,6 @@ pub struct CreateCollabInviteRequest {
     pub role: String,
     #[serde(default, rename = "byHint")]
     pub by_hint: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, ToSchema)]
-pub struct HandoffRequest {
-    #[serde(rename = "senderDisplayName")]
-    pub sender_display_name: String,
-    #[serde(rename = "clientSessionId")]
-    pub client_session_id: String,
-    #[serde(default, rename = "checkpointVersionId")]
-    pub checkpoint_version_id: Option<String>,
-    #[serde(default)]
-    pub message: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, ToSchema)]
-pub struct HandoffResponse {
-    pub event: String,
-    #[serde(rename = "documentId")]
-    pub document_id: String,
-    pub path: String,
-    #[serde(rename = "senderDisplayName")]
-    pub sender_display_name: String,
-    #[serde(rename = "clientSessionId")]
-    pub client_session_id: String,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        rename = "checkpointVersionId"
-    )]
-    pub checkpoint_version_id: Option<String>,
-    pub message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2292,7 +2157,6 @@ async fn get_tmp_document(
         });
         return Ok(events_for_tmp_document(
             &state.store,
-            state.handoff_events.clone(),
             path.to_string(),
             presence_guard,
             state.shutdown_token(),
@@ -2483,14 +2347,6 @@ async fn post_tmp_document_action(
         return json_response(StatusCode::CREATED, &token);
     }
 
-    if let Some(path) = path.strip_suffix("/handoff") {
-        let request: HandoffRequest = serde_json::from_value(request).map_err(|error| {
-            QuarryError::InvalidPath(format!("invalid handoff request: {error}"))
-        })?;
-        let response = handoff_tmp_document(&state, path, request).await?;
-        return json_response(StatusCode::ACCEPTED, &response);
-    }
-
     if let Some(path) = path.strip_suffix("/promote") {
         if !cfg!(feature = "lib-documents") {
             return Err(QuarryError::NotFound(path.to_string()).into());
@@ -2644,16 +2500,6 @@ async fn tmp_agent_presence_list_openapi() {}
 )]
 #[allow(dead_code)]
 async fn tmp_agent_presence_openapi() {}
-
-#[utoipa::path(
-    post,
-    path = "/v1/tmp/documents/{path}/handoff",
-    params(("path" = String, Path)),
-    request_body = HandoffRequest,
-    responses((status = 202, body = HandoffResponse), (status = 404, body = ErrorResponse), (status = 412, body = ErrorResponse))
-)]
-#[allow(dead_code)]
-async fn tmp_document_handoff_openapi() {}
 
 #[utoipa::path(
     get,
@@ -3348,33 +3194,6 @@ async fn agent_presence_tmp_document(
         status,
         request.by.filter(|by| !by.trim().is_empty()),
     ))
-}
-
-async fn handoff_tmp_document(
-    state: &AppState,
-    path: &str,
-    request: HandoffRequest,
-) -> Result<HandoffResponse, ApiError> {
-    let document = state.store.head_tmp_document(path).await?;
-    if let Some(version_id) = request.checkpoint_version_id.as_deref() {
-        if version_id != document.head_version_id {
-            return Err(QuarryError::PreconditionFailed(format!(
-                "handoff checkpoint {version_id} is not the current tmp document head"
-            ))
-            .into());
-        }
-    }
-    let response = HandoffResponse {
-        event: "handoff.requested".to_string(),
-        document_id: document.id,
-        path: path.to_string(),
-        sender_display_name: request.sender_display_name,
-        client_session_id: request.client_session_id,
-        checkpoint_version_id: request.checkpoint_version_id,
-        message: request.message.unwrap_or_else(|| "I'm done".to_string()),
-    };
-    state.handoff_events.publish(response.clone());
-    Ok(response)
 }
 
 async fn agent_document_snapshot(

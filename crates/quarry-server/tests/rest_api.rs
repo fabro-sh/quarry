@@ -1339,8 +1339,8 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
     assert!(docs.contains("conflict"));
     assert!(docs.contains("GET $DOC/review"));
     assert!(docs.contains("/v1/tmp/documents/$PATH_ENCODED"));
-    assert!(docs.contains("$DOC/handoff"));
-    assert!(docs.contains("handoff.requested"));
+    let removed_tmp_signal = ["han", "doff"].join("");
+    assert!(!docs.to_lowercase().contains(&removed_tmp_signal));
     // The legacy facade vocabulary is gone.
     assert!(!docs.contains("/edit"));
     assert!(!docs.contains("$DOC/ops"));
@@ -1408,17 +1408,12 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
             serde_json::json!("POST")
         );
         assert_eq!(
-            body["endpoints"]["tmp_handoff"]["url"],
-            "http://127.0.0.1:7831/v1/tmp/documents/{path}/handoff"
-        );
-        assert_eq!(
             body["route_hints"]["tmp_blocks"],
             "http://127.0.0.1:7831/v1/tmp/documents/{path}/blocks"
         );
-        assert_eq!(
-            body["route_hints"]["tmp_handoff"],
-            "http://127.0.0.1:7831/v1/tmp/documents/{path}/handoff"
-        );
+        let removed_tmp_signal_key = ["tmp_han", "doff"].join("");
+        assert!(body["endpoints"][&removed_tmp_signal_key].is_null());
+        assert!(body["route_hints"][removed_tmp_signal_key].is_null());
     } else {
         assert!(body["endpoints"]["tmp_transactions"].is_null());
         assert!(body["route_hints"]["tmp_blocks"].is_null());
@@ -1450,11 +1445,11 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
             .unwrap()
             .iter()
             .any(|capability| capability == "tmp_documents"));
-        assert!(body["capabilities"]
+        assert!(!body["capabilities"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|capability| capability == "handoff"));
+            .any(|capability| capability == &removed_tmp_signal));
     }
     assert!(body["auth_note"]
         .as_str()

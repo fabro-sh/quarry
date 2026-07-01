@@ -64,7 +64,7 @@ Intentional boundaries of the current architecture (see `docs/superpowers/specs/
 
 - **Online-only browsers.** A disconnected browser is read-only until it reconnects and reseeds; there is no offline editing and no local draft persistence.
 - **Checkpoint-window crash loss.** A server crash loses un-checkpointed session edits (the debounce window). There is no session WAL; sessions reseed from the last checkpointed rows.
-- **Single-server sessions.** One server owns the database and all live sessions; there is no multi-server session handoff.
+- **Single-server sessions.** One server owns the database and all live sessions; sessions cannot move between servers.
 - **Hunk-level external merges.** Whole-file writes (Git/FUSE/CLI/PUT) merge at diff3 hunk granularity, not character level: concurrent edits to the same region become conflict review items instead of fine-grained merges.
 - **Unauthenticated collab websocket.** `/v1/collab/{document_id}` trusts loopback like the rest of the phase-one REST surface; invite tokens are locators, not auth.
 - **Persistent checkpoint-failure loss.** A checkpoint that cannot project or export (a doc shape the Markdown writer rejects) is skipped with a warning and retried on the next edit; if the failing shape persists until the last subscriber leaves, the final checkpoint fails too and every edit since the last successful checkpoint is lost with the discarded session — unbounded loss while the shape persists. Containment rules (unknown marks dropped, unrepresentable blocks degraded to `raw_markdown`) exist to keep every reachable shape projectable; see the "Known hazards" notes in `quarry-server/src/session.rs`.

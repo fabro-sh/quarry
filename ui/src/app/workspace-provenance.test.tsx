@@ -115,7 +115,7 @@ describe('workspace document mutation provenance', () => {
     expect(screen.getByLabelText('Save status')).toHaveTextContent('Saved');
   });
 
-  it('wires tmp Markdown collaboration and posts handoff only after save state is clean', async () => {
+  it('wires tmp Markdown collaboration with agent presence', async () => {
     stubBrowserOrigin('00000000-0000-4000-8000-000000000004');
     window.history.pushState({}, '', '/tmp/scratch/live.md');
     const fetch = vi.fn(tmpCollabFetch());
@@ -128,32 +128,16 @@ describe('workspace document mutation provenance', () => {
     expect(collab?.documentId).toBe('tmp-doc');
     expect(collab?.sessionId).toBe('browser:00000000-0000-4000-8000-000000000004');
 
-    const handoff = await screen.findByRole('button', { name: 'Handoff to Agent' });
-    expect(handoff).toBeDisabled();
-
     act(() => collab?.onSaveStateChange?.('saving'));
-    expect(handoff).toBeDisabled();
+    expect(screen.getByLabelText('Save status')).toHaveTextContent('Saving…');
 
     act(() => collab?.onSaveStateChange?.('saved'));
-    expect(handoff).toBeEnabled();
+    expect(screen.getByLabelText('Save status')).toHaveTextContent('Saved');
+    expect(screen.getByRole('button', { name: 'Codex · waiting' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: ['Han', 'doff to Agent'].join('') })).not.toBeInTheDocument();
 
-    await userEvent.click(handoff);
-
-    await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith(
-        '/v1/tmp/documents/scratch/live.md/handoff',
-        expect.objectContaining({ method: 'POST' })
-      )
-    );
-    const handoffCall = fetch.mock.calls.find(
-      ([input, init]) => String(input) === '/v1/tmp/documents/scratch/live.md/handoff' && init?.method === 'POST'
-    );
-    expect(JSON.parse(String(handoffCall?.[1]?.body))).toEqual({
-      senderDisplayName: 'Tester',
-      clientSessionId: 'browser:00000000-0000-4000-8000-000000000004',
-      checkpointVersionId: 'tmp-v1',
-      message: "I'm done",
-    });
+    const removedTmpSignalRoute = ['han', 'doff'].join('');
+    expect(fetch.mock.calls.some(([input]) => String(input).includes(`/${removedTmpSignalRoute}`))).toBe(false);
   });
 
   it('keeps the selected editor mounted across a checkpoint head move', async () => {
@@ -312,17 +296,6 @@ function tmpCollabFetch() {
     }
     if (url === '/v1/tmp/documents/scratch/live.md/review?includeResolved=1') {
       return json({ documentId: 'tmp-doc', comments: [], suggestions: [], conflicts: [] });
-    }
-    if (url === '/v1/tmp/documents/scratch/live.md/handoff' && init?.method === 'POST') {
-      return json({
-        event: 'handoff.requested',
-        documentId: 'tmp-doc',
-        path: 'scratch/live.md',
-        senderDisplayName: 'Tester',
-        clientSessionId: 'browser:00000000-0000-4000-8000-000000000004',
-        checkpointVersionId: 'tmp-v1',
-        message: "I'm done",
-      }, {}, 202);
     }
     return new Response('not found', { status: 404 });
   };

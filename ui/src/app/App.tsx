@@ -102,7 +102,6 @@ import {
   resolveConflict,
   restoreVersion,
   searchDocuments,
-  postTmpHandoff,
   tmpDocumentHref,
   tmpDocumentVersion,
   tmpVersions,
@@ -258,7 +257,6 @@ function Workspace() {
     waitingForAgent: false,
     knownAgentIds: [],
   });
-  const [handoffPending, setHandoffPending] = useState(false);
   const [lastSyncResult, setLastSyncResult] = useState('');
   const [author, setAuthor] = useState(() => loadAuthor());
   const [showOnboarding, setShowOnboarding] = useState(() => !hasStoredAuthor());
@@ -1229,38 +1227,6 @@ function Workspace() {
     }
   }
 
-  async function handoffCurrentTmpDocument() {
-    if (!isTmpDocument || !selectedPath || !collabDocumentId || saveState !== 'saved') return;
-    setHandoffPending(true);
-    try {
-      const latest = await getTmpDocument(selectedPath);
-      await postTmpHandoff(selectedPath, {
-        senderDisplayName: author,
-        clientSessionId: collabSessionIdRef.current,
-        checkpointVersionId: versionIdFromEtag(latest.etag),
-        message: "I'm done",
-      });
-      await mutate(
-        ['/v1/tmp-document', selectedPath],
-        {
-          ...latest,
-          path: selectedPath,
-        },
-        { revalidate: false }
-      );
-      setEtag(latest.etag);
-      loadedDocumentRef.current = {
-        scope: 'tmp',
-        library: activeLibrary,
-        path: selectedPath,
-        etag: latest.etag,
-        documentId: latest.documentId,
-      };
-    } finally {
-      setHandoffPending(false);
-    }
-  }
-
   function closeAddAgentModal() {
     setAddAgentModal((state) => ({ ...state, open: false }));
   }
@@ -1493,20 +1459,12 @@ function Workspace() {
                 isText={isTextContentType(selectedContentType)}
                 isTmp={isTmpDocument}
                 mode={editorMode}
-                handoffDisabled={saveState !== 'saved' || handoffPending}
-                handoffPending={handoffPending}
                 onModeChange={setEditorMode}
                 path={selectedPath}
                 saveState={saveState}
-                showHandoff={
-                  isTmpDocument &&
-                  isMarkdownDocument(selectedPath, selectedContentType) &&
-                  agentPresence.presence.length > 0
-                }
                 onAddAgent={() => void openAddAgentModal()}
                 onDelete={deleteCurrent}
                 onDownload={downloadCurrentMarkdown}
-                onHandoff={() => void handoffCurrentTmpDocument()}
                 onPromote={() => void promoteCurrentTmpDocument()}
                 onRename={renameCurrent}
                 onUploadMarkdown={startUploadMarkdown}
@@ -3352,16 +3310,12 @@ function DocumentToolbar({
   isText,
   isTmp,
   mode,
-  handoffDisabled,
-  handoffPending,
   onModeChange,
   path,
   saveState,
-  showHandoff,
   onAddAgent,
   onDelete,
   onDownload,
-  onHandoff,
   onPromote,
   onRename,
   onUploadMarkdown,
@@ -3372,16 +3326,12 @@ function DocumentToolbar({
   isText: boolean;
   isTmp: boolean;
   mode: EditorMode;
-  handoffDisabled: boolean;
-  handoffPending: boolean;
   onModeChange: (mode: EditorMode) => void;
   path: string;
   saveState: CollabSaveState | null;
-  showHandoff: boolean;
   onAddAgent: () => void;
   onDelete: () => void;
   onDownload: () => void;
-  onHandoff: () => void;
   onPromote: () => void;
   onRename: () => void;
   onUploadMarkdown: () => void;
@@ -3400,18 +3350,6 @@ function DocumentToolbar({
       </h1>
       {isMarkdown && saveState ? <SaveStatusIndicator saveState={saveState} /> : null}
       {isMarkdown ? <AgentPresencePill presence={agentPresence} /> : null}
-      {showHandoff ? (
-        <button
-          className={cn(secondaryButton, 'px-2 sm:px-3')}
-          disabled={handoffDisabled}
-          onClick={onHandoff}
-          title={handoffDisabled ? 'Waiting for saved changes' : 'Handoff to Agent'}
-          type="button"
-        >
-          {handoffPending ? <Loader2 className="animate-spin" size={15} /> : <CheckCircle2 size={15} />}
-          <span>Handoff to Agent</span>
-        </button>
-      ) : null}
       {isMarkdown ? (
         <button
           aria-label="Add agent"
@@ -4452,11 +4390,6 @@ function workspaceRoute(library: string, path: string) {
 function tmpWorkspaceRoute(path: string) {
   if (!path) return '/tmp';
   return `/tmp/${path.split('/').map(encodeURIComponent).join('/')}`;
-}
-
-function versionIdFromEtag(etag: string) {
-  const trimmed = etag.trim().replace(/^W\//, '').replace(/^"|"$/g, '');
-  return trimmed || undefined;
 }
 
 function safeDecodeSegment(segment: string) {

@@ -20,7 +20,6 @@ import {
   listTmpAgentPresence,
   postBlockTransaction,
   postTmpBlockTransaction,
-  postTmpHandoff,
   putDocument,
   putTmpDocument,
   restoreVersion,
@@ -368,7 +367,7 @@ describe('Quarry API client', () => {
     );
   });
 
-  it('exposes tmp collaboration review presence share transaction and handoff helpers', async () => {
+  it('exposes tmp collaboration review presence share and transaction helpers', async () => {
     const fetch = vi.fn(async () =>
       new Response(
         JSON.stringify({
@@ -388,11 +387,6 @@ describe('Quarry API client', () => {
           status: 'committed',
           transaction_id: 'tx-1',
           changed_block_ids: [],
-          event: 'handoff.requested',
-          path: 'scratch/live.md',
-          senderDisplayName: 'Avery',
-          clientSessionId: 'browser:1',
-          message: "I'm done",
         }),
         { headers: { 'content-type': 'application/json' } }
       )
@@ -410,12 +404,6 @@ describe('Quarry API client', () => {
       ops: [{ op: 'replace_block_content', block_id: 'b1', text: 'Updated' }],
     };
     await postTmpBlockTransaction('scratch/live.md', transaction);
-    await postTmpHandoff('scratch/live.md', {
-      senderDisplayName: 'Avery',
-      clientSessionId: 'browser:1',
-      checkpointVersionId: 'tmp-v2',
-      message: "I'm done",
-    });
 
     expect(fetch).toHaveBeenNthCalledWith(
       1,
@@ -448,19 +436,7 @@ describe('Quarry API client', () => {
         body: JSON.stringify(transaction),
       })
     );
-    expect(fetch).toHaveBeenNthCalledWith(
-      6,
-      '/v1/tmp/documents/scratch/live.md/handoff',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          senderDisplayName: 'Avery',
-          clientSessionId: 'browser:1',
-          checkpointVersionId: 'tmp-v2',
-          message: "I'm done",
-        }),
-      })
-    );
+    expect(fetch).toHaveBeenCalledTimes(5);
   });
 
   it('sets and clears library document TTLs', async () => {

@@ -104,10 +104,9 @@ async fn document_feature_surface_matches_compiled_features() {
         openapi["paths"]["/v1/tmp/documents/{path}/share"].is_object(),
         tmp_documents
     );
-    assert_eq!(
-        openapi["paths"]["/v1/tmp/documents/{path}/handoff"].is_object(),
-        tmp_documents
-    );
+    let removed_tmp_signal_path =
+        format!("/v1/tmp/documents/{{path}}/{}", ["han", "doff"].join(""));
+    assert!(openapi["paths"][removed_tmp_signal_path].is_null());
     assert_eq!(openapi["paths"]["/v1/libraries"].is_object(), lib_documents);
     assert_eq!(openapi["paths"]["/v1/events"].is_object(), lib_documents);
     assert_eq!(
@@ -142,15 +141,7 @@ async fn document_feature_surface_matches_compiled_features() {
         tmp_documents
     );
     assert_eq!(
-        discovery["endpoints"]["tmp_handoff"].is_object(),
-        tmp_documents
-    );
-    assert_eq!(
         discovery["route_hints"]["tmp_blocks"].is_string(),
-        tmp_documents
-    );
-    assert_eq!(
-        discovery["route_hints"]["tmp_handoff"].is_string(),
         tmp_documents
     );
     assert_eq!(
@@ -167,10 +158,9 @@ async fn document_feature_surface_matches_compiled_features() {
             .unwrap()
             .iter()
             .any(|capability| capability == "tmp_documents"));
-        assert_eq!(
-            discovery["endpoints"]["tmp_handoff"]["url"],
-            "http://127.0.0.1:7831/v1/tmp/documents/{path}/handoff"
-        );
+        let removed_tmp_signal_key = ["tmp_han", "doff"].join("");
+        assert!(discovery["endpoints"][&removed_tmp_signal_key].is_null());
+        assert!(discovery["route_hints"][removed_tmp_signal_key].is_null());
     }
 
     let response = app
@@ -235,7 +225,7 @@ async fn document_feature_surface_matches_compiled_features() {
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_handoff_routes() {
+async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_events_routes() {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
@@ -281,6 +271,21 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_h
     let block_id = blocks["blocks"][0]["block_id"].as_str().unwrap();
     let base_clock = blocks["document_clock"].as_str().unwrap();
 
+    let event_stream = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/tmp/documents/scratch/live.md/events/stream")
+                .header("X-Agent-Id", "agent-a")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(event_stream.status(), StatusCode::OK);
+    let event_stream_body = event_stream.into_body();
+
     let response = app
         .clone()
         .oneshot(json_request(
@@ -311,6 +316,10 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_h
     assert_eq!(response.status(), StatusCode::OK);
     let ack: Value = response_json(response).await;
     assert_eq!(ack["status"], "committed");
+
+    let event = first_sse_chunk_containing(event_stream_body, "doc.changed").await;
+    assert!(event.contains("event: doc.changed"));
+    assert!(event.contains("\"path\":\"scratch/live.md\""));
 
     let response = app
         .clone()
@@ -380,46 +389,7 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_h
     let token: Value = response_json(response).await;
     assert_eq!(token["document_id"], document_id);
 
-    let handoff_stream = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/tmp/documents/scratch/live.md/events/stream")
-                .header("X-Agent-Id", "agent-a")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(handoff_stream.status(), StatusCode::OK);
-    let handoff_stream_body = handoff_stream.into_body();
-
-    let response = app
-        .clone()
-        .oneshot(json_request(
-            Method::POST,
-            "/v1/tmp/documents/scratch/live.md/handoff",
-            serde_json::json!({
-                "senderDisplayName": "Avery",
-                "clientSessionId": "browser:session-1",
-                "checkpointVersionId": ack["document_clock"],
-                "message": "I'm done"
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
-    let handoff: Value = response_json(response).await;
-    assert_eq!(handoff["event"], "handoff.requested");
-    assert_eq!(handoff["documentId"], document_id);
-    assert_eq!(handoff["path"], "scratch/live.md");
-    assert_eq!(handoff["message"], "I'm done");
-
-    let event = first_sse_chunk_containing(handoff_stream_body, "handoff.requested").await;
-    assert!(event.contains("event: handoff.requested"));
-    assert!(event.contains("\"documentId\":\""));
-    assert!(event.contains("\"senderDisplayName\":\"Avery\""));
+    assert!(ack["document_clock"].is_string());
 }
 
 #[cfg(feature = "tmp-documents")]

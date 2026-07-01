@@ -388,64 +388,6 @@
         }
       }
     },
-    "/v1/tmp/documents/{path}/handoff": {
-      "post": {
-        "tags": [],
-        "operationId": "tmp_document_handoff_openapi",
-        "parameters": [
-          {
-            "name": "path",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/HandoffRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HandoffResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "412": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v1/tmp/documents/{path}/presence": {
       "get": {
         "tags": [],
@@ -2446,70 +2388,6 @@
           },
           "truncated": {
             "type": "boolean"
-          }
-        }
-      },
-      "HandoffRequest": {
-        "type": "object",
-        "required": [
-          "senderDisplayName",
-          "clientSessionId"
-        ],
-        "properties": {
-          "checkpointVersionId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "clientSessionId": {
-            "type": "string"
-          },
-          "message": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "senderDisplayName": {
-            "type": "string"
-          }
-        }
-      },
-      "HandoffResponse": {
-        "type": "object",
-        "required": [
-          "event",
-          "documentId",
-          "path",
-          "senderDisplayName",
-          "clientSessionId",
-          "message"
-        ],
-        "properties": {
-          "checkpointVersionId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "clientSessionId": {
-            "type": "string"
-          },
-          "documentId": {
-            "type": "string"
-          },
-          "event": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          },
-          "senderDisplayName": {
-            "type": "string"
           }
         }
       },

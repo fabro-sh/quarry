@@ -97,23 +97,6 @@ export interface AgentPresenceListResponse {
   presence: AgentPresenceEntry[];
 }
 
-export interface HandoffRequest {
-  senderDisplayName: string;
-  clientSessionId: string;
-  checkpointVersionId?: string;
-  message?: string;
-}
-
-export interface HandoffResponse {
-  event: 'handoff.requested';
-  documentId: string;
-  path: string;
-  senderDisplayName: string;
-  clientSessionId: string;
-  checkpointVersionId?: string;
-  message: string;
-}
-
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -505,17 +488,6 @@ export async function postTmpBlockTransaction(
     body: JSON.stringify(request),
   });
   return readBlockTransactionResponse(response);
-}
-
-export async function postTmpHandoff(
-  path: string,
-  request: HandoffRequest
-): Promise<HandoffResponse> {
-  return jsonRequest<HandoffResponse>(`/v1/tmp/documents/${pathSegments(path)}/handoff`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(request),
-  });
 }
 
 async function readBlockTransactionResponse(response: Response): Promise<BlockTransactionAck> {
