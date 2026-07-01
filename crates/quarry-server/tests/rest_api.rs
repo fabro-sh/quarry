@@ -1543,7 +1543,7 @@ async fn agent_presence_repost_resets_ttl() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn event_stream_with_agent_id_keeps_presence_until_disconnect() {
+async fn event_stream_presence_survives_disconnect_until_ttl() {
     let (_root, app) = presence_test_app("presence-stream").await;
 
     let stream = app
@@ -1577,8 +1577,200 @@ async fn event_stream_with_agent_id_keeps_presence_until_disconnect() {
     tokio::task::yield_now().await;
     assert_eq!(list_presence(&app, "presence-stream").await.len(), 1);
 
+    // Disconnecting only stops the heartbeat: burst readers and stream
+    // reconnects must not flap presence. Expiry is TTL-only.
     drop(stream);
+    assert_eq!(list_presence(&app, "presence-stream").await.len(), 1);
+
+    // Let the runtime process the heartbeat abort so advancing the paused
+    // clock cannot fire one more touch.
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(61)).await;
     assert_eq!(list_presence(&app, "presence-stream").await.len(), 0);
+}
+
+#[tokio::test]
+async fn document_read_with_agent_header_auto_joins_presence() {
+    let (_root, app) = presence_test_app("presence-auto-join").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/presence-auto-join/documents/live.md/blocks")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(list_presence(&app, "presence-auto-join").await.len(), 0);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/presence-auto-join/documents/live.md/blocks")
+                .header("X-Agent-Id", "agent-r")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let presence = list_presence(&app, "presence-auto-join").await;
+    assert_eq!(presence.len(), 1);
+    assert_eq!(presence[0]["agentId"], "agent-r");
+    assert_eq!(presence[0]["status"], "waiting");
+}
+
+#[tokio::test(start_paused = true)]
+async fn document_read_with_agent_header_refreshes_ttl_without_clobbering_status() {
+    let (_root, app) = presence_test_app("presence-implicit").await;
+
+    post_presence(&app, "presence-implicit", "agent-a", "acting").await;
+    tokio::time::advance(Duration::from_secs(40)).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/presence-implicit/documents/live.md/blocks")
+                .header("X-Agent-Id", "agent-a")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // The read refreshed the TTL (40s + 40s > 60s) without touching the
+    // declared status.
+    tokio::time::advance(Duration::from_secs(40)).await;
+    let presence = list_presence(&app, "presence-implicit").await;
+    assert_eq!(presence.len(), 1);
+    assert_eq!(presence[0]["status"], "acting");
+
+    tokio::time::advance(Duration::from_secs(61)).await;
+    assert_eq!(list_presence(&app, "presence-implicit").await.len(), 0);
+}
+
+#[tokio::test]
+async fn document_write_with_agent_header_touches_presence() {
+    let (_root, app) = presence_test_app("presence-write").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/presence-write/documents/live.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header("X-Agent-Id", "agent-w")
+                .body(Body::from("hello again"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/presence-write/documents/live.md/transactions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("X-Agent-Id", "agent-t")
+                .body(Body::from(
+                    block_tx(
+                        "tx-presence",
+                        serde_json::json!([{
+                            "op": "insert_block",
+                            "position": 1,
+                            "block_type": "p",
+                            "text": "Second."
+                        }]),
+                    )
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let mut agent_ids: Vec<String> = list_presence(&app, "presence-write")
+        .await
+        .iter()
+        .map(|entry| entry["agentId"].as_str().unwrap_or_default().to_string())
+        .collect();
+    agent_ids.sort();
+    assert_eq!(agent_ids, vec!["agent-t", "agent-w"]);
+}
+
+#[cfg(feature = "tmp-documents")]
+#[tokio::test]
+async fn tmp_document_read_with_agent_header_auto_joins_presence() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/tmp/documents",
+            serde_json::json!({
+                "content": "tmp presence",
+                "content_type": "text/plain"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created: Value = response_json(response).await;
+    let secret = created["document"]["path"].as_str().unwrap().to_string();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/tmp/documents/{secret}"))
+                .header("X-Agent-Id", "agent-tmp-reader")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/tmp/documents/{secret}/presence"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let presence: Value = response_json(response).await;
+    assert_eq!(presence["presence"].as_array().unwrap().len(), 1);
+    assert_eq!(presence["presence"][0]["agentId"], "agent-tmp-reader");
+    assert_eq!(presence["presence"][0]["status"], "waiting");
 }
 
 #[tokio::test]

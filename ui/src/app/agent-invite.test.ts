@@ -59,7 +59,9 @@ describe('agent invite helpers', () => {
     expect(prompt).toContain(
       'GET http://127.0.0.1:5173/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e/review'
     );
-    expect(prompt).toContain('re-POST presence at least once per minute');
+    expect(prompt).toContain(
+      'Document API calls carrying X-Agent-Id refresh your presence automatically'
+    );
   });
 
   it('generates the Proof-style agent prompt with all required Quarry endpoints', () => {
@@ -80,6 +82,7 @@ describe('agent invite helpers', () => {
     expect(prompt).toContain('API base: http://127.0.0.1:5173/v1');
     expect(prompt).toContain('Library: team notes');
     expect(prompt).toContain('Document path: folder/live doc.md');
+    expect(prompt).toContain('1. Identify yourself on every request.');
     expect(prompt).toContain(
       'POST http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md/presence'
     );

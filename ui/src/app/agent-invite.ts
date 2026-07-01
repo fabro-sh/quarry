@@ -67,8 +67,8 @@ export function buildAddAgentPrompt({
   const scopeLine = scope === 'tmp' ? 'Scope: tmp document' : `Library: ${libraryName}`;
   const fallbackMonitoring =
     pendingApi === null
-      ? '   If you cannot keep a stream open, re-POST presence at least once per minute while active (presence expires after 60 seconds).'
-      : `   If you cannot keep a stream open, poll GET ${pendingApi} and re-POST ${documentApi}/presence at least once per minute while active (presence expires after 60 seconds).`;
+      ? `   If you cannot keep a stream open, re-read ${documentApi}/blocks periodically. Document API calls carrying X-Agent-Id refresh your presence automatically (it expires 60 seconds after your last one).`
+      : `   If you cannot keep a stream open, poll GET ${pendingApi} for activity. Document API calls carrying X-Agent-Id refresh your presence automatically (it expires 60 seconds after your last one); if you go quiet for close to a minute, make any document call or re-POST ${documentApi}/presence.`;
   const authNotice =
     scope === 'tmp'
       ? 'Tmp document URLs are bearer capabilities. Anyone with this URL can access this tmp document; do not treat the secret as an agent identity.'
@@ -85,8 +85,9 @@ API base: ${apiBase}
 ${scopeLine}
 Document path: ${path}
 
-1. Register presence first.
-   Choose an agent id like ai:codex:<short-id> or ai:claude:<short-id>.
+1. Identify yourself on every request.
+   Choose an agent id like ai:codex:<short-id> or ai:claude:<short-id> and send it as the X-Agent-Id header on every API call. Any document call carrying it registers and refreshes your presence automatically; presence expires 60 seconds after your last call.
+   Announce your status and display name:
    POST ${documentApi}/presence
    Headers:
    - Content-Type: application/json
@@ -115,9 +116,9 @@ ${fallbackMonitoring}
    When an event arrives, re-read the block tree before replying or editing.
 
 6. Do not edit until the user gives further instructions.
-   For surgical edits and review operations, POST ${documentApi}/transactions with {"client_tx_id":"<unique-id>","base_clock":"<document_clock>","actor":{"kind":"agent","id":"<agent-id>"},"ops":[...]}.
+   For surgical edits and review operations, POST ${documentApi}/transactions with header X-Agent-Id: <agent-id> and body {"client_tx_id":"<unique-id>","base_clock":"<document_clock>","actor":{"kind":"agent","id":"<agent-id>"},"ops":[...]}.
    Ops: insert_block, delete_block, move_block, replace_block_content, set_block_attrs, mark/link ops, comment.add, comment.reply, comment.edit, comment.resolve, comment.delete, suggestion.add, suggestion.accept, suggestion.reject.
-   To author or restructure the whole document, instead PUT ${documentApi} with a plain Markdown body and header If-Match: "<document_clock>" — concurrent edits diff3-merge rather than being overwritten (details in the skill).
+   To author or restructure the whole document, instead PUT ${documentApi} with a plain Markdown body and headers If-Match: "<document_clock>" and X-Agent-Id: <agent-id> — concurrent edits diff3-merge rather than being overwritten (details in the skill).
    To read existing comments, suggestions, and merge conflicts, GET ${documentApi}/review.
    Errors are typed {code, retryable, message}; when retryable, refresh GET ${documentApi}/blocks and resubmit with the new document_clock.`;
 }

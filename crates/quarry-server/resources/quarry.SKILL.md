@@ -25,7 +25,7 @@ ai:<agent-name>` or another stable session id.
 If the user shares a Quarry locator URL:
 
 - Join immediately.
-- Register presence before reading.
+- Send `X-Agent-Id` on every request; POST `/presence` to announce your status.
 - Read `GET $DOC/blocks` before editing or reviewing.
 - Reply with the required ready message.
 - Work in the Quarry document unless the user asks otherwise.
@@ -115,10 +115,11 @@ curl -sS -X POST "$DOC/presence" \
 
 Statuses: `reading`, `thinking`, `acting`, `waiting`, `completed`, `error`.
 
-Presence expires after 60 seconds. Holding the document event stream open with
-your `X-Agent-Id` refreshes it automatically; otherwise re-POST `/presence` at
-least once per minute while active. Disconnecting the stream removes your
-presence.
+Presence expires 60 seconds after your last request. Any document API call
+carrying `X-Agent-Id` refreshes it automatically (auto-registering you as
+`waiting` on first contact), as does holding the document event stream open
+with your `X-Agent-Id`. POST `/presence` when you want to declare a status
+change or display name, not as a keepalive.
 
 Library presence entries include `path`. Tmp presence entries omit `path`; use
 the requested `$DOC` URL plus `documentId` to correlate them.
@@ -126,7 +127,7 @@ the requested `$DOC` URL plus `documentId` to correlate them.
 ## Blocks And Stable Ids
 
 ```bash
-curl -sS "$DOC/blocks"
+curl -sS -H "X-Agent-Id: $AGENT_ID" "$DOC/blocks"
 ```
 
 The response is `{document_id, document_clock, blocks: [...]}`. Each block has

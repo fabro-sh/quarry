@@ -143,9 +143,10 @@ impl AgentEventJournal {
     }
 }
 
-/// Presence entries expire unless refreshed: agents either re-POST `/presence`
-/// within this window or hold the document event stream open (which touches
-/// the entry every [`AGENT_PRESENCE_STREAM_HEARTBEAT`]).
+/// Expiry is the only way presence entries go away. Anything that signals the
+/// agent is still around refreshes the clock: a document call carrying
+/// `X-Agent-Id`, a `/presence` POST, or an open document event stream (which
+/// touches the entry every [`AGENT_PRESENCE_STREAM_HEARTBEAT`]).
 const AGENT_PRESENCE_TTL: Duration = Duration::from_secs(60);
 const AGENT_PRESENCE_STREAM_HEARTBEAT: Duration = Duration::from_secs(15);
 
@@ -234,12 +235,6 @@ impl AgentPresenceRegistry {
         slot.touched = tokio::time::Instant::now();
     }
 
-    fn remove(&self, library: Option<&str>, path: &str, agent_id: &str) {
-        let key = agent_presence_key(library, path, agent_id);
-        let mut entries = self.entries.lock().expect("presence lock poisoned");
-        entries.remove(&key);
-    }
-
     fn list(&self, library: Option<&str>, path: &str) -> AgentPresenceListResponse {
         let presence = self
             .live_entries()
@@ -251,15 +246,12 @@ impl AgentPresenceRegistry {
     }
 }
 
-/// Marks an agent present for as long as a document event stream stays open:
-/// touches presence on connect and every heartbeat, then removes it (and stops
-/// the heartbeat) when the stream is dropped. Expiry via [`AGENT_PRESENCE_TTL`]
-/// remains the backstop if the drop never runs.
+/// Keeps an agent's presence fresh for as long as a document event stream
+/// stays open: touches presence on connect and every heartbeat. Dropping the
+/// guard only stops the heartbeat — the entry survives until
+/// [`AGENT_PRESENCE_TTL`], so stream reconnects and burst readers do not flap
+/// presence.
 struct PresenceStreamGuard {
-    registry: AgentPresenceRegistry,
-    library: Option<String>,
-    path: String,
-    agent_id: String,
     heartbeat: tokio::task::JoinHandle<()>,
 }
 
@@ -272,32 +264,47 @@ impl PresenceStreamGuard {
         agent_id: String,
     ) -> Self {
         registry.touch(library.as_deref(), &path, &document_id, &agent_id);
-        let heartbeat = tokio::spawn({
-            let registry = registry.clone();
-            let (library, path, agent_id) = (library.clone(), path.clone(), agent_id.clone());
-            async move {
-                loop {
-                    tokio::time::sleep(AGENT_PRESENCE_STREAM_HEARTBEAT).await;
-                    registry.touch(library.as_deref(), &path, &document_id, &agent_id);
-                }
+        let heartbeat = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(AGENT_PRESENCE_STREAM_HEARTBEAT).await;
+                registry.touch(library.as_deref(), &path, &document_id, &agent_id);
             }
         });
-        Self {
-            registry,
-            library,
-            path,
-            agent_id,
-            heartbeat,
-        }
+        Self { heartbeat }
     }
 }
 
 impl Drop for PresenceStreamGuard {
     fn drop(&mut self) {
         self.heartbeat.abort();
-        self.registry
-            .remove(self.library.as_deref(), &self.path, &self.agent_id);
     }
+}
+
+/// Implicit presence for the endpoints agents use while working on a
+/// document: any such request carrying `X-Agent-Id` refreshes the agent's
+/// presence entry, auto-creating a `waiting` one on first contact. A missing
+/// document is a no-op — the main operation surfaces the real error — so a
+/// PUT that creates a document skips the touch and the agent appears on its
+/// next call.
+async fn touch_agent_presence(
+    state: &AppState,
+    headers: &HeaderMap,
+    library: Option<&str>,
+    path: &str,
+) -> Result<(), ApiError> {
+    let Some(agent_id) = optional_header(headers, "x-agent-id")? else {
+        return Ok(());
+    };
+    let scope = match library {
+        Some(library) => DocumentScopeRef::library(library),
+        None => DocumentScopeRef::Tmp,
+    };
+    if let Ok(document) = state.store.head_document_for_scope(&scope, path).await {
+        state
+            .agent_presence
+            .touch(library, path, &document.id, &agent_id);
+    }
+    Ok(())
 }
 
 /// Builds the server state for `store`. Pair with
@@ -2208,9 +2215,11 @@ async fn get_tmp_document(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     if let Some(path) = path.strip_suffix("/blocks") {
+        touch_agent_presence(&state, &headers, None, path).await?;
         return gateway::tmp_document_blocks(&state, path).await;
     }
     if let Some(path) = path.strip_suffix("/review") {
+        touch_agent_presence(&state, &headers, None, path).await?;
         let include_resolved = query.include_resolved()?;
         return json_response(
             StatusCode::OK,
@@ -2218,6 +2227,7 @@ async fn get_tmp_document(
         );
     }
     if let Some(path) = path.strip_suffix("/presence") {
+        touch_agent_presence(&state, &headers, None, path).await?;
         state.store.head_tmp_document(path).await?;
         return json_response(
             StatusCode::OK,
@@ -2264,6 +2274,7 @@ async fn get_tmp_document(
             &state.store.tmp_document_version(path, version).await?,
         );
     }
+    touch_agent_presence(&state, &headers, None, &path).await?;
     let document = state.store.get_tmp_document(&path).await?;
     bytes_response_with_expiry(
         StatusCode::OK,
@@ -2323,6 +2334,7 @@ async fn put_tmp_document(
     Path(path): Path<String>,
     body: Bytes,
 ) -> Result<Response, ApiError> {
+    touch_agent_presence(&state, &headers, None, &path).await?;
     let content_type = content_type(&headers);
     let metadata = metadata_from_headers(&headers, &content_type)?;
     let precondition = precondition_from_headers(&headers)?;
@@ -2402,6 +2414,7 @@ async fn post_tmp_document_action(
     Json(request): Json<JsonValue>,
 ) -> Result<Response, ApiError> {
     if let Some(path) = path.strip_suffix("/transactions") {
+        touch_agent_presence(&state, &headers, None, path).await?;
         return gateway::tmp_document_block_transactions(&state, path, request).await;
     }
 
@@ -2661,15 +2674,18 @@ async fn get_document(
         );
     }
     if let Some(path) = path.strip_suffix("/blocks") {
+        touch_agent_presence(&state, &headers, Some(&library), path).await?;
         return gateway::document_blocks(&state, &library, path).await;
     }
     if let Some(path) = path.strip_suffix("/snapshot") {
+        touch_agent_presence(&state, &headers, Some(&library), path).await?;
         return json_response(
             StatusCode::OK,
             &agent_document_snapshot(&state.store, &library, path).await?,
         );
     }
     if let Some(path) = path.strip_suffix("/review") {
+        touch_agent_presence(&state, &headers, Some(&library), path).await?;
         let include_resolved = query.review.include_resolved()?;
         return json_response(
             StatusCode::OK,
@@ -2677,6 +2693,7 @@ async fn get_document(
         );
     }
     if let Some(path) = path.strip_suffix("/presence") {
+        touch_agent_presence(&state, &headers, Some(&library), path).await?;
         state.store.head_document(&library, path).await?;
         return json_response(
             StatusCode::OK,
@@ -2741,6 +2758,7 @@ async fn get_document(
         );
     }
 
+    touch_agent_presence(&state, &headers, Some(&library), &path).await?;
     let document = state.store.get_document(&library, &path).await?;
     bytes_response_with_expiry(
         StatusCode::OK,
@@ -2947,6 +2965,7 @@ async fn put_document(
     Path((library, path)): Path<(String, String)>,
     body: Bytes,
 ) -> Result<Response, ApiError> {
+    touch_agent_presence(&state, &headers, Some(&library), &path).await?;
     let content_type = content_type(&headers);
     let metadata = metadata_from_headers(&headers, &content_type)?;
     let precondition = precondition_from_headers(&headers)?;
@@ -3092,6 +3111,7 @@ async fn post_document_action(
     let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
     let actor = transaction_metadata_from_headers(&headers)?.actor;
     if let Some((path, version)) = document_version_restore_path(&path) {
+        touch_agent_presence(&state, &headers, Some(&library), path).await?;
         let target = state
             .store
             .document_version(&library, path, version)
@@ -3175,6 +3195,7 @@ async fn post_document_action(
     }
 
     if let Some(path) = path.strip_suffix("/transactions") {
+        touch_agent_presence(&state, &headers, Some(&library), path).await?;
         return gateway::document_block_transactions(&state, &library, path, request).await;
     }
 
@@ -4413,7 +4434,7 @@ mod tests {
 
     #[cfg(feature = "lib-documents")]
     #[tokio::test]
-    async fn document_sse_shutdown_drops_presence_guard() {
+    async fn document_sse_shutdown_keeps_presence_until_ttl() {
         let (_root, store) = test_store().await;
         let library = store.create_library("doc-sse-shutdown").await.unwrap();
         store
@@ -4466,7 +4487,8 @@ mod tests {
                 .list(Some("doc-sse-shutdown"), "live.md")
                 .presence
                 .len(),
-            0
+            1,
+            "closing the stream must not remove presence; only TTL expiry does"
         );
     }
 
