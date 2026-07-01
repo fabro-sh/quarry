@@ -69,7 +69,6 @@ import {
   createCollabInvite,
   createDocument,
   createGitPeer,
-  createTmpCollabInvite,
   createTmpDocument,
   deleteDocument,
   deleteTmpDocument,
@@ -92,7 +91,6 @@ import {
   listGitPeers,
   listLibraries,
   listTmpAgentPresence,
-  listTmpDocuments,
   moveDocument,
   outgoingLinks,
   promoteTmpDocument,
@@ -134,6 +132,7 @@ import {
 } from '../features/collab/session-events';
 import { collabDebug } from '../features/collab/collab-debug';
 import { saveStateLabel, type CollabSaveState } from '../features/collab/save-state';
+import { tmpCollabWebSocketBaseUrl } from '../features/collab/rust-ws-provider';
 import {
   MarkdownEditor,
   type CollabEditorConfig,
@@ -669,17 +668,13 @@ function Workspace() {
 
   const isTmpDocument = documentScope === 'tmp';
   const isLibraryDocument = documentScope === 'library';
-  const tmpOnlyMode = tmpDocumentsEnabled && !libDocumentsEnabled;
+  const tmpIslandMode = isTmpDocument;
 
   const { data: libraryDocuments = [] } = useSWR(
     libDocumentsEnabled && activeLibrary ? ['/v1/documents', activeLibrary] : null,
     () => listDocuments(activeLibrary)
   );
-  const { data: tmpDocuments = [] } = useSWR(
-    tmpDocumentsEnabled ? ['/v1/tmp-documents'] : null,
-    listTmpDocuments
-  );
-  const documents = isTmpDocument ? tmpDocuments : libraryDocuments;
+  const documents = isTmpDocument ? [] : libraryDocuments;
   const { data: document } = useSWR(
     selectedPath
       ? isTmpDocument
@@ -758,7 +753,7 @@ function Workspace() {
     [activeLibrary, mutate]
   );
   const { data: versionList = [] } = useSWR(
-    !tmpOnlyMode && selectedPath
+    !tmpIslandMode && selectedPath
       ? isTmpDocument
         ? tmpDocumentsEnabled
           ? ['/v1/tmp-versions', selectedPath]
@@ -877,6 +872,9 @@ function Workspace() {
   const collabDocumentId = selectedDocumentBodyReady
     ? activeLoadedDocument?.documentId || loadedDocumentForSelection?.documentId || ''
     : '';
+  const collabBaseUrl =
+    isTmpDocument && selectedPath ? tmpCollabWebSocketBaseUrl(selectedPath) : undefined;
+  const collabRoomName = isTmpDocument ? 'content' : undefined;
   const layoutStorageKey = activeLibrary ? `quarry:layout:${activeLibrary}` : 'quarry:layout:workspace';
   const mergeConflict = conflicts.find((conflict) => conflict.id === mergeConflictId) ?? null;
   const { data: agentPresence = { presence: [] } } = useSWR(
@@ -960,41 +958,40 @@ function Workspace() {
     setSelectedPath(path);
   }
 
-  async function createNewTmpDocument(defaultPath = 'scratch/untitled.md') {
+  async function createNewTmpDocument() {
     if (!tmpDocumentsEnabled) return;
     setDocumentScope('tmp');
-    const path = window.prompt('New tmp document path', defaultPath);
-    if (!path) return;
     const initialContent = '# Untitled\n';
     const initialContentType = 'text/markdown';
     const created = await createTmpDocument({
-      path,
       content: initialContent,
       contentType: initialContentType,
+      metadata: { title: 'Untitled' },
     });
+    const secret = created.outcome.document?.path ?? '';
+    if (!secret) throw new Error('tmp document creation did not return a secret');
     const createdEtag = created.etag || `"${created.outcome.version.id}"`;
     await Promise.all([
       mutate(
-        ['/v1/tmp-document', path],
+        ['/v1/tmp-document', secret],
         {
           content: initialContent,
           contentType: initialContentType,
           documentId: created.outcome.document?.id ?? '',
           etag: createdEtag,
-          path,
+          path: secret,
         },
         { revalidate: false }
       ),
-      mutate(['/v1/tmp-versions', path], [historyEntryFromVersion(created.outcome.version)], {
+      mutate(['/v1/tmp-versions', secret], [historyEntryFromVersion(created.outcome.version)], {
         revalidate: false,
       }),
-      mutate(['/v1/tmp-documents']),
     ]);
-    setSelectedPath(path);
+    setSelectedPath(secret);
   }
 
   async function createVisibleDocument(defaultPath = 'untitled.md') {
-    if (isTmpDocument || !libDocumentsEnabled) await createNewTmpDocument(defaultPath);
+    if (isTmpDocument || !libDocumentsEnabled) await createNewTmpDocument();
     else await createNewDocument(defaultPath);
   }
 
@@ -1062,7 +1059,6 @@ function Workspace() {
     if (isTmpDocument) {
       await deleteTmpDocument(deletingPath, browserMutationOptions());
       await clearTmpDocumentCaches(deletingPath);
-      await mutate(['/v1/tmp-documents']);
     } else {
       await deleteDocument(activeLibrary, deletingPath, browserMutationOptions());
       await clearDeletedDocumentCaches(activeLibrary, deletingPath);
@@ -1145,7 +1141,6 @@ function Workspace() {
       if (tmp) {
         await Promise.all([
           mutate(['/v1/tmp-document', path]),
-          mutate(['/v1/tmp-documents']),
           mutate(['/v1/tmp-versions', path]),
           mutate(['/v1/tmp-review', path]),
         ]);
@@ -1186,10 +1181,7 @@ function Workspace() {
     });
     try {
       const token = isTmpDocument
-        ? await createTmpCollabInvite(path, {
-            byHint: author,
-            role: 'editor',
-          })
+        ? { id: '' }
         : await createCollabInvite(activeLibrary, path, {
             byHint: author,
             role: 'editor',
@@ -1309,7 +1301,6 @@ function Workspace() {
       if (!window.confirm(`Delete ${node.path}?`)) return;
       await deleteTmpDocument(node.path, browserMutationOptions());
       await clearTmpDocumentCaches(node.path);
-      await mutate(['/v1/tmp-documents']);
       if (selectedPath === node.path) setSelectedPath('');
     } else {
       await deleteDocumentPath(node.path);
@@ -1408,7 +1399,7 @@ function Workspace() {
         data-layout-storage-key={layoutStorageKey}
         direction="horizontal"
       >
-        {!tmpOnlyMode ? (
+        {!tmpIslandMode ? (
           <>
             <Panel
               className={cn(!resizingPanels && 'transition-[flex] duration-200 ease-out')}
@@ -1449,7 +1440,7 @@ function Workspace() {
             <PanelResizeHandle className="w-px bg-line" onDragging={setResizingPanels} />
           </>
         ) : null}
-        <Panel defaultSize={tmpOnlyMode ? 100 : 54} minSize={tmpOnlyMode ? 100 : 35}>
+        <Panel defaultSize={tmpIslandMode ? 100 : 54} minSize={tmpIslandMode ? 100 : 35}>
           {selectedPath ? (
             <div className="flex h-full min-h-0 flex-col">
               <DocumentToolbar
@@ -1475,8 +1466,10 @@ function Workspace() {
                   author={author}
                   byteSize={selectedEntry?.byte_size}
                   collabEnabled={Boolean(collabDocumentId)}
+                  collabBaseUrl={collabBaseUrl}
+                  collabRoomName={collabRoomName}
                   collabSessionId={collabSessionIdRef.current}
-                  collabToken={routeCollabToken}
+                  collabToken={isTmpDocument ? undefined : routeCollabToken}
                   contentHash={selectedEntry?.content_hash}
                   content={content}
                   contentType={selectedContentType}
@@ -1494,10 +1487,10 @@ function Workspace() {
               )}
             </div>
           ) : (
-            <EmptyDocument treeHidden={tmpOnlyMode} />
+            <EmptyDocument treeHidden={tmpIslandMode} />
           )}
         </Panel>
-        {!tmpOnlyMode ? (
+        {!tmpIslandMode ? (
           <>
             <PanelResizeHandle className="w-px bg-line" onDragging={setResizingPanels} />
             <Panel
@@ -1630,7 +1623,9 @@ function DocumentBody({
   activeLibrary,
   author,
   byteSize,
+  collabBaseUrl,
   collabEnabled,
+  collabRoomName,
   collabSessionId,
   collabToken,
   contentHash,
@@ -1648,7 +1643,9 @@ function DocumentBody({
   activeLibrary: string;
   author: string;
   byteSize?: number;
+  collabBaseUrl?: string;
   collabEnabled: boolean;
+  collabRoomName?: string;
   collabSessionId: string;
   collabToken?: string;
   contentHash?: string | null;
@@ -1670,7 +1667,9 @@ function DocumentBody({
     const collab: CollabEditorConfig | undefined = collabEnabled && documentId
       ? {
           documentId,
+          baseUrl: collabBaseUrl,
           onSaveStateChange,
+          roomName: collabRoomName,
           sessionId: collabSessionId,
           token: collabToken,
         }
@@ -3338,16 +3337,20 @@ function DocumentToolbar({
 }) {
   return (
     <div className="flex h-12 shrink-0 items-center gap-2 bg-surface px-3">
-      <h1 className="min-w-0 flex-1 truncate text-sm">
-        {path.split('/').map((segment, index, segments) => (
-          <span key={index}>
-            {index > 0 ? <span className="px-1.5 text-faint">/</span> : null}
-            <span className={index === segments.length - 1 ? 'font-semibold text-ink' : 'text-muted'}>
-              {segment}
+      {!isTmp ? (
+        <h1 className="min-w-0 flex-1 truncate text-sm">
+          {path.split('/').map((segment, index, segments) => (
+            <span key={index}>
+              {index > 0 ? <span className="px-1.5 text-faint">/</span> : null}
+              <span className={index === segments.length - 1 ? 'font-semibold text-ink' : 'text-muted'}>
+                {segment}
+              </span>
             </span>
-          </span>
-        ))}
-      </h1>
+          ))}
+        </h1>
+      ) : (
+        <div className="min-w-0 flex-1" />
+      )}
       {isMarkdown && saveState ? <SaveStatusIndicator saveState={saveState} /> : null}
       {isMarkdown ? <AgentPresencePill presence={agentPresence} /> : null}
       {isMarkdown ? (
@@ -4363,7 +4366,7 @@ function parseWorkspaceRoute(pathname: string) {
     return {
       scope: 'tmp' as DocumentScope,
       library: null,
-      path: segments.slice(1).map(safeDecodeSegment).join('/'),
+      path: segments[1] ? safeDecodeSegment(segments[1]) : '',
     };
   }
   if (segments[0] !== 'lib' || !segments[1]) {
@@ -4387,9 +4390,9 @@ function workspaceRoute(library: string, path: string) {
   return `${libraryPath}/documents/${path.split('/').map(encodeURIComponent).join('/')}`;
 }
 
-function tmpWorkspaceRoute(path: string) {
-  if (!path) return '/tmp';
-  return `/tmp/${path.split('/').map(encodeURIComponent).join('/')}`;
+function tmpWorkspaceRoute(secret: string) {
+  if (!secret) return '/tmp';
+  return `/tmp/${encodeURIComponent(secret)}`;
 }
 
 function safeDecodeSegment(segment: string) {
