@@ -102,7 +102,6 @@ import {
   searchDocuments,
   tmpDocumentHref,
   tmpDocumentVersion,
-  tmpVersions,
   getTmpDocument,
   versions,
 } from '../api/client';
@@ -153,7 +152,12 @@ import {
 import { CommentsPanel } from '../features/review/ui/CommentsPanel';
 import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../features/tree/tree-model';
 import { cn } from '../lib/utils';
-import { buildAddAgentPrompt, buildTokenizedDocumentUrl } from './agent-invite';
+import {
+  buildAddAgentPrompt,
+  buildTokenizedDocumentUrl,
+  tmpWorkspaceRouteForDocument,
+  workspaceRouteForDocument,
+} from './agent-invite';
 
 type EventState = 'idle' | 'connecting' | 'open' | 'polling' | 'error';
 type DocumentScope = 'library' | 'tmp';
@@ -336,7 +340,9 @@ function Workspace() {
     if (documentScope === 'library' && !libDocumentsEnabled) return;
     if (documentScope === 'tmp' && !tmpDocumentsEnabled) return;
     const nextPath =
-      documentScope === 'tmp' ? tmpWorkspaceRoute(selectedPath) : workspaceRoute(activeLibrary, selectedPath);
+      documentScope === 'tmp'
+        ? tmpWorkspaceRouteForDocument(selectedPath)
+        : workspaceRouteForDocument(activeLibrary, selectedPath);
     if (nextPath && location.pathname !== nextPath) {
       navigate(nextPath, { replace: location.pathname === '/' });
     }
@@ -664,7 +670,12 @@ function Workspace() {
 
   const isTmpDocument = documentScope === 'tmp';
   const isLibraryDocument = documentScope === 'library';
-  const tmpIslandMode = isTmpDocument;
+  // Whether the active scope's document surface is usable: the tmp surface
+  // needs only its capability flag; the library surface needs its flag plus a
+  // selected library. Gates every scope-dispatched SWR key below.
+  const scopeReady = isTmpDocument
+    ? tmpDocumentsEnabled
+    : libDocumentsEnabled && Boolean(activeLibrary);
 
   const { data: libraryDocuments = [] } = useSWR(
     libDocumentsEnabled && activeLibrary ? ['/v1/documents', activeLibrary] : null,
@@ -672,14 +683,10 @@ function Workspace() {
   );
   const documents = isTmpDocument ? [] : libraryDocuments;
   const { data: document } = useSWR(
-    selectedPath
+    selectedPath && scopeReady
       ? isTmpDocument
-        ? tmpDocumentsEnabled
-          ? ['/v1/tmp-document', selectedPath]
-          : null
-        : libDocumentsEnabled && activeLibrary
-          ? ['/v1/document', activeLibrary, selectedPath]
-          : null
+        ? ['/v1/tmp-document', selectedPath]
+        : ['/v1/document', activeLibrary, selectedPath]
       : null,
     () => (isTmpDocument ? getTmpDocument(selectedPath) : getDocument(activeLibrary, selectedPath)),
     { revalidateOnFocus: false }
@@ -765,28 +772,20 @@ function Workspace() {
     }),
     [activeLibrary, mutate]
   );
+  // The versions pane is hidden in the tmp island layout, so the version
+  // list only ever loads for library documents.
   const { data: versionList = [] } = useSWR(
-    !tmpIslandMode && selectedPath
-      ? isTmpDocument
-        ? tmpDocumentsEnabled
-          ? ['/v1/tmp-versions', selectedPath]
-          : null
-        : libDocumentsEnabled && activeLibrary
-          ? ['/v1/versions', activeLibrary, selectedPath]
-          : null
+    isLibraryDocument && scopeReady && selectedPath
+      ? ['/v1/versions', activeLibrary, selectedPath]
       : null,
-    () => (isTmpDocument ? tmpVersions(selectedPath) : versions(activeLibrary, selectedPath))
+    () => versions(activeLibrary, selectedPath)
   );
   const headVersionId = versionList[0]?.latest_version_id;
   const { data: selectedVersionContent } = useSWR(
-    selectedPath && selectedVersionId
+    selectedPath && selectedVersionId && scopeReady
       ? isTmpDocument
-        ? tmpDocumentsEnabled
-          ? ['/v1/tmp-version-content', selectedPath, selectedVersionId]
-          : null
-        : libDocumentsEnabled && activeLibrary
-          ? ['/v1/version-content', activeLibrary, selectedPath, selectedVersionId]
-          : null
+        ? ['/v1/tmp-version-content', selectedPath, selectedVersionId]
+        : ['/v1/version-content', activeLibrary, selectedPath, selectedVersionId]
       : null,
     () =>
       isTmpDocument
@@ -891,14 +890,10 @@ function Workspace() {
   const layoutStorageKey = activeLibrary ? `quarry:layout:${activeLibrary}` : 'quarry:layout:workspace';
   const mergeConflict = conflicts.find((conflict) => conflict.id === mergeConflictId) ?? null;
   const { data: agentPresence = { presence: [] } } = useSWR(
-    selectedPath && isTextContentType(selectedContentType)
+    selectedPath && isTextContentType(selectedContentType) && scopeReady
       ? isTmpDocument
-        ? tmpDocumentsEnabled
-          ? ['/v1/tmp-agent-presence', selectedPath]
-          : null
-        : libDocumentsEnabled && activeLibrary
-          ? ['/v1/agent-presence', activeLibrary, selectedPath]
-          : null
+        ? ['/v1/tmp-agent-presence', selectedPath]
+        : ['/v1/agent-presence', activeLibrary, selectedPath]
       : null,
     () =>
       isTmpDocument
@@ -910,14 +905,10 @@ function Workspace() {
   // orphaned/invalidated badges, diff3 conflict items). Refreshed by the
   // SSE classification above whenever the document changes.
   const { data: documentReview } = useSWR(
-    selectedPath && isMarkdownDocument(selectedPath, selectedContentType)
+    selectedPath && isMarkdownDocument(selectedPath, selectedContentType) && scopeReady
       ? isTmpDocument
-        ? tmpDocumentsEnabled
-          ? ['/v1/tmp-review', selectedPath]
-          : null
-        : libDocumentsEnabled && activeLibrary
-          ? ['/v1/review', activeLibrary, selectedPath]
-          : null
+        ? ['/v1/tmp-review', selectedPath]
+        : ['/v1/review', activeLibrary, selectedPath]
       : null,
     () =>
       isTmpDocument
@@ -1129,21 +1120,24 @@ function Workspace() {
     void copyText(rawLink, 'Raw document link');
   }
 
-  function startUploadMarkdown() {
-    if (!selectedPath || !selectedIsMarkdown) return;
-    if (isLibraryDocument && !activeLibrary) return;
+  function canUploadMarkdown() {
+    if (!selectedPath || !selectedIsMarkdown) return false;
+    if (isLibraryDocument && !activeLibrary) return false;
     if (saveState && saveState !== 'saved') {
       window.alert('Wait for the current document to finish saving before uploading Markdown.');
-      return;
+      return false;
     }
+    return true;
+  }
+
+  function startUploadMarkdown() {
+    if (!canUploadMarkdown()) return;
     uploadMarkdownInputRef.current?.click();
   }
 
   async function uploadCurrentMarkdownFile(file: File | null | undefined) {
-    if (!file || !selectedPath || !selectedIsMarkdown) return;
-    if (isLibraryDocument && !activeLibrary) return;
-    if (saveState && saveState !== 'saved') {
-      window.alert('Wait for the current document to finish saving before uploading Markdown.');
+    if (!file) return;
+    if (!canUploadMarkdown()) {
       if (uploadMarkdownInputRef.current) uploadMarkdownInputRef.current.value = '';
       return;
     }
@@ -1151,8 +1145,10 @@ function Workspace() {
     const library = activeLibrary;
     const tmp = isTmpDocument;
     try {
-      const text = await file.text();
-      const latest = tmp ? await getTmpDocument(path) : await getDocument(library, path);
+      const [text, latest] = await Promise.all([
+        file.text(),
+        tmp ? getTmpDocument(path) : getDocument(library, path),
+      ]);
       const saved = tmp
         ? await putTmpDocument(path, text, latest.etag, 'text/markdown', browserMutationOptions())
         : await putDocument(library, path, text, latest.etag, 'text/markdown', browserMutationOptions());
@@ -1331,7 +1327,7 @@ function Workspace() {
 
   function copyTreePath(node: TreeNode) {
     closeTreeContextMenu();
-    void navigator.clipboard?.writeText(node.path);
+    void copyText(node.path, 'Document path');
   }
 
   function changeActiveLibrary(slug: string) {
@@ -1341,7 +1337,7 @@ function Workspace() {
     setTreeOpenState(loadTreeOpenState(slug));
     setRightPaneTab(loadRightPaneTab(slug));
     setSelectedPath('');
-    navigate(workspaceRoute(slug, ''), { replace: false });
+    navigate(workspaceRouteForDocument(slug, ''), { replace: false });
   }
 
   function changeTreeOpenState(id: string) {
@@ -1421,7 +1417,7 @@ function Workspace() {
         data-layout-storage-key={layoutStorageKey}
         direction="horizontal"
       >
-        {!tmpIslandMode ? (
+        {!isTmpDocument ? (
           <>
             <Panel
               className={cn(!resizingPanels && 'transition-[flex] duration-200 ease-out')}
@@ -1462,7 +1458,7 @@ function Workspace() {
             <PanelResizeHandle className="w-px bg-line" onDragging={setResizingPanels} />
           </>
         ) : null}
-        <Panel defaultSize={tmpIslandMode ? 100 : 54} minSize={tmpIslandMode ? 100 : 35}>
+        <Panel defaultSize={isTmpDocument ? 100 : 54} minSize={isTmpDocument ? 100 : 35}>
           {selectedPath ? (
             <div className="flex h-full min-h-0 flex-col">
               <DocumentToolbar
@@ -1510,10 +1506,10 @@ function Workspace() {
               )}
             </div>
           ) : (
-            <EmptyDocument treeHidden={tmpIslandMode} />
+            <EmptyDocument treeHidden={isTmpDocument} />
           )}
         </Panel>
-        {!tmpIslandMode ? (
+        {!isTmpDocument ? (
           <>
             <PanelResizeHandle className="w-px bg-line" onDragging={setResizingPanels} />
             <Panel
@@ -1822,7 +1818,7 @@ function BinaryPreview({
             <h2 className="truncate text-sm font-semibold text-ink">{path}</h2>
             <p className="mt-1 text-sm text-muted">This binary document is available for download.</p>
           </div>
-          <a className={secondaryButton} download={path.split('/').at(-1)} href={href}>
+          <a className={secondaryButton} download={documentBasename(path)} href={href}>
             <Download size={15} />
             Download
           </a>
@@ -4092,7 +4088,7 @@ function List({ items }: { items: string[] }) {
 
 function documentTitle(entry: DocumentListEntry) {
   const title = entry.metadata.title;
-  return typeof title === 'string' && title.trim() ? title : entry.path.split('/').at(-1) ?? entry.path;
+  return typeof title === 'string' && title.trim() ? title : documentBasename(entry.path);
 }
 
 function documentBasename(path: string) {
@@ -4421,18 +4417,6 @@ function parseWorkspaceRoute(pathname: string) {
     library,
     path: segments.slice(3).map(safeDecodeSegment).join('/'),
   };
-}
-
-function workspaceRoute(library: string, path: string) {
-  if (!library) return '';
-  const libraryPath = `/lib/${encodeURIComponent(library)}`;
-  if (!path) return libraryPath;
-  return `${libraryPath}/documents/${path.split('/').map(encodeURIComponent).join('/')}`;
-}
-
-function tmpWorkspaceRoute(secret: string) {
-  if (!secret) return '/tmp';
-  return `/tmp/${encodeURIComponent(secret)}`;
 }
 
 function safeDecodeSegment(segment: string) {

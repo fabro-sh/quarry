@@ -17,6 +17,7 @@ interface AddAgentPromptParams {
 }
 
 export function workspaceRouteForDocument(library: string, path: string) {
+  if (!library) return '';
   const libraryPath = `/lib/${encodeURIComponent(library)}`;
   if (!path) return libraryPath;
   return `${libraryPath}/documents/${pathSegments(path)}`;
