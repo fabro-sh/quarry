@@ -367,8 +367,22 @@ function Workspace() {
   }, [theme]);
 
   useEffect(() => {
-    window.document.title = selectedPath ? `${documentBasename(selectedPath)} · Quarry` : 'Quarry';
-  }, [selectedPath]);
+    if (!selectedPath) {
+      window.document.title = 'Quarry';
+      return;
+    }
+
+    const isMarkdown = document && isMarkdownDocument(selectedPath, document.contentType);
+    if (isMarkdown && document?.content) {
+      const h1 = extractFirstH1(document.content);
+      if (h1) {
+        window.document.title = `${h1} · Quarry`;
+        return;
+      }
+    }
+
+    window.document.title = `${documentBasename(selectedPath)} · Quarry`;
+  }, [selectedPath, document]);
 
   function changeAuthor(nextAuthor: string) {
     setAuthor(saveAuthor(nextAuthor));
@@ -4084,6 +4098,17 @@ function documentTitle(entry: DocumentListEntry) {
 
 function documentBasename(path: string) {
   return path.split('/').at(-1) ?? path;
+}
+
+function extractFirstH1(content: string): string | null {
+  const lines = content.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('# ')) {
+      return trimmed.slice(2).trim();
+    }
+  }
+  return null;
 }
 
 function useDialogFocusTrap(open: boolean, onClose: () => void) {
