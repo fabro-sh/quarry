@@ -163,7 +163,7 @@ use quarry_core::{
 };
 use quarry_storage::{
     document_kind, BlockMutationCommit, BlockMutationOutcome, BlockMutationState, BlockReviewItem,
-    BlockReviewKind, BlockReviewState, BlockTransactionRecord, DocumentKind,
+    BlockReviewKind, BlockReviewState, BlockTransactionRecord, DocumentKind, DocumentScopeRef,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
@@ -1911,15 +1911,25 @@ pub(crate) async fn document_blocks(
     library: &str,
     path: &str,
 ) -> Result<Response, ApiError> {
-    gateway_reply(document_blocks_inner(state, library, path).await)
+    gateway_reply(document_blocks_for_scope(state, &DocumentScopeRef::library(library), path).await)
 }
 
-async fn document_blocks_inner(
+pub(crate) async fn tmp_document_blocks(
     state: &AppState,
-    library: &str,
+    path: &str,
+) -> Result<Response, ApiError> {
+    gateway_reply(document_blocks_for_scope(state, &DocumentScopeRef::Tmp, path).await)
+}
+
+async fn document_blocks_for_scope(
+    state: &AppState,
+    scope: &DocumentScopeRef,
     path: &str,
 ) -> Result<Response, GatewayFailure> {
-    let document = state.store.get_document(library, path).await?;
+    let document = match scope {
+        DocumentScopeRef::Library { slug } => state.store.get_document(slug, path).await?,
+        DocumentScopeRef::Tmp => state.store.get_tmp_document(path).await?,
+    };
     require_block_document(&document.path, &document.version.content_type)?;
     let mut document_clock = document.version.id.clone();
     let mut rows = state.store.load_block_tree(&document.id).await?;
@@ -1936,18 +1946,34 @@ async fn document_blocks_inner(
                 .into(),
             )
         })?;
-        let outcome = state
-            .store
-            .import_block_document(
-                library,
-                path,
-                &markdown,
-                document.version.metadata.clone(),
-                &document.version.content_type,
-                DocumentSource::Rest,
-                WritePrecondition::IfMatch(document.version.id.clone()),
-            )
-            .await?;
+        let outcome = match scope {
+            DocumentScopeRef::Library { slug } => {
+                state
+                    .store
+                    .import_block_document(
+                        slug,
+                        path,
+                        &markdown,
+                        document.version.metadata.clone(),
+                        &document.version.content_type,
+                        DocumentSource::Rest,
+                        WritePrecondition::IfMatch(document.version.id.clone()),
+                    )
+                    .await?
+            }
+            DocumentScopeRef::Tmp => {
+                state
+                    .store
+                    .import_tmp_block_document(
+                        path,
+                        &markdown,
+                        document.version.metadata.clone(),
+                        &document.version.content_type,
+                        WritePrecondition::IfMatch(document.version.id.clone()),
+                    )
+                    .await?
+            }
+        };
         document_clock = outcome.version.id;
         rows = state.store.load_block_tree(&document.id).await?;
     }
@@ -2052,12 +2078,30 @@ pub(crate) async fn document_block_transactions(
     path: &str,
     payload: JsonValue,
 ) -> Result<Response, ApiError> {
-    gateway_reply(document_block_transactions_inner(state, library, path, payload).await)
+    gateway_reply(
+        document_block_transactions_for_scope(
+            state,
+            &DocumentScopeRef::library(library),
+            path,
+            payload,
+        )
+        .await,
+    )
 }
 
-async fn document_block_transactions_inner(
+pub(crate) async fn tmp_document_block_transactions(
     state: &AppState,
-    library: &str,
+    path: &str,
+    payload: JsonValue,
+) -> Result<Response, ApiError> {
+    gateway_reply(
+        document_block_transactions_for_scope(state, &DocumentScopeRef::Tmp, path, payload).await,
+    )
+}
+
+async fn document_block_transactions_for_scope(
+    state: &AppState,
+    scope: &DocumentScopeRef,
     path: &str,
     payload: JsonValue,
 ) -> Result<Response, GatewayFailure> {
@@ -2076,7 +2120,7 @@ async fn document_block_transactions_inner(
     };
     let reply = execute_block_transaction(
         state,
-        library,
+        scope,
         path,
         &ctx,
         &TransactionSettings::default(),
@@ -2107,19 +2151,22 @@ fn transaction_reply_response(reply: TransactionReply) -> Result<Response, Gatew
 /// here; it is never rejected because a session exists.
 pub(crate) async fn execute_block_transaction(
     state: &AppState,
-    library: &str,
+    scope: &DocumentScopeRef,
     path: &str,
     ctx: &TransactionContext,
     settings: &TransactionSettings,
     plan: PlanProvider<'_>,
 ) -> Result<TransactionReply, GatewayFailure> {
-    let document = state.store.head_document(library, path).await?;
+    let document = match scope {
+        DocumentScopeRef::Library { slug } => state.store.head_document(slug, path).await?,
+        DocumentScopeRef::Tmp => state.store.head_tmp_document(path).await?,
+    };
     let guard = state.sessions.lock_document(&document.id).await;
     match guard.session() {
         Some(session) => {
-            apply_session_transaction(state, &session, library, path, ctx, settings, plan).await
+            apply_session_transaction(state, &session, scope, path, ctx, settings, plan).await
         }
-        None => apply_rows_transaction(state, library, path, ctx, settings, plan).await,
+        None => apply_rows_transaction(state, scope, path, ctx, settings, plan).await,
     }
 }
 
@@ -2127,7 +2174,7 @@ pub(crate) async fn execute_block_transaction(
 /// transaction. The caller holds the per-document mutex.
 async fn apply_rows_transaction(
     state: &AppState,
-    library: &str,
+    scope: &DocumentScopeRef,
     path: &str,
     ctx: &TransactionContext,
     settings: &TransactionSettings,
@@ -2136,7 +2183,7 @@ async fn apply_rows_transaction(
     for _attempt in 0..COMMIT_RETRY_LIMIT {
         let snapshot = state
             .store
-            .block_mutation_state(library, path, &ctx.client_tx_id)
+            .block_mutation_state_for_scope(scope, path, &ctx.client_tx_id)
             .await?;
         if let Some(record) = &snapshot.replay {
             return Ok(TransactionReply::Replayed(record.clone()));
@@ -2177,7 +2224,11 @@ async fn apply_rows_transaction(
             review_items: applied.review_items,
             normalized_markdown: normalized_markdown(&applied.rows, &metadata)?,
         };
-        match state.store.commit_block_mutation(library, commit).await {
+        match state
+            .store
+            .commit_block_mutation_for_scope(scope, commit)
+            .await
+        {
             Ok(BlockMutationOutcome::Applied { outcome, record }) => {
                 return Ok(TransactionReply::Committed(CommittedTransaction {
                     status,
@@ -2225,7 +2276,7 @@ async fn apply_rows_transaction(
 async fn apply_session_transaction(
     state: &AppState,
     session: &crate::session::LiveSession,
-    library: &str,
+    scope: &DocumentScopeRef,
     path: &str,
     ctx: &TransactionContext,
     settings: &TransactionSettings,
@@ -2242,7 +2293,7 @@ async fn apply_session_transaction(
     }
     let snapshot = state
         .store
-        .block_mutation_state(library, path, &ctx.client_tx_id)
+        .block_mutation_state_for_scope(scope, path, &ctx.client_tx_id)
         .await?;
     if let Some(record) = &snapshot.replay {
         return Ok(TransactionReply::Replayed(record.clone()));
@@ -2311,7 +2362,11 @@ async fn apply_session_transaction(
         review_items: applied.review_items.clone(),
         normalized_markdown: normalized_markdown(&applied.rows, &metadata)?,
     };
-    match state.store.commit_block_mutation(library, commit).await {
+    match state
+        .store
+        .commit_block_mutation_for_scope(scope, commit)
+        .await
+    {
         Ok(BlockMutationOutcome::Applied { outcome, record }) => {
             session.mark_committed(&mut awareness, &outcome, &applied.review_items);
             Ok(TransactionReply::Committed(CommittedTransaction {

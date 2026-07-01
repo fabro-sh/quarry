@@ -33,7 +33,9 @@ use quarry_git::{
     export_worktree, import_worktree, pull_peer, push_peer, sync_peer, GitExportOptions,
     GitExportResult, GitImportResult, GitSyncResult,
 };
-use quarry_storage::{QuarryStore, StoreEvent, StoreEventKind, TransactionMetadata};
+use quarry_storage::{
+    DocumentScopeRef, QuarryStore, StoreEvent, StoreEventKind, TransactionMetadata,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -42,7 +44,7 @@ use std::future::{Future, IntoFuture};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use utoipa::{OpenApi, ToSchema};
@@ -54,6 +56,7 @@ pub struct AppState {
     sessions: session::SessionHub,
     agent_events: AgentEventJournal,
     agent_presence: AgentPresenceRegistry,
+    handoff_events: HandoffEventBus,
     shutdown: CancellationToken,
 }
 
@@ -140,6 +143,28 @@ impl AgentEventJournal {
     }
 }
 
+#[derive(Clone)]
+struct HandoffEventBus {
+    tx: broadcast::Sender<HandoffResponse>,
+}
+
+impl Default for HandoffEventBus {
+    fn default() -> Self {
+        let (tx, _) = broadcast::channel(1024);
+        Self { tx }
+    }
+}
+
+impl HandoffEventBus {
+    fn subscribe(&self) -> broadcast::Receiver<HandoffResponse> {
+        self.tx.subscribe()
+    }
+
+    fn publish(&self, event: HandoffResponse) {
+        let _ = self.tx.send(event);
+    }
+}
+
 /// Presence entries expire unless refreshed: agents either re-POST `/presence`
 /// within this window or hold the document event stream open (which touches
 /// the entry every [`AGENT_PRESENCE_STREAM_HEARTBEAT`]).
@@ -160,6 +185,10 @@ fn agent_presence_key(library: &str, path: &str, agent_id: &str) -> String {
     format!("{library}\0{path}\0{agent_id}")
 }
 
+fn presence_scope_key(library: Option<&str>) -> &str {
+    library.unwrap_or("__tmp__")
+}
+
 impl AgentPresenceRegistry {
     fn live_entries(&self) -> std::sync::MutexGuard<'_, HashMap<String, AgentPresenceSlot>> {
         let mut entries = self.entries.lock().expect("presence lock poisoned");
@@ -169,7 +198,7 @@ impl AgentPresenceRegistry {
 
     fn update(
         &self,
-        library: &str,
+        library: Option<&str>,
         path: &str,
         document_id: &str,
         agent_id: String,
@@ -177,7 +206,7 @@ impl AgentPresenceRegistry {
         by: Option<String>,
     ) -> AgentPresenceResponse {
         let entry = AgentPresenceEntry {
-            library: library.to_string(),
+            library: library.map(str::to_string),
             path: path.to_string(),
             document_id: document_id.to_string(),
             agent_id,
@@ -185,7 +214,8 @@ impl AgentPresenceRegistry {
             by,
             updated_at: now_timestamp(),
         };
-        let key = agent_presence_key(library, path, &entry.agent_id);
+        let scope = presence_scope_key(library);
+        let key = agent_presence_key(scope, path, &entry.agent_id);
         let mut entries = self.live_entries();
         entries.insert(
             key,
@@ -196,7 +226,7 @@ impl AgentPresenceRegistry {
         );
         let presence = entries
             .values()
-            .filter(|slot| slot.entry.library == library && slot.entry.path == path)
+            .filter(|slot| slot.entry.library.as_deref() == library && slot.entry.path == path)
             .map(|slot| slot.entry.clone())
             .collect();
         AgentPresenceResponse {
@@ -207,12 +237,12 @@ impl AgentPresenceRegistry {
 
     /// Refreshes an entry's TTL without changing its declared status, creating
     /// a `waiting` entry for agents that connect before posting one.
-    fn touch(&self, library: &str, path: &str, document_id: &str, agent_id: &str) {
-        let key = agent_presence_key(library, path, agent_id);
+    fn touch(&self, library: Option<&str>, path: &str, document_id: &str, agent_id: &str) {
+        let key = agent_presence_key(presence_scope_key(library), path, agent_id);
         let mut entries = self.live_entries();
         let slot = entries.entry(key).or_insert_with(|| AgentPresenceSlot {
             entry: AgentPresenceEntry {
-                library: library.to_string(),
+                library: library.map(str::to_string),
                 path: path.to_string(),
                 document_id: document_id.to_string(),
                 agent_id: agent_id.to_string(),
@@ -226,17 +256,17 @@ impl AgentPresenceRegistry {
         slot.touched = tokio::time::Instant::now();
     }
 
-    fn remove(&self, library: &str, path: &str, agent_id: &str) {
-        let key = agent_presence_key(library, path, agent_id);
+    fn remove(&self, library: Option<&str>, path: &str, agent_id: &str) {
+        let key = agent_presence_key(presence_scope_key(library), path, agent_id);
         let mut entries = self.entries.lock().expect("presence lock poisoned");
         entries.remove(&key);
     }
 
-    fn list(&self, library: &str, path: &str) -> AgentPresenceListResponse {
+    fn list(&self, library: Option<&str>, path: &str) -> AgentPresenceListResponse {
         let presence = self
             .live_entries()
             .values()
-            .filter(|slot| slot.entry.library == library && slot.entry.path == path)
+            .filter(|slot| slot.entry.library.as_deref() == library && slot.entry.path == path)
             .map(|slot| slot.entry.clone())
             .collect();
         AgentPresenceListResponse { presence }
@@ -249,7 +279,7 @@ impl AgentPresenceRegistry {
 /// remains the backstop if the drop never runs.
 struct PresenceStreamGuard {
     registry: AgentPresenceRegistry,
-    library: String,
+    library: Option<String>,
     path: String,
     agent_id: String,
     heartbeat: tokio::task::JoinHandle<()>,
@@ -258,19 +288,19 @@ struct PresenceStreamGuard {
 impl PresenceStreamGuard {
     fn open(
         registry: AgentPresenceRegistry,
-        library: String,
+        library: Option<String>,
         path: String,
         document_id: String,
         agent_id: String,
     ) -> Self {
-        registry.touch(&library, &path, &document_id, &agent_id);
+        registry.touch(library.as_deref(), &path, &document_id, &agent_id);
         let heartbeat = tokio::spawn({
             let registry = registry.clone();
             let (library, path, agent_id) = (library.clone(), path.clone(), agent_id.clone());
             async move {
                 loop {
                     tokio::time::sleep(AGENT_PRESENCE_STREAM_HEARTBEAT).await;
-                    registry.touch(&library, &path, &document_id, &agent_id);
+                    registry.touch(library.as_deref(), &path, &document_id, &agent_id);
                 }
             }
         });
@@ -288,7 +318,7 @@ impl Drop for PresenceStreamGuard {
     fn drop(&mut self) {
         self.heartbeat.abort();
         self.registry
-            .remove(&self.library, &self.path, &self.agent_id);
+            .remove(self.library.as_deref(), &self.path, &self.agent_id);
     }
 }
 
@@ -306,6 +336,7 @@ pub fn app_state(store: QuarryStore) -> AppState {
         sessions,
         agent_events,
         agent_presence: AgentPresenceRegistry::default(),
+        handoff_events: HandoffEventBus::default(),
         shutdown,
     }
 }
@@ -341,6 +372,7 @@ pub fn router_with_state(state: AppState) -> Router {
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/openapi.json", get(openapi_json))
         .route("/v1/admin/gc", post(admin_gc));
+    let router = install_collab_routes(router);
     let router = install_tmp_document_routes(router);
     let router = install_library_document_routes(router);
     let router = router.fallback(get(browser_asset));
@@ -350,6 +382,14 @@ pub fn router_with_state(state: AppState) -> Router {
     router.with_state(state)
 }
 
+fn install_collab_routes(router: Router<AppState>) -> Router<AppState> {
+    if !(cfg!(feature = "tmp-documents") || cfg!(feature = "lib-documents")) {
+        return router;
+    }
+
+    router.route("/v1/collab/{document_id}", get(collab_websocket))
+}
+
 fn install_tmp_document_routes(router: Router<AppState>) -> Router<AppState> {
     if !cfg!(feature = "tmp-documents") {
         return router;
@@ -357,14 +397,10 @@ fn install_tmp_document_routes(router: Router<AppState>) -> Router<AppState> {
 
     let tmp_document_route = get(get_tmp_document)
         .head(head_tmp_document)
+        .post(post_tmp_document_action)
         .put(put_tmp_document)
         .patch(patch_tmp_document_action)
         .delete(delete_tmp_document);
-    let tmp_document_route = if cfg!(all(feature = "tmp-documents", feature = "lib-documents")) {
-        tmp_document_route.post(post_tmp_document_action)
-    } else {
-        tmp_document_route
-    };
 
     router
         .route(
@@ -381,7 +417,6 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
 
     router
         .route("/v1/events", get(events))
-        .route("/v1/collab/{document_id}", get(collab_websocket))
         .route("/v1/libraries", get(list_libraries).post(create_library))
         .route("/v1/libraries/{library}", get(get_library))
         .route("/v1/libraries/{library}/documents", get(list_documents))
@@ -774,6 +809,7 @@ fn browser_ui_not_built() -> Response {
         capabilities,
         openapi_json,
         admin_gc,
+        collab_websocket_openapi,
         events,
         create_library,
         list_libraries,
@@ -790,6 +826,15 @@ fn browser_ui_not_built() -> Response {
         tmp_document_version_openapi,
         tmp_document_ttl_openapi,
         tmp_document_promote_openapi,
+        tmp_document_review_openapi,
+        tmp_document_blocks_openapi,
+        tmp_document_block_transactions_openapi,
+        tmp_document_events_stream_openapi,
+        tmp_document_share_openapi,
+        tmp_document_share_create_openapi,
+        tmp_document_handoff_openapi,
+        tmp_agent_presence_list_openapi,
+        tmp_agent_presence_openapi,
         search_documents,
         suggest_documents,
         reindex_library,
@@ -870,6 +915,8 @@ fn browser_ui_not_built() -> Response {
         AgentEventRecord,
         AgentEventsAckRequest,
         AgentEventsAckResponse,
+        HandoffRequest,
+        HandoffResponse,
         gateway::BlockTreeResponse,
         gateway::BlockNodePayload,
         gateway::BlockMarkRunPayload,
@@ -951,13 +998,36 @@ struct AgentDiscoveryAuth {
 
 #[derive(Debug, Serialize)]
 struct AgentDiscoveryRouteHints {
-    presence: String,
-    snapshot: String,
-    blocks: String,
-    transactions: String,
-    review: String,
-    events_stream: String,
-    events_pending: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    blocks: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transactions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    review: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    events_stream: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    events_pending: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tmp_document: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tmp_presence: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tmp_blocks: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tmp_transactions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tmp_review: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tmp_events_stream: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tmp_share: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tmp_handoff: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -979,79 +1049,126 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
     let origin = request_origin(&headers);
     let api_base = format!("{origin}/v1");
     let document_path = "/v1/libraries/{library}/documents/{path}";
+    let tmp_document_path = "/v1/tmp/documents/{path}";
+    let lib_documents_enabled = cfg!(feature = "lib-documents");
+    let tmp_documents_enabled = cfg!(feature = "tmp-documents");
     let mut endpoints = BTreeMap::new();
-    endpoints.insert(
-        "presence",
-        discovery_endpoint(
-            "POST",
-            "/v1/libraries/{library}/documents/{path}/presence",
-            &api_base,
-        ),
-    );
-    endpoints.insert(
-        "presence_list",
-        discovery_endpoint(
-            "GET",
-            "/v1/libraries/{library}/documents/{path}/presence",
-            &api_base,
-        ),
-    );
-    endpoints.insert(
-        "snapshot",
-        discovery_endpoint(
-            "GET",
-            "/v1/libraries/{library}/documents/{path}/snapshot",
-            &api_base,
-        ),
-    );
-    endpoints.insert(
-        "blocks",
-        discovery_endpoint(
-            "GET",
-            "/v1/libraries/{library}/documents/{path}/blocks",
-            &api_base,
-        ),
-    );
-    endpoints.insert(
-        "transactions",
-        discovery_endpoint(
-            "POST",
-            "/v1/libraries/{library}/documents/{path}/transactions",
-            &api_base,
-        ),
-    );
-    endpoints.insert(
-        "review",
-        discovery_endpoint(
-            "GET",
-            "/v1/libraries/{library}/documents/{path}/review",
-            &api_base,
-        ),
-    );
-    endpoints.insert(
-        "document",
-        discovery_endpoint("GET", document_path, &api_base),
-    );
-    endpoints.insert(
-        "events_stream",
-        discovery_endpoint(
-            "GET",
-            "/v1/libraries/{library}/documents/{path}/events/stream",
-            &api_base,
-        ),
-    );
-    endpoints.insert(
-        "events_pending",
-        discovery_endpoint(
-            "GET",
-            "/v1/libraries/{library}/events/pending?after={last-seen-id}",
-            &api_base,
-        ),
-    );
-    endpoints.insert(
-        "events_ack",
-        discovery_endpoint("POST", "/v1/libraries/{library}/events/ack", &api_base),
-    );
+    if lib_documents_enabled {
+        endpoints.insert(
+            "presence",
+            discovery_endpoint(
+                "POST",
+                "/v1/libraries/{library}/documents/{path}/presence",
+                &api_base,
+            ),
+        );
+        endpoints.insert(
+            "presence_list",
+            discovery_endpoint(
+                "GET",
+                "/v1/libraries/{library}/documents/{path}/presence",
+                &api_base,
+            ),
+        );
+        endpoints.insert(
+            "snapshot",
+            discovery_endpoint(
+                "GET",
+                "/v1/libraries/{library}/documents/{path}/snapshot",
+                &api_base,
+            ),
+        );
+        endpoints.insert(
+            "blocks",
+            discovery_endpoint(
+                "GET",
+                "/v1/libraries/{library}/documents/{path}/blocks",
+                &api_base,
+            ),
+        );
+        endpoints.insert(
+            "transactions",
+            discovery_endpoint(
+                "POST",
+                "/v1/libraries/{library}/documents/{path}/transactions",
+                &api_base,
+            ),
+        );
+        endpoints.insert(
+            "review",
+            discovery_endpoint(
+                "GET",
+                "/v1/libraries/{library}/documents/{path}/review",
+                &api_base,
+            ),
+        );
+        endpoints.insert(
+            "document",
+            discovery_endpoint("GET", document_path, &api_base),
+        );
+        endpoints.insert(
+            "events_stream",
+            discovery_endpoint(
+                "GET",
+                "/v1/libraries/{library}/documents/{path}/events/stream",
+                &api_base,
+            ),
+        );
+        endpoints.insert(
+            "events_pending",
+            discovery_endpoint(
+                "GET",
+                "/v1/libraries/{library}/events/pending?after={last-seen-id}",
+                &api_base,
+            ),
+        );
+        endpoints.insert(
+            "events_ack",
+            discovery_endpoint("POST", "/v1/libraries/{library}/events/ack", &api_base),
+        );
+    }
+    if tmp_documents_enabled {
+        endpoints.insert(
+            "tmp_document",
+            discovery_endpoint("GET", tmp_document_path, &api_base),
+        );
+        endpoints.insert(
+            "tmp_presence",
+            discovery_endpoint("POST", "/v1/tmp/documents/{path}/presence", &api_base),
+        );
+        endpoints.insert(
+            "tmp_presence_list",
+            discovery_endpoint("GET", "/v1/tmp/documents/{path}/presence", &api_base),
+        );
+        endpoints.insert(
+            "tmp_blocks",
+            discovery_endpoint("GET", "/v1/tmp/documents/{path}/blocks", &api_base),
+        );
+        endpoints.insert(
+            "tmp_transactions",
+            discovery_endpoint("POST", "/v1/tmp/documents/{path}/transactions", &api_base),
+        );
+        endpoints.insert(
+            "tmp_review",
+            discovery_endpoint("GET", "/v1/tmp/documents/{path}/review", &api_base),
+        );
+        endpoints.insert(
+            "tmp_events_stream",
+            discovery_endpoint("GET", "/v1/tmp/documents/{path}/events/stream", &api_base),
+        );
+        endpoints.insert(
+            "tmp_share",
+            discovery_endpoint("POST", "/v1/tmp/documents/{path}/share", &api_base),
+        );
+        endpoints.insert(
+            "tmp_share_list",
+            discovery_endpoint("GET", "/v1/tmp/documents/{path}/share", &api_base),
+        );
+        endpoints.insert(
+            "tmp_handoff",
+            discovery_endpoint("POST", "/v1/tmp/documents/{path}/handoff", &api_base),
+        );
+    }
     endpoints.insert(
         "openapi",
         discovery_endpoint("GET", "/v1/openapi.json", &api_base),
@@ -1072,6 +1189,37 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
             url: format!("{origin}/quarry.SKILL.md"),
         },
     );
+    let mut capabilities = vec![
+        "presence",
+        "blocks",
+        "transactions",
+        "review",
+        "events",
+        "comments",
+        "suggestions",
+    ];
+    if lib_documents_enabled {
+        capabilities.extend(["library_documents", "snapshot", "events_pending"]);
+    }
+    if tmp_documents_enabled {
+        capabilities.extend(["tmp_documents", "share", "handoff"]);
+    }
+    let library_route = |suffix: &str| {
+        if lib_documents_enabled {
+            Some(format!(
+                "{api_base}/libraries/{{library}}/documents/{{path}}{suffix}"
+            ))
+        } else {
+            None
+        }
+    };
+    let tmp_route = |suffix: &str| {
+        if tmp_documents_enabled {
+            Some(format!("{api_base}/tmp/documents/{{path}}{suffix}"))
+        } else {
+            None
+        }
+    };
     json_response(
         StatusCode::OK,
         &AgentDiscovery {
@@ -1080,16 +1228,7 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
             docs_url: format!("{origin}/agent-docs"),
             skill_url: format!("{origin}/quarry.SKILL.md"),
             openapi_url: format!("{api_base}/openapi.json"),
-            capabilities: vec![
-                "presence",
-                "snapshot",
-                "blocks",
-                "transactions",
-                "review",
-                "events",
-                "comments",
-                "suggestions",
-            ],
+            capabilities,
             auth_note:
                 "Quarry REST agent APIs are trusted-localhost for now; URL tokens identify browser/collab joins and are not enforced as REST bearer auth.",
             auth: AgentDiscoveryAuth {
@@ -1131,17 +1270,31 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
                 "Quarry does not currently support rewrite.apply.",
             ],
             route_hints: AgentDiscoveryRouteHints {
-                presence: format!("{api_base}/libraries/{{library}}/documents/{{path}}/presence"),
-                snapshot: format!("{api_base}/libraries/{{library}}/documents/{{path}}/snapshot"),
-                blocks: format!("{api_base}/libraries/{{library}}/documents/{{path}}/blocks"),
-                transactions: format!(
-                    "{api_base}/libraries/{{library}}/documents/{{path}}/transactions"
-                ),
-                review: format!("{api_base}/libraries/{{library}}/documents/{{path}}/review"),
-                events_stream: format!(
-                    "{api_base}/libraries/{{library}}/documents/{{path}}/events/stream"
-                ),
-                events_pending: format!("{api_base}/libraries/{{library}}/events/pending?after={{last-seen-id}}"),
+                presence: library_route("/presence"),
+                snapshot: library_route("/snapshot"),
+                blocks: library_route("/blocks"),
+                transactions: library_route("/transactions"),
+                review: library_route("/review"),
+                events_stream: library_route("/events/stream"),
+                events_pending: if lib_documents_enabled {
+                    Some(format!(
+                        "{api_base}/libraries/{{library}}/events/pending?after={{last-seen-id}}"
+                    ))
+                } else {
+                    None
+                },
+                tmp_document: if tmp_documents_enabled {
+                    Some(format!("{api_base}/tmp/documents/{{path}}"))
+                } else {
+                    None
+                },
+                tmp_presence: tmp_route("/presence"),
+                tmp_blocks: tmp_route("/blocks"),
+                tmp_transactions: tmp_route("/transactions"),
+                tmp_review: tmp_route("/review"),
+                tmp_events_stream: tmp_route("/events/stream"),
+                tmp_share: tmp_route("/share"),
+                tmp_handoff: tmp_route("/handoff"),
             },
             endpoints,
         },
@@ -1205,11 +1358,23 @@ fn openapi_path_enabled(path: &str) -> bool {
         return cfg!(feature = "tmp-documents")
             && (path != "/v1/tmp/documents/{path}/promote" || cfg!(feature = "lib-documents"));
     }
-    if path == "/v1/events" || path.starts_with("/v1/libraries") || path.starts_with("/v1/collab") {
+    if path.starts_with("/v1/collab") {
+        return cfg!(feature = "tmp-documents") || cfg!(feature = "lib-documents");
+    }
+    if path == "/v1/events" || path.starts_with("/v1/libraries") {
         return cfg!(feature = "lib-documents");
     }
     true
 }
+
+#[utoipa::path(
+    get,
+    path = "/v1/collab/{document_id}",
+    params(("document_id" = String, Path)),
+    responses((status = 101, description = "Yjs collaboration websocket"))
+)]
+#[allow(dead_code)]
+async fn collab_websocket_openapi() {}
 
 async fn collab_websocket(
     State(state): State<AppState>,
@@ -1370,6 +1535,164 @@ async fn events_for_library(
             .interval(Duration::from_secs(15))
             .text("keepalive"),
     ))
+}
+
+async fn events_for_tmp_document(
+    store: &QuarryStore,
+    handoff_events: HandoffEventBus,
+    document_path: String,
+    presence_guard: Option<PresenceStreamGuard>,
+    shutdown: CancellationToken,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    tracing::debug!(
+        event = "sse.stream.opened",
+        scope = "tmp",
+        path = %document_path,
+        "tmp SSE stream opened"
+    );
+    let store_receiver = store.subscribe_events();
+    let handoff_receiver = handoff_events.subscribe();
+    let stream = stream::unfold(
+        (
+            store_receiver,
+            handoff_receiver,
+            document_path,
+            presence_guard,
+            shutdown,
+        ),
+        |(mut store_receiver, mut handoff_receiver, document_path, presence_guard, shutdown)| async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => {
+                        tracing::debug!(
+                            event = "sse.stream.closed",
+                            scope = "tmp",
+                            path = %document_path,
+                            reason_code = "shutdown",
+                            "tmp SSE stream closed for shutdown"
+                        );
+                        return None;
+                    }
+                    received = handoff_receiver.recv() => {
+                        match received {
+                            Ok(handoff) if handoff.path == document_path => {
+                                let event_type = handoff.event.clone();
+                                let payload = handoff_event_payload(&handoff);
+                                let event = Event::default().event(event_type).data(payload.to_string());
+                                return Some((
+                                    Ok(event),
+                                    (
+                                        store_receiver,
+                                        handoff_receiver,
+                                        document_path,
+                                        presence_guard,
+                                        shutdown,
+                                    ),
+                                ));
+                            }
+                            Ok(_) => continue,
+                            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                                tracing::warn!(
+                                    event = "sse.stream.lagged",
+                                    scope = "tmp",
+                                    stream = "handoff",
+                                    skipped,
+                                    "tmp handoff SSE stream lagged"
+                                );
+                                let event_type = "stream.lagged".to_string();
+                                let payload = serde_json::json!({
+                                    "type": event_type,
+                                    "library": "tmp",
+                                    "stream": "handoff",
+                                    "skipped": skipped
+                                });
+                                let event = Event::default().event(event_type).data(payload.to_string());
+                                return Some((
+                                    Ok(event),
+                                    (
+                                        store_receiver,
+                                        handoff_receiver,
+                                        document_path,
+                                        presence_guard,
+                                        shutdown,
+                                    ),
+                                ));
+                            }
+                            Err(broadcast::error::RecvError::Closed) => return None,
+                        }
+                    }
+                    received = store_receiver.recv() => {
+                        match received {
+                            Ok(store_event)
+                                if store_event.library_id == DocumentScopeRef::Tmp.event_library_id()
+                                    && event_matches_document_filter(&store_event, Some(&document_path)) =>
+                            {
+                                let event_type = store_event_type(&store_event);
+                                let payload = store_event_payload("tmp", &event_type, &store_event);
+                                let event = Event::default().event(event_type).data(payload.to_string());
+                                return Some((
+                                    Ok(event),
+                                    (
+                                        store_receiver,
+                                        handoff_receiver,
+                                        document_path,
+                                        presence_guard,
+                                        shutdown,
+                                    ),
+                                ));
+                            }
+                            Ok(_) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                                tracing::warn!(
+                                    event = "sse.stream.lagged",
+                                    scope = "tmp",
+                                    skipped,
+                                    "tmp SSE stream lagged"
+                                );
+                                let event_type = "stream.lagged".to_string();
+                                let payload = serde_json::json!({
+                                    "type": event_type,
+                                    "library": "tmp",
+                                    "skipped": skipped
+                                });
+                                let event = Event::default().event(event_type).data(payload.to_string());
+                                return Some((
+                                    Ok(event),
+                                    (
+                                        store_receiver,
+                                        handoff_receiver,
+                                        document_path,
+                                        presence_guard,
+                                        shutdown,
+                                    ),
+                                ));
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+                        }
+                    }
+                }
+            }
+        },
+    );
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keepalive"),
+    ))
+}
+
+fn handoff_event_payload(handoff: &HandoffResponse) -> JsonValue {
+    let mut payload = serde_json::to_value(handoff).unwrap_or_else(|_| {
+        serde_json::json!({
+            "event": "handoff.requested",
+            "path": handoff.path,
+        })
+    });
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("type".to_string(), JsonValue::from(handoff.event.clone()));
+    }
+    payload
 }
 
 fn event_matches_document_filter(event: &StoreEvent, document_path: Option<&str>) -> bool {
@@ -1584,7 +1907,7 @@ pub struct AgentPresenceRequest {
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct AgentPresenceEntry {
-    pub library: String,
+    pub library: Option<String>,
     pub path: String,
     #[serde(rename = "documentId")]
     pub document_id: String,
@@ -1613,6 +1936,36 @@ pub struct CreateCollabInviteRequest {
     pub role: String,
     #[serde(default, rename = "byHint")]
     pub by_hint: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, ToSchema)]
+pub struct HandoffRequest {
+    #[serde(rename = "senderDisplayName")]
+    pub sender_display_name: String,
+    #[serde(rename = "clientSessionId")]
+    pub client_session_id: String,
+    #[serde(default, rename = "checkpointVersionId")]
+    pub checkpoint_version_id: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct HandoffResponse {
+    pub event: String,
+    #[serde(rename = "documentId")]
+    pub document_id: String,
+    pub path: String,
+    #[serde(rename = "senderDisplayName")]
+    pub sender_display_name: String,
+    #[serde(rename = "clientSessionId")]
+    pub client_session_id: String,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        rename = "checkpointVersionId"
+    )]
+    pub checkpoint_version_id: Option<String>,
+    pub message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1908,8 +2261,51 @@ async fn create_tmp_document(
 )]
 async fn get_tmp_document(
     State(state): State<AppState>,
+    Query(query): Query<DocumentReviewQuery>,
     Path(path): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    if let Some(path) = path.strip_suffix("/blocks") {
+        return gateway::tmp_document_blocks(&state, path).await;
+    }
+    if let Some(path) = path.strip_suffix("/review") {
+        let include_resolved = query.include_resolved()?;
+        return json_response(
+            StatusCode::OK,
+            &agent_tmp_document_review(&state.store, path, include_resolved).await?,
+        );
+    }
+    if let Some(path) = path.strip_suffix("/presence") {
+        state.store.head_tmp_document(path).await?;
+        return json_response(StatusCode::OK, &state.agent_presence.list(None, path));
+    }
+    if let Some(path) = path.strip_suffix("/events/stream") {
+        let document = state.store.head_tmp_document(path).await?;
+        let presence_guard = optional_header(&headers, "x-agent-id")?.map(|agent_id| {
+            PresenceStreamGuard::open(
+                state.agent_presence.clone(),
+                None,
+                path.to_string(),
+                document.id,
+                agent_id,
+            )
+        });
+        return Ok(events_for_tmp_document(
+            &state.store,
+            state.handoff_events.clone(),
+            path.to_string(),
+            presence_guard,
+            state.shutdown_token(),
+        )
+        .await?
+        .into_response());
+    }
+    if let Some(path) = path.strip_suffix("/share") {
+        return json_response(
+            StatusCode::OK,
+            &state.store.tmp_collab_invite_tokens(path).await?,
+        );
+    }
     if let Some(path) = path.strip_suffix("/versions/raw") {
         return json_response(
             StatusCode::OK,
@@ -2038,21 +2434,60 @@ async fn patch_tmp_document_action(
 
 async fn post_tmp_document_action(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(path): Path<String>,
-    Json(request): Json<PromoteTmpDocumentRequest>,
+    Json(request): Json<JsonValue>,
 ) -> Result<Response, ApiError> {
-    let Some(path) = path.strip_suffix("/promote") else {
-        return Err(QuarryError::NotFound(path).into());
-    };
-    let precondition = request
-        .if_match
-        .map(WritePrecondition::IfMatch)
-        .unwrap_or(WritePrecondition::None);
-    let entry = state
-        .store
-        .promote_tmp_document(path, &request.library, &request.path, precondition)
-        .await?;
-    json_response(StatusCode::OK, &entry)
+    if let Some(path) = path.strip_suffix("/transactions") {
+        return gateway::tmp_document_block_transactions(&state, path, request).await;
+    }
+
+    if let Some(path) = path.strip_suffix("/presence") {
+        let request: AgentPresenceRequest = serde_json::from_value(request).map_err(|error| {
+            QuarryError::InvalidPath(format!("invalid presence request: {error}"))
+        })?;
+        let response = agent_presence_tmp_document(&state, &headers, path, request).await?;
+        return json_response(StatusCode::OK, &response);
+    }
+
+    if let Some(path) = path.strip_suffix("/share") {
+        let request: CreateCollabInviteRequest = serde_json::from_value(request)
+            .map_err(|error| QuarryError::InvalidPath(format!("invalid share request: {error}")))?;
+        let token = state
+            .store
+            .create_tmp_collab_invite_token(path, &request.role, request.by_hint)
+            .await?;
+        return json_response(StatusCode::CREATED, &token);
+    }
+
+    if let Some(path) = path.strip_suffix("/handoff") {
+        let request: HandoffRequest = serde_json::from_value(request).map_err(|error| {
+            QuarryError::InvalidPath(format!("invalid handoff request: {error}"))
+        })?;
+        let response = handoff_tmp_document(&state, path, request).await?;
+        return json_response(StatusCode::ACCEPTED, &response);
+    }
+
+    if let Some(path) = path.strip_suffix("/promote") {
+        if !cfg!(feature = "lib-documents") {
+            return Err(QuarryError::NotFound(path.to_string()).into());
+        }
+        let request: PromoteTmpDocumentRequest =
+            serde_json::from_value(request).map_err(|error| {
+                QuarryError::InvalidPath(format!("invalid promote request: {error}"))
+            })?;
+        let precondition = request
+            .if_match
+            .map(WritePrecondition::IfMatch)
+            .unwrap_or(WritePrecondition::None);
+        let entry = state
+            .store
+            .promote_tmp_document(path, &request.library, &request.path, precondition)
+            .await?;
+        return json_response(StatusCode::OK, &entry);
+    }
+
+    Err(QuarryError::NotFound(path).into())
 }
 
 #[utoipa::path(
@@ -2101,6 +2536,101 @@ async fn tmp_document_ttl_openapi() {}
 )]
 #[allow(dead_code)]
 async fn tmp_document_promote_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{path}/review",
+    params(("path" = String, Path), ("includeResolved" = Option<DryRunValue>, Query)),
+    responses((status = 200, body = AgentReviewResponse), (status = 404, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn tmp_document_review_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{path}/blocks",
+    params(("path" = String, Path)),
+    responses(
+        (status = 200, body = gateway::BlockTreeResponse),
+        (status = 404, body = ErrorResponse),
+        (status = 422, body = gateway::BlockTransactionError)
+    )
+)]
+#[allow(dead_code)]
+async fn tmp_document_blocks_openapi() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/tmp/documents/{path}/transactions",
+    params(("path" = String, Path)),
+    request_body = gateway::BlockTransactionRequest,
+    responses(
+        (status = 200, body = gateway::BlockTransactionAck),
+        (status = 400, body = gateway::BlockTransactionError),
+        (status = 404, body = gateway::BlockTransactionError),
+        (status = 412, body = gateway::BlockTransactionError),
+        (status = 422, body = gateway::BlockTransactionError)
+    )
+)]
+#[allow(dead_code)]
+async fn tmp_document_block_transactions_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{path}/events/stream",
+    params(("path" = String, Path)),
+    responses((status = 200, description = "Tmp document-scoped server-sent event stream"), (status = 404, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn tmp_document_events_stream_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{path}/share",
+    params(("path" = String, Path)),
+    responses((status = 200, body = [CollabInviteToken]), (status = 404, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn tmp_document_share_openapi() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/tmp/documents/{path}/share",
+    params(("path" = String, Path)),
+    request_body = CreateCollabInviteRequest,
+    responses((status = 201, body = CollabInviteToken), (status = 404, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn tmp_document_share_create_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{path}/presence",
+    params(("path" = String, Path)),
+    responses((status = 200, body = AgentPresenceListResponse), (status = 404, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn tmp_agent_presence_list_openapi() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/tmp/documents/{path}/presence",
+    params(("path" = String, Path)),
+    request_body = AgentPresenceRequest,
+    responses((status = 200, body = AgentPresenceResponse), (status = 404, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn tmp_agent_presence_openapi() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/tmp/documents/{path}/handoff",
+    params(("path" = String, Path)),
+    request_body = HandoffRequest,
+    responses((status = 202, body = HandoffResponse), (status = 404, body = ErrorResponse), (status = 412, body = ErrorResponse))
+)]
+#[allow(dead_code)]
+async fn tmp_document_handoff_openapi() {}
 
 #[utoipa::path(
     get,
@@ -2232,14 +2762,17 @@ async fn get_document(
     }
     if let Some(path) = path.strip_suffix("/presence") {
         state.store.head_document(&library, path).await?;
-        return json_response(StatusCode::OK, &state.agent_presence.list(&library, path));
+        return json_response(
+            StatusCode::OK,
+            &state.agent_presence.list(Some(&library), path),
+        );
     }
     if let Some(path) = path.strip_suffix("/events/stream") {
         let document = state.store.head_document(&library, path).await?;
         let presence_guard = optional_header(&headers, "x-agent-id")?.map(|agent_id| {
             PresenceStreamGuard::open(
                 state.agent_presence.clone(),
-                library.clone(),
+                Some(library.clone()),
                 path.to_string(),
                 document.id,
                 agent_id,
@@ -2766,13 +3299,59 @@ async fn agent_presence_document(
     let agent_id = agent_id_from_headers_or_body(headers, request.agent_id.as_deref())?;
     let status = normalized_agent_status(&request.status)?;
     Ok(state.agent_presence.update(
-        library,
+        Some(library),
         path,
         &document.id,
         agent_id,
         status,
         request.by.filter(|by| !by.trim().is_empty()),
     ))
+}
+
+async fn agent_presence_tmp_document(
+    state: &AppState,
+    headers: &HeaderMap,
+    path: &str,
+    request: AgentPresenceRequest,
+) -> Result<AgentPresenceResponse, ApiError> {
+    let document = state.store.head_tmp_document(path).await?;
+    let agent_id = agent_id_from_headers_or_body(headers, request.agent_id.as_deref())?;
+    let status = normalized_agent_status(&request.status)?;
+    Ok(state.agent_presence.update(
+        None,
+        path,
+        &document.id,
+        agent_id,
+        status,
+        request.by.filter(|by| !by.trim().is_empty()),
+    ))
+}
+
+async fn handoff_tmp_document(
+    state: &AppState,
+    path: &str,
+    request: HandoffRequest,
+) -> Result<HandoffResponse, ApiError> {
+    let document = state.store.head_tmp_document(path).await?;
+    if let Some(version_id) = request.checkpoint_version_id.as_deref() {
+        if version_id != document.head_version_id {
+            return Err(QuarryError::PreconditionFailed(format!(
+                "handoff checkpoint {version_id} is not the current tmp document head"
+            ))
+            .into());
+        }
+    }
+    let response = HandoffResponse {
+        event: "handoff.requested".to_string(),
+        document_id: document.id,
+        path: path.to_string(),
+        sender_display_name: request.sender_display_name,
+        client_session_id: request.client_session_id,
+        checkpoint_version_id: request.checkpoint_version_id,
+        message: request.message.unwrap_or_else(|| "I'm done".to_string()),
+    };
+    state.handoff_events.publish(response.clone());
+    Ok(response)
 }
 
 async fn agent_document_snapshot(
@@ -2798,6 +3377,23 @@ async fn agent_document_review(
     include_resolved: bool,
 ) -> Result<AgentReviewResponse, ApiError> {
     let document = store.get_document(library, path).await?;
+    agent_document_review_from_document(store, document, include_resolved).await
+}
+
+async fn agent_tmp_document_review(
+    store: &QuarryStore,
+    path: &str,
+    include_resolved: bool,
+) -> Result<AgentReviewResponse, ApiError> {
+    let document = store.get_tmp_document(path).await?;
+    agent_document_review_from_document(store, document, include_resolved).await
+}
+
+async fn agent_document_review_from_document(
+    store: &QuarryStore,
+    document: quarry_core::Document,
+    include_resolved: bool,
+) -> Result<AgentReviewResponse, ApiError> {
     // Documents with canonical block rows project review items from
     // `block_review_items` (the Phase 2 rows-backed projection); documents
     // without rows keep the legacy CriticMarkup/endmatter projection.
@@ -3871,7 +4467,7 @@ mod tests {
         assert_eq!(
             state
                 .agent_presence
-                .list("doc-sse-shutdown", "live.md")
+                .list(Some("doc-sse-shutdown"), "live.md")
                 .presence
                 .len(),
             1
@@ -3888,7 +4484,7 @@ mod tests {
         assert_eq!(
             state
                 .agent_presence
-                .list("doc-sse-shutdown", "live.md")
+                .list(Some("doc-sse-shutdown"), "live.md")
                 .presence
                 .len(),
             0

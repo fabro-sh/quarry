@@ -1,14 +1,18 @@
+type AgentDocumentScope = 'library' | 'tmp';
+
 interface TokenizedDocumentUrlParams {
   origin: string;
-  library: string;
+  library?: string;
   path: string;
+  scope?: AgentDocumentScope;
   token: string;
 }
 
 interface AddAgentPromptParams {
   origin: string;
-  library: string;
+  library?: string;
   path: string;
+  scope?: AgentDocumentScope;
   tokenizedDocUrl: string;
 }
 
@@ -18,13 +22,23 @@ export function workspaceRouteForDocument(library: string, path: string) {
   return `${libraryPath}/documents/${pathSegments(path)}`;
 }
 
+export function tmpWorkspaceRouteForDocument(path: string) {
+  if (!path) return '/tmp';
+  return `/tmp/${pathSegments(path)}`;
+}
+
 export function buildTokenizedDocumentUrl({
   origin,
   library,
   path,
+  scope = 'library',
   token,
 }: TokenizedDocumentUrlParams) {
-  const url = new URL(workspaceRouteForDocument(library, path), normalizedOrigin(origin));
+  const route =
+    scope === 'tmp'
+      ? tmpWorkspaceRouteForDocument(path)
+      : workspaceRouteForDocument(requiredLibrary(library), path);
+  const url = new URL(route, normalizedOrigin(origin));
   url.searchParams.set('token', token);
   return url.toString();
 }
@@ -33,14 +47,27 @@ export function buildAddAgentPrompt({
   origin,
   library,
   path,
+  scope = 'library',
   tokenizedDocUrl,
 }: AddAgentPromptParams) {
   const apiBase = `${normalizedOrigin(origin)}/v1`;
-  const librarySegment = encodeURIComponent(library);
   const documentPath = pathSegments(path);
-  const documentApi = `${apiBase}/libraries/${librarySegment}/documents/${documentPath}`;
-  const libraryApi = `${apiBase}/libraries/${librarySegment}`;
+  const libraryName = scope === 'library' ? requiredLibrary(library) : '';
+  const librarySegment = scope === 'library' ? encodeURIComponent(libraryName) : '';
+  const documentApi =
+    scope === 'tmp'
+      ? `${apiBase}/tmp/documents/${documentPath}`
+      : `${apiBase}/libraries/${librarySegment}/documents/${documentPath}`;
+  const pendingApi =
+    scope === 'tmp'
+      ? null
+      : `${apiBase}/libraries/${librarySegment}/events/pending?after=<last-seen-id>`;
   const discoveryOrigin = normalizedOrigin(origin);
+  const scopeLine = scope === 'tmp' ? 'Scope: tmp document' : `Library: ${libraryName}`;
+  const fallbackMonitoring =
+    pendingApi === null
+      ? '   If you cannot keep a stream open, re-POST presence at least once per minute while active (presence expires after 60 seconds).'
+      : `   If you cannot keep a stream open, poll GET ${pendingApi} and re-POST ${documentApi}/presence at least once per minute while active (presence expires after 60 seconds).`;
 
   return `Quarry is a local-first collaborative Markdown editor with presence, comments, suggestions, and block edit APIs.
 
@@ -50,7 +77,7 @@ ${tokenizedDocUrl}
 Quarry local REST APIs are trusted-localhost for now. The token in the URL identifies the shared document for browser/collab join, but REST agent endpoints on this host do not currently enforce bearer-token auth.
 
 API base: ${apiBase}
-Library: ${library}
+${scopeLine}
 Document path: ${path}
 
 1. Register presence first.
@@ -79,7 +106,7 @@ Document path: ${path}
 
 5. While working, monitor document activity.
    Prefer GET ${documentApi}/events/stream with header X-Agent-Id: <agent-id> — the open stream also keeps your presence fresh.
-   If you cannot keep a stream open, poll GET ${libraryApi}/events/pending?after=<last-seen-id> and re-POST ${documentApi}/presence at least once per minute while active (presence expires after 60 seconds).
+${fallbackMonitoring}
    When an event arrives, re-read the block tree before replying or editing.
 
 6. Do not edit until the user gives further instructions.
@@ -92,6 +119,11 @@ Document path: ${path}
 
 function normalizedOrigin(origin: string) {
   return origin.replace(/\/+$/, '');
+}
+
+function requiredLibrary(library?: string) {
+  if (!library) throw new Error('library is required for library document agent prompts');
+  return library;
 }
 
 function pathSegments(path: string) {

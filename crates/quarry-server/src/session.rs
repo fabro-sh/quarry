@@ -97,7 +97,7 @@ use quarry_collab_codec::{
 use quarry_core::{now_timestamp, render_markdown_frontmatter, QuarryError, WriteOutcome};
 use quarry_storage::{
     BlockMutationCommit, BlockMutationOutcome, BlockReviewItem, BlockReviewKind, BlockReviewState,
-    QuarryStore,
+    DocumentScopeRef, QuarryStore,
 };
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
@@ -337,7 +337,7 @@ impl SessionHub {
 
 pub(crate) struct LiveSession {
     pub(crate) document_id: String,
-    library_slug: String,
+    scope: DocumentScopeRef,
     awareness: AwarenessRef,
     broadcast_tx: broadcast::Sender<Vec<u8>>,
     _doc_sub: yrs::Subscription,
@@ -461,7 +461,7 @@ impl LiveSession {
 
         let session = Arc::new(LiveSession {
             document_id: document_id.to_string(),
-            library_slug: seed.library_slug.clone(),
+            scope: seed.scope.clone(),
             awareness,
             broadcast_tx,
             _doc_sub: doc_sub,
@@ -508,7 +508,7 @@ impl LiveSession {
         tracing::debug!(
             event = "collab.session.seeded",
             %document_id,
-            library = %seed.library_slug,
+            scope = %session.scope_label(),
             path = %seed.path,
             head_version_id = %seed.head_version_id,
             blocks = seed.rows.len(),
@@ -520,6 +520,13 @@ impl LiveSession {
 
     pub(crate) fn awareness(&self) -> &AwarenessRef {
         &self.awareness
+    }
+
+    fn scope_label(&self) -> String {
+        match &self.scope {
+            DocumentScopeRef::Library { slug } => format!("library:{slug}"),
+            DocumentScopeRef::Tmp => "tmp".to_string(),
+        }
     }
 
     pub(crate) fn subscribe_broadcast(&self) -> broadcast::Receiver<Vec<u8>> {
@@ -645,7 +652,7 @@ impl LiveSession {
                 normalized_markdown: normalized,
             };
             match store
-                .commit_block_mutation(&self.library_slug, commit)
+                .commit_block_mutation_for_scope(&self.scope, commit)
                 .await
             {
                 Ok(BlockMutationOutcome::Applied { outcome, .. }) => {

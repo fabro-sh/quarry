@@ -84,7 +84,7 @@ export interface GitExportResult {
 }
 
 export interface AgentPresenceEntry {
-  library: string;
+  library: string | null;
   path: string;
   documentId: string;
   agentId: string;
@@ -95,6 +95,23 @@ export interface AgentPresenceEntry {
 
 export interface AgentPresenceListResponse {
   presence: AgentPresenceEntry[];
+}
+
+export interface HandoffRequest {
+  senderDisplayName: string;
+  clientSessionId: string;
+  checkpointVersionId?: string;
+  message?: string;
+}
+
+export interface HandoffResponse {
+  event: 'handoff.requested';
+  documentId: string;
+  path: string;
+  senderDisplayName: string;
+  clientSessionId: string;
+  checkpointVersionId?: string;
+  message: string;
 }
 
 export class ApiError extends Error {
@@ -321,10 +338,23 @@ export const createCollabInvite = (
     body: JSON.stringify({ byHint: request.byHint, role: request.role ?? 'editor' }),
   });
 
+export const createTmpCollabInvite = (
+  path: string,
+  request: { byHint?: string; role?: 'editor' | 'viewer' } = {}
+) =>
+  jsonRequest<CollabInviteToken>(`/v1/tmp/documents/${pathSegments(path)}/share`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ byHint: request.byHint, role: request.role ?? 'editor' }),
+  });
+
 export const listAgentPresence = (library: string, path: string) =>
   jsonRequest<AgentPresenceListResponse>(
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/presence`
   );
+
+export const listTmpAgentPresence = (path: string) =>
+  jsonRequest<AgentPresenceListResponse>(`/v1/tmp/documents/${pathSegments(path)}/presence`);
 
 export const searchDocuments = (library: string, query: string) =>
   jsonRequest<SearchResponse>(
@@ -431,6 +461,9 @@ export const getDocumentBlocks = (library: string, path: string) =>
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/blocks`
   );
 
+export const getTmpDocumentBlocks = (path: string) =>
+  jsonRequest<BlockTreeResponse>(`/v1/tmp/documents/${pathSegments(path)}/blocks`);
+
 // The rows-backed review projection: comments and suggestions with their
 // row anchors and states (open/resolved/orphaned/invalidated), plus diff3
 // conflict review items. Resolved items are included so the Comments panel
@@ -439,6 +472,9 @@ export const getDocumentReview = (library: string, path: string) =>
   jsonRequest<AgentReviewResponse>(
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/review?includeResolved=1`
   );
+
+export const getTmpDocumentReview = (path: string) =>
+  jsonRequest<AgentReviewResponse>(`/v1/tmp/documents/${pathSegments(path)}/review?includeResolved=1`);
 
 // Submits one semantic block transaction. Non-2xx responses with the gateway's
 // typed `{code, retryable, message}` body throw BlockTransactionError; other
@@ -456,24 +492,49 @@ export async function postBlockTransaction(
       body: JSON.stringify(request),
     }
   );
-  if (!response.ok) {
-    const payload = await readErrorPayload(response);
-    if (isBlockTransactionFailure(payload)) {
-      throw new BlockTransactionError(
-        payload.message,
-        response.status,
-        payload.code,
-        payload.retryable,
-        payload
-      );
-    }
-    const message =
-      payload && typeof payload === 'object' && 'error' in payload
-        ? String(payload.error)
-        : response.statusText;
-    throw new ApiError(message, response.status, payload);
+  return readBlockTransactionResponse(response);
+}
+
+export async function postTmpBlockTransaction(
+  path: string,
+  request: BlockTransactionRequest
+): Promise<BlockTransactionAck> {
+  const response = await fetch(`/v1/tmp/documents/${pathSegments(path)}/transactions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  return readBlockTransactionResponse(response);
+}
+
+export async function postTmpHandoff(
+  path: string,
+  request: HandoffRequest
+): Promise<HandoffResponse> {
+  return jsonRequest<HandoffResponse>(`/v1/tmp/documents/${pathSegments(path)}/handoff`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+}
+
+async function readBlockTransactionResponse(response: Response): Promise<BlockTransactionAck> {
+  if (response.ok) return (await response.json()) as BlockTransactionAck;
+  const payload = await readErrorPayload(response);
+  if (isBlockTransactionFailure(payload)) {
+    throw new BlockTransactionError(
+      payload.message,
+      response.status,
+      payload.code,
+      payload.retryable,
+      payload
+    );
   }
-  return (await response.json()) as BlockTransactionAck;
+  const message =
+    payload && typeof payload === 'object' && 'error' in payload
+      ? String(payload.error)
+      : response.statusText;
+  throw new ApiError(message, response.status, payload);
 }
 
 function isBlockTransactionFailure(

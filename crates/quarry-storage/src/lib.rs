@@ -4,7 +4,7 @@ pub use blocks::{
     document_kind, BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockMarkdownWriter,
     BlockMutationCommit, BlockMutationOutcome, BlockMutationState, BlockReviewItem,
     BlockReviewKind, BlockReviewState, BlockShadowBase, BlockTransactionRecord, BlockWriteBase,
-    DocumentKind, NewBlockReviewItem, SessionSeedState,
+    DocumentKind, DocumentScopeRef, NewBlockReviewItem, SessionSeedState,
 };
 /// Re-exported because the store's block APIs speak it.
 pub use quarry_collab_codec::BlockRow;
@@ -1356,6 +1356,50 @@ impl QuarryStore {
         finish_tx(&conn, result).await
     }
 
+    pub async fn create_tmp_collab_invite_token(
+        &self,
+        path: &str,
+        role: &str,
+        by_hint: Option<String>,
+    ) -> Result<CollabInviteToken> {
+        let role = normalize_collab_invite_role(role)?;
+        let path = normalize_path(path)?;
+        let _guard = self.acquire_write_lock().await;
+        let conn = self.conn()?;
+        begin_immediate(&conn).await?;
+        let result = async {
+            let (document_id, _) = self
+                .tmp_document_identity_conn(&conn, &path)
+                .await?
+                .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+            let token = CollabInviteToken {
+                id: Uuid::new_v4().to_string(),
+                document_id,
+                role,
+                by_hint: by_hint.filter(|value| !value.trim().is_empty()),
+                created_at: now_timestamp(),
+                revoked_at: None,
+            };
+            conn.execute(
+                "INSERT INTO collab_invite_tokens
+                 (id, document_id, role, by_hint, created_at, revoked_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+                vec![
+                    Value::Text(token.id.clone()),
+                    Value::Text(token.document_id.clone()),
+                    Value::Text(token.role.clone()),
+                    opt_value(token.by_hint.clone()),
+                    Value::Text(token.created_at.clone()),
+                ],
+            )
+            .await
+            .map_err(map_turso_error)?;
+            Ok(token)
+        }
+        .await;
+        finish_tx(&conn, result).await
+    }
+
     pub async fn collab_invite_tokens(
         &self,
         library: &str,
@@ -1366,6 +1410,17 @@ impl QuarryStore {
         let library = self.require_library_conn(&conn, library).await?;
         let (document_id, _) = self
             .document_identity_conn(&conn, &library.id, &path)
+            .await?
+            .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+        self.collab_invite_tokens_for_document_conn(&conn, &document_id)
+            .await
+    }
+
+    pub async fn tmp_collab_invite_tokens(&self, path: &str) -> Result<Vec<CollabInviteToken>> {
+        let path = normalize_path(path)?;
+        let conn = self.conn()?;
+        let (document_id, _) = self
+            .tmp_document_identity_conn(&conn, &path)
             .await?
             .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
         self.collab_invite_tokens_for_document_conn(&conn, &document_id)

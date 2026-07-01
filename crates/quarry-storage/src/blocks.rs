@@ -48,6 +48,32 @@ pub enum DocumentKind {
     RawDocument,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DocumentScopeRef {
+    Library { slug: String },
+    Tmp,
+}
+
+impl DocumentScopeRef {
+    pub fn library(slug: impl Into<String>) -> Self {
+        Self::Library { slug: slug.into() }
+    }
+
+    pub fn event_library_id(&self) -> &str {
+        match self {
+            Self::Library { slug } => slug,
+            Self::Tmp => TMP_TRANSACTION_LIBRARY_ID,
+        }
+    }
+
+    pub fn library_slug(&self) -> Option<&str> {
+        match self {
+            Self::Library { slug } => Some(slug),
+            Self::Tmp => None,
+        }
+    }
+}
+
 pub fn document_kind(path: &str, content_type: &str) -> DocumentKind {
     let path = path.to_ascii_lowercase();
     if path.ends_with(".md")
@@ -327,7 +353,7 @@ pub struct BlockMutationCommit {
 #[derive(Clone, Debug)]
 pub struct SessionSeedState {
     pub document_id: String,
-    pub library_slug: String,
+    pub scope: DocumentScopeRef,
     pub path: String,
     pub head_version_id: String,
     pub content_type: String,
@@ -548,6 +574,93 @@ impl QuarryStore {
         let outcome = finish_tx(&conn, result).await?;
         self.emit_document_put_events(&outcome, origin_id);
         Ok(outcome)
+    }
+
+    pub async fn import_tmp_block_document(
+        &self,
+        path: &str,
+        markdown: &str,
+        metadata: JsonValue,
+        content_type: &str,
+        precondition: WritePrecondition,
+    ) -> Result<WriteOutcome> {
+        let path = normalize_path(path)?;
+        if document_kind(&path, content_type) == DocumentKind::RawDocument {
+            return Err(QuarryError::Unsupported(format!(
+                "cannot import {path} ({content_type}) as a block document"
+            )));
+        }
+        let (frontmatter, body) = split_markdown_frontmatter(markdown)?;
+        let rows = canonical_rows(markdown_to_block_rows(body, || Uuid::new_v4().to_string())?);
+        let mut merged_metadata = frontmatter;
+        merge_json(&mut merged_metadata, metadata.clone());
+        let normalized = format!(
+            "{}{}",
+            render_markdown_frontmatter(&merged_metadata)?,
+            block_rows_to_markdown(&rows)?
+        );
+
+        let _operation_guard = self.normal_write_gate().await;
+        let _guard = self.acquire_write_lock().await;
+        let conn = self.conn()?;
+        begin_immediate(&conn).await?;
+        let result = async {
+            self.check_tmp_precondition_conn(&conn, &path, &precondition)
+                .await?;
+            let expires_at = self
+                .tmp_document_expires_at_conn(&conn, &path)
+                .await?
+                .unwrap_or_else(default_tmp_expires_at);
+            let tx = insert_transaction_conn(
+                &conn,
+                TMP_TRANSACTION_LIBRARY_ID,
+                DocumentSource::Rest,
+                None,
+                None,
+                serde_json::json!({ "mode": "tmp_block_import" }),
+            )
+            .await?;
+            let (doc_id, old_version_id) =
+                ensure_tmp_document_conn(&conn, &path, &expires_at, &now_timestamp()).await?;
+            let version = self
+                .insert_version_conn(
+                    &conn,
+                    &doc_id,
+                    &tx.id,
+                    normalized.into_bytes(),
+                    metadata,
+                    content_type,
+                )
+                .await?;
+            insert_change_conn(
+                &conn,
+                &tx.id,
+                &path,
+                ChangeType::Put,
+                old_version_id.as_deref(),
+                Some(&version.id),
+                None,
+            )
+            .await?;
+            publish_put_conn(&conn, &doc_id, &version.id).await?;
+            replace_block_rows_conn(&conn, &doc_id, &rows).await?;
+            conn.execute(
+                "UPDATE documents SET expires_at = ?1 WHERE id = ?2",
+                params![expires_at, doc_id.clone()],
+            )
+            .await
+            .map_err(map_turso_error)?;
+            commit_transaction_record_conn(&conn, &tx.id).await?;
+            let document = self.tmp_document_entry_conn(&conn, &path).await?;
+            let tx = self.transaction_conn(&conn, &tx.id).await?;
+            Ok(WriteOutcome {
+                document,
+                version,
+                transaction: tx,
+            })
+        }
+        .await;
+        finish_tx(&conn, result).await
     }
 
     /// Exports a BlockDocument from its canonical rows: frontmatter rendered
@@ -809,12 +922,27 @@ impl QuarryStore {
         path: &str,
         client_tx_id: &str,
     ) -> Result<BlockMutationState> {
+        self.block_mutation_state_for_scope(&DocumentScopeRef::library(library), path, client_tx_id)
+            .await
+    }
+
+    pub async fn block_mutation_state_for_scope(
+        &self,
+        scope: &DocumentScopeRef,
+        path: &str,
+        client_tx_id: &str,
+    ) -> Result<BlockMutationState> {
         let conn = self.conn()?;
         conn.execute("BEGIN", ()).await.map_err(map_turso_error)?;
         let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
             let path = normalize_path(path)?;
-            let document = self.document_conn(&conn, &library.id, &path).await?;
+            let document = match scope {
+                DocumentScopeRef::Library { slug } => {
+                    let library = self.require_library_conn(&conn, slug).await?;
+                    self.document_conn(&conn, &library.id, &path).await?
+                }
+                DocumentScopeRef::Tmp => self.tmp_document_conn(&conn, &path).await?,
+            };
             let stored_rows = load_block_tree_conn(&conn, &document.id).await?;
             let projection_missing = stored_rows.is_empty();
             let rows = if projection_missing
@@ -862,14 +990,20 @@ impl QuarryStore {
         let result = async {
             let mut head_rows = conn
                 .query(
-                    "SELECT d.id, d.path, l.slug, v.id, v.content_type, v.metadata_json,
+                    "SELECT d.id, d.path, d.document_scope, l.slug, v.id, v.content_type, v.metadata_json,
                             v.content_hash, v.inline_content
                      FROM documents d
-                     JOIN libraries l ON l.id = d.library_id
+                     LEFT JOIN libraries l ON l.id = d.library_id
                      JOIN document_versions v ON v.id = d.head_version_id
-                     WHERE d.id = ?1 AND d.deleted_at IS NULL AND d.head_version_id IS NOT NULL
+                     WHERE d.id = ?1
+                       AND d.deleted_at IS NULL
+                       AND d.head_version_id IS NOT NULL
+                       AND (
+                         (d.document_scope = 'library' AND (d.expires_at IS NULL OR d.expires_at > ?2))
+                         OR (d.document_scope = 'tmp' AND d.library_id IS NULL AND d.expires_at > ?2)
+                       )
                      LIMIT 1",
-                    params![document_id.to_string()],
+                    params![document_id.to_string(), now_timestamp()],
                 )
                 .await
                 .map_err(map_turso_error)?;
@@ -877,12 +1011,27 @@ impl QuarryStore {
                 return Ok(None);
             };
             let path = text(&row, 1)?;
-            let content_type = text(&row, 4)?;
+            let scope = match text(&row, 2)?.as_str() {
+                "library" => DocumentScopeRef::Library {
+                    slug: opt_text(&row, 3)?.ok_or_else(|| {
+                        QuarryError::Storage(format!(
+                            "library document {document_id} is missing a library slug"
+                        ))
+                    })?,
+                },
+                "tmp" => DocumentScopeRef::Tmp,
+                other => {
+                    return Err(QuarryError::Storage(format!(
+                        "document {document_id} has unsupported scope {other}"
+                    )));
+                }
+            };
+            let content_type = text(&row, 5)?;
             if document_kind(&path, &content_type) == DocumentKind::RawDocument {
                 return Ok(None);
             }
-            let content_hash = opt_text(&row, 6)?;
-            let inline_content = opt_blob(&row, 7)?;
+            let content_hash = opt_text(&row, 7)?;
+            let inline_content = opt_blob(&row, 8)?;
             let stored_rows = load_block_tree_conn(&conn, document_id).await?;
             let rows = if stored_rows.is_empty() {
                 let content = match (inline_content, content_hash) {
@@ -907,11 +1056,11 @@ impl QuarryStore {
             let review_items = list_block_review_items_conn(&conn, document_id).await?;
             Ok(Some(SessionSeedState {
                 document_id: text(&row, 0)?,
-                library_slug: text(&row, 2)?,
+                scope,
                 path,
-                head_version_id: text(&row, 3)?,
+                head_version_id: text(&row, 4)?,
                 content_type,
-                metadata: serde_json::from_str(&text(&row, 5)?)?,
+                metadata: serde_json::from_str(&text(&row, 6)?)?,
                 rows,
                 review_items,
             }))
@@ -935,19 +1084,29 @@ impl QuarryStore {
         library: &str,
         commit: BlockMutationCommit,
     ) -> Result<BlockMutationOutcome> {
+        self.commit_block_mutation_for_scope(&DocumentScopeRef::library(library), commit)
+            .await
+    }
+
+    pub async fn commit_block_mutation_for_scope(
+        &self,
+        scope: &DocumentScopeRef,
+        commit: BlockMutationCommit,
+    ) -> Result<BlockMutationOutcome> {
         validate_review_items_against_rows(&commit.rows, &commit.review_items)?;
         let _operation_guard = self.normal_write_gate().await;
         let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
+            let resolved_scope = self.resolve_document_scope_conn(&conn, scope).await?;
             if let Some(replayed) =
                 block_transaction_conn(&conn, &commit.document_id, &commit.client_tx_id).await?
             {
                 return Ok(BlockMutationOutcome::Replayed(replayed));
             }
-            let head = document_head_conn(&conn, &library.id, &commit.document_id).await?;
+            let head =
+                document_head_for_scope_conn(&conn, &resolved_scope, &commit.document_id).await?;
             if head.head_version_id != commit.expected_head_version_id {
                 return Err(QuarryError::PreconditionFailed(format!(
                     "document {} head moved from {} to {}",
@@ -962,7 +1121,7 @@ impl QuarryStore {
             });
             let tx = insert_transaction_conn(
                 &conn,
-                &library.id,
+                resolved_scope.transaction_library_id(),
                 commit.source,
                 commit.transaction_actor.clone(),
                 commit.transaction_message.clone(),
@@ -1003,11 +1162,18 @@ impl QuarryStore {
                 Some(version.id.clone()),
             )
             .await?;
-            self.reindex_links_conn(&conn, &library.id).await?;
+            if let ResolvedDocumentScope::Library { id, .. } = &resolved_scope {
+                self.reindex_links_conn(&conn, id).await?;
+            }
             commit_transaction_record_conn(&conn, &tx.id).await?;
-            let document = self
-                .document_entry_conn(&conn, &library.id, &head.path)
-                .await?;
+            let document = match &resolved_scope {
+                ResolvedDocumentScope::Library { id, .. } => {
+                    self.document_entry_conn(&conn, id, &head.path).await?
+                }
+                ResolvedDocumentScope::Tmp => {
+                    self.tmp_document_entry_conn(&conn, &head.path).await?
+                }
+            };
             let tx = self.transaction_conn(&conn, &tx.id).await?;
             Ok(BlockMutationOutcome::Applied {
                 outcome: Box::new(WriteOutcome {
@@ -1419,6 +1585,36 @@ struct DocumentHeadRef {
     head_version_id: String,
 }
 
+enum ResolvedDocumentScope {
+    Library { id: String },
+    Tmp,
+}
+
+impl ResolvedDocumentScope {
+    fn transaction_library_id(&self) -> &str {
+        match self {
+            Self::Library { id } => id,
+            Self::Tmp => TMP_TRANSACTION_LIBRARY_ID,
+        }
+    }
+}
+
+impl QuarryStore {
+    async fn resolve_document_scope_conn(
+        &self,
+        conn: &Connection,
+        scope: &DocumentScopeRef,
+    ) -> Result<ResolvedDocumentScope> {
+        match scope {
+            DocumentScopeRef::Library { slug } => {
+                let library = self.require_library_conn(conn, slug).await?;
+                Ok(ResolvedDocumentScope::Library { id: library.id })
+            }
+            DocumentScopeRef::Tmp => Ok(ResolvedDocumentScope::Tmp),
+        }
+    }
+}
+
 async fn document_head_conn(
     conn: &Connection,
     library_id: &str,
@@ -1440,6 +1636,39 @@ async fn document_head_conn(
             head_version_id: text(&row, 1)?,
         }),
         None => Err(QuarryError::NotFound(format!("document {document_id}"))),
+    }
+}
+
+async fn document_head_for_scope_conn(
+    conn: &Connection,
+    scope: &ResolvedDocumentScope,
+    document_id: &str,
+) -> Result<DocumentHeadRef> {
+    match scope {
+        ResolvedDocumentScope::Library { id } => document_head_conn(conn, id, document_id).await,
+        ResolvedDocumentScope::Tmp => {
+            let mut rows = conn
+                .query(
+                    "SELECT path, head_version_id FROM documents
+                     WHERE id = ?1
+                       AND document_scope = 'tmp'
+                       AND library_id IS NULL
+                       AND deleted_at IS NULL
+                       AND head_version_id IS NOT NULL
+                       AND expires_at > ?2
+                     LIMIT 1",
+                    params![document_id.to_string(), now_timestamp()],
+                )
+                .await
+                .map_err(map_turso_error)?;
+            match rows.next().await.map_err(map_turso_error)? {
+                Some(row) => Ok(DocumentHeadRef {
+                    path: text(&row, 0)?,
+                    head_version_id: text(&row, 1)?,
+                }),
+                None => Err(QuarryError::NotFound(format!("document {document_id}"))),
+            }
+        }
     }
 }
 

@@ -53,7 +53,7 @@ use quarry_collab_codec::{
 use quarry_core::{DocumentSource, QuarryError, WriteOutcome, WritePrecondition};
 use quarry_storage::{
     document_kind, merge_json, split_markdown_frontmatter, BlockMarkdownWrite,
-    BlockMarkdownWriteOutcome, BlockMarkdownWriter, BlockWriteBase, DocumentKind,
+    BlockMarkdownWriteOutcome, BlockMarkdownWriter, BlockWriteBase, DocumentKind, DocumentScopeRef,
 };
 use serde_json::Value as JsonValue;
 use std::future::Future;
@@ -251,9 +251,15 @@ pub(crate) async fn patch_block_document_metadata(
             ops_json: JsonValue::Array(Vec::new()),
         })
     };
-    let reply =
-        gateway::execute_block_transaction(state, library, path, &ctx, &settings, &mut plan)
-            .await?;
+    let reply = gateway::execute_block_transaction(
+        state,
+        &DocumentScopeRef::library(library),
+        path,
+        &ctx,
+        &settings,
+        &mut plan,
+    )
+    .await?;
     let committed = match reply {
         TransactionReply::Committed(committed) => committed,
         TransactionReply::Replayed(record) => {
@@ -447,7 +453,7 @@ async fn write_markdown_with(
     };
     let reply = match gateway::execute_block_transaction(
         state,
-        &write.library,
+        &DocumentScopeRef::library(&write.library),
         &write.path,
         &ctx,
         &settings,
@@ -461,7 +467,7 @@ async fn write_markdown_with(
             ctx.base_clock = None;
             gateway::execute_block_transaction(
                 state,
-                &write.library,
+                &DocumentScopeRef::library(&write.library),
                 &write.path,
                 &ctx,
                 &settings,

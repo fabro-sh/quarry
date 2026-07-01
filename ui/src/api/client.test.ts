@@ -5,16 +5,22 @@ import {
   BlockTransactionError,
   createCollabInvite,
   createDocument,
+  createTmpCollabInvite,
   createTmpDocument,
   deleteDocument,
   deleteTmpDocument,
   getDocument,
   getDocumentBlocks,
+  getTmpDocumentBlocks,
+  getTmpDocumentReview,
   getTmpDocument,
   isTextContentType,
   moveDocument,
   listAgentPresence,
+  listTmpAgentPresence,
   postBlockTransaction,
+  postTmpBlockTransaction,
+  postTmpHandoff,
   putDocument,
   putTmpDocument,
   restoreVersion,
@@ -359,6 +365,101 @@ describe('Quarry API client', () => {
       5,
       '/v1/tmp/documents/scratch/note.txt',
       expect.objectContaining({ method: 'DELETE' })
+    );
+  });
+
+  it('exposes tmp collaboration review presence share transaction and handoff helpers', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          id: 'invite-tmp',
+          document_id: 'tmp-1',
+          role: 'editor',
+          by_hint: 'Avery',
+          created_at: 'now',
+          revoked_at: null,
+          presence: [],
+          documentId: 'tmp-1',
+          comments: [],
+          suggestions: [],
+          conflicts: [],
+          document_clock: 'tmp-v1',
+          blocks: [],
+          status: 'committed',
+          transaction_id: 'tx-1',
+          changed_block_ids: [],
+          event: 'handoff.requested',
+          path: 'scratch/live.md',
+          senderDisplayName: 'Avery',
+          clientSessionId: 'browser:1',
+          message: "I'm done",
+        }),
+        { headers: { 'content-type': 'application/json' } }
+      )
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await createTmpCollabInvite('scratch/live.md', { byHint: 'Avery' });
+    await listTmpAgentPresence('scratch/live.md');
+    await getTmpDocumentBlocks('scratch/live.md');
+    await getTmpDocumentReview('scratch/live.md');
+    const transaction: BlockTransactionRequest = {
+      client_tx_id: 'tmp-tx-1',
+      base_clock: 'tmp-v1',
+      actor: { kind: 'browser', id: 'browser:1' },
+      ops: [{ op: 'replace_block_content', block_id: 'b1', text: 'Updated' }],
+    };
+    await postTmpBlockTransaction('scratch/live.md', transaction);
+    await postTmpHandoff('scratch/live.md', {
+      senderDisplayName: 'Avery',
+      clientSessionId: 'browser:1',
+      checkpointVersionId: 'tmp-v2',
+      message: "I'm done",
+    });
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      '/v1/tmp/documents/scratch/live.md/share',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ byHint: 'Avery', role: 'editor' }),
+      })
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      '/v1/tmp/documents/scratch/live.md/presence',
+      undefined
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      '/v1/tmp/documents/scratch/live.md/blocks',
+      undefined
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      4,
+      '/v1/tmp/documents/scratch/live.md/review?includeResolved=1',
+      undefined
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      5,
+      '/v1/tmp/documents/scratch/live.md/transactions',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify(transaction),
+      })
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      6,
+      '/v1/tmp/documents/scratch/live.md/handoff',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          senderDisplayName: 'Avery',
+          clientSessionId: 'browser:1',
+          checkpointVersionId: 'tmp-v2',
+          message: "I'm done",
+        }),
+      })
     );
   });
 

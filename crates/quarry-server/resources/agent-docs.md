@@ -11,7 +11,7 @@ every mutation — edits, comments, suggestions — as one semantic transaction 
 
 ## Two-Minute Version
 
-1. If you received a Quarry link, extract the origin, library, and document path.
+1. If you received a Quarry link, extract the origin and document locator.
 2. Register presence with a stable `X-Agent-Id`.
 3. Read `GET /blocks` for the block tree, ids, and the current `document_clock`.
 4. Reply with the required ready message.
@@ -25,15 +25,23 @@ every mutation — edits, comments, suggestions — as one semantic transaction 
 
 ## I Just Received A Quarry Link
 
-Quarry invite links look like this:
+Library document invite links look like this:
 
 ```text
 http://127.0.0.1:5173/lib/team%20notes/documents/folder/live%20doc.md?token=invite-token
 ```
 
-Use the link as a locator. The origin is the API origin, the library is the
-segment after `/lib/`, and the document path is the portion after `/documents/`.
-Keep document path segments URL-encoded in REST URLs and preserve `/` separators.
+Tmp document invite links look like this:
+
+```text
+http://127.0.0.1:5173/tmp/scratch/live%20doc.md?token=invite-token
+```
+
+Use the link as a locator. The origin is the API origin. For library documents,
+the library is the segment after `/lib/`, and the document path is the portion
+after `/documents/`. For tmp documents, the document path is the portion after
+`/tmp/`. Keep document path segments URL-encoded in REST URLs and preserve `/`
+separators.
 
 ```sh
 ORIGIN="http://127.0.0.1:5173"
@@ -45,8 +53,26 @@ AGENT_NAME="Codex"
 DOC="$ORIGIN/v1/libraries/$LIBRARY_ENCODED/documents/$PATH_ENCODED"
 ```
 
+For a tmp document, omit the library and build the document API from
+`/v1/tmp/documents/$PATH_ENCODED`:
+
+```sh
+ORIGIN="http://127.0.0.1:5173"
+PATH_ENCODED="scratch/live%20doc.md"
+AGENT_ID="ai:codex:abc123"
+AGENT_NAME="Codex"
+DOC="$ORIGIN/v1/tmp/documents/$PATH_ENCODED"
+```
+
 For a raw document path like `notes/Project Plan.md`, encode each path segment
 and keep slash separators: `notes/Project%20Plan.md`.
+
+Tmp Markdown documents support the same block reads, semantic transactions,
+comments, suggestions, presence, and document event streams as library
+Markdown documents. Tmp docs also expose `$DOC/share` for invite creation and
+`$DOC/handoff` for browser-to-agent handoff signals. They remain temporary
+documents: they do not have library search, graph, Git, backlinks, promote
+from library routes, or library pending-event polling.
 
 ## Auth And Locator Tokens
 
@@ -377,7 +403,7 @@ also keeps your presence alive:
 curl -N -H "X-Agent-Id: $AGENT_ID" "$DOC/events/stream"
 ```
 
-If a stream is not practical, poll pending events:
+If a stream is not practical for a library document, poll pending events:
 
 ```sh
 curl -sS "$ORIGIN/v1/libraries/$LIBRARY_ENCODED/events/pending?after=0"
@@ -399,6 +425,24 @@ curl -sS -X POST "$ORIGIN/v1/libraries/$LIBRARY_ENCODED/events/ack" \
   -H "X-Agent-Id: $AGENT_ID" \
   -d '{"eventId": 42}'
 ```
+
+Tmp documents do not currently expose a pending-events poll route. Keep the
+tmp document stream open while active, or re-POST `$DOC/presence` at least once
+per minute and re-read `$DOC/blocks` after the user asks you to continue.
+
+### Tmp Handoff
+
+When a browser user clicks `Handoff to Agent`, tmp document streams receive a
+`handoff.requested` event:
+
+```text
+event: handoff.requested
+data: {"type":"handoff.requested","documentId":"doc_123","path":"scratch/live.md","senderDisplayName":"Bea","clientSessionId":"browser-session","checkpointVersionId":"version_123","message":"I'm done"}
+```
+
+Treat handoff as a wake signal, not as persistence. The browser only sends it
+after local edits are checkpointed; after receiving it, re-read `$DOC/blocks`
+and continue from the checkpoint named by `checkpointVersionId` when present.
 
 ## Errors And Retry Rules
 

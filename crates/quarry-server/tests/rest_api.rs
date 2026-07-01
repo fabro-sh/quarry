@@ -1338,6 +1338,9 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
     assert!(docs.contains("suggestion.accept"));
     assert!(docs.contains("conflict"));
     assert!(docs.contains("GET $DOC/review"));
+    assert!(docs.contains("/v1/tmp/documents/$PATH_ENCODED"));
+    assert!(docs.contains("$DOC/handoff"));
+    assert!(docs.contains("handoff.requested"));
     // The legacy facade vocabulary is gone.
     assert!(!docs.contains("/edit"));
     assert!(!docs.contains("$DOC/ops"));
@@ -1365,20 +1368,61 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
     assert_eq!(body["docs_url"], "http://127.0.0.1:7831/agent-docs");
     assert_eq!(body["skill_url"], "http://127.0.0.1:7831/quarry.SKILL.md");
     assert_eq!(body["openapi_url"], "http://127.0.0.1:7831/v1/openapi.json");
-    assert_eq!(
-        body["endpoints"]["transactions"]["method"],
-        serde_json::json!("POST")
-    );
-    assert_eq!(
-        body["route_hints"]["transactions"],
-        serde_json::json!(
-            "http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/transactions"
-        )
-    );
-    assert_eq!(
-        body["route_hints"]["blocks"],
-        serde_json::json!("http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/blocks")
-    );
+    if cfg!(feature = "lib-documents") {
+        assert_eq!(
+            body["endpoints"]["transactions"]["method"],
+            serde_json::json!("POST")
+        );
+        assert_eq!(
+            body["route_hints"]["transactions"],
+            serde_json::json!(
+                "http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/transactions"
+            )
+        );
+        assert_eq!(
+            body["route_hints"]["blocks"],
+            serde_json::json!(
+                "http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/blocks"
+            )
+        );
+        assert_eq!(
+            body["endpoints"]["snapshot"]["url"],
+            "http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/snapshot"
+        );
+        assert_eq!(
+            body["endpoints"]["review"]["url"],
+            "http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/review"
+        );
+        assert_eq!(
+            body["route_hints"]["review"],
+            "http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/review"
+        );
+    } else {
+        assert!(body["endpoints"]["transactions"].is_null());
+        assert!(body["route_hints"]["transactions"].is_null());
+        assert!(body["endpoints"]["snapshot"].is_null());
+    }
+    if cfg!(feature = "tmp-documents") {
+        assert_eq!(
+            body["endpoints"]["tmp_transactions"]["method"],
+            serde_json::json!("POST")
+        );
+        assert_eq!(
+            body["endpoints"]["tmp_handoff"]["url"],
+            "http://127.0.0.1:7831/v1/tmp/documents/{path}/handoff"
+        );
+        assert_eq!(
+            body["route_hints"]["tmp_blocks"],
+            "http://127.0.0.1:7831/v1/tmp/documents/{path}/blocks"
+        );
+        assert_eq!(
+            body["route_hints"]["tmp_handoff"],
+            "http://127.0.0.1:7831/v1/tmp/documents/{path}/handoff"
+        );
+    } else {
+        assert!(body["endpoints"]["tmp_transactions"].is_null());
+        assert!(body["route_hints"]["tmp_blocks"].is_null());
+    }
     // The legacy facades are gone from discovery entirely.
     assert!(body["endpoints"]["edit"].is_null());
     assert!(body["endpoints"]["ops"].is_null());
@@ -1400,6 +1444,18 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
         .unwrap()
         .iter()
         .any(|capability| capability == "review"));
+    if cfg!(feature = "tmp-documents") {
+        assert!(body["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|capability| capability == "tmp_documents"));
+        assert!(body["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|capability| capability == "handoff"));
+    }
     assert!(body["auth_note"]
         .as_str()
         .unwrap()
@@ -1438,18 +1494,6 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
         .any(|limitation| limitation
             .as_str()
             .is_some_and(|limitation| limitation.contains("comment.reply"))));
-    assert_eq!(
-        body["endpoints"]["snapshot"]["url"],
-        "http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/snapshot"
-    );
-    assert_eq!(
-        body["endpoints"]["review"]["url"],
-        "http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/review"
-    );
-    assert_eq!(
-        body["route_hints"]["review"],
-        "http://127.0.0.1:7831/v1/libraries/{library}/documents/{path}/review"
-    );
 }
 
 #[tokio::test]

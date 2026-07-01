@@ -68,6 +68,7 @@ import {
   createCollabInvite,
   createDocument,
   createGitPeer,
+  createTmpCollabInvite,
   createTmpDocument,
   deleteDocument,
   deleteTmpDocument,
@@ -77,6 +78,7 @@ import {
   getCapabilities,
   getDocument,
   getDocumentReview,
+  getTmpDocumentReview,
   gitExport,
   gitImport,
   gitPull,
@@ -88,17 +90,17 @@ import {
   listDocuments,
   listGitPeers,
   listLibraries,
+  listTmpAgentPresence,
   listTmpDocuments,
   moveDocument,
   outgoingLinks,
   promoteTmpDocument,
   putBinaryDocument,
   putDocument,
-  putTmpDocument,
   resolveConflict,
   restoreVersion,
   searchDocuments,
-  setTmpDocumentTtl,
+  postTmpHandoff,
   tmpDocumentHref,
   tmpDocumentVersion,
   tmpVersions,
@@ -254,6 +256,7 @@ function Workspace() {
     waitingForAgent: false,
     knownAgentIds: [],
   });
+  const [handoffPending, setHandoffPending] = useState(false);
   const [lastSyncResult, setLastSyncResult] = useState('');
   const [author, setAuthor] = useState(() => loadAuthor());
   const [showOnboarding, setShowOnboarding] = useState(() => !hasStoredAuthor());
@@ -856,7 +859,6 @@ function Workspace() {
   const activeLibraryRecord = libraries.find((library) => library.slug === activeLibrary);
   const selectedEntry = documents.find((entry) => entry.path === selectedPath);
   const loadedDocumentForSelection = document?.path === selectedPath ? document : undefined;
-  const tmpExpiresAt = isTmpDocument ? loadedDocumentForSelection?.expiresAt : undefined;
   const loadedDocumentContentType = loadedDocumentForSelection?.contentType;
   const selectedContentType = loadedDocumentContentType ?? selectedEntry?.content_type ?? contentType;
   const activeLoadedDocument =
@@ -874,34 +876,42 @@ function Workspace() {
   const layoutStorageKey = activeLibrary ? `quarry:layout:${activeLibrary}` : 'quarry:layout:workspace';
   const mergeConflict = conflicts.find((conflict) => conflict.id === mergeConflictId) ?? null;
   const { data: agentPresence = { presence: [] } } = useSWR(
-    libDocumentsEnabled &&
-      isLibraryDocument &&
-      activeLibrary &&
-      selectedPath &&
-      isTextContentType(selectedContentType)
-      ? ['/v1/agent-presence', activeLibrary, selectedPath]
+    selectedPath && isTextContentType(selectedContentType)
+      ? isTmpDocument
+        ? tmpDocumentsEnabled
+          ? ['/v1/tmp-agent-presence', selectedPath]
+          : null
+        : libDocumentsEnabled && activeLibrary
+          ? ['/v1/agent-presence', activeLibrary, selectedPath]
+          : null
       : null,
-    () => listAgentPresence(activeLibrary, selectedPath),
+    () =>
+      isTmpDocument
+        ? listTmpAgentPresence(selectedPath)
+        : listAgentPresence(activeLibrary, selectedPath),
     { refreshInterval: 3_000 }
   );
   // The rows-backed review projection feeds the Comments panel (states,
   // orphaned/invalidated badges, diff3 conflict items). Refreshed by the
   // SSE classification above whenever the document changes.
   const { data: documentReview } = useSWR(
-    libDocumentsEnabled &&
-      isLibraryDocument &&
-      activeLibrary &&
-      selectedPath &&
-      isMarkdownDocument(selectedPath, selectedContentType)
-      ? ['/v1/review', activeLibrary, selectedPath]
+    selectedPath && isMarkdownDocument(selectedPath, selectedContentType)
+      ? isTmpDocument
+        ? tmpDocumentsEnabled
+          ? ['/v1/tmp-review', selectedPath]
+          : null
+        : libDocumentsEnabled && activeLibrary
+          ? ['/v1/review', activeLibrary, selectedPath]
+          : null
       : null,
-    () => getDocumentReview(activeLibrary, selectedPath)
+    () =>
+      isTmpDocument
+        ? getTmpDocumentReview(selectedPath)
+        : getDocumentReview(activeLibrary, selectedPath)
   );
 
   useEffect(() => {
     if (
-      libDocumentsEnabled &&
-      isLibraryDocument &&
       selectedPath &&
       collabDocumentId &&
       isMarkdownDocument(selectedPath, selectedContentType)
@@ -914,7 +924,7 @@ function Workspace() {
       liveCollabSessionRef.current = null;
       setSaveState(null);
     }
-  }, [collabDocumentId, isLibraryDocument, libDocumentsEnabled, selectedContentType, selectedPath]);
+  }, [collabDocumentId, selectedContentType, selectedPath]);
 
   const changeSaveState = useCallback((state: CollabSaveState) => {
     setSaveState(state);
@@ -1057,39 +1067,6 @@ function Workspace() {
     setSelectedPath('');
   }
 
-  async function saveTmpCurrent() {
-    if (!isTmpDocument || !selectedPath || !etag) return;
-    const saved = await putTmpDocument(
-      selectedPath,
-      contentRef.current,
-      etag,
-      contentType,
-      browserMutationOptions()
-    );
-    const nextEtag = saved.etag || `"${saved.outcome.version.id}"`;
-    setEtag(nextEtag);
-    loadedDocumentRef.current = {
-      scope: 'tmp',
-      library: activeLibrary,
-      path: selectedPath,
-      etag: nextEtag,
-      documentId: saved.outcome.document.id,
-    };
-    await Promise.all([
-      mutate(['/v1/tmp-document', selectedPath]),
-      mutate(['/v1/tmp-versions', selectedPath]),
-    ]);
-  }
-
-  async function extendTmpTtl() {
-    if (!isTmpDocument || !selectedPath) return;
-    const defaultExpiry = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-    const expiresAt = window.prompt('Tmp document expiry', tmpExpiresAt ?? defaultExpiry);
-    if (!expiresAt) return;
-    await setTmpDocumentTtl(selectedPath, expiresAt);
-    await mutate(['/v1/tmp-document', selectedPath]);
-  }
-
   async function promoteCurrentTmpDocument() {
     if (!libDocumentsEnabled || !isTmpDocument || !selectedPath) return;
     const library = window.prompt('Promote to library', activeLibrary);
@@ -1130,25 +1107,12 @@ function Workspace() {
     URL.revokeObjectURL(url);
   }
 
-  async function shareCurrentDocument() {
-    if (!libDocumentsEnabled || !isLibraryDocument || !activeLibrary || !selectedPath) return;
-    const token = await createCollabInvite(activeLibrary, selectedPath, {
-      byHint: author,
-      role: 'editor',
-    });
-    const url = new URL(workspaceRoute(activeLibrary, selectedPath), window.location.origin);
-    url.searchParams.set('token', token.id);
-    try {
-      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
-      await navigator.clipboard.writeText(url.toString());
-    } catch {
-      window.prompt('Share link', url.toString());
-    }
-  }
-
   async function openAddAgentModal() {
-    if (!libDocumentsEnabled || !isLibraryDocument || !activeLibrary || !selectedPath) return;
-    const library = activeLibrary;
+    if (!selectedPath || !isMarkdownDocument(selectedPath, selectedContentType)) return;
+    if (isLibraryDocument && (!libDocumentsEnabled || !activeLibrary)) return;
+    if (isTmpDocument && !tmpDocumentsEnabled) return;
+    const scope = isTmpDocument ? 'tmp' : 'library';
+    const library = isTmpDocument ? undefined : activeLibrary;
     const path = selectedPath;
     const knownAgentIds = agentPresence.presence.map((e) => e.agentId);
     setAddAgentModal({
@@ -1160,12 +1124,18 @@ function Workspace() {
       knownAgentIds,
     });
     try {
-      const token = await createCollabInvite(library, path, {
-        byHint: author,
-        role: 'editor',
-      });
+      const token = isTmpDocument
+        ? await createTmpCollabInvite(path, {
+            byHint: author,
+            role: 'editor',
+          })
+        : await createCollabInvite(activeLibrary, path, {
+            byHint: author,
+            role: 'editor',
+          });
       const tokenizedDocUrl = buildTokenizedDocumentUrl({
         origin: window.location.origin,
+        scope,
         library,
         path,
         token: token.id,
@@ -1175,6 +1145,7 @@ function Workspace() {
         loading: false,
         instructions: buildAddAgentPrompt({
           origin: window.location.origin,
+          scope,
           library,
           path,
           tokenizedDocUrl,
@@ -1192,6 +1163,38 @@ function Workspace() {
         waitingForAgent: false,
         knownAgentIds,
       });
+    }
+  }
+
+  async function handoffCurrentTmpDocument() {
+    if (!isTmpDocument || !selectedPath || !collabDocumentId || saveState !== 'saved') return;
+    setHandoffPending(true);
+    try {
+      const latest = await getTmpDocument(selectedPath);
+      await postTmpHandoff(selectedPath, {
+        senderDisplayName: author,
+        clientSessionId: collabSessionIdRef.current,
+        checkpointVersionId: versionIdFromEtag(latest.etag),
+        message: "I'm done",
+      });
+      await mutate(
+        ['/v1/tmp-document', selectedPath],
+        {
+          ...latest,
+          path: selectedPath,
+        },
+        { revalidate: false }
+      );
+      setEtag(latest.etag);
+      loadedDocumentRef.current = {
+        scope: 'tmp',
+        library: activeLibrary,
+        path: selectedPath,
+        etag: latest.etag,
+        documentId: latest.documentId,
+      };
+    } finally {
+      setHandoffPending(false);
     }
   }
 
@@ -1412,29 +1415,33 @@ function Workspace() {
               <DocumentToolbar
                 agentPresence={agentPresence.presence}
                 canPromote={libDocumentsEnabled}
-                expiresAt={tmpExpiresAt}
                 isMarkdown={isMarkdownDocument(selectedPath, selectedContentType)}
                 isText={isTextContentType(selectedContentType)}
                 isTmp={isTmpDocument}
                 mode={editorMode}
+                handoffDisabled={saveState !== 'saved' || handoffPending}
+                handoffPending={handoffPending}
                 onModeChange={setEditorMode}
                 path={selectedPath}
                 saveState={saveState}
+                showHandoff={
+                  isTmpDocument &&
+                  isMarkdownDocument(selectedPath, selectedContentType) &&
+                  agentPresence.presence.length > 0
+                }
                 onAddAgent={() => void openAddAgentModal()}
                 onDelete={deleteCurrent}
                 onDownload={downloadCurrentMarkdown}
-                onExtendTtl={() => void extendTmpTtl()}
+                onHandoff={() => void handoffCurrentTmpDocument()}
                 onPromote={() => void promoteCurrentTmpDocument()}
                 onRename={renameCurrent}
-                onSaveTmp={() => void saveTmpCurrent()}
-                onShare={() => void shareCurrentDocument()}
               />
               {selectedDocumentBodyReady ? (
                 <DocumentBody
                   activeLibrary={activeLibrary}
                   author={author}
                   byteSize={selectedEntry?.byte_size}
-                  collabEnabled={isLibraryDocument}
+                  collabEnabled={Boolean(collabDocumentId)}
                   collabSessionId={collabSessionIdRef.current}
                   collabToken={routeCollabToken}
                   contentHash={selectedEntry?.content_hash}
@@ -3119,15 +3126,6 @@ function SaveStatusIndicator({ saveState }: { saveState: CollabSaveState }) {
   );
 }
 
-function TmpExpiryPill({ expiresAt }: { expiresAt?: string }) {
-  return (
-    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-line bg-raised px-2 py-1 text-xs text-muted">
-      <RotateCcw size={13} />
-      {expiresAt ? `Expires ${formatShortDateTime(expiresAt)}` : 'Tmp'}
-    </span>
-  );
-}
-
 const PRESENCE_AVATAR_CAP = 3;
 const presenceAvatar =
   'flex size-7 shrink-0 items-center justify-center rounded-full ring-2 ring-surface';
@@ -3259,41 +3257,41 @@ function DocumentModeSelect({
 function DocumentToolbar({
   agentPresence,
   canPromote,
-  expiresAt,
   isMarkdown,
   isText,
   isTmp,
   mode,
+  handoffDisabled,
+  handoffPending,
   onModeChange,
   path,
   saveState,
+  showHandoff,
   onAddAgent,
   onDelete,
   onDownload,
-  onExtendTtl,
+  onHandoff,
   onPromote,
   onRename,
-  onSaveTmp,
-  onShare,
 }: {
   agentPresence: AgentPresenceEntry[];
   canPromote: boolean;
-  expiresAt?: string;
   isMarkdown: boolean;
   isText: boolean;
   isTmp: boolean;
   mode: EditorMode;
+  handoffDisabled: boolean;
+  handoffPending: boolean;
   onModeChange: (mode: EditorMode) => void;
   path: string;
   saveState: CollabSaveState | null;
+  showHandoff: boolean;
   onAddAgent: () => void;
   onDelete: () => void;
   onDownload: () => void;
-  onExtendTtl: () => void;
+  onHandoff: () => void;
   onPromote: () => void;
   onRename: () => void;
-  onSaveTmp: () => void;
-  onShare: () => void;
 }) {
   return (
     <div className="flex h-12 shrink-0 items-center gap-2 bg-surface px-3">
@@ -3307,16 +3305,21 @@ function DocumentToolbar({
           </span>
         ))}
       </h1>
-      {isTmp ? <TmpExpiryPill expiresAt={expiresAt} /> : null}
-      {isTmp && isMarkdown ? (
-        <button className={cn(primaryButton, 'px-2 sm:px-3')} onClick={onSaveTmp} type="button">
-          <Check size={15} />
-          <span className="hidden sm:inline">Save</span>
+      {isMarkdown && saveState ? <SaveStatusIndicator saveState={saveState} /> : null}
+      {isMarkdown ? <AgentPresencePill presence={agentPresence} /> : null}
+      {showHandoff ? (
+        <button
+          className={cn(secondaryButton, 'px-2 sm:px-3')}
+          disabled={handoffDisabled}
+          onClick={onHandoff}
+          title={handoffDisabled ? 'Waiting for saved changes' : 'Handoff to Agent'}
+          type="button"
+        >
+          {handoffPending ? <Loader2 className="animate-spin" size={15} /> : <CheckCircle2 size={15} />}
+          <span>Handoff to Agent</span>
         </button>
       ) : null}
-      {!isTmp && isMarkdown && saveState ? <SaveStatusIndicator saveState={saveState} /> : null}
-      {!isTmp && isMarkdown ? <AgentPresencePill presence={agentPresence} /> : null}
-      {!isTmp && isMarkdown ? (
+      {isMarkdown ? (
         <button
           aria-label="Add agent"
           className={cn(secondaryButton, 'px-2 sm:px-3')}
@@ -3341,25 +3344,13 @@ function DocumentToolbar({
             sideOffset={6}
           >
             {isText ? (
-              <>
-                {!isTmp ? (
-                  <DropdownMenu.Item className={menuItem} onSelect={onShare}>
-                    <Link2 className="shrink-0" size={15} />
-                    Copy invite link
-                  </DropdownMenu.Item>
-                ) : null}
-                <DropdownMenu.Item className={menuItem} onSelect={onDownload}>
-                  <Download className="shrink-0" size={15} />
-                  Download as Markdown
-                </DropdownMenu.Item>
-              </>
+              <DropdownMenu.Item className={menuItem} onSelect={onDownload}>
+                <Download className="shrink-0" size={15} />
+                Download as Markdown
+              </DropdownMenu.Item>
             ) : null}
             {isTmp ? (
               <>
-                <DropdownMenu.Item className={menuItem} onSelect={onExtendTtl}>
-                  <RotateCcw className="shrink-0" size={15} />
-                  Extend TTL…
-                </DropdownMenu.Item>
                 {canPromote ? (
                   <DropdownMenu.Item className={menuItem} onSelect={onPromote}>
                     <FolderInput className="shrink-0" size={15} />
@@ -4362,6 +4353,11 @@ function workspaceRoute(library: string, path: string) {
 function tmpWorkspaceRoute(path: string) {
   if (!path) return '/tmp';
   return `/tmp/${path.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+function versionIdFromEtag(etag: string) {
+  const trimmed = etag.trim().replace(/^W\//, '').replace(/^"|"$/g, '');
+  return trimmed || undefined;
 }
 
 function safeDecodeSegment(segment: string) {

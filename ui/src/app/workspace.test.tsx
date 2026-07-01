@@ -320,7 +320,7 @@ describe('Quarry Browser workspace', () => {
     expect(window.location.pathname).toBe('/lib/routed-lib/documents/next.md');
   });
 
-  it('loads and saves routed tmp documents through tmp APIs', async () => {
+  it('loads routed tmp Markdown document controls through tmp APIs', async () => {
     window.history.pushState({}, '', '/tmp/scratch/note.md');
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -328,26 +328,18 @@ describe('Quarry Browser workspace', () => {
         return json([{ id: 'lib-notes', slug: 'notes', created_at: 'now', settings: {} }]);
       }
       if (url === '/v1/libraries/notes/documents') return json([]);
-      if (url === '/v1/tmp/documents/scratch/note.md' && init?.method === 'PUT') {
-        expect(init.headers).toMatchObject({ 'If-Match': '"tmp-v1"' });
-        expect(init.body).toBe('# Tmp\n');
-        return json(
-          {
-            document: { id: 'tmp-1', path: 'scratch/note.md', library_id: null },
-            version: { id: 'tmp-v2' },
-          },
-          { ETag: '"tmp-v2"' }
-        );
-      }
       if (url === '/v1/tmp/documents/scratch/note.md') {
         return new Response('# Tmp\n', {
           headers: {
             ETag: '"tmp-v1"',
             'content-type': 'text/markdown',
-            'x-quarry-document-id': 'tmp-1',
             'x-quarry-expires-at': '2099-01-01T00:00:00Z',
           },
         });
+      }
+      if (url === '/v1/tmp/documents/scratch/note.md/presence') return json({ presence: [] });
+      if (url === '/v1/tmp/documents/scratch/note.md/review?includeResolved=1') {
+        return json({ documentId: 'tmp-1', comments: [], suggestions: [], conflicts: [] });
       }
       if (url === '/v1/tmp/documents/scratch/note.md/versions') return json([]);
       return new Response('not found', { status: 404 });
@@ -356,18 +348,17 @@ describe('Quarry Browser workspace', () => {
 
     renderApp();
 
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Tmp'));
-    expect(window.location.pathname).toBe('/tmp/scratch/note.md');
-    expect(screen.getByText(/Expires/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Add agent/ })).not.toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith(
-        '/v1/tmp/documents/scratch/note.md',
-        expect.objectContaining({ method: 'PUT' })
-      )
+    expect(await screen.findByRole('button', { name: 'Document mode' })).toHaveTextContent(
+      'Editing'
     );
+    expect(window.location.pathname).toBe('/tmp/scratch/note.md');
+    expect(screen.queryByText(/Expires/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add agent' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Document actions' }));
+    expect(await screen.findByText('Download as Markdown')).toBeInTheDocument();
+    expect(screen.queryByText('Copy invite link')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Extend TTL/)).not.toBeInTheDocument();
   });
 
   it('uses the tmp workspace and hides library controls when library documents are disabled', async () => {
@@ -395,10 +386,13 @@ describe('Quarry Browser workspace', () => {
           headers: {
             ETag: '"tmp-v1"',
             'content-type': 'text/markdown',
-            'x-quarry-document-id': 'tmp-1',
             'x-quarry-expires-at': '2099-01-01T00:00:00Z',
           },
         });
+      }
+      if (url === '/v1/tmp/documents/scratch/note.md/presence') return json({ presence: [] });
+      if (url === '/v1/tmp/documents/scratch/note.md/review?includeResolved=1') {
+        return json({ documentId: 'tmp-1', comments: [], suggestions: [], conflicts: [] });
       }
       if (url === '/v1/tmp/documents/scratch/note.md/versions') return json([]);
       return new Response('not found', { status: 404 });
@@ -407,7 +401,9 @@ describe('Quarry Browser workspace', () => {
 
     renderApp();
 
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Tmp'));
+    expect(await screen.findByRole('button', { name: 'Document mode' })).toHaveTextContent(
+      'Editing'
+    );
 
     expect(window.location.pathname).toBe('/tmp/scratch/note.md');
     expect(fetch).not.toHaveBeenCalledWith('/v1/libraries', undefined);
@@ -415,10 +411,10 @@ describe('Quarry Browser workspace', () => {
     expect(screen.queryByLabelText('Document details')).not.toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: 'Library switcher' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Add agent' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add agent' })).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Versions' })).not.toBeInTheDocument();
-    expect(screen.getByText(/Expires/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    expect(screen.queryByText(/Expires/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
   });
 
   it('does not mount a routed editor before the document body loads', async () => {

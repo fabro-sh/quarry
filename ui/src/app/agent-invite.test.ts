@@ -1,6 +1,7 @@
 import {
   buildAddAgentPrompt,
   buildTokenizedDocumentUrl,
+  tmpWorkspaceRouteForDocument,
   workspaceRouteForDocument,
 } from './agent-invite';
 
@@ -17,6 +18,45 @@ describe('agent invite helpers', () => {
         token: 'invite-token',
       })
     ).toBe('http://127.0.0.1:5173/lib/team%20notes/documents/folder/live%20doc.md?token=invite-token');
+  });
+
+  it('builds tmp tokenized URLs and tmp-scoped agent prompts', () => {
+    expect(tmpWorkspaceRouteForDocument('scratch/live doc.md')).toBe('/tmp/scratch/live%20doc.md');
+    const tokenizedDocUrl = buildTokenizedDocumentUrl({
+      origin: 'http://127.0.0.1:5173',
+      scope: 'tmp',
+      path: 'scratch/live doc.md',
+      token: 'tmp-invite-token',
+    });
+    expect(tokenizedDocUrl).toBe(
+      'http://127.0.0.1:5173/tmp/scratch/live%20doc.md?token=tmp-invite-token'
+    );
+
+    const prompt = buildAddAgentPrompt({
+      origin: 'http://127.0.0.1:5173',
+      scope: 'tmp',
+      path: 'scratch/live doc.md',
+      tokenizedDocUrl,
+    });
+
+    expect(prompt).toContain('Scope: tmp document');
+    expect(prompt).not.toContain('Library:');
+    expect(prompt).toContain(
+      'POST http://127.0.0.1:5173/v1/tmp/documents/scratch/live%20doc.md/presence'
+    );
+    expect(prompt).toContain(
+      'GET http://127.0.0.1:5173/v1/tmp/documents/scratch/live%20doc.md/events/stream'
+    );
+    expect(prompt).toContain(
+      'GET http://127.0.0.1:5173/v1/tmp/documents/scratch/live%20doc.md/blocks'
+    );
+    expect(prompt).toContain(
+      'POST http://127.0.0.1:5173/v1/tmp/documents/scratch/live%20doc.md/transactions'
+    );
+    expect(prompt).toContain(
+      'GET http://127.0.0.1:5173/v1/tmp/documents/scratch/live%20doc.md/review'
+    );
+    expect(prompt).toContain('re-POST presence at least once per minute');
   });
 
   it('generates the Proof-style agent prompt with all required Quarry endpoints', () => {

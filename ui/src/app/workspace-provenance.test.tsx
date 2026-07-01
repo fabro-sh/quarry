@@ -115,6 +115,47 @@ describe('workspace document mutation provenance', () => {
     expect(screen.getByLabelText('Save status')).toHaveTextContent('Saved');
   });
 
+  it('wires tmp Markdown collaboration and posts handoff only after save state is clean', async () => {
+    stubBrowserOrigin('00000000-0000-4000-8000-000000000004');
+    window.history.pushState({}, '', '/tmp/scratch/live.md');
+    const fetch = vi.fn(tmpCollabFetch());
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    expect(await screen.findByLabelText('Plate markdown editor')).toHaveValue('# Tmp');
+    const collab = testWindow().__quarryTestCollab;
+    expect(collab?.documentId).toBe('tmp-doc');
+    expect(collab?.sessionId).toBe('browser:00000000-0000-4000-8000-000000000004');
+
+    const handoff = await screen.findByRole('button', { name: 'Handoff to Agent' });
+    expect(handoff).toBeDisabled();
+
+    act(() => collab?.onSaveStateChange?.('saving'));
+    expect(handoff).toBeDisabled();
+
+    act(() => collab?.onSaveStateChange?.('saved'));
+    expect(handoff).toBeEnabled();
+
+    await userEvent.click(handoff);
+
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        '/v1/tmp/documents/scratch/live.md/handoff',
+        expect.objectContaining({ method: 'POST' })
+      )
+    );
+    const handoffCall = fetch.mock.calls.find(
+      ([input, init]) => String(input) === '/v1/tmp/documents/scratch/live.md/handoff' && init?.method === 'POST'
+    );
+    expect(JSON.parse(String(handoffCall?.[1]?.body))).toEqual({
+      senderDisplayName: 'Tester',
+      clientSessionId: 'browser:00000000-0000-4000-8000-000000000004',
+      checkpointVersionId: 'tmp-v1',
+      message: "I'm done",
+    });
+  });
+
   it('keeps the selected editor mounted across a checkpoint head move', async () => {
     stubBrowserOrigin('00000000-0000-4000-8000-000000000007');
     vi.stubGlobal('fetch', vi.fn(provenanceFetch()));
@@ -148,6 +189,7 @@ async function openDailyDocument() {
 }
 
 function renderApp(config: Record<string, unknown> = {}) {
+  localStorage.setItem('quarry:author', 'Tester');
   const swrConfig = { provider: () => new Map(), ...config } as SWRConfiguration;
   return render(
     <SWRConfig value={swrConfig}>
@@ -220,6 +262,67 @@ function provenanceFetch() {
     if (url === '/v1/libraries/provenance-lib/git/peers') return json([]);
     if (url.startsWith('/v1/libraries/provenance-lib/search')) {
       return json({ results: [], cursor: null });
+    }
+    return new Response('not found', { status: 404 });
+  };
+}
+
+function tmpCollabFetch() {
+  return async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === '/v1/capabilities') {
+      return json({ tmp_documents: true, lib_documents: false });
+    }
+    if (url === '/v1/tmp/documents') {
+      return json([
+        {
+          id: 'tmp-doc',
+          path: 'scratch/live.md',
+          head_version_id: 'tmp-v1',
+          content_type: 'text/markdown',
+          byte_size: 5,
+          metadata: { title: 'Tmp' },
+          updated_at: 'now',
+        },
+      ]);
+    }
+    if (url === '/v1/tmp/documents/scratch/live.md') {
+      return new Response('# Tmp', {
+        headers: {
+          ETag: '"tmp-v1"',
+          'content-type': 'text/markdown',
+          'x-quarry-document-id': 'tmp-doc',
+        },
+      });
+    }
+    if (url === '/v1/tmp/documents/scratch/live.md/presence') {
+      return json({
+        presence: [
+          {
+            library: null,
+            path: 'scratch/live.md',
+            documentId: 'tmp-doc',
+            agentId: 'ai:codex:tmp',
+            status: 'waiting',
+            by: 'Codex',
+            updatedAt: 'now',
+          },
+        ],
+      });
+    }
+    if (url === '/v1/tmp/documents/scratch/live.md/review?includeResolved=1') {
+      return json({ documentId: 'tmp-doc', comments: [], suggestions: [], conflicts: [] });
+    }
+    if (url === '/v1/tmp/documents/scratch/live.md/handoff' && init?.method === 'POST') {
+      return json({
+        event: 'handoff.requested',
+        documentId: 'tmp-doc',
+        path: 'scratch/live.md',
+        senderDisplayName: 'Tester',
+        clientSessionId: 'browser:00000000-0000-4000-8000-000000000004',
+        checkpointVersionId: 'tmp-v1',
+        message: "I'm done",
+      }, {}, 202);
     }
     return new Response('not found', { status: 404 });
   };
