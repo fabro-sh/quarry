@@ -646,9 +646,9 @@ async fn autosave_tagged_writes_keep_raw_versions_but_group_history() {
     let transaction = || TransactionMetadata {
         actor: Some("browser".to_string()),
         message: Some("Autosaved edits".to_string()),
-        provenance: serde_json::json!({
+        provenance: Some(serde_json::json!({
             "history": {"kind": "autosave", "reason": "typing", "session_id": "browser:s1"}
-        }),
+        })),
     };
 
     let first = store

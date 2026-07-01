@@ -159,12 +159,13 @@ struct AgentPresenceRegistry {
     entries: Arc<std::sync::Mutex<HashMap<String, AgentPresenceSlot>>>,
 }
 
-fn agent_presence_key(library: &str, path: &str, agent_id: &str) -> String {
-    format!("{library}\0{path}\0{agent_id}")
-}
-
-fn presence_scope_key(library: Option<&str>) -> &str {
-    library.unwrap_or("__tmp__")
+/// The scope discriminant keeps tmp entries apart from any library — even a
+/// library literally named "tmp".
+fn agent_presence_key(library: Option<&str>, path: &str, agent_id: &str) -> String {
+    match library {
+        Some(library) => format!("library\0{library}\0{path}\0{agent_id}"),
+        None => format!("tmp\0{path}\0{agent_id}"),
+    }
 }
 
 impl AgentPresenceRegistry {
@@ -192,8 +193,7 @@ impl AgentPresenceRegistry {
             by,
             updated_at: now_timestamp(),
         };
-        let scope = presence_scope_key(library);
-        let key = agent_presence_key(scope, path, &entry.agent_id);
+        let key = agent_presence_key(library, path, &entry.agent_id);
         let mut entries = self.live_entries();
         entries.insert(
             key,
@@ -216,7 +216,7 @@ impl AgentPresenceRegistry {
     /// Refreshes an entry's TTL without changing its declared status, creating
     /// a `waiting` entry for agents that connect before posting one.
     fn touch(&self, library: Option<&str>, path: &str, document_id: &str, agent_id: &str) {
-        let key = agent_presence_key(presence_scope_key(library), path, agent_id);
+        let key = agent_presence_key(library, path, agent_id);
         let mut entries = self.live_entries();
         let slot = entries.entry(key).or_insert_with(|| AgentPresenceSlot {
             entry: AgentPresenceEntry {
@@ -235,7 +235,7 @@ impl AgentPresenceRegistry {
     }
 
     fn remove(&self, library: Option<&str>, path: &str, agent_id: &str) {
-        let key = agent_presence_key(presence_scope_key(library), path, agent_id);
+        let key = agent_presence_key(library, path, agent_id);
         let mut entries = self.entries.lock().expect("presence lock poisoned");
         entries.remove(&key);
     }
@@ -4823,12 +4823,14 @@ fn transaction_metadata_from_headers(headers: &HeaderMap) -> Result<TransactionM
         ..TransactionMetadata::default()
     };
     if let Some(value) = headers.get("x-quarry-transaction-provenance") {
-        metadata.provenance = serde_json::from_str(value.to_str().map_err(|_| {
-            QuarryError::InvalidPath("invalid x-quarry-transaction-provenance".to_string())
-        })?)
-        .map_err(|_| {
-            QuarryError::InvalidPath("invalid x-quarry-transaction-provenance".to_string())
-        })?;
+        metadata.provenance = Some(
+            serde_json::from_str(value.to_str().map_err(|_| {
+                QuarryError::InvalidPath("invalid x-quarry-transaction-provenance".to_string())
+            })?)
+            .map_err(|_| {
+                QuarryError::InvalidPath("invalid x-quarry-transaction-provenance".to_string())
+            })?,
+        );
     }
     Ok(metadata)
 }

@@ -1,3 +1,4 @@
+use quarry_storage::{is_tmp_document_secret, TMP_DOCUMENT_SECRET_LEN};
 use std::borrow::Cow;
 
 pub(crate) const TMP_SECRET_PLACEHOLDER: &str = "<tmp-secret>";
@@ -14,7 +15,7 @@ pub(crate) fn redact_path(path: &str) -> Cow<'_, str> {
 }
 
 pub(crate) fn redact_tmp_document_identifier(identifier: &str) -> Cow<'_, str> {
-    if is_tmp_capability_secret(identifier) {
+    if is_tmp_document_secret(identifier) {
         Cow::Borrowed(TMP_SECRET_PLACEHOLDER)
     } else {
         Cow::Borrowed(identifier)
@@ -23,27 +24,22 @@ pub(crate) fn redact_tmp_document_identifier(identifier: &str) -> Cow<'_, str> {
 
 fn redact_segment_after_prefix(path: &str, prefix: &str) -> Option<String> {
     let suffix = path.strip_prefix(prefix)?;
-    let secret = suffix.as_bytes().get(..32)?;
-    if !secret.iter().all(u8::is_ascii_hexdigit) {
+    let secret = suffix.get(..TMP_DOCUMENT_SECRET_LEN)?;
+    if !is_tmp_document_secret(secret) {
         return None;
     }
-    if suffix
-        .as_bytes()
-        .get(32)
-        .is_some_and(|byte| !matches!(byte, b'/' | b'?' | b'#'))
-    {
+    let rest = &suffix[TMP_DOCUMENT_SECRET_LEN..];
+    if !rest.is_empty() && !rest.starts_with(['/', '?', '#']) {
         return None;
     }
 
-    let mut redacted = String::with_capacity(path.len() + TMP_SECRET_PLACEHOLDER.len() - 32);
+    let mut redacted = String::with_capacity(
+        path.len() + TMP_SECRET_PLACEHOLDER.len() - TMP_DOCUMENT_SECRET_LEN,
+    );
     redacted.push_str(prefix);
     redacted.push_str(TMP_SECRET_PLACEHOLDER);
-    redacted.push_str(&suffix[32..]);
+    redacted.push_str(rest);
     Some(redacted)
-}
-
-fn is_tmp_capability_secret(identifier: &str) -> bool {
-    identifier.len() == 32 && identifier.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[cfg(test)]

@@ -51,9 +51,7 @@ use axum::http::StatusCode;
 use quarry_collab_codec::{
     block_rows_to_markdown, reconcile, BlockRow, ReconcileBase, ReconcileOp,
 };
-use quarry_core::{
-    Document, DocumentListEntry, DocumentSource, QuarryError, WriteOutcome, WritePrecondition,
-};
+use quarry_core::{DocumentSource, QuarryError, WriteOutcome, WritePrecondition};
 use quarry_storage::{
     document_kind, merge_json, split_markdown_frontmatter, BlockMarkdownWrite,
     BlockMarkdownWriteOutcome, BlockMarkdownWriter, BlockWriteBase, DocumentKind, DocumentScopeRef,
@@ -133,10 +131,7 @@ async fn put_scoped_block_document(
     })?;
     let base = match precondition {
         WritePrecondition::IfNoneMatch => {
-            let head = match &scope {
-                DocumentScopeRef::Library { slug } => state.store.head_document(slug, path).await,
-                DocumentScopeRef::Tmp => state.store.head_tmp_document(path).await,
-            };
+            let head = state.store.head_document_for_scope(&scope, path).await;
             if head.is_ok() {
                 return Err(GatewayFailure::Api(
                     QuarryError::PreconditionFailed(format!("{path} already exists")).into(),
@@ -150,12 +145,10 @@ async fn put_scoped_block_document(
             BlockWriteBase::CurrentCanonical
         }
         WritePrecondition::IfMatch(version_id) => {
-            let version = match &scope {
-                DocumentScopeRef::Library { slug } => {
-                    state.store.document_version(slug, path, &version_id).await
-                }
-                DocumentScopeRef::Tmp => state.store.tmp_document_version(path, &version_id).await,
-            };
+            let version = state
+                .store
+                .document_version_for_scope(&scope, path, &version_id)
+                .await;
             match version {
                 Ok(version) => BlockWriteBase::Markdown {
                     markdown: version.content,
@@ -230,10 +223,10 @@ pub(crate) async fn restore_block_document_version(
         quarry_storage::TransactionMetadata {
             actor,
             message: Some(format!("Restore version {version_id}")),
-            provenance: serde_json::json!({
+            provenance: Some(serde_json::json!({
                 "mode": "auto_commit",
                 "history": {"kind": "checkpoint", "reason": "restore"}
-            }),
+            })),
         },
     )
     .await?;
@@ -370,45 +363,31 @@ async fn write_markdown_with(
 
     // First import: the document does not exist yet — every block takes a
     // fresh id through the Phase 1 import path.
-    let document = match document_for_scope(state, &write.scope, &write.path).await {
+    let document = match state
+        .store
+        .get_document_for_scope(&write.scope, &write.path)
+        .await
+    {
         Ok(document) => {
             log_block_write_started(&write, Some(&document.id));
             document
         }
         Err(QuarryError::NotFound(_)) => {
             log_block_write_started(&write, None);
-            let outcome = match &write.scope {
-                DocumentScopeRef::Library { slug } => {
-                    state
-                        .store
-                        .import_block_document_with_origin(
-                            slug,
-                            &write.path,
-                            &write.markdown,
-                            write.metadata.clone(),
-                            &content_type,
-                            write.source.clone(),
-                            WritePrecondition::IfNoneMatch,
-                            origin_id,
-                            transaction.actor.clone(),
-                        )
-                        .await?
-                }
-                DocumentScopeRef::Tmp => {
-                    state
-                        .store
-                        .import_tmp_block_document_with_transaction(
-                            &write.path,
-                            &write.markdown,
-                            write.metadata.clone(),
-                            &content_type,
-                            WritePrecondition::IfNoneMatch,
-                            origin_id,
-                            transaction,
-                        )
-                        .await?
-                }
-            };
+            let outcome = state
+                .store
+                .import_block_document_for_scope(
+                    &write.scope,
+                    &write.path,
+                    &write.markdown,
+                    write.metadata.clone(),
+                    &content_type,
+                    write.source.clone(),
+                    WritePrecondition::IfNoneMatch,
+                    origin_id,
+                    transaction,
+                )
+                .await?;
             let canonical_body = canonical_body(state, &outcome.document.id).await?;
             return Ok(BlockMarkdownWriteOutcome {
                 outcome,
@@ -427,7 +406,10 @@ async fn write_markdown_with(
     // is a legal serialization — identical to this write committing first
     // and the racing write winning afterwards.
     if document.content == write.markdown.as_bytes() {
-        let entry = head_for_scope(state, &write.scope, &write.path).await?;
+        let entry = state
+            .store
+            .head_document_for_scope(&write.scope, &write.path)
+            .await?;
         let transaction = state.store.get_transaction(&document.version.tx_id).await?;
         let canonical_body = canonical_body(state, &document.id).await?;
         return Ok(BlockMarkdownWriteOutcome {
@@ -601,28 +583,6 @@ fn log_block_write_started(write: &BlockMarkdownWrite, document_id: Option<&str>
                 "reconciled markdown write started"
             );
         }
-    }
-}
-
-async fn document_for_scope(
-    state: &AppState,
-    scope: &DocumentScopeRef,
-    path: &str,
-) -> Result<Document, QuarryError> {
-    match scope {
-        DocumentScopeRef::Library { slug } => state.store.get_document(slug, path).await,
-        DocumentScopeRef::Tmp => state.store.get_tmp_document(path).await,
-    }
-}
-
-async fn head_for_scope(
-    state: &AppState,
-    scope: &DocumentScopeRef,
-    path: &str,
-) -> Result<DocumentListEntry, QuarryError> {
-    match scope {
-        DocumentScopeRef::Library { slug } => state.store.head_document(slug, path).await,
-        DocumentScopeRef::Tmp => state.store.head_tmp_document(path).await,
     }
 }
 

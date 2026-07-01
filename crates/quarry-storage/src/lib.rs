@@ -34,7 +34,13 @@ use turso::{params, Builder, Connection, Database, Row, Rows, Value};
 use uuid::Uuid;
 
 const TMP_TRANSACTION_LIBRARY_ID: &str = "__tmp__";
-const TMP_DOCUMENT_SECRET_LEN: usize = 32;
+pub const TMP_DOCUMENT_SECRET_LEN: usize = 32;
+
+/// True when `value` has the exact shape of a tmp document capability secret.
+pub fn is_tmp_document_secret(value: &str) -> bool {
+    value.len() == TMP_DOCUMENT_SECRET_LEN
+        && value.chars().all(|character| character.is_ascii_hexdigit())
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TmpDocumentSecret(String);
@@ -46,9 +52,7 @@ impl TmpDocumentSecret {
 
     fn parse(value: &str) -> Result<Self> {
         let value = value.trim();
-        let valid = value.len() == TMP_DOCUMENT_SECRET_LEN
-            && value.chars().all(|character| character.is_ascii_hexdigit());
-        if !valid {
+        if !is_tmp_document_secret(value) {
             return Err(QuarryError::InvalidPath(
                 "invalid tmp document secret".to_string(),
             ));
@@ -68,11 +72,12 @@ pub struct StoreConfig {
     pub lock_path: Option<PathBuf>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct TransactionMetadata {
     pub actor: Option<String>,
     pub message: Option<String>,
-    pub provenance: JsonValue,
+    /// `None` means the write path supplies its own default provenance.
+    pub provenance: Option<JsonValue>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,16 +85,6 @@ pub enum TmpTtl {
     Default,
     Unchanged,
     ExpiresAt(String),
-}
-
-impl Default for TransactionMetadata {
-    fn default() -> Self {
-        Self {
-            actor: None,
-            message: None,
-            provenance: serde_json::json!({ "mode": "auto_commit" }),
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -916,7 +911,9 @@ impl QuarryStore {
                 source,
                 transaction.actor,
                 transaction.message,
-                transaction.provenance,
+                transaction
+                    .provenance
+                    .unwrap_or_else(|| serde_json::json!({ "mode": "auto_commit" })),
             )
             .await?;
             let (doc_id, old_version_id) =
@@ -997,6 +994,42 @@ impl QuarryStore {
         self.document_conn(&conn, &library.id, &path).await
     }
 
+    pub async fn get_document_for_scope(
+        &self,
+        scope: &DocumentScopeRef,
+        path: &str,
+    ) -> Result<Document> {
+        match scope {
+            DocumentScopeRef::Library { slug } => self.get_document(slug, path).await,
+            DocumentScopeRef::Tmp => self.get_tmp_document(path).await,
+        }
+    }
+
+    pub async fn head_document_for_scope(
+        &self,
+        scope: &DocumentScopeRef,
+        path: &str,
+    ) -> Result<DocumentListEntry> {
+        match scope {
+            DocumentScopeRef::Library { slug } => self.head_document(slug, path).await,
+            DocumentScopeRef::Tmp => self.head_tmp_document(path).await,
+        }
+    }
+
+    pub async fn document_version_for_scope(
+        &self,
+        scope: &DocumentScopeRef,
+        path: &str,
+        version_id: &str,
+    ) -> Result<DocumentVersionContent> {
+        match scope {
+            DocumentScopeRef::Library { slug } => {
+                self.document_version(slug, path, version_id).await
+            }
+            DocumentScopeRef::Tmp => self.tmp_document_version(path, version_id).await,
+        }
+    }
+
     pub async fn put_tmp_document(
         &self,
         path: &str,
@@ -1057,12 +1090,9 @@ impl QuarryStore {
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
-            let provenance =
-                if transaction.provenance == serde_json::json!({ "mode": "auto_commit" }) {
-                    serde_json::json!({ "mode": "tmp_document" })
-                } else {
-                    transaction.provenance
-                };
+            let provenance = transaction
+                .provenance
+                .unwrap_or_else(|| serde_json::json!({ "mode": "tmp_document" }));
             self.check_tmp_precondition_conn(&conn, &path, &precondition)
                 .await?;
             let expires_at = match ttl {
@@ -2073,10 +2103,10 @@ impl QuarryStore {
             TransactionMetadata {
                 actor,
                 message: Some(format!("Restore version {version_id}")),
-                provenance: serde_json::json!({
+                provenance: Some(serde_json::json!({
                     "mode": "auto_commit",
                     "history": {"kind": "checkpoint", "reason": "restore"}
-                }),
+                })),
             },
         )
         .await

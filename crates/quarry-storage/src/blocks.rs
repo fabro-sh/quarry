@@ -467,8 +467,8 @@ impl QuarryStore {
         source: DocumentSource,
         precondition: WritePrecondition,
     ) -> Result<WriteOutcome> {
-        self.import_block_document_with_origin(
-            library,
+        self.import_block_document_for_scope(
+            &DocumentScopeRef::library(library),
             path,
             markdown,
             metadata,
@@ -476,18 +476,41 @@ impl QuarryStore {
             source,
             precondition,
             None,
-            None,
+            TransactionMetadata::default(),
         )
         .await
     }
 
-    /// [`QuarryStore::import_block_document`] with an `origin_id` echoed on
-    /// the emitted `doc.changed` event (the Phase 4 first-import path) and
-    /// an optional `actor` recorded on the import transaction.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn import_block_document_with_origin(
+    pub async fn import_tmp_block_document(
         &self,
-        library: &str,
+        path: &str,
+        markdown: &str,
+        metadata: JsonValue,
+        content_type: &str,
+        precondition: WritePrecondition,
+    ) -> Result<WriteOutcome> {
+        self.import_block_document_for_scope(
+            &DocumentScopeRef::Tmp,
+            path,
+            markdown,
+            metadata,
+            content_type,
+            DocumentSource::Rest,
+            precondition,
+            None,
+            TransactionMetadata::default(),
+        )
+        .await
+    }
+
+    /// [`QuarryStore::import_block_document`] for either scope, with an
+    /// `origin_id` echoed on the emitted `doc.changed` event (the Phase 4
+    /// first-import path) and transaction attribution recorded on the import
+    /// transaction. Unset provenance defaults per scope.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn import_block_document_for_scope(
+        &self,
+        scope: &DocumentScopeRef,
         path: &str,
         markdown: &str,
         metadata: JsonValue,
@@ -495,9 +518,12 @@ impl QuarryStore {
         source: DocumentSource,
         precondition: WritePrecondition,
         origin_id: Option<String>,
-        actor: Option<String>,
+        transaction: TransactionMetadata,
     ) -> Result<WriteOutcome> {
-        let path = normalize_path(path)?;
+        let path = match scope {
+            DocumentScopeRef::Library { .. } => normalize_path(path)?,
+            DocumentScopeRef::Tmp => TmpDocumentSecret::parse(path)?.as_str().to_string(),
+        };
         if document_kind(&path, content_type) == DocumentKind::RawDocument {
             return Err(QuarryError::Unsupported(format!(
                 "cannot import {path} ({content_type}) as a block document"
@@ -518,20 +544,46 @@ impl QuarryStore {
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
-            self.check_precondition_conn(&conn, &library.id, &path, &precondition)
-                .await?;
+            let resolved_scope = self.resolve_document_scope_conn(&conn, scope).await?;
+            match &resolved_scope {
+                ResolvedDocumentScope::Library { id } => {
+                    self.check_precondition_conn(&conn, id, &path, &precondition)
+                        .await?;
+                }
+                ResolvedDocumentScope::Tmp => {
+                    self.check_tmp_precondition_conn(&conn, &path, &precondition)
+                        .await?;
+                }
+            }
+            let provenance = transaction.provenance.unwrap_or_else(|| match &resolved_scope {
+                ResolvedDocumentScope::Library { .. } => {
+                    serde_json::json!({ "mode": "block_import" })
+                }
+                ResolvedDocumentScope::Tmp => serde_json::json!({ "mode": "tmp_block_import" }),
+            });
             let tx = insert_transaction_conn(
                 &conn,
-                &library.id,
+                resolved_scope.transaction_library_id(),
                 source,
-                actor,
-                None,
-                serde_json::json!({ "mode": "block_import" }),
+                transaction.actor,
+                transaction.message,
+                provenance,
             )
             .await?;
-            let (doc_id, old_version_id) =
-                ensure_document_conn(&conn, &library.id, &path, &now_timestamp()).await?;
+            let (doc_id, old_version_id) = match &resolved_scope {
+                ResolvedDocumentScope::Library { id } => {
+                    ensure_document_conn(&conn, id, &path, &now_timestamp()).await?
+                }
+                ResolvedDocumentScope::Tmp => {
+                    // Keep the existing expiry (or the default for a fresh
+                    // document); an import never extends a tmp TTL.
+                    let expires_at = self
+                        .tmp_document_expires_at_conn(&conn, &path)
+                        .await?
+                        .unwrap_or_else(default_tmp_expires_at);
+                    ensure_tmp_document_conn(&conn, &path, &expires_at, &now_timestamp()).await?
+                }
+            };
             // insert_version_conn re-parses the frontmatter rendered into
             // `normalized` and re-merges the caller metadata over it; both
             // were derived from `merged_metadata`, so the stored metadata
@@ -559,129 +611,17 @@ impl QuarryStore {
             .await?;
             publish_put_conn(&conn, &doc_id, &version.id).await?;
             replace_block_rows_conn(&conn, &doc_id, &rows).await?;
-            ensure_path_inodes_conn(&conn, &library.id, &path).await?;
-            self.reindex_links_conn(&conn, &library.id).await?;
+            if let ResolvedDocumentScope::Library { id } = &resolved_scope {
+                ensure_path_inodes_conn(&conn, id, &path).await?;
+                self.reindex_links_conn(&conn, id).await?;
+            }
             commit_transaction_record_conn(&conn, &tx.id).await?;
-            let document = self.document_entry_conn(&conn, &library.id, &path).await?;
-            let tx = self.transaction_conn(&conn, &tx.id).await?;
-            Ok(WriteOutcome {
-                document,
-                version,
-                transaction: tx,
-            })
-        }
-        .await;
-        let outcome = finish_tx(&conn, result).await?;
-        self.emit_document_put_events(&outcome, origin_id);
-        Ok(outcome)
-    }
-
-    pub async fn import_tmp_block_document(
-        &self,
-        path: &str,
-        markdown: &str,
-        metadata: JsonValue,
-        content_type: &str,
-        precondition: WritePrecondition,
-    ) -> Result<WriteOutcome> {
-        self.import_tmp_block_document_with_transaction(
-            path,
-            markdown,
-            metadata,
-            content_type,
-            precondition,
-            None,
-            TransactionMetadata::default(),
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn import_tmp_block_document_with_transaction(
-        &self,
-        path: &str,
-        markdown: &str,
-        metadata: JsonValue,
-        content_type: &str,
-        precondition: WritePrecondition,
-        origin_id: Option<String>,
-        transaction: TransactionMetadata,
-    ) -> Result<WriteOutcome> {
-        let secret = TmpDocumentSecret::parse(path)?;
-        let path = secret.as_str().to_string();
-        if document_kind(&path, content_type) == DocumentKind::RawDocument {
-            return Err(QuarryError::Unsupported(format!(
-                "cannot import {path} ({content_type}) as a block document"
-            )));
-        }
-        let (frontmatter, body) = split_markdown_frontmatter(markdown)?;
-        let rows = canonical_rows(markdown_to_block_rows(body, || Uuid::new_v4().to_string())?);
-        let mut merged_metadata = frontmatter;
-        merge_json(&mut merged_metadata, metadata.clone());
-        let normalized = format!(
-            "{}{}",
-            render_markdown_frontmatter(&merged_metadata)?,
-            block_rows_to_markdown(&rows)?
-        );
-
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let provenance =
-                if transaction.provenance == serde_json::json!({ "mode": "auto_commit" }) {
-                    serde_json::json!({ "mode": "tmp_block_import" })
-                } else {
-                    transaction.provenance
-                };
-            self.check_tmp_precondition_conn(&conn, &path, &precondition)
-                .await?;
-            let expires_at = self
-                .tmp_document_expires_at_conn(&conn, &path)
-                .await?
-                .unwrap_or_else(default_tmp_expires_at);
-            let tx = insert_transaction_conn(
-                &conn,
-                TMP_TRANSACTION_LIBRARY_ID,
-                DocumentSource::Rest,
-                transaction.actor,
-                transaction.message,
-                provenance,
-            )
-            .await?;
-            let (doc_id, old_version_id) =
-                ensure_tmp_document_conn(&conn, &path, &expires_at, &now_timestamp()).await?;
-            let version = self
-                .insert_version_conn(
-                    &conn,
-                    &doc_id,
-                    &tx.id,
-                    normalized.into_bytes(),
-                    metadata,
-                    content_type,
-                )
-                .await?;
-            insert_change_conn(
-                &conn,
-                &tx.id,
-                &path,
-                ChangeType::Put,
-                old_version_id.as_deref(),
-                Some(&version.id),
-                None,
-            )
-            .await?;
-            publish_put_conn(&conn, &doc_id, &version.id).await?;
-            replace_block_rows_conn(&conn, &doc_id, &rows).await?;
-            conn.execute(
-                "UPDATE documents SET expires_at = ?1 WHERE id = ?2",
-                params![expires_at, doc_id.clone()],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            commit_transaction_record_conn(&conn, &tx.id).await?;
-            let document = self.tmp_document_entry_conn(&conn, &path).await?;
+            let document = match &resolved_scope {
+                ResolvedDocumentScope::Library { id } => {
+                    self.document_entry_conn(&conn, id, &path).await?
+                }
+                ResolvedDocumentScope::Tmp => self.tmp_document_entry_conn(&conn, &path).await?,
+            };
             let tx = self.transaction_conn(&conn, &tx.id).await?;
             Ok(WriteOutcome {
                 document,

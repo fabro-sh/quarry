@@ -1926,10 +1926,7 @@ async fn document_blocks_for_scope(
     scope: &DocumentScopeRef,
     path: &str,
 ) -> Result<Response, GatewayFailure> {
-    let document = match scope {
-        DocumentScopeRef::Library { slug } => state.store.get_document(slug, path).await?,
-        DocumentScopeRef::Tmp => state.store.get_tmp_document(path).await?,
-    };
+    let document = state.store.get_document_for_scope(scope, path).await?;
     require_block_document(&document.path, &document.version.content_type)?;
     let mut document_clock = document.version.id.clone();
     let mut rows = state.store.load_block_tree(&document.id).await?;
@@ -1946,34 +1943,20 @@ async fn document_blocks_for_scope(
                 .into(),
             )
         })?;
-        let outcome = match scope {
-            DocumentScopeRef::Library { slug } => {
-                state
-                    .store
-                    .import_block_document(
-                        slug,
-                        path,
-                        &markdown,
-                        document.version.metadata.clone(),
-                        &document.version.content_type,
-                        DocumentSource::Rest,
-                        WritePrecondition::IfMatch(document.version.id.clone()),
-                    )
-                    .await?
-            }
-            DocumentScopeRef::Tmp => {
-                state
-                    .store
-                    .import_tmp_block_document(
-                        path,
-                        &markdown,
-                        document.version.metadata.clone(),
-                        &document.version.content_type,
-                        WritePrecondition::IfMatch(document.version.id.clone()),
-                    )
-                    .await?
-            }
-        };
+        let outcome = state
+            .store
+            .import_block_document_for_scope(
+                scope,
+                path,
+                &markdown,
+                document.version.metadata.clone(),
+                &document.version.content_type,
+                DocumentSource::Rest,
+                WritePrecondition::IfMatch(document.version.id.clone()),
+                None,
+                quarry_storage::TransactionMetadata::default(),
+            )
+            .await?;
         document_clock = outcome.version.id;
         rows = state.store.load_block_tree(&document.id).await?;
     }
@@ -2037,6 +2020,18 @@ impl Default for TransactionSettings {
             metadata: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         }
+    }
+}
+
+/// The provenance recorded on a gateway commit: an explicit
+/// `x-quarry-transaction-provenance` value passes through, an explicit
+/// null/empty object engages the store's per-commit default, and an absent
+/// header keeps the legacy `auto_commit` marker.
+fn commit_provenance(settings: &TransactionSettings) -> Option<JsonValue> {
+    match &settings.transaction.provenance {
+        None => Some(json!({ "mode": "auto_commit" })),
+        Some(provenance) if provenance.is_null() || *provenance == json!({}) => None,
+        Some(provenance) => Some(provenance.clone()),
     }
 }
 
@@ -2157,10 +2152,7 @@ pub(crate) async fn execute_block_transaction(
     settings: &TransactionSettings,
     plan: PlanProvider<'_>,
 ) -> Result<TransactionReply, GatewayFailure> {
-    let document = match scope {
-        DocumentScopeRef::Library { slug } => state.store.head_document(slug, path).await?,
-        DocumentScopeRef::Tmp => state.store.head_tmp_document(path).await?,
-    };
+    let document = state.store.head_document_for_scope(scope, path).await?;
     let guard = state.sessions.lock_document(&document.id).await;
     match guard.session() {
         Some(session) => {
@@ -2208,8 +2200,7 @@ async fn apply_rows_transaction(
                 .clone()
                 .or_else(|| Some(ctx.actor.display())),
             transaction_message: settings.transaction.message.clone(),
-            transaction_provenance: Some(settings.transaction.provenance.clone())
-                .filter(|provenance| !provenance.is_null() && provenance != &json!({})),
+            transaction_provenance: commit_provenance(settings),
             origin_id: settings.origin_id.clone(),
             source: settings.source.clone(),
             recorded_ops: recorded_ops(
@@ -2342,8 +2333,7 @@ async fn apply_session_transaction(
             .clone()
             .or_else(|| Some(ctx.actor.display())),
         transaction_message: settings.transaction.message.clone(),
-        transaction_provenance: Some(settings.transaction.provenance.clone())
-            .filter(|provenance| !provenance.is_null() && provenance != &json!({})),
+        transaction_provenance: commit_provenance(settings),
         // In-session browsers classify this as a benign refresh
         // (`session-events.ts`), exactly like checkpoint commits — for
         // whole-file writes too, since the session doc already carries the
