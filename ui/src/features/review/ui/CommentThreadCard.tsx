@@ -68,13 +68,63 @@ function CommentEditForm({
   );
 }
 
+function ActionsMenu({
+  label,
+  open,
+  onOpenChange,
+  canEdit,
+  onEdit,
+  onDelete,
+}: {
+  label: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  canEdit: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <DropdownMenu.Root onOpenChange={onOpenChange} open={open}>
+      <DropdownMenu.Trigger asChild>
+        <button
+          aria-label={label}
+          className="flex size-7 shrink-0 items-center justify-center rounded text-faint outline-none transition-colors hover:bg-well hover:text-body"
+          onClick={(event) => event.stopPropagation()}
+          type="button"
+        >
+          <MoreHorizontal size={16} />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          className="z-50 min-w-36 rounded-md border border-line bg-raised p-1 shadow-lg"
+          onClick={(event) => event.stopPropagation()}
+          sideOffset={6}
+        >
+          {canEdit ? (
+            <DropdownMenu.Item className={menuItem} onSelect={onEdit}>
+              <Pencil className="shrink-0" size={15} />
+              Edit
+            </DropdownMenu.Item>
+          ) : null}
+          <DropdownMenu.Item className={cn(menuItem, 'text-danger')} onSelect={onDelete}>
+            <Trash2 className="shrink-0" size={15} />
+            Delete
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
 export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; editor: PlateEditor }) {
   const activeId = useReviewStore((state) => state.activeId);
   const hoverId = useReviewStore((state) => state.hoverId);
   const setHoverId = useReviewStore((state) => state.setHoverId);
   const [draft, setDraft] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [replyFocused, setReplyFocused] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -121,6 +171,10 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
     applyReviewMutation((meta) => deleteComment(meta, thread.id));
   }
 
+  function deleteReply(id: string) {
+    applyReviewMutation((meta) => deleteComment(meta, id));
+  }
+
   return (
     <div
       className={cn(
@@ -146,7 +200,7 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
         <div
           className={cn(
             'flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100',
-            menuOpen && 'opacity-100'
+            openMenuId === thread.id && 'opacity-100'
           )}
         >
           {resolved || !rootHasBody ? null : (
@@ -163,43 +217,14 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
               <Check size={16} />
             </button>
           )}
-          <DropdownMenu.Root onOpenChange={setMenuOpen} open={menuOpen}>
-            <DropdownMenu.Trigger asChild>
-              <button
-                aria-label="Comment actions"
-                className="flex size-7 shrink-0 items-center justify-center rounded text-faint outline-none transition-colors hover:bg-well hover:text-body"
-                onClick={(event) => event.stopPropagation()}
-                type="button"
-              >
-                <MoreHorizontal size={16} />
-              </button>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                align="end"
-                className="z-50 min-w-36 rounded-md border border-line bg-raised p-1 shadow-lg"
-                onClick={(event) => event.stopPropagation()}
-                sideOffset={6}
-              >
-                {!resolved && rootHasBody ? (
-                  <DropdownMenu.Item
-                    className={menuItem}
-                    onSelect={() => {
-                      setEditingId(thread.id);
-                      setMenuOpen(false);
-                    }}
-                  >
-                    <Pencil className="shrink-0" size={15} />
-                    Edit
-                  </DropdownMenu.Item>
-                ) : null}
-                <DropdownMenu.Item className={cn(menuItem, 'text-danger')} onSelect={discard}>
-                  <Trash2 className="shrink-0" size={15} />
-                  Delete
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
+          <ActionsMenu
+            canEdit={!resolved && rootHasBody}
+            label="Comment actions"
+            onDelete={discard}
+            onEdit={() => setEditingId(thread.id)}
+            onOpenChange={(next) => setOpenMenuId(next ? thread.id : null)}
+            open={openMenuId === thread.id}
+          />
         </div>
       </div>
 
@@ -217,7 +242,7 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
       ) : null}
 
       {thread.replies.length > 0 ? (
-        <div className="mt-3 flex flex-col gap-3 border-l border-line pl-3">
+        <div className="mt-5 flex flex-col gap-5">
           {thread.replies.map((reply) => (
             <div className="group/reply" key={reply.id}>
               <div className="flex items-start justify-between gap-2">
@@ -227,17 +252,21 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
                   editedAt={reply.entry.editedAt}
                 />
                 {!resolved && reply.entry.status !== 'resolved' ? (
-                  <button
-                    aria-label="Edit reply"
-                    className="flex size-7 shrink-0 items-center justify-center rounded text-faint opacity-0 outline-none transition-colors hover:bg-well hover:text-body group-hover/reply:opacity-100 focus-visible:opacity-100"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setEditingId(reply.id);
-                    }}
-                    type="button"
+                  <div
+                    className={cn(
+                      'shrink-0 opacity-0 transition-opacity group-hover/reply:opacity-100 focus-within:opacity-100',
+                      openMenuId === reply.id && 'opacity-100'
+                    )}
                   >
-                    <Pencil size={15} />
-                  </button>
+                    <ActionsMenu
+                      canEdit
+                      label="Reply actions"
+                      onDelete={() => deleteReply(reply.id)}
+                      onEdit={() => setEditingId(reply.id)}
+                      onOpenChange={(next) => setOpenMenuId(next ? reply.id : null)}
+                      open={openMenuId === reply.id}
+                    />
+                  </div>
                 ) : null}
               </div>
               {editingId === reply.id ? (

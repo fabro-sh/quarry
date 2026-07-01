@@ -99,7 +99,7 @@ function CommentItem({ comment }: { comment: AgentReviewComment }) {
       ) : null}
 
       {comment.replies.length > 0 ? (
-        <div className="mt-3 flex flex-col gap-3 border-l border-line pl-3">
+        <div className="mt-5 flex flex-col gap-5">
           {comment.replies.map((reply) => (
             <div key={reply.id}>
               <ReviewAuthorHeader at={reply.at} by={reply.by} editedAt={reply.editedAt} />

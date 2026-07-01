@@ -318,7 +318,8 @@ describe('CommentThreadCard', () => {
   it('edits a reply body inline', async () => {
     render(<CommentThreadCard thread={seedThread()} editor={makeEditor()} />);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Edit reply' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Reply actions' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Edit' }));
     const editor = screen.getByRole('textbox', { name: 'Edit reply' });
     await userEvent.clear(editor);
     await userEvent.type(editor, 'Updated reply.');
@@ -327,6 +328,19 @@ describe('CommentThreadCard', () => {
     const reply = useReviewStore.getState().getMeta().comments.c2;
     expect(reply.body).toBe('Updated reply.');
     expect(reply.editedAt).toEqual(expect.any(String));
+  });
+
+  it('deletes a reply while leaving the root comment and its mark intact', async () => {
+    const editor = makeEditor();
+    render(<CommentThreadCard thread={seedThread()} editor={editor} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Reply actions' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+
+    const comments = useReviewStore.getState().getMeta().comments;
+    expect(comments.c2).toBeUndefined();
+    expect(comments.c1).toBeDefined();
+    expect(JSON.stringify(editor.children)).toContain('comment_c1');
   });
 
   it('shows a Resolved badge and hides the resolve checkbox when resolved', () => {
