@@ -1933,6 +1933,316 @@ describe('Quarry Browser workspace', () => {
     click.mockRestore();
   });
 
+  it('shows Upload Markdown for markdown documents and hides it for raw text documents', async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/v1/libraries') {
+        return json([{ id: 'lib-upload-menu', slug: 'upload-menu', created_at: 'now', settings: {} }]);
+      }
+      if (url === '/v1/libraries/upload-menu/documents') {
+        return json([
+          {
+            id: 'doc-md',
+            path: 'daily.md',
+            head_version_id: 'v-md',
+            content_type: 'text/markdown',
+            byte_size: 8,
+            metadata: { title: 'Daily' },
+            updated_at: 'now',
+          },
+          {
+            id: 'doc-txt',
+            path: 'raw.txt',
+            head_version_id: 'v-txt',
+            content_type: 'text/plain',
+            byte_size: 4,
+            metadata: { title: 'Raw' },
+            updated_at: 'now',
+          },
+        ]);
+      }
+      if (url === '/v1/libraries/upload-menu/documents/daily.md') {
+        return new Response('# Daily\n', { headers: { ETag: '"v-md"', 'content-type': 'text/markdown' } });
+      }
+      if (url === '/v1/libraries/upload-menu/documents/raw.txt') {
+        return new Response('raw\n', { headers: { ETag: '"v-txt"', 'content-type': 'text/plain' } });
+      }
+      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) return json({ path: 'daily.md', links: [] });
+      if (url.endsWith('/versions')) return json([]);
+      if (url.startsWith('/v1/libraries/upload-menu/graph')) return json({ nodes: [], edges: [], truncated: false });
+      if (url === '/v1/libraries/upload-menu/conflicts') return json([]);
+      if (url === '/v1/libraries/upload-menu/git/peers') return json([]);
+      if (url.startsWith('/v1/libraries/upload-menu/search')) return json({ results: [], cursor: null });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Document actions' }));
+    expect(await screen.findByText('Upload Markdown')).toBeInTheDocument();
+    await userEvent.keyboard('{Escape}');
+
+    await userEvent.click(screen.getByRole('treeitem', { name: /Raw/ }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Document actions' }));
+    expect(screen.queryByText('Upload Markdown')).not.toBeInTheDocument();
+  });
+
+  it('uploads a markdown file to the selected library document using a fresh ETag', async () => {
+    let documentFetches = 0;
+    let putInit: RequestInit | undefined;
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/v1/libraries') {
+        return json([{ id: 'lib-upload', slug: 'upload-lib', created_at: 'now', settings: {} }]);
+      }
+      if (url === '/v1/libraries/upload-lib/documents') {
+        return json([
+          {
+            id: 'doc-upload',
+            path: 'notes/readme.md',
+            head_version_id: 'v1',
+            content_type: 'text/markdown',
+            byte_size: 10,
+            metadata: { title: 'Readme' },
+            updated_at: 'now',
+          },
+        ]);
+      }
+      if (url === '/v1/libraries/upload-lib/documents/notes/readme.md' && init?.method === 'PUT') {
+        putInit = init;
+        return json(writeOutcome('doc-upload', 'v3', 'notes/readme.md'), { ETag: '"v3"' });
+      }
+      if (url === '/v1/libraries/upload-lib/documents/notes/readme.md') {
+        documentFetches += 1;
+        const etag = documentFetches === 1 ? '"v1"' : '"v2"';
+        const body = documentFetches >= 3 ? '# Uploaded\n' : '# Current\n';
+        return new Response(body, {
+          headers: {
+            ETag: etag,
+            'content-type': 'text/markdown',
+          },
+        });
+      }
+      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) {
+        return json({ path: 'notes/readme.md', links: [] });
+      }
+      if (url.endsWith('/review?includeResolved=1')) {
+        return json({ documentId: 'doc-upload', comments: [], suggestions: [], conflicts: [] });
+      }
+      if (url.endsWith('/versions')) return json([]);
+      if (url.startsWith('/v1/libraries/upload-lib/graph')) return json({ nodes: [], edges: [], truncated: false });
+      if (url === '/v1/libraries/upload-lib/conflicts') return json([]);
+      if (url === '/v1/libraries/upload-lib/git/peers') return json([]);
+      if (url.startsWith('/v1/libraries/upload-lib/search')) return json({ results: [], cursor: null });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    await userEvent.click(await screen.findByRole('treeitem', { name: /Readme/ }));
+    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Document actions' }));
+    await userEvent.click(await screen.findByText('Upload Markdown'));
+    await userEvent.upload(
+      screen.getByLabelText('Upload Markdown file'),
+      markdownFile('# Uploaded\n')
+    );
+
+    await waitFor(() => expect(putInit).toBeTruthy());
+    expect(putInit?.body).toBe('# Uploaded\n');
+    expect(putInit?.headers).toMatchObject({
+      'If-Match': '"v2"',
+      'content-type': 'text/markdown',
+      'X-Quarry-Origin-Id': expect.any(String),
+      'X-Quarry-Transaction-Actor': 'Tester',
+    });
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/v1/libraries/upload-lib/documents/notes/readme.md/versions', undefined));
+  });
+
+  it('uploads markdown in tmp mode through the tmp document endpoint', async () => {
+    window.history.pushState({}, '', '/tmp/scratch/note.md');
+    let putUrl = '';
+    let putInit: RequestInit | undefined;
+    let documentFetches = 0;
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/v1/libraries') return json([]);
+      if (url === '/v1/tmp/documents') {
+        return json([
+          {
+            id: 'tmp-upload',
+            path: 'scratch/note.md',
+            head_version_id: 'tmp-v1',
+            content_type: 'text/markdown',
+            byte_size: 8,
+            metadata: { title: 'Scratch' },
+            updated_at: 'now',
+          },
+        ]);
+      }
+      if (url === '/v1/tmp/documents/scratch/note.md' && init?.method === 'PUT') {
+        putUrl = url;
+        putInit = init;
+        return json(writeOutcome('tmp-upload', 'tmp-v3', 'scratch/note.md'), { ETag: '"tmp-v3"' });
+      }
+      if (url === '/v1/tmp/documents/scratch/note.md') {
+        documentFetches += 1;
+        return new Response(documentFetches >= 3 ? '# Tmp uploaded\n' : '# Tmp\n', {
+          headers: {
+            ETag: documentFetches === 1 ? '"tmp-v1"' : '"tmp-v2"',
+            'content-type': 'text/markdown',
+          },
+        });
+      }
+      if (url === '/v1/tmp/documents/scratch/note.md/presence') return json({ presence: [] });
+      if (url === '/v1/tmp/documents/scratch/note.md/review?includeResolved=1') {
+        return json({ documentId: 'tmp-upload', comments: [], suggestions: [], conflicts: [] });
+      }
+      if (url === '/v1/tmp/documents/scratch/note.md/versions') return json([]);
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    expect(await screen.findByRole('button', { name: 'Document mode' })).toHaveTextContent('Editing');
+    await userEvent.keyboard('{Control>}k{/Control}');
+    await userEvent.click(await screen.findByText('Upload Markdown'));
+    await userEvent.upload(
+      screen.getByLabelText('Upload Markdown file'),
+      markdownFile('# Tmp uploaded\n')
+    );
+
+    await waitFor(() => expect(putInit).toBeTruthy());
+    expect(putUrl).toBe('/v1/tmp/documents/scratch/note.md');
+    expect(putInit?.body).toBe('# Tmp uploaded\n');
+    expect(putInit?.headers).toMatchObject({
+      'If-Match': '"tmp-v2"',
+      'content-type': 'text/markdown',
+      'X-Quarry-Origin-Id': expect.any(String),
+      'X-Quarry-Transaction-Actor': 'Tester',
+    });
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/v1/tmp/documents/scratch/note.md/versions', undefined));
+  });
+
+  it('blocks markdown upload while the live document has unsaved session state', async () => {
+    const alert = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    const clickFileInput = vi.spyOn(HTMLInputElement.prototype, 'click');
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/v1/libraries') {
+        return json([{ id: 'lib-blocked', slug: 'blocked-lib', created_at: 'now', settings: {} }]);
+      }
+      if (url === '/v1/libraries/blocked-lib/documents') {
+        return json([
+          {
+            id: 'doc-blocked',
+            path: 'blocked.md',
+            head_version_id: 'v1',
+            content_type: 'text/markdown',
+            byte_size: 10,
+            metadata: { title: 'Blocked' },
+            updated_at: 'now',
+          },
+        ]);
+      }
+      if (url === '/v1/libraries/blocked-lib/documents/blocked.md') {
+        return new Response('# Blocked\n', {
+          headers: {
+            ETag: '"v1"',
+            'content-type': 'text/markdown',
+            'x-quarry-document-id': 'doc-blocked',
+          },
+        });
+      }
+      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) return json({ path: 'blocked.md', links: [] });
+      if (url.endsWith('/review?includeResolved=1')) {
+        return json({ documentId: 'doc-blocked', comments: [], suggestions: [], conflicts: [] });
+      }
+      if (url.endsWith('/versions')) return json([]);
+      if (url.startsWith('/v1/libraries/blocked-lib/graph')) return json({ nodes: [], edges: [], truncated: false });
+      if (url === '/v1/libraries/blocked-lib/conflicts') return json([]);
+      if (url === '/v1/libraries/blocked-lib/git/peers') return json([]);
+      if (url.startsWith('/v1/libraries/blocked-lib/search')) return json({ results: [], cursor: null });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    await userEvent.click(await screen.findByRole('treeitem', { name: /Blocked/ }));
+    expect(await screen.findByLabelText('Save status')).toHaveTextContent(/Reconnecting|Saving/);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Document actions' }));
+    await userEvent.click(await screen.findByText('Upload Markdown'));
+
+    expect(alert).toHaveBeenCalledWith(expect.stringMatching(/finish saving/i));
+    expect(clickFileInput).not.toHaveBeenCalled();
+  });
+
+  it('alerts on upload failure and leaves the visible document content unchanged', async () => {
+    const alert = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    let documentFetches = 0;
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/v1/libraries') {
+        return json([{ id: 'lib-fail', slug: 'fail-lib', created_at: 'now', settings: {} }]);
+      }
+      if (url === '/v1/libraries/fail-lib/documents') {
+        return json([
+          {
+            id: 'doc-fail',
+            path: 'fail.md',
+            head_version_id: 'v1',
+            content_type: 'text/markdown',
+            byte_size: 10,
+            metadata: { title: 'Fail' },
+            updated_at: 'now',
+          },
+        ]);
+      }
+      if (url === '/v1/libraries/fail-lib/documents/fail.md' && init?.method === 'PUT') {
+        return new Response(JSON.stringify({ error: 'write failed' }), {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/v1/libraries/fail-lib/documents/fail.md') {
+        documentFetches += 1;
+        return new Response('# Current\n', {
+          headers: {
+            ETag: documentFetches === 1 ? '"v1"' : '"v2"',
+            'content-type': 'text/markdown',
+          },
+        });
+      }
+      if (url.endsWith('/outgoing-links') || url.endsWith('/backlinks')) return json({ path: 'fail.md', links: [] });
+      if (url.endsWith('/versions')) return json([]);
+      if (url.startsWith('/v1/libraries/fail-lib/graph')) return json({ nodes: [], edges: [], truncated: false });
+      if (url === '/v1/libraries/fail-lib/conflicts') return json([]);
+      if (url === '/v1/libraries/fail-lib/git/peers') return json([]);
+      if (url.startsWith('/v1/libraries/fail-lib/search')) return json({ results: [], cursor: null });
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    await userEvent.click(await screen.findByRole('treeitem', { name: /Fail/ }));
+    const editor = await screen.findByLabelText('Plate markdown editor');
+    expect(editor).toHaveTextContent('Current');
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Document actions' }));
+    await userEvent.click(await screen.findByText('Upload Markdown'));
+    await userEvent.upload(
+      screen.getByLabelText('Upload Markdown file'),
+      markdownFile('# Replacement\n')
+    );
+
+    await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringContaining('write failed')));
+    expect(editor).toHaveTextContent('Current');
+  });
+
   it('requires a name on first run and stamps it into the author store', async () => {
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -2012,6 +2322,14 @@ function json(body: unknown, headers: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
     headers: { 'content-type': 'application/json', ...headers },
   });
+}
+
+function markdownFile(content: string, name = 'upload.md') {
+  const file = new File([content], name, { type: 'text/markdown' });
+  Object.defineProperty(file, 'text', {
+    value: vi.fn().mockResolvedValue(content),
+  });
+  return file;
 }
 
 function link(overrides: Record<string, unknown>) {

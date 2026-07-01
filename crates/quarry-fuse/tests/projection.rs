@@ -669,7 +669,7 @@ async fn concurrent_canonical_edit_and_fuse_write_converge_with_conflict_items()
     let head = store.head_document(&library.slug, "doc.md").await.unwrap();
     store
         .write_block_markdown(quarry_storage::BlockMarkdownWrite {
-            library: library.slug.clone(),
+            scope: quarry_storage::DocumentScopeRef::library(&library.slug),
             path: "doc.md".to_string(),
             markdown: base_export.replace("Alpha.", "Alpha, canonical."),
             metadata: serde_json::json!({"content_type": "text/markdown"}),

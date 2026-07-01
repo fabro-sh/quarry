@@ -39,6 +39,7 @@ import {
   Sun,
   Trash2,
   Unlink,
+  Upload,
 } from 'lucide-react';
 import {
   type FormEvent,
@@ -97,6 +98,7 @@ import {
   promoteTmpDocument,
   putBinaryDocument,
   putDocument,
+  putTmpDocument,
   resolveConflict,
   restoreVersion,
   searchDocuments,
@@ -267,6 +269,7 @@ function Workspace() {
   const [treeMenu, setTreeMenu] = useState<TreeMenuState | null>(null);
   const leftPanelRef = useRef<ImperativePanelHandle>(null);
   const rightPanelRef = useRef<ImperativePanelHandle>(null);
+  const uploadMarkdownInputRef = useRef<HTMLInputElement>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [resizingPanels, setResizingPanels] = useState(false);
@@ -861,6 +864,9 @@ function Workspace() {
   const loadedDocumentForSelection = document?.path === selectedPath ? document : undefined;
   const loadedDocumentContentType = loadedDocumentForSelection?.contentType;
   const selectedContentType = loadedDocumentContentType ?? selectedEntry?.content_type ?? contentType;
+  const selectedIsMarkdown = Boolean(
+    selectedPath && isMarkdownDocument(selectedPath, selectedContentType)
+  );
   const activeLoadedDocument =
     loadedDocumentRef.current?.scope === documentScope &&
     loadedDocumentRef.current?.library === activeLibrary &&
@@ -1105,6 +1111,63 @@ function Workspace() {
     anchor.download = documentBasename(selectedPath);
     anchor.click();
     URL.revokeObjectURL(url);
+  }
+
+  function startUploadMarkdown() {
+    if (!selectedPath || !selectedIsMarkdown) return;
+    if (isLibraryDocument && !activeLibrary) return;
+    if (saveState && saveState !== 'saved') {
+      window.alert('Wait for the current document to finish saving before uploading Markdown.');
+      return;
+    }
+    uploadMarkdownInputRef.current?.click();
+  }
+
+  async function uploadCurrentMarkdownFile(file: File | null | undefined) {
+    if (!file || !selectedPath || !selectedIsMarkdown) return;
+    if (isLibraryDocument && !activeLibrary) return;
+    if (saveState && saveState !== 'saved') {
+      window.alert('Wait for the current document to finish saving before uploading Markdown.');
+      if (uploadMarkdownInputRef.current) uploadMarkdownInputRef.current.value = '';
+      return;
+    }
+    const path = selectedPath;
+    const library = activeLibrary;
+    const tmp = isTmpDocument;
+    try {
+      const text = await file.text();
+      const latest = tmp ? await getTmpDocument(path) : await getDocument(library, path);
+      const saved = tmp
+        ? await putTmpDocument(path, text, latest.etag, 'text/markdown', browserMutationOptions())
+        : await putDocument(library, path, text, latest.etag, 'text/markdown', browserMutationOptions());
+      setEtag(saved.etag || `"${saved.outcome.version.id}"`);
+      setSelectedVersionId(null);
+      setCompareVersionId(null);
+      setCurrentDiffOpen(false);
+      if (tmp) {
+        await Promise.all([
+          mutate(['/v1/tmp-document', path]),
+          mutate(['/v1/tmp-documents']),
+          mutate(['/v1/tmp-versions', path]),
+          mutate(['/v1/tmp-review', path]),
+        ]);
+      } else {
+        await Promise.all([
+          mutate(['/v1/document', library, path]),
+          mutate(['/v1/documents', library]),
+          mutate(['/v1/versions', library, path]),
+          mutate(['/v1/review', library, path]),
+          mutate(['/v1/outgoing', library, path]),
+          mutate(['/v1/backlinks', library, path]),
+        ]);
+      }
+    } catch (error) {
+      window.alert(
+        `Upload Markdown failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    } finally {
+      if (uploadMarkdownInputRef.current) uploadMarkdownInputRef.current.value = '';
+    }
   }
 
   async function openAddAgentModal() {
@@ -1360,6 +1423,17 @@ function Workspace() {
       data-theme={theme}
     >
       <h1 className="sr-only">Quarry</h1>
+      <label className="sr-only" htmlFor="upload-markdown-file">
+        Upload Markdown file
+      </label>
+      <input
+        accept=".md,.markdown,text/markdown,text/x-markdown"
+        className="sr-only"
+        id="upload-markdown-file"
+        ref={uploadMarkdownInputRef}
+        type="file"
+        onChange={(event) => void uploadCurrentMarkdownFile(event.currentTarget.files?.[0])}
+      />
 
       <PanelGroup
         aria-label="Workspace layout"
@@ -1435,6 +1509,7 @@ function Workspace() {
                 onHandoff={() => void handoffCurrentTmpDocument()}
                 onPromote={() => void promoteCurrentTmpDocument()}
                 onRename={renameCurrent}
+                onUploadMarkdown={startUploadMarkdown}
               />
               {selectedDocumentBodyReady ? (
                 <DocumentBody
@@ -1521,6 +1596,7 @@ function Workspace() {
         onCreate={() => void createVisibleDocument()}
         onDelete={deleteCurrent}
         onDownload={downloadCurrentMarkdown}
+        onUploadMarkdown={startUploadMarkdown}
         onOpenGit={() => setGitOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
         onMove={renameCurrent}
@@ -1528,6 +1604,7 @@ function Workspace() {
         onQueryChange={setPaletteQuery}
         onSearch={setSearchQuery}
         onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+        selectedIsMarkdown={selectedIsMarkdown}
         theme={theme}
       />
 
@@ -1805,6 +1882,7 @@ function CommandPalette({
   onCreate,
   onDelete,
   onDownload,
+  onUploadMarkdown,
   onOpenGit,
   onOpenSettings,
   onMove,
@@ -1812,6 +1890,7 @@ function CommandPalette({
   onQueryChange,
   onSearch,
   onToggleTheme,
+  selectedIsMarkdown,
 }: {
   activeLibrary: string;
   documents: DocumentListEntry[];
@@ -1825,6 +1904,7 @@ function CommandPalette({
   onCreate: () => void;
   onDelete: () => void;
   onDownload: () => void;
+  onUploadMarkdown: () => void;
   onOpenGit: () => void;
   onOpenSettings: () => void;
   onMove: () => void;
@@ -1832,6 +1912,7 @@ function CommandPalette({
   onQueryChange: (query: string) => void;
   onSearch: (query: string) => void;
   onToggleTheme: () => void;
+  selectedIsMarkdown: boolean;
 }) {
   const dialogRef = useDialogFocusTrap(open, onClose);
 
@@ -1921,6 +2002,16 @@ function CommandPalette({
                 <span className="min-w-0 flex-1 truncate">Download as Markdown</span>
                 {selectedPath ? <span className="shrink-0 truncate text-xs text-muted">{selectedPath}</span> : null}
               </Command.Item>
+              {selectedIsMarkdown ? (
+                <Command.Item
+                  className={commandItem}
+                  value="upload import markdown replace current document"
+                  onSelect={() => run(onUploadMarkdown)}
+                >
+                  <span className="min-w-0 flex-1 truncate">Upload Markdown</span>
+                  <span className="shrink-0 truncate text-xs text-muted">{selectedPath}</span>
+                </Command.Item>
+              ) : null}
               {libraryControlsEnabled ? (
                 <Command.Item
                   className={commandItem}
@@ -3273,6 +3364,7 @@ function DocumentToolbar({
   onHandoff,
   onPromote,
   onRename,
+  onUploadMarkdown,
 }: {
   agentPresence: AgentPresenceEntry[];
   canPromote: boolean;
@@ -3292,6 +3384,7 @@ function DocumentToolbar({
   onHandoff: () => void;
   onPromote: () => void;
   onRename: () => void;
+  onUploadMarkdown: () => void;
 }) {
   return (
     <div className="flex h-12 shrink-0 items-center gap-2 bg-surface px-3">
@@ -3347,6 +3440,12 @@ function DocumentToolbar({
               <DropdownMenu.Item className={menuItem} onSelect={onDownload}>
                 <Download className="shrink-0" size={15} />
                 Download as Markdown
+              </DropdownMenu.Item>
+            ) : null}
+            {isMarkdown ? (
+              <DropdownMenu.Item className={menuItem} onSelect={onUploadMarkdown}>
+                <Upload className="shrink-0" size={15} />
+                Upload Markdown
               </DropdownMenu.Item>
             ) : null}
             {isTmp ? (

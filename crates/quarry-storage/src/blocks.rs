@@ -194,7 +194,7 @@ pub struct NewBlockReviewItem {
 /// [`QuarryStore::set_block_markdown_writer`].
 #[derive(Clone, Debug)]
 pub struct BlockMarkdownWrite {
-    pub library: String,
+    pub scope: DocumentScopeRef,
     pub path: String,
     /// The full incoming text (frontmatter + body).
     pub markdown: String,
@@ -584,6 +584,29 @@ impl QuarryStore {
         content_type: &str,
         precondition: WritePrecondition,
     ) -> Result<WriteOutcome> {
+        self.import_tmp_block_document_with_transaction(
+            path,
+            markdown,
+            metadata,
+            content_type,
+            precondition,
+            None,
+            TransactionMetadata::default(),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn import_tmp_block_document_with_transaction(
+        &self,
+        path: &str,
+        markdown: &str,
+        metadata: JsonValue,
+        content_type: &str,
+        precondition: WritePrecondition,
+        origin_id: Option<String>,
+        transaction: TransactionMetadata,
+    ) -> Result<WriteOutcome> {
         let path = normalize_path(path)?;
         if document_kind(&path, content_type) == DocumentKind::RawDocument {
             return Err(QuarryError::Unsupported(format!(
@@ -605,6 +628,12 @@ impl QuarryStore {
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
+            let provenance =
+                if transaction.provenance == serde_json::json!({ "mode": "auto_commit" }) {
+                    serde_json::json!({ "mode": "tmp_block_import" })
+                } else {
+                    transaction.provenance
+                };
             self.check_tmp_precondition_conn(&conn, &path, &precondition)
                 .await?;
             let expires_at = self
@@ -615,9 +644,9 @@ impl QuarryStore {
                 &conn,
                 TMP_TRANSACTION_LIBRARY_ID,
                 DocumentSource::Rest,
-                None,
-                None,
-                serde_json::json!({ "mode": "tmp_block_import" }),
+                transaction.actor,
+                transaction.message,
+                provenance,
             )
             .await?;
             let (doc_id, old_version_id) =
@@ -660,7 +689,9 @@ impl QuarryStore {
             })
         }
         .await;
-        finish_tx(&conn, result).await
+        let outcome = finish_tx(&conn, result).await?;
+        self.emit_document_put_events(&outcome, origin_id);
+        Ok(outcome)
     }
 
     /// Exports a BlockDocument from its canonical rows: frontmatter rendered

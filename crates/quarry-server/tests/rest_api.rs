@@ -3630,6 +3630,23 @@ async fn get_block_tree(app: &axum::Router, path: &str) -> Value {
     response_json(response).await
 }
 
+#[cfg(feature = "tmp-documents")]
+async fn get_tmp_block_tree(app: &axum::Router, path: &str) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/tmp/documents/{path}/blocks"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response_json(response).await
+}
+
 async fn post_block_transaction(
     app: &axum::Router,
     path: &str,
@@ -7095,6 +7112,174 @@ async fn markdown_put_with_critic_markup_fails_typed_unsupported() {
     let status = response.status();
     let body = response_json(response).await;
     assert_typed_error(status, &body, "UNSUPPORTED_MARKDOWN", false);
+}
+
+#[cfg(feature = "tmp-documents")]
+#[tokio::test]
+async fn tmp_markdown_put_replaces_materialized_blocks_and_preserves_ttl() {
+    let (_root, app, store) = block_test_app().await;
+    let path = "scratch/upload.md";
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/tmp/documents",
+            serde_json::json!({
+                "path": path,
+                "content": "# Original\n\nOld body.\n",
+                "content_type": "text/markdown",
+                "expires_at": "2099-01-01T00:00:00Z"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let before = get_tmp_block_tree(&app, path).await;
+    assert_eq!(before["blocks"].as_array().unwrap().len(), 2);
+    assert_eq!(before["blocks"][0]["text"], "Original");
+    assert_eq!(before["blocks"][1]["text"], "Old body.");
+    let clock = before["document_clock"].as_str().unwrap().to_string();
+    let expires_before = store.head_tmp_document(path).await.unwrap().expires_at;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/tmp/documents/{path}"))
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header(header::IF_MATCH, format!("\"{clock}\""))
+                .body(Body::from("# Uploaded\n\nNew body.\n"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let etag = response.headers()[header::ETAG]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let outcome = response_json(response).await;
+    assert_eq!(
+        etag,
+        format!("\"{}\"", outcome["version"]["id"].as_str().unwrap())
+    );
+    assert_eq!(
+        store.head_tmp_document(path).await.unwrap().expires_at,
+        expires_before
+    );
+
+    let after = get_tmp_block_tree(&app, path).await;
+    let blocks = after["blocks"].as_array().unwrap();
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks[0]["text"], "Uploaded");
+    assert_eq!(blocks[1]["text"], "New body.");
+
+    let document = store.get_tmp_document(path).await.unwrap();
+    assert_eq!(
+        String::from_utf8(document.content).unwrap(),
+        "# Uploaded\n\nNew body.\n"
+    );
+}
+
+#[cfg(feature = "tmp-documents")]
+#[tokio::test]
+async fn tmp_markdown_put_lands_in_an_active_session_as_a_collaborator_edit() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    let path = "scratch/live-upload.md";
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/tmp/documents",
+            serde_json::json!({
+                "path": path,
+                "content": "Old first.\n\nOld second.\n",
+                "content_type": "text/markdown",
+                "expires_at": "2099-01-01T00:00:00Z"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let tree = get_tmp_block_tree(&app, path).await;
+    let clock = tree["document_clock"].as_str().unwrap().to_string();
+    let document_id = store.head_tmp_document(path).await.unwrap().id;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    assert_eq!(yjs_plain_text(&doc), "Old first.Old second.");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/tmp/documents/{path}"))
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header(header::IF_MATCH, format!("\"{clock}\""))
+                .body(Body::from("Uploaded first.\n\nUploaded second.\n"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let after = get_tmp_block_tree(&app, path).await;
+    assert_eq!(after["blocks"][0]["text"], "Uploaded first.");
+    assert_eq!(after["blocks"][1]["text"], "Uploaded second.");
+    wait_for_yjs_plain_text(&mut socket, &doc, "Uploaded first.Uploaded second.").await;
+
+    socket.close(None).await.unwrap();
+    server.abort();
+}
+
+#[cfg(feature = "tmp-documents")]
+#[tokio::test]
+async fn tmp_raw_text_put_bypasses_the_block_model() {
+    let (_root, app, store) = block_test_app().await;
+    let path = "scratch/raw.txt";
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/tmp/documents",
+            serde_json::json!({
+                "path": path,
+                "content": "draft one",
+                "content_type": "text/plain",
+                "expires_at": "2099-01-01T00:00:00Z"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let etag = response.headers()[header::ETAG]
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/tmp/documents/{path}"))
+                .header(header::CONTENT_TYPE, "text/plain")
+                .header(header::IF_MATCH, etag)
+                .body(Body::from("draft two"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let document = store.get_tmp_document(path).await.unwrap();
+    assert_eq!(document.content, b"draft two".to_vec());
+    assert_eq!(
+        store.load_block_tree(&document.id).await.unwrap(),
+        Vec::<quarry_collab_codec::BlockRow>::new()
+    );
 }
 
 /// RawDocuments keep the untouched byte path: bytes round-trip exactly and

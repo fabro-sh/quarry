@@ -1,7 +1,9 @@
 use quarry_core::{
     normalize_path, parent_dirs, DocumentSource, QuarryError, Result, WritePrecondition,
 };
-use quarry_storage::{BlockMarkdownWrite, BlockWriteBase, DocumentKind, QuarryStore};
+use quarry_storage::{
+    BlockMarkdownWrite, BlockWriteBase, DocumentKind, DocumentScopeRef, QuarryStore,
+};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::path::Path;
@@ -649,7 +651,7 @@ impl FuseProjection {
     ) -> BlockMarkdownWrite {
         let content_type = content_type_for_path(path);
         BlockMarkdownWrite {
-            library: self.library.clone(),
+            scope: DocumentScopeRef::library(&self.library),
             path: path.to_string(),
             markdown,
             metadata: serde_json::json!({ "content_type": content_type }),

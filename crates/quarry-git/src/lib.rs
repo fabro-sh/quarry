@@ -8,7 +8,7 @@ use quarry_core::{
 };
 use quarry_storage::{
     split_markdown_frontmatter, BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockWriteBase,
-    DocumentKind, QuarryStore,
+    DocumentKind, DocumentScopeRef, QuarryStore,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -1223,7 +1223,7 @@ async fn write_markdown_file(
     };
     let outcome = store
         .write_block_markdown(BlockMarkdownWrite {
-            library: library.to_string(),
+            scope: DocumentScopeRef::library(library),
             path: path.to_string(),
             markdown,
             metadata: file.metadata.clone(),

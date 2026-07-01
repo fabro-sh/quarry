@@ -977,12 +977,43 @@ impl QuarryStore {
         ttl: TmpTtl,
         precondition: WritePrecondition,
     ) -> Result<WriteOutcome> {
+        self.put_tmp_document_with_transaction(
+            path,
+            content,
+            metadata,
+            content_type,
+            ttl,
+            precondition,
+            None,
+            TransactionMetadata::default(),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn put_tmp_document_with_transaction(
+        &self,
+        path: &str,
+        content: Vec<u8>,
+        metadata: JsonValue,
+        content_type: &str,
+        ttl: TmpTtl,
+        precondition: WritePrecondition,
+        origin_id: Option<String>,
+        transaction: TransactionMetadata,
+    ) -> Result<WriteOutcome> {
         let path = normalize_path(path)?;
         let _operation_guard = self.normal_write_gate().await;
         let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
         let result = async {
+            let provenance =
+                if transaction.provenance == serde_json::json!({ "mode": "auto_commit" }) {
+                    serde_json::json!({ "mode": "tmp_document" })
+                } else {
+                    transaction.provenance
+                };
             self.check_tmp_precondition_conn(&conn, &path, &precondition)
                 .await?;
             let expires_at = match ttl {
@@ -997,9 +1028,9 @@ impl QuarryStore {
                 &conn,
                 TMP_TRANSACTION_LIBRARY_ID,
                 DocumentSource::Rest,
-                None,
-                None,
-                serde_json::json!({ "mode": "tmp_document" }),
+                transaction.actor,
+                transaction.message,
+                provenance,
             )
             .await?;
             let (doc_id, old_version_id) =
@@ -1034,7 +1065,9 @@ impl QuarryStore {
             })
         }
         .await;
-        finish_tx(&conn, result).await
+        let outcome = finish_tx(&conn, result).await?;
+        self.emit_document_put_events(&outcome, origin_id);
+        Ok(outcome)
     }
 
     pub async fn get_tmp_document(&self, path: &str) -> Result<Document> {

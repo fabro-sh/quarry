@@ -14,7 +14,7 @@ use quarry_server::serve;
 #[cfg(feature = "lib-documents")]
 use quarry_server::{serve_state_with_shutdown, shutdown_signal};
 #[cfg(feature = "lib-documents")]
-use quarry_storage::{BlockMarkdownWrite, BlockWriteBase, DocumentKind};
+use quarry_storage::{BlockMarkdownWrite, BlockWriteBase, DocumentKind, DocumentScopeRef};
 use quarry_storage::{QuarryStore, StoreConfig};
 #[cfg(feature = "lib-documents")]
 use serde_json::json;
@@ -417,7 +417,7 @@ pub async fn run() -> Result<()> {
                 })?;
                 store
                     .write_block_markdown(BlockMarkdownWrite {
-                        library: command.library.clone(),
+                        scope: DocumentScopeRef::library(&command.library),
                         path: command.path.clone(),
                         markdown,
                         metadata: json!({"content_type": content_type}),

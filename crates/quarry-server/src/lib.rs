@@ -2385,15 +2385,38 @@ async fn put_tmp_document(
 ) -> Result<Response, ApiError> {
     let content_type = content_type(&headers);
     let metadata = metadata_from_headers(&headers, &content_type)?;
+    let precondition = precondition_from_headers(&headers)?;
+    let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
+    let transaction = transaction_metadata_from_headers(&headers)?;
+
+    if quarry_storage::document_kind(&path, &content_type)
+        == quarry_storage::DocumentKind::BlockDocument
+    {
+        return gateway::gateway_reply(
+            markdown_write::put_tmp_block_document(
+                &state,
+                &path,
+                body.to_vec(),
+                metadata,
+                precondition,
+                origin_id,
+                transaction,
+            )
+            .await,
+        );
+    }
+
     let outcome = state
         .store
-        .put_tmp_document(
+        .put_tmp_document_with_transaction(
             &path,
             body.to_vec(),
             metadata,
             &content_type,
             quarry_storage::TmpTtl::Unchanged,
-            precondition_from_headers(&headers)?,
+            precondition,
+            origin_id,
+            transaction,
         )
         .await?;
     json_with_etag(StatusCode::OK, &outcome, &outcome.version.id)

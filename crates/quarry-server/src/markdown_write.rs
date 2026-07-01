@@ -50,7 +50,9 @@ use axum::http::StatusCode;
 use quarry_collab_codec::{
     block_rows_to_markdown, reconcile, BlockRow, ReconcileBase, ReconcileOp,
 };
-use quarry_core::{DocumentSource, QuarryError, WriteOutcome, WritePrecondition};
+use quarry_core::{
+    Document, DocumentListEntry, DocumentSource, QuarryError, WriteOutcome, WritePrecondition,
+};
 use quarry_storage::{
     document_kind, merge_json, split_markdown_frontmatter, BlockMarkdownWrite,
     BlockMarkdownWriteOutcome, BlockMarkdownWriter, BlockWriteBase, DocumentKind, DocumentScopeRef,
@@ -76,6 +78,51 @@ pub(crate) async fn put_block_document(
     origin_id: Option<String>,
     transaction: quarry_storage::TransactionMetadata,
 ) -> Result<axum::response::Response, GatewayFailure> {
+    put_scoped_block_document(
+        state,
+        DocumentScopeRef::library(library),
+        path,
+        body,
+        metadata,
+        precondition,
+        origin_id,
+        transaction,
+    )
+    .await
+}
+
+pub(crate) async fn put_tmp_block_document(
+    state: &AppState,
+    path: &str,
+    body: Vec<u8>,
+    metadata: JsonValue,
+    precondition: WritePrecondition,
+    origin_id: Option<String>,
+    transaction: quarry_storage::TransactionMetadata,
+) -> Result<axum::response::Response, GatewayFailure> {
+    put_scoped_block_document(
+        state,
+        DocumentScopeRef::Tmp,
+        path,
+        body,
+        metadata,
+        precondition,
+        origin_id,
+        transaction,
+    )
+    .await
+}
+
+async fn put_scoped_block_document(
+    state: &AppState,
+    scope: DocumentScopeRef,
+    path: &str,
+    body: Vec<u8>,
+    metadata: JsonValue,
+    precondition: WritePrecondition,
+    origin_id: Option<String>,
+    transaction: quarry_storage::TransactionMetadata,
+) -> Result<axum::response::Response, GatewayFailure> {
     let markdown = String::from_utf8(body).map_err(|_| {
         GatewayFailure::Api(
             QuarryError::InvalidInput(format!("markdown PUT body for {path} must be valid UTF-8"))
@@ -84,19 +131,30 @@ pub(crate) async fn put_block_document(
     })?;
     let base = match precondition {
         WritePrecondition::IfNoneMatch => {
-            if state.store.head_document(library, path).await.is_ok() {
+            let head = match &scope {
+                DocumentScopeRef::Library { slug } => state.store.head_document(slug, path).await,
+                DocumentScopeRef::Tmp => state.store.head_tmp_document(path).await,
+            };
+            if head.is_ok() {
                 return Err(GatewayFailure::Api(
                     QuarryError::PreconditionFailed(format!("{path} already exists")).into(),
                 ));
             }
+            if let Err(error) = head {
+                if !matches!(error, QuarryError::NotFound(_)) {
+                    return Err(error.into());
+                }
+            }
             BlockWriteBase::CurrentCanonical
         }
         WritePrecondition::IfMatch(version_id) => {
-            match state
-                .store
-                .document_version(library, path, &version_id)
-                .await
-            {
+            let version = match &scope {
+                DocumentScopeRef::Library { slug } => {
+                    state.store.document_version(slug, path, &version_id).await
+                }
+                DocumentScopeRef::Tmp => state.store.tmp_document_version(path, &version_id).await,
+            };
+            match version {
                 Ok(version) => BlockWriteBase::Markdown {
                     markdown: version.content,
                     version_id: Some(version_id),
@@ -117,7 +175,7 @@ pub(crate) async fn put_block_document(
     let result = write_markdown_with(
         state,
         BlockMarkdownWrite {
-            library: library.to_string(),
+            scope,
             path: path.to_string(),
             markdown,
             metadata,
@@ -157,7 +215,7 @@ pub(crate) async fn restore_block_document_version(
     let result = write_markdown_with(
         state,
         BlockMarkdownWrite {
-            library: library.to_string(),
+            scope: DocumentScopeRef::library(library),
             path: path.to_string(),
             markdown: version.content.clone(),
             metadata: version.version.metadata.clone(),
@@ -309,7 +367,7 @@ async fn write_markdown_with(
     gateway::require_block_document(&write.path, &content_type)?;
     tracing::debug!(
         event = "document.block_write.started",
-        library = %write.library,
+        scope = %write.scope.event_library_id(),
         path = %write.path,
         surface = %write.surface,
         content_bytes = write.markdown.len(),
@@ -318,23 +376,41 @@ async fn write_markdown_with(
 
     // First import: the document does not exist yet — every block takes a
     // fresh id through the Phase 1 import path.
-    let document = match state.store.get_document(&write.library, &write.path).await {
+    let document = match document_for_scope(state, &write.scope, &write.path).await {
         Ok(document) => document,
         Err(QuarryError::NotFound(_)) => {
-            let outcome = state
-                .store
-                .import_block_document_with_origin(
-                    &write.library,
-                    &write.path,
-                    &write.markdown,
-                    write.metadata.clone(),
-                    &content_type,
-                    write.source.clone(),
-                    WritePrecondition::IfNoneMatch,
-                    origin_id,
-                    transaction.actor.clone(),
-                )
-                .await?;
+            let outcome = match &write.scope {
+                DocumentScopeRef::Library { slug } => {
+                    state
+                        .store
+                        .import_block_document_with_origin(
+                            slug,
+                            &write.path,
+                            &write.markdown,
+                            write.metadata.clone(),
+                            &content_type,
+                            write.source.clone(),
+                            WritePrecondition::IfNoneMatch,
+                            origin_id,
+                            transaction.actor.clone(),
+                        )
+                        .await?
+                }
+                DocumentScopeRef::Tmp => {
+                    state
+                        .store
+                        .import_tmp_block_document_with_transaction(
+                            &write.path,
+                            &write.markdown,
+                            write.metadata.clone(),
+                            &content_type,
+                            WritePrecondition::IfNoneMatch,
+                            origin_id,
+                            transaction,
+                        )
+                        .await?
+                }
+            };
             let canonical_body = canonical_body(state, &outcome.document.id).await?;
             return Ok(BlockMarkdownWriteOutcome {
                 outcome,
@@ -353,10 +429,7 @@ async fn write_markdown_with(
     // is a legal serialization — identical to this write committing first
     // and the racing write winning afterwards.
     if document.content == write.markdown.as_bytes() {
-        let entry = state
-            .store
-            .head_document(&write.library, &write.path)
-            .await?;
+        let entry = head_for_scope(state, &write.scope, &write.path).await?;
         let transaction = state.store.get_transaction(&document.version.tx_id).await?;
         let canonical_body = canonical_body(state, &document.id).await?;
         return Ok(BlockMarkdownWriteOutcome {
@@ -453,7 +526,7 @@ async fn write_markdown_with(
     };
     let reply = match gateway::execute_block_transaction(
         state,
-        &DocumentScopeRef::library(&write.library),
+        &write.scope,
         &write.path,
         &ctx,
         &settings,
@@ -467,7 +540,7 @@ async fn write_markdown_with(
             ctx.base_clock = None;
             gateway::execute_block_transaction(
                 state,
-                &DocumentScopeRef::library(&write.library),
+                &write.scope,
                 &write.path,
                 &ctx,
                 &settings,
@@ -504,6 +577,28 @@ async fn canonical_body(state: &AppState, document_id: &str) -> Result<String, G
     block_rows_to_markdown(&rows).map_err(|unsupported| {
         GatewayFailure::Api(QuarryError::UnsupportedMarkdown(unsupported).into())
     })
+}
+
+async fn document_for_scope(
+    state: &AppState,
+    scope: &DocumentScopeRef,
+    path: &str,
+) -> Result<Document, QuarryError> {
+    match scope {
+        DocumentScopeRef::Library { slug } => state.store.get_document(slug, path).await,
+        DocumentScopeRef::Tmp => state.store.get_tmp_document(path).await,
+    }
+}
+
+async fn head_for_scope(
+    state: &AppState,
+    scope: &DocumentScopeRef,
+    path: &str,
+) -> Result<DocumentListEntry, QuarryError> {
+    match scope {
+        DocumentScopeRef::Library { slug } => state.store.head_document(slug, path).await,
+        DocumentScopeRef::Tmp => state.store.head_tmp_document(path).await,
+    }
 }
 
 fn split_frontmatter_owned(markdown: &str) -> Result<(JsonValue, String), QuarryError> {
