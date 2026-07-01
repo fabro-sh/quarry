@@ -366,24 +366,6 @@ function Workspace() {
     window.document.documentElement.dataset.theme = theme;
   }, [theme]);
 
-  useEffect(() => {
-    if (!selectedPath) {
-      window.document.title = 'Quarry';
-      return;
-    }
-
-    const isMarkdown = document && isMarkdownDocument(selectedPath, document.contentType);
-    if (isMarkdown && document?.content) {
-      const h1 = extractFirstH1(document.content);
-      if (h1) {
-        window.document.title = `${h1} · Quarry`;
-        return;
-      }
-    }
-
-    window.document.title = `${documentBasename(selectedPath)} · Quarry`;
-  }, [selectedPath, document]);
-
   function changeAuthor(nextAuthor: string) {
     setAuthor(saveAuthor(nextAuthor));
   }
@@ -702,6 +684,23 @@ function Workspace() {
     () => (isTmpDocument ? getTmpDocument(selectedPath) : getDocument(activeLibrary, selectedPath)),
     { revalidateOnFocus: false }
   );
+  useEffect(() => {
+    if (!selectedPath) {
+      window.document.title = 'Quarry';
+      return;
+    }
+
+    const isMarkdown = document && isMarkdownDocument(selectedPath, document.contentType);
+    if (isMarkdown && document?.content) {
+      const h1 = extractFirstH1(document.content);
+      if (h1) {
+        window.document.title = `${h1} · Quarry`;
+        return;
+      }
+    }
+
+    window.document.title = `${documentBasename(selectedPath)} · Quarry`;
+  }, [selectedPath, document]);
   const { data: search = { results: [], cursor: null } } = useSWR(
     libDocumentsEnabled && isLibraryDocument && activeLibrary && searchQuery
       ? ['/v1/search', activeLibrary, searchQuery]

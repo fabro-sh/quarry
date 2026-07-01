@@ -364,6 +364,38 @@ describe('Quarry Browser workspace', () => {
     expect(screen.queryByText(/Extend TTL/)).not.toBeInTheDocument();
   });
 
+  it('loads a routed tmp Markdown document and titles the page from its H1', async () => {
+    const secret = '63895bec2fda4380b44a240f8ca57075';
+    window.history.pushState({}, '', `/tmp/${secret}`);
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/v1/capabilities') {
+        return json({ tmp_documents: true, lib_documents: false });
+      }
+      if (url === `/v1/tmp/documents/${secret}`) {
+        return new Response('# Tmp Workspace\n\nBody text.\n', {
+          headers: {
+            ETag: '"tmp-v1"',
+            'content-type': 'text/markdown',
+            'x-quarry-document-id': 'tmp-title',
+          },
+        });
+      }
+      if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
+        return json({ documentId: 'tmp-title', comments: [], suggestions: [], conflicts: [] });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    expect(await screen.findByRole('button', { name: 'Document mode' })).toHaveTextContent('Editing');
+    await waitFor(() => expect(window.document.title).toBe('Tmp Workspace · Quarry'));
+    expect(window.location.pathname).toBe(`/tmp/${secret}`);
+  });
+
   it('uses the tmp workspace and hides library controls when library documents are disabled', async () => {
     const secret = '72cb58585aa73e35758bc1141f79e32e';
     window.history.pushState({}, '', `/tmp/${secret}`);
