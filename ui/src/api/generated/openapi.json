@@ -103,46 +103,36 @@
         }
       }
     },
-    "/v1/tmp/documents": {
+    "/v1/tmp/collab/{secret}/{room}": {
       "get": {
         "tags": [],
-        "operationId": "list_tmp_documents",
+        "operationId": "tmp_collab_websocket_openapi",
         "parameters": [
           {
-            "name": "prefix",
-            "in": "query",
-            "required": false,
+            "name": "secret",
+            "in": "path",
+            "required": true,
             "schema": {
               "type": "string"
             }
           },
           {
-            "name": "limit",
-            "in": "query",
-            "required": false,
+            "name": "room",
+            "in": "path",
+            "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
+              "type": "string"
             }
           }
         ],
         "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/DocumentListEntry"
-                  }
-                }
-              }
-            }
+          "101": {
+            "description": "Yjs collaboration websocket for tmp capability documents"
           }
         }
-      },
+      }
+    },
+    "/v1/tmp/documents": {
       "post": {
         "tags": [],
         "operationId": "create_tmp_document",
@@ -170,13 +160,13 @@
         }
       }
     },
-    "/v1/tmp/documents/{path}": {
+    "/v1/tmp/documents/{secret}": {
       "get": {
         "tags": [],
         "operationId": "get_tmp_document",
         "parameters": [
           {
-            "name": "path",
+            "name": "secret",
             "in": "path",
             "required": true,
             "schema": {
@@ -212,7 +202,7 @@
         "operationId": "put_tmp_document",
         "parameters": [
           {
-            "name": "path",
+            "name": "secret",
             "in": "path",
             "required": true,
             "schema": {
@@ -258,7 +248,7 @@
         "operationId": "delete_tmp_document",
         "parameters": [
           {
-            "name": "path",
+            "name": "secret",
             "in": "path",
             "required": true,
             "schema": {
@@ -284,7 +274,7 @@
         "operationId": "head_tmp_document",
         "parameters": [
           {
-            "name": "path",
+            "name": "secret",
             "in": "path",
             "required": true,
             "schema": {
@@ -309,13 +299,13 @@
         }
       }
     },
-    "/v1/tmp/documents/{path}/blocks": {
+    "/v1/tmp/documents/{secret}/blocks": {
       "get": {
         "tags": [],
         "operationId": "tmp_document_blocks_openapi",
         "parameters": [
           {
-            "name": "path",
+            "name": "secret",
             "in": "path",
             "required": true,
             "schema": {
@@ -357,13 +347,13 @@
         }
       }
     },
-    "/v1/tmp/documents/{path}/events/stream": {
+    "/v1/tmp/documents/{secret}/events/stream": {
       "get": {
         "tags": [],
         "operationId": "tmp_document_events_stream_openapi",
         "parameters": [
           {
-            "name": "path",
+            "name": "secret",
             "in": "path",
             "required": true,
             "schema": {
@@ -388,13 +378,13 @@
         }
       }
     },
-    "/v1/tmp/documents/{path}/presence": {
+    "/v1/tmp/documents/{secret}/presence": {
       "get": {
         "tags": [],
         "operationId": "tmp_agent_presence_list_openapi",
         "parameters": [
           {
-            "name": "path",
+            "name": "secret",
             "in": "path",
             "required": true,
             "schema": {
@@ -408,7 +398,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AgentPresenceListResponse"
+                  "$ref": "#/components/schemas/TmpAgentPresenceListResponse"
                 }
               }
             }
@@ -430,7 +420,7 @@
         "operationId": "tmp_agent_presence_openapi",
         "parameters": [
           {
-            "name": "path",
+            "name": "secret",
             "in": "path",
             "required": true,
             "schema": {
@@ -454,7 +444,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AgentPresenceResponse"
+                  "$ref": "#/components/schemas/TmpAgentPresenceResponse"
                 }
               }
             }
@@ -472,13 +462,13 @@
         }
       }
     },
-    "/v1/tmp/documents/{path}/review": {
+    "/v1/tmp/documents/{secret}/review": {
       "get": {
         "tags": [],
         "operationId": "tmp_document_review_openapi",
         "parameters": [
           {
-            "name": "path",
+            "name": "secret",
             "in": "path",
             "required": true,
             "schema": {
@@ -518,100 +508,13 @@
         }
       }
     },
-    "/v1/tmp/documents/{path}/share": {
-      "get": {
-        "tags": [],
-        "operationId": "tmp_document_share_openapi",
-        "parameters": [
-          {
-            "name": "path",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CollabInviteToken"
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [],
-        "operationId": "tmp_document_share_create_openapi",
-        "parameters": [
-          {
-            "name": "path",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateCollabInviteRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CollabInviteToken"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/tmp/documents/{path}/transactions": {
+    "/v1/tmp/documents/{secret}/transactions": {
       "post": {
         "tags": [],
         "operationId": "tmp_document_block_transactions_openapi",
         "parameters": [
           {
-            "name": "path",
+            "name": "secret",
             "in": "path",
             "required": true,
             "schema": {
@@ -683,13 +586,13 @@
         }
       }
     },
-    "/v1/tmp/documents/{path}/ttl": {
+    "/v1/tmp/documents/{secret}/ttl": {
       "patch": {
         "tags": [],
         "operationId": "tmp_document_ttl_openapi",
         "parameters": [
           {
-            "name": "path",
+            "name": "secret",
             "in": "path",
             "required": true,
             "schema": {
@@ -731,13 +634,13 @@
         }
       }
     },
-    "/v1/tmp/documents/{path}/versions": {
+    "/v1/tmp/documents/{secret}/versions": {
       "get": {
         "tags": [],
         "operationId": "tmp_document_versions_openapi",
         "parameters": [
           {
-            "name": "path",
+            "name": "secret",
             "in": "path",
             "required": true,
             "schema": {
@@ -762,13 +665,13 @@
         }
       }
     },
-    "/v1/tmp/documents/{path}/versions/raw": {
+    "/v1/tmp/documents/{secret}/versions/raw": {
       "get": {
         "tags": [],
         "operationId": "tmp_document_versions_raw_openapi",
         "parameters": [
           {
-            "name": "path",
+            "name": "secret",
             "in": "path",
             "required": true,
             "schema": {
@@ -793,13 +696,13 @@
         }
       }
     },
-    "/v1/tmp/documents/{path}/versions/{version}": {
+    "/v1/tmp/documents/{secret}/versions/{version}": {
       "get": {
         "tags": [],
         "operationId": "tmp_document_version_openapi",
         "parameters": [
           {
-            "name": "path",
+            "name": "secret",
             "in": "path",
             "required": true,
             "schema": {
@@ -1774,12 +1677,6 @@
                 "$ref": "#/components/schemas/Value"
               }
             ]
-          },
-          "path": {
-            "type": [
-              "string",
-              "null"
-            ]
           }
         }
       },
@@ -2577,6 +2474,67 @@
           },
           "title": {
             "type": "string"
+          }
+        }
+      },
+      "TmpAgentPresenceEntry": {
+        "type": "object",
+        "required": [
+          "documentId",
+          "agentId",
+          "status",
+          "updatedAt"
+        ],
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "documentId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        }
+      },
+      "TmpAgentPresenceListResponse": {
+        "type": "object",
+        "required": [
+          "presence"
+        ],
+        "properties": {
+          "presence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TmpAgentPresenceEntry"
+            }
+          }
+        }
+      },
+      "TmpAgentPresenceResponse": {
+        "type": "object",
+        "required": [
+          "current",
+          "presence"
+        ],
+        "properties": {
+          "current": {
+            "$ref": "#/components/schemas/TmpAgentPresenceEntry"
+          },
+          "presence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TmpAgentPresenceEntry"
+            }
           }
         }
       },

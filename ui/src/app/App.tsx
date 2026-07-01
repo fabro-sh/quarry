@@ -64,7 +64,7 @@ import useSWR, { useSWRConfig } from 'swr';
 import {
   ApiError,
   ApiPreconditionError,
-  type AgentPresenceEntry,
+  type AgentPresenceDisplayEntry,
   backlinks,
   createCollabInvite,
   createDocument,
@@ -3178,18 +3178,18 @@ const PRESENCE_AVATAR_CAP = 3;
 const presenceAvatar =
   'flex size-7 shrink-0 items-center justify-center rounded-full ring-2 ring-surface';
 
-function agentPresenceName(entry: AgentPresenceEntry) {
+function agentPresenceName(entry: AgentPresenceDisplayEntry) {
   const by = entry.by?.trim();
   if (by) return by;
   const parts = entry.agentId.split(':').filter(Boolean);
   return parts.at(-1) ?? entry.agentId;
 }
 
-function presenceLabel(entry: AgentPresenceEntry) {
+function presenceLabel(entry: AgentPresenceDisplayEntry) {
   return `${agentPresenceName(entry)} · ${entry.status}`;
 }
 
-function AgentPresenceAvatar({ entry }: { entry: AgentPresenceEntry }) {
+function AgentPresenceAvatar({ entry }: { entry: AgentPresenceDisplayEntry }) {
   const label = presenceLabel(entry);
   return (
     <Tooltip.Root>
@@ -3212,7 +3212,7 @@ function AgentPresenceAvatar({ entry }: { entry: AgentPresenceEntry }) {
   );
 }
 
-function AgentOverflowAvatar({ entries }: { entries: AgentPresenceEntry[] }) {
+function AgentOverflowAvatar({ entries }: { entries: AgentPresenceDisplayEntry[] }) {
   return (
     <Tooltip.Root>
       <Tooltip.Trigger
@@ -3236,7 +3236,7 @@ function AgentOverflowAvatar({ entries }: { entries: AgentPresenceEntry[] }) {
   );
 }
 
-function AgentPresencePill({ presence }: { presence: AgentPresenceEntry[] }) {
+function AgentPresencePill({ presence }: { presence: AgentPresenceDisplayEntry[] }) {
   if (!presence.length) return null;
   const shown = presence.slice(0, PRESENCE_AVATAR_CAP);
   const overflow = presence.slice(PRESENCE_AVATAR_CAP);
@@ -3319,7 +3319,7 @@ function DocumentToolbar({
   onRename,
   onUploadMarkdown,
 }: {
-  agentPresence: AgentPresenceEntry[];
+  agentPresence: AgentPresenceDisplayEntry[];
   canPromote: boolean;
   isMarkdown: boolean;
   isText: boolean;

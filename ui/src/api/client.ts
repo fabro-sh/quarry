@@ -40,7 +40,6 @@ export interface DocumentMutationOptions {
 }
 
 export interface CreateTmpDocumentRequest {
-  path?: string;
   content?: string;
   metadata?: Record<string, unknown>;
   contentType?: string;
@@ -83,9 +82,7 @@ export interface GitExportResult {
   commit_id: string | null;
 }
 
-export interface AgentPresenceEntry {
-  library: string | null;
-  path: string;
+export interface AgentPresenceDisplayEntry {
   documentId: string;
   agentId: string;
   status: string;
@@ -93,8 +90,19 @@ export interface AgentPresenceEntry {
   updatedAt: string;
 }
 
+export interface AgentPresenceEntry extends AgentPresenceDisplayEntry {
+  library: string | null;
+  path: string;
+}
+
+export type TmpAgentPresenceEntry = AgentPresenceDisplayEntry;
+
 export interface AgentPresenceListResponse {
   presence: AgentPresenceEntry[];
+}
+
+export interface TmpAgentPresenceListResponse {
+  presence: TmpAgentPresenceEntry[];
 }
 
 export class ApiError extends Error {
@@ -159,8 +167,6 @@ export const createLibrary = (slug: string) =>
 export const listDocuments = (library: string) =>
   jsonRequest<DocumentListEntry[]>(`/v1/libraries/${segment(library)}/documents`);
 
-export const listTmpDocuments = () => jsonRequest<DocumentListEntry[]>('/v1/tmp/documents');
-
 export async function getDocument(library: string, path: string): Promise<LoadedDocument> {
   const response = await fetch(documentHref(library, path));
   await assertOk(response);
@@ -175,13 +181,13 @@ export async function getDocument(library: string, path: string): Promise<Loaded
   };
 }
 
-export async function getTmpDocument(path: string): Promise<LoadedDocument> {
-  const response = await fetch(tmpDocumentHref(path));
+export async function getTmpDocument(secret: string): Promise<LoadedDocument> {
+  const response = await fetch(tmpDocumentHref(secret));
   await assertOk(response);
   const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
   return {
     documentId: response.headers.get('x-quarry-document-id') ?? '',
-    path,
+    path: secret,
     content: isTextContentType(contentType) ? await response.text() : '',
     contentType,
     etag: response.headers.get('etag') ?? '',
@@ -196,7 +202,6 @@ export async function createTmpDocument(
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      path: request.path,
       content: request.content,
       content_type: request.contentType,
       metadata: request.metadata,
@@ -226,7 +231,7 @@ export function putDocument(
 }
 
 export function putTmpDocument(
-  path: string,
+  secret: string,
   content: string,
   etag: string,
   contentType = 'text/markdown',
@@ -236,7 +241,7 @@ export function putTmpDocument(
     'If-Match': etag,
     'content-type': contentType,
   });
-  return writeTmpDocument(path, content, headers);
+  return writeTmpDocument(secret, content, headers);
 }
 
 export function createDocument(
@@ -294,8 +299,8 @@ export async function deleteDocument(
   });
 }
 
-export async function deleteTmpDocument(path: string, options: DocumentMutationOptions = {}) {
-  return jsonRequest(tmpDocumentHref(path), {
+export async function deleteTmpDocument(secret: string, options: DocumentMutationOptions = {}) {
+  return jsonRequest(tmpDocumentHref(secret), {
     method: 'DELETE',
     headers: mutationHeaders(options),
   });
@@ -321,23 +326,13 @@ export const createCollabInvite = (
     body: JSON.stringify({ byHint: request.byHint, role: request.role ?? 'editor' }),
   });
 
-export const createTmpCollabInvite = (
-  path: string,
-  request: { byHint?: string; role?: 'editor' | 'viewer' } = {}
-) =>
-  jsonRequest<CollabInviteToken>(`/v1/tmp/documents/${pathSegments(path)}/share`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ byHint: request.byHint, role: request.role ?? 'editor' }),
-  });
-
 export const listAgentPresence = (library: string, path: string) =>
   jsonRequest<AgentPresenceListResponse>(
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/presence`
   );
 
-export const listTmpAgentPresence = (path: string) =>
-  jsonRequest<AgentPresenceListResponse>(`/v1/tmp/documents/${pathSegments(path)}/presence`);
+export const listTmpAgentPresence = (secret: string) =>
+  jsonRequest<TmpAgentPresenceListResponse>(`/v1/tmp/documents/${segment(secret)}/presence`);
 
 export const searchDocuments = (library: string, query: string) =>
   jsonRequest<SearchResponse>(
@@ -364,8 +359,8 @@ export const versions = (library: string, path: string) =>
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/versions`
   );
 
-export const tmpVersions = (path: string) =>
-  jsonRequest<DocumentHistoryEntry[]>(`/v1/tmp/documents/${pathSegments(path)}/versions`);
+export const tmpVersions = (secret: string) =>
+  jsonRequest<DocumentHistoryEntry[]>(`/v1/tmp/documents/${segment(secret)}/versions`);
 
 export const rawVersions = (library: string, path: string) =>
   jsonRequest<DocumentVersion[]>(
@@ -377,13 +372,13 @@ export const documentVersion = (library: string, path: string, version: string) 
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/versions/${segment(version)}`
   );
 
-export const tmpDocumentVersion = (path: string, version: string) =>
+export const tmpDocumentVersion = (secret: string, version: string) =>
   jsonRequest<DocumentVersionContent>(
-    `/v1/tmp/documents/${pathSegments(path)}/versions/${segment(version)}`
+    `/v1/tmp/documents/${segment(secret)}/versions/${segment(version)}`
   );
 
-export const setTmpDocumentTtl = (path: string, expiresAt: string) =>
-  jsonRequest<{ expires_at: string | null }>(`/v1/tmp/documents/${pathSegments(path)}/ttl`, {
+export const setTmpDocumentTtl = (secret: string, expiresAt: string) =>
+  jsonRequest<{ expires_at: string | null }>(`/v1/tmp/documents/${segment(secret)}/ttl`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ expires_at: expiresAt }),
@@ -399,8 +394,8 @@ export const setDocumentTtl = (library: string, path: string, expiresAt: string 
     }
   );
 
-export const promoteTmpDocument = (path: string, request: PromoteTmpDocumentRequest) =>
-  jsonRequest<DocumentListEntry>(`/v1/tmp/documents/${pathSegments(path)}/promote`, {
+export const promoteTmpDocument = (secret: string, request: PromoteTmpDocumentRequest) =>
+  jsonRequest<DocumentListEntry>(`/v1/tmp/documents/${segment(secret)}/promote`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -444,8 +439,8 @@ export const getDocumentBlocks = (library: string, path: string) =>
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/blocks`
   );
 
-export const getTmpDocumentBlocks = (path: string) =>
-  jsonRequest<BlockTreeResponse>(`/v1/tmp/documents/${pathSegments(path)}/blocks`);
+export const getTmpDocumentBlocks = (secret: string) =>
+  jsonRequest<BlockTreeResponse>(`/v1/tmp/documents/${segment(secret)}/blocks`);
 
 // The rows-backed review projection: comments and suggestions with their
 // row anchors and states (open/resolved/orphaned/invalidated), plus diff3
@@ -456,8 +451,8 @@ export const getDocumentReview = (library: string, path: string) =>
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/review?includeResolved=1`
   );
 
-export const getTmpDocumentReview = (path: string) =>
-  jsonRequest<AgentReviewResponse>(`/v1/tmp/documents/${pathSegments(path)}/review?includeResolved=1`);
+export const getTmpDocumentReview = (secret: string) =>
+  jsonRequest<AgentReviewResponse>(`/v1/tmp/documents/${segment(secret)}/review?includeResolved=1`);
 
 // Submits one semantic block transaction. Non-2xx responses with the gateway's
 // typed `{code, retryable, message}` body throw BlockTransactionError; other
@@ -479,10 +474,10 @@ export async function postBlockTransaction(
 }
 
 export async function postTmpBlockTransaction(
-  path: string,
+  secret: string,
   request: BlockTransactionRequest
 ): Promise<BlockTransactionAck> {
-  const response = await fetch(`/v1/tmp/documents/${pathSegments(path)}/transactions`, {
+  const response = await fetch(`/v1/tmp/documents/${segment(secret)}/transactions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(request),
@@ -584,11 +579,11 @@ async function writeDocument(
 }
 
 async function writeTmpDocument(
-  path: string,
+  secret: string,
   content: string,
   headers: Record<string, string>
 ): Promise<SavedDocument> {
-  const response = await fetch(tmpDocumentHref(path), {
+  const response = await fetch(tmpDocumentHref(secret), {
     method: 'PUT',
     headers,
     body: content,
@@ -651,8 +646,8 @@ export function documentHref(library: string, path: string) {
   return `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}`;
 }
 
-export function tmpDocumentHref(path: string) {
-  return `/v1/tmp/documents/${pathSegments(path)}`;
+export function tmpDocumentHref(secret: string) {
+  return `/v1/tmp/documents/${segment(secret)}`;
 }
 
 export function isTextContentType(contentType: string) {

@@ -531,7 +531,6 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
             Method::POST,
             "/v1/tmp/documents",
             serde_json::json!({
-                "path": "scratch/note.txt",
                 "content": "draft one",
                 "content_type": "text/plain",
                 "metadata": {"title": "Scratch"}
@@ -545,7 +544,12 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
         .unwrap()
         .to_string();
     let created: Value = response_json(response).await;
+    let secret = created["document"]["path"].as_str().unwrap().to_string();
     let document_id = created["document"]["id"].as_str().unwrap().to_string();
+    assert_eq!(secret.len(), 32);
+    assert!(secret
+        .chars()
+        .all(|character| character.is_ascii_hexdigit()));
     assert_eq!(created["document"]["library_id"], Value::Null);
     assert!(created["document"]["expires_at"].as_str().is_some());
 
@@ -554,7 +558,20 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/v1/tmp/documents/scratch/note.txt")
+                .uri("/v1/tmp/documents")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/tmp/documents/{secret}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -579,8 +596,32 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
         .clone()
         .oneshot(
             Request::builder()
-                .method(Method::PUT)
+                .method(Method::GET)
                 .uri("/v1/tmp/documents/scratch/note.txt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            &format!("/v1/tmp/documents/{secret}/share"),
+            serde_json::json!({"role": "editor"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/tmp/documents/{secret}"))
                 .header(header::IF_MATCH, etag)
                 .header(header::CONTENT_TYPE, "text/plain")
                 .body(Body::from("draft two"))
@@ -597,7 +638,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/v1/tmp/documents/scratch/note.txt/versions/raw")
+                .uri(format!("/v1/tmp/documents/{secret}/versions/raw"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -613,7 +654,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
             Request::builder()
                 .method(Method::GET)
                 .uri(format!(
-                    "/v1/tmp/documents/scratch/note.txt/versions/{}",
+                    "/v1/tmp/documents/{secret}/versions/{}",
                     created["version"]["id"].as_str().unwrap()
                 ))
                 .body(Body::empty())
@@ -629,7 +670,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
         .clone()
         .oneshot(json_request(
             Method::PATCH,
-            "/v1/tmp/documents/scratch/note.txt/ttl",
+            &format!("/v1/tmp/documents/{secret}/ttl"),
             serde_json::json!({"expires_at":"2099-01-01T00:00:00Z"}),
         ))
         .await
@@ -642,7 +683,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
         .clone()
         .oneshot(json_request(
             Method::PATCH,
-            "/v1/tmp/documents/scratch/note.txt/ttl",
+            &format!("/v1/tmp/documents/{secret}/ttl"),
             serde_json::json!({"expires_at": null}),
         ))
         .await
@@ -664,7 +705,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
         .clone()
         .oneshot(json_request(
             Method::POST,
-            "/v1/tmp/documents/scratch/note.txt/promote",
+            &format!("/v1/tmp/documents/{secret}/promote"),
             serde_json::json!({
                 "library": "promoted",
                 "path": "notes/promoted.txt",
@@ -680,7 +721,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/v1/tmp/documents/scratch/note.txt")
+                .uri(format!("/v1/tmp/documents/{secret}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1138,6 +1179,87 @@ async fn agent_presence_records_status_by_document() {
     assert_eq!(presence[0]["path"], "live.md");
 }
 
+#[tokio::test]
+async fn tmp_agent_presence_omits_capability_path() {
+    let root = tempfile::tempdir().unwrap();
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .unwrap();
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/tmp/documents",
+            serde_json::json!({
+                "content": "tmp presence",
+                "content_type": "text/plain"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created: Value = response_json(response).await;
+    let secret = created["document"]["path"].as_str().unwrap().to_string();
+    let document_id = created["document"]["id"].as_str().unwrap().to_string();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/v1/tmp/documents/{secret}/presence"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("X-Agent-Id", "agent-tmp")
+                .body(Body::from(
+                    serde_json::json!({"status":"thinking","by":"ai:codex"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body.contains(&secret));
+    let presence: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(presence["current"]["documentId"], document_id);
+    assert_eq!(presence["current"]["agentId"], "agent-tmp");
+    assert_eq!(presence["current"]["status"], "thinking");
+    assert_eq!(presence["current"]["by"], "ai:codex");
+    assert!(presence["current"]["updatedAt"].as_str().is_some());
+    assert!(presence["current"].get("path").is_none());
+    assert!(presence["current"].get("library").is_none());
+    assert!(presence["presence"][0].get("path").is_none());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/tmp/documents/{secret}/presence"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body.contains(&secret));
+    let presence: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(presence["presence"].as_array().unwrap().len(), 1);
+    assert_eq!(presence["presence"][0]["documentId"], document_id);
+    assert_eq!(presence["presence"][0]["agentId"], "agent-tmp");
+    assert!(presence["presence"][0].get("path").is_none());
+    assert!(presence["presence"][0].get("library").is_none());
+}
+
 async fn presence_test_app(library: &str) -> (tempfile::TempDir, axum::Router) {
     let root = tempfile::tempdir().unwrap();
     let store = QuarryStore::open(StoreConfig {
@@ -1338,7 +1460,7 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
     assert!(docs.contains("suggestion.accept"));
     assert!(docs.contains("conflict"));
     assert!(docs.contains("GET $DOC/review"));
-    assert!(docs.contains("/v1/tmp/documents/$PATH_ENCODED"));
+    assert!(docs.contains("/v1/tmp/documents/$SECRET"));
     let removed_tmp_signal = ["han", "doff"].join("");
     assert!(!docs.to_lowercase().contains(&removed_tmp_signal));
     // The legacy facade vocabulary is gone.
@@ -1409,7 +1531,7 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
         );
         assert_eq!(
             body["route_hints"]["tmp_blocks"],
-            "http://127.0.0.1:7831/v1/tmp/documents/{path}/blocks"
+            "http://127.0.0.1:7831/v1/tmp/documents/{secret}/blocks"
         );
         let removed_tmp_signal_key = ["tmp_han", "doff"].join("");
         assert!(body["endpoints"][&removed_tmp_signal_key].is_null());
@@ -2344,6 +2466,37 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
             "completed",
             "error",
         ],
+    );
+    let library_presence_entry = &openapi["components"]["schemas"]["AgentPresenceEntry"];
+    assert!(library_presence_entry["properties"]["path"].is_object());
+    assert!(library_presence_entry["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|field| field == "path"));
+    let tmp_presence_entry = &openapi["components"]["schemas"]["TmpAgentPresenceEntry"];
+    assert!(tmp_presence_entry.is_object());
+    assert!(tmp_presence_entry["properties"].get("path").is_none());
+    assert!(tmp_presence_entry["properties"].get("library").is_none());
+    let tmp_presence_required = tmp_presence_entry["required"].as_array().unwrap();
+    assert!(tmp_presence_required
+        .iter()
+        .any(|field| field == "documentId"));
+    assert!(tmp_presence_required.iter().any(|field| field == "agentId"));
+    assert!(tmp_presence_required.iter().any(|field| field == "status"));
+    assert!(tmp_presence_required
+        .iter()
+        .any(|field| field == "updatedAt"));
+    assert!(!tmp_presence_required.iter().any(|field| field == "path"));
+    assert_eq!(
+        openapi["paths"]["/v1/tmp/documents/{secret}/presence"]["get"]["responses"]["200"]
+            ["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/TmpAgentPresenceListResponse"
+    );
+    assert_eq!(
+        openapi["paths"]["/v1/tmp/documents/{secret}/presence"]["post"]["responses"]["200"]
+            ["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/TmpAgentPresenceResponse"
     );
     assert_path_parameter_enum_contains(
         &openapi,
@@ -3626,13 +3779,13 @@ async fn get_block_tree(app: &axum::Router, path: &str) -> Value {
 }
 
 #[cfg(feature = "tmp-documents")]
-async fn get_tmp_block_tree(app: &axum::Router, path: &str) -> Value {
+async fn get_tmp_block_tree(app: &axum::Router, secret: &str) -> Value {
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri(format!("/v1/tmp/documents/{path}/blocks"))
+                .uri(format!("/v1/tmp/documents/{secret}/blocks"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -7113,14 +7266,12 @@ async fn markdown_put_with_critic_markup_fails_typed_unsupported() {
 #[tokio::test]
 async fn tmp_markdown_put_replaces_materialized_blocks_and_preserves_ttl() {
     let (_root, app, store) = block_test_app().await;
-    let path = "scratch/upload.md";
     let response = app
         .clone()
         .oneshot(json_request(
             Method::POST,
             "/v1/tmp/documents",
             serde_json::json!({
-                "path": path,
                 "content": "# Original\n\nOld body.\n",
                 "content_type": "text/markdown",
                 "expires_at": "2099-01-01T00:00:00Z"
@@ -7129,20 +7280,22 @@ async fn tmp_markdown_put_replaces_materialized_blocks_and_preserves_ttl() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
+    let created = response_json(response).await;
+    let secret = created["document"]["path"].as_str().unwrap().to_string();
 
-    let before = get_tmp_block_tree(&app, path).await;
+    let before = get_tmp_block_tree(&app, &secret).await;
     assert_eq!(before["blocks"].as_array().unwrap().len(), 2);
     assert_eq!(before["blocks"][0]["text"], "Original");
     assert_eq!(before["blocks"][1]["text"], "Old body.");
     let clock = before["document_clock"].as_str().unwrap().to_string();
-    let expires_before = store.head_tmp_document(path).await.unwrap().expires_at;
+    let expires_before = store.head_tmp_document(&secret).await.unwrap().expires_at;
 
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method(Method::PUT)
-                .uri(format!("/v1/tmp/documents/{path}"))
+                .uri(format!("/v1/tmp/documents/{secret}"))
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .header(header::IF_MATCH, format!("\"{clock}\""))
                 .body(Body::from("# Uploaded\n\nNew body.\n"))
@@ -7161,17 +7314,17 @@ async fn tmp_markdown_put_replaces_materialized_blocks_and_preserves_ttl() {
         format!("\"{}\"", outcome["version"]["id"].as_str().unwrap())
     );
     assert_eq!(
-        store.head_tmp_document(path).await.unwrap().expires_at,
+        store.head_tmp_document(&secret).await.unwrap().expires_at,
         expires_before
     );
 
-    let after = get_tmp_block_tree(&app, path).await;
+    let after = get_tmp_block_tree(&app, &secret).await;
     let blocks = after["blocks"].as_array().unwrap();
     assert_eq!(blocks.len(), 2);
     assert_eq!(blocks[0]["text"], "Uploaded");
     assert_eq!(blocks[1]["text"], "New body.");
 
-    let document = store.get_tmp_document(path).await.unwrap();
+    let document = store.get_tmp_document(&secret).await.unwrap();
     assert_eq!(
         String::from_utf8(document.content).unwrap(),
         "# Uploaded\n\nNew body.\n"
@@ -7182,14 +7335,12 @@ async fn tmp_markdown_put_replaces_materialized_blocks_and_preserves_ttl() {
 #[tokio::test]
 async fn tmp_markdown_put_lands_in_an_active_session_as_a_collaborator_edit() {
     let (_root, addr, app, store, server) = spawn_session_server().await;
-    let path = "scratch/live-upload.md";
     let response = app
         .clone()
         .oneshot(json_request(
             Method::POST,
             "/v1/tmp/documents",
             serde_json::json!({
-                "path": path,
                 "content": "Old first.\n\nOld second.\n",
                 "content_type": "text/markdown",
                 "expires_at": "2099-01-01T00:00:00Z"
@@ -7198,9 +7349,11 @@ async fn tmp_markdown_put_lands_in_an_active_session_as_a_collaborator_edit() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
-    let tree = get_tmp_block_tree(&app, path).await;
+    let created = response_json(response).await;
+    let secret = created["document"]["path"].as_str().unwrap().to_string();
+    let tree = get_tmp_block_tree(&app, &secret).await;
     let clock = tree["document_clock"].as_str().unwrap().to_string();
-    let document_id = store.head_tmp_document(path).await.unwrap().id;
+    let document_id = store.head_tmp_document(&secret).await.unwrap().id;
 
     let (mut socket, doc) = connect_session(addr, &document_id).await;
     assert_eq!(yjs_plain_text(&doc), "Old first.Old second.");
@@ -7210,7 +7363,7 @@ async fn tmp_markdown_put_lands_in_an_active_session_as_a_collaborator_edit() {
         .oneshot(
             Request::builder()
                 .method(Method::PUT)
-                .uri(format!("/v1/tmp/documents/{path}"))
+                .uri(format!("/v1/tmp/documents/{secret}"))
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .header(header::IF_MATCH, format!("\"{clock}\""))
                 .body(Body::from("Uploaded first.\n\nUploaded second.\n"))
@@ -7220,7 +7373,7 @@ async fn tmp_markdown_put_lands_in_an_active_session_as_a_collaborator_edit() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    let after = get_tmp_block_tree(&app, path).await;
+    let after = get_tmp_block_tree(&app, &secret).await;
     assert_eq!(after["blocks"][0]["text"], "Uploaded first.");
     assert_eq!(after["blocks"][1]["text"], "Uploaded second.");
     wait_for_yjs_plain_text(&mut socket, &doc, "Uploaded first.Uploaded second.").await;
@@ -7233,14 +7386,12 @@ async fn tmp_markdown_put_lands_in_an_active_session_as_a_collaborator_edit() {
 #[tokio::test]
 async fn tmp_raw_text_put_bypasses_the_block_model() {
     let (_root, app, store) = block_test_app().await;
-    let path = "scratch/raw.txt";
     let response = app
         .clone()
         .oneshot(json_request(
             Method::POST,
             "/v1/tmp/documents",
             serde_json::json!({
-                "path": path,
                 "content": "draft one",
                 "content_type": "text/plain",
                 "expires_at": "2099-01-01T00:00:00Z"
@@ -7253,13 +7404,15 @@ async fn tmp_raw_text_put_bypasses_the_block_model() {
         .to_str()
         .unwrap()
         .to_string();
+    let created = response_json(response).await;
+    let secret = created["document"]["path"].as_str().unwrap().to_string();
 
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method(Method::PUT)
-                .uri(format!("/v1/tmp/documents/{path}"))
+                .uri(format!("/v1/tmp/documents/{secret}"))
                 .header(header::CONTENT_TYPE, "text/plain")
                 .header(header::IF_MATCH, etag)
                 .body(Body::from("draft two"))
@@ -7269,7 +7422,7 @@ async fn tmp_raw_text_put_bypasses_the_block_model() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    let document = store.get_tmp_document(path).await.unwrap();
+    let document = store.get_tmp_document(&secret).await.unwrap();
     assert_eq!(document.content, b"draft two".to_vec());
     assert_eq!(
         store.load_block_tree(&document.id).await.unwrap(),

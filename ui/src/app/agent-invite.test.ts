@@ -21,40 +21,43 @@ describe('agent invite helpers', () => {
   });
 
   it('builds tmp tokenized URLs and tmp-scoped agent prompts', () => {
-    expect(tmpWorkspaceRouteForDocument('scratch/live doc.md')).toBe('/tmp/scratch/live%20doc.md');
+    const secret = '72cb58585aa73e35758bc1141f79e32e';
+    expect(tmpWorkspaceRouteForDocument(secret)).toBe(
+      '/tmp/72cb58585aa73e35758bc1141f79e32e'
+    );
     const tokenizedDocUrl = buildTokenizedDocumentUrl({
       origin: 'http://127.0.0.1:5173',
       scope: 'tmp',
-      path: 'scratch/live doc.md',
+      path: secret,
       token: 'tmp-invite-token',
     });
-    expect(tokenizedDocUrl).toBe(
-      'http://127.0.0.1:5173/tmp/scratch/live%20doc.md?token=tmp-invite-token'
-    );
+    expect(tokenizedDocUrl).toBe('http://127.0.0.1:5173/tmp/72cb58585aa73e35758bc1141f79e32e');
 
     const prompt = buildAddAgentPrompt({
       origin: 'http://127.0.0.1:5173',
       scope: 'tmp',
-      path: 'scratch/live doc.md',
+      path: secret,
       tokenizedDocUrl,
     });
 
     expect(prompt).toContain('Scope: tmp document');
     expect(prompt).not.toContain('Library:');
+    expect(prompt).toContain('Tmp document URLs are bearer capabilities');
+    expect(prompt).toContain('do not treat the secret as an agent identity');
     expect(prompt).toContain(
-      'POST http://127.0.0.1:5173/v1/tmp/documents/scratch/live%20doc.md/presence'
+      'POST http://127.0.0.1:5173/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e/presence'
     );
     expect(prompt).toContain(
-      'GET http://127.0.0.1:5173/v1/tmp/documents/scratch/live%20doc.md/events/stream'
+      'GET http://127.0.0.1:5173/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e/events/stream'
     );
     expect(prompt).toContain(
-      'GET http://127.0.0.1:5173/v1/tmp/documents/scratch/live%20doc.md/blocks'
+      'GET http://127.0.0.1:5173/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e/blocks'
     );
     expect(prompt).toContain(
-      'POST http://127.0.0.1:5173/v1/tmp/documents/scratch/live%20doc.md/transactions'
+      'POST http://127.0.0.1:5173/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e/transactions'
     );
     expect(prompt).toContain(
-      'GET http://127.0.0.1:5173/v1/tmp/documents/scratch/live%20doc.md/review'
+      'GET http://127.0.0.1:5173/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e/review'
     );
     expect(prompt).toContain('re-POST presence at least once per minute');
   });

@@ -607,7 +607,8 @@ impl QuarryStore {
         origin_id: Option<String>,
         transaction: TransactionMetadata,
     ) -> Result<WriteOutcome> {
-        let path = normalize_path(path)?;
+        let secret = TmpDocumentSecret::parse(path)?;
+        let path = secret.as_str().to_string();
         if document_kind(&path, content_type) == DocumentKind::RawDocument {
             return Err(QuarryError::Unsupported(format!(
                 "cannot import {path} ({content_type}) as a block document"
@@ -966,7 +967,10 @@ impl QuarryStore {
         let conn = self.conn()?;
         conn.execute("BEGIN", ()).await.map_err(map_turso_error)?;
         let result = async {
-            let path = normalize_path(path)?;
+            let path = match scope {
+                DocumentScopeRef::Library { .. } => normalize_path(path)?,
+                DocumentScopeRef::Tmp => TmpDocumentSecret::parse(path)?.as_str().to_string(),
+            };
             let document = match scope {
                 DocumentScopeRef::Library { slug } => {
                     let library = self.require_library_conn(&conn, slug).await?;

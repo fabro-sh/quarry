@@ -39,10 +39,16 @@ envelope. To author or restructure a whole document, prefer the Markdown `PUT`
 
 ## Locator URLs And Auth
 
-Locator URL format:
+Library locator URL format:
 
 ```text
 http://127.0.0.1:5173/lib/<library>/documents/<path>?token=<token>
+```
+
+Tmp locator URL format:
+
+```text
+http://127.0.0.1:5173/tmp/72cb58585aa73e35758bc1141f79e32e
 ```
 
 Extract:
@@ -50,10 +56,14 @@ Extract:
 - origin: `http://127.0.0.1:5173`
 - library: the URL-decoded segment after `/lib/`
 - path: the encoded path after `/documents/`
-- token: locator for browser/collab joins
+- token: locator for browser/collab joins on library documents
+- tmp secret: the single URL segment after `/tmp/`
 
-Quarry REST agent APIs are trusted-localhost for now. The locator token is not
-REST bearer auth unless discovery metadata later says otherwise.
+Quarry REST agent APIs are trusted-localhost for now. Library locator tokens are
+not REST bearer auth unless discovery metadata later says otherwise. For tmp
+documents, the segment after `/tmp/` is the document identifier and capability.
+Do not send a separate bearer token for tmp docs. Use `X-Agent-Id` to identify
+your agent.
 
 Build the document API URL with each library/path segment URL-encoded:
 
@@ -64,6 +74,16 @@ PATH_ENCODED="folder/live%20doc.md"
 AGENT_ID="ai:codex:abc123"
 AGENT_NAME="Codex"
 DOC="$ORIGIN/v1/libraries/$LIBRARY_ENCODED/documents/$PATH_ENCODED"
+```
+
+For tmp documents:
+
+```bash
+ORIGIN="http://127.0.0.1:5173"
+SECRET="72cb58585aa73e35758bc1141f79e32e"
+AGENT_ID="ai:codex:abc123"
+AGENT_NAME="Codex"
+DOC="$ORIGIN/v1/tmp/documents/$SECRET"
 ```
 
 ## Core Workflow
@@ -99,6 +119,9 @@ Presence expires after 60 seconds. Holding the document event stream open with
 your `X-Agent-Id` refreshes it automatically; otherwise re-POST `/presence` at
 least once per minute while active. Disconnecting the stream removes your
 presence.
+
+Library presence entries include `path`. Tmp presence entries omit `path`; use
+the requested `$DOC` URL plus `documentId` to correlate them.
 
 ## Blocks And Stable Ids
 
@@ -254,6 +277,10 @@ event before replying, commenting, suggesting, or editing.
 curl -N -H "X-Agent-Id: $AGENT_ID" "$DOC/events/stream"
 curl -sS "$ORIGIN/v1/libraries/$LIBRARY_ENCODED/events/pending?after=0"
 ```
+
+Library streams include document paths. Tmp document-scoped streams omit
+`path`, `from`, and `to`; use the requested `$DOC` URL plus `doc_id` to
+correlate tmp events.
 
 The pending response includes `events` and `nextAfter`. Store `nextAfter` for
 the next poll. Ack processed events when useful:

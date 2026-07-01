@@ -346,9 +346,11 @@ const plateMarkdownPlugins = [
 export type EditorMode = 'editing' | 'suggesting' | 'viewing';
 
 export interface CollabEditorConfig {
+  baseUrl?: string;
   documentId: string;
   /** Save state for the document header: Saved / Saving… / Reconnecting. */
   onSaveStateChange?: (state: CollabSaveState) => void;
+  roomName?: string;
   sessionId: string;
   token?: string;
 }
@@ -391,6 +393,8 @@ export function PlateMarkdownEditor({
   const storeGetMeta = useReviewStore((s) => s.getMeta);
   const collabEnabled = Boolean(collab?.documentId);
   const collabDocumentId = collab?.documentId ?? '';
+  const collabBaseUrl = collab?.baseUrl;
+  const collabRoomName = collab?.roomName ?? collabDocumentId;
   const collabSessionId = collab?.sessionId ?? '';
   const collabToken = collab?.token;
   // Bumped to reconnect: a new epoch recreates the editor with a FRESH
@@ -460,7 +464,8 @@ export function PlateMarkdownEditor({
           providers: [
             {
               options: {
-                roomName: collabDocumentId,
+                baseUrl: collabBaseUrl,
+                roomName: collabRoomName,
                 token: collabToken,
               },
               type: RUST_WS_PROVIDER_TYPE,
@@ -470,7 +475,15 @@ export function PlateMarkdownEditor({
         },
       }),
     ] as const;
-  }, [collabCursorName, collabDocumentId, collabEnabled, collabSessionId, collabToken]);
+  }, [
+    collabBaseUrl,
+    collabCursorName,
+    collabDocumentId,
+    collabEnabled,
+    collabRoomName,
+    collabSessionId,
+    collabToken,
+  ]);
   const editor = usePlateEditor(
     {
       // Stamp a stable id onto every node up front (not just first/last). The
@@ -574,7 +587,7 @@ export function PlateMarkdownEditor({
     const attempt = () => {
       if (disposed) return;
       try {
-        probe = new WebSocket(`${collabWebSocketBaseUrl()}/${collabDocumentId}`);
+        probe = new WebSocket(`${collabBaseUrl ?? collabWebSocketBaseUrl()}/${collabRoomName}`);
       } catch {
         schedule();
         return;
@@ -603,7 +616,7 @@ export function PlateMarkdownEditor({
         probe.close();
       }
     };
-  }, [collabDocumentId, collabEnabled, collabInitCompleted, collabLive]);
+  }, [collabBaseUrl, collabEnabled, collabInitCompleted, collabLive, collabRoomName]);
 
   useEffect(() => {
     if (collabEnabled) return;

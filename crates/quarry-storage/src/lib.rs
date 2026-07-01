@@ -34,6 +34,32 @@ use turso::{params, Builder, Connection, Database, Row, Rows, Value};
 use uuid::Uuid;
 
 const TMP_TRANSACTION_LIBRARY_ID: &str = "__tmp__";
+const TMP_DOCUMENT_SECRET_LEN: usize = 32;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TmpDocumentSecret(String);
+
+impl TmpDocumentSecret {
+    fn generate() -> Self {
+        Self(Uuid::new_v4().simple().to_string())
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        let value = value.trim();
+        let valid = value.len() == TMP_DOCUMENT_SECRET_LEN
+            && value.chars().all(|character| character.is_ascii_hexdigit());
+        if !valid {
+            return Err(QuarryError::InvalidPath(
+                "invalid tmp document secret".to_string(),
+            ));
+        }
+        Ok(Self(value.to_ascii_lowercase()))
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct StoreConfig {
@@ -724,7 +750,7 @@ impl QuarryStore {
             .map_err(map_turso_error)?
             .map(|row| int(&row, 0))
             .transpose()?
-            .ok_or_else(|| QuarryError::NotFound(path))
+            .ok_or(QuarryError::NotFound(path))
     }
 
     pub async fn path_for_inode(&self, library: &str, inode: i64) -> Result<String> {
@@ -748,6 +774,7 @@ impl QuarryStore {
             .ok_or_else(|| QuarryError::NotFound(format!("inode {inode}")))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn put_document(
         &self,
         library: &str,
@@ -771,6 +798,7 @@ impl QuarryStore {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn put_document_with_origin(
         &self,
         library: &str,
@@ -825,6 +853,7 @@ impl QuarryStore {
         Ok(outcome)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn commit_document_without_events(
         &self,
         library: &str,
@@ -990,6 +1019,25 @@ impl QuarryStore {
         .await
     }
 
+    pub async fn create_tmp_document(
+        &self,
+        content: Vec<u8>,
+        metadata: JsonValue,
+        content_type: &str,
+        ttl: TmpTtl,
+    ) -> Result<WriteOutcome> {
+        let secret = TmpDocumentSecret::generate();
+        self.put_tmp_document(
+            secret.as_str(),
+            content,
+            metadata,
+            content_type,
+            ttl,
+            WritePrecondition::IfNoneMatch,
+        )
+        .await
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn put_tmp_document_with_transaction(
         &self,
@@ -1002,7 +1050,8 @@ impl QuarryStore {
         origin_id: Option<String>,
         transaction: TransactionMetadata,
     ) -> Result<WriteOutcome> {
-        let path = normalize_path(path)?;
+        let secret = TmpDocumentSecret::parse(path)?;
+        let path = secret.as_str().to_string();
         let _operation_guard = self.normal_write_gate().await;
         let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
@@ -1071,71 +1120,20 @@ impl QuarryStore {
     }
 
     pub async fn get_tmp_document(&self, path: &str) -> Result<Document> {
-        let path = normalize_path(path)?;
+        let secret = TmpDocumentSecret::parse(path)?;
         let conn = self.conn()?;
-        self.tmp_document_conn(&conn, &path).await
+        self.tmp_document_conn(&conn, secret.as_str()).await
     }
 
     pub async fn head_tmp_document(&self, path: &str) -> Result<DocumentListEntry> {
-        let path = normalize_path(path)?;
+        let secret = TmpDocumentSecret::parse(path)?;
         let conn = self.conn()?;
-        self.tmp_document_entry_conn(&conn, &path).await
-    }
-
-    pub async fn list_tmp_documents(
-        &self,
-        prefix: Option<&str>,
-        limit: Option<u64>,
-    ) -> Result<Vec<DocumentListEntry>> {
-        let conn = self.conn()?;
-        let normalized_prefix = match prefix {
-            Some("") | None => None,
-            Some(prefix) => Some(normalize_prefix(prefix)?),
-        };
-        let now = now_timestamp();
-        let limit = limit.unwrap_or(1000).min(10_000) as i64;
-        let (sql, params) = if let Some(prefix) = normalized_prefix {
-            (
-                "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
-                 FROM documents d
-                 JOIN document_versions v ON v.id = d.head_version_id
-                 WHERE d.document_scope = 'tmp'
-                   AND d.library_id IS NULL
-                   AND d.deleted_at IS NULL
-                   AND d.head_version_id IS NOT NULL
-                   AND d.expires_at > ?1
-                   AND d.path LIKE ?2
-                 ORDER BY d.path LIMIT ?3",
-                vec![
-                    Value::Text(now),
-                    Value::Text(format!("{prefix}%")),
-                    Value::Integer(limit),
-                ],
-            )
-        } else {
-            (
-                "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
-                 FROM documents d
-                 JOIN document_versions v ON v.id = d.head_version_id
-                 WHERE d.document_scope = 'tmp'
-                   AND d.library_id IS NULL
-                   AND d.deleted_at IS NULL
-                   AND d.head_version_id IS NOT NULL
-                   AND d.expires_at > ?1
-                 ORDER BY d.path LIMIT ?2",
-                vec![Value::Text(now), Value::Integer(limit)],
-            )
-        };
-        let mut rows = conn.query(sql, params).await.map_err(map_turso_error)?;
-        let mut documents = Vec::new();
-        while let Some(row) = rows.next().await.map_err(map_turso_error)? {
-            documents.push(document_entry_from_row(&row)?);
-        }
-        Ok(documents)
+        self.tmp_document_entry_conn(&conn, secret.as_str()).await
     }
 
     pub async fn raw_tmp_version_history(&self, path: &str) -> Result<Vec<DocumentVersion>> {
-        let path = normalize_path(path)?;
+        let secret = TmpDocumentSecret::parse(path)?;
+        let path = secret.as_str().to_string();
         let conn = self.conn()?;
         let document_id = self
             .tmp_document_id_conn(&conn, &path)
@@ -1155,7 +1153,8 @@ impl QuarryStore {
         path: &str,
         version_id: &str,
     ) -> Result<DocumentVersionContent> {
-        let path = normalize_path(path)?;
+        let secret = TmpDocumentSecret::parse(path)?;
+        let path = secret.as_str().to_string();
         let conn = self.conn()?;
         let document_id = self
             .tmp_document_id_conn(&conn, &path)
@@ -1171,7 +1170,8 @@ impl QuarryStore {
     }
 
     pub async fn delete_tmp_document(&self, path: &str) -> Result<TransactionRecord> {
-        let path = normalize_path(path)?;
+        let secret = TmpDocumentSecret::parse(path)?;
+        let path = secret.as_str().to_string();
         let _operation_guard = self.normal_write_gate().await;
         let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
@@ -1223,7 +1223,8 @@ impl QuarryStore {
                 "tmp document TTL cannot be removed".to_string(),
             ));
         };
-        let path = normalize_path(path)?;
+        let secret = TmpDocumentSecret::parse(path)?;
+        let path = secret.as_str().to_string();
         let _operation_guard = self.normal_write_gate().await;
         let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
@@ -1286,7 +1287,8 @@ impl QuarryStore {
         target_path: &str,
         precondition: WritePrecondition,
     ) -> Result<DocumentListEntry> {
-        let tmp_path = normalize_path(tmp_path)?;
+        let tmp_secret = TmpDocumentSecret::parse(tmp_path)?;
+        let tmp_path = tmp_secret.as_str().to_string();
         let target_path = normalize_path(target_path)?;
         let _operation_guard = self.normal_write_gate().await;
         let _guard = self.acquire_write_lock().await;
@@ -1389,50 +1391,6 @@ impl QuarryStore {
         finish_tx(&conn, result).await
     }
 
-    pub async fn create_tmp_collab_invite_token(
-        &self,
-        path: &str,
-        role: &str,
-        by_hint: Option<String>,
-    ) -> Result<CollabInviteToken> {
-        let role = normalize_collab_invite_role(role)?;
-        let path = normalize_path(path)?;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let (document_id, _) = self
-                .tmp_document_identity_conn(&conn, &path)
-                .await?
-                .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
-            let token = CollabInviteToken {
-                id: Uuid::new_v4().to_string(),
-                document_id,
-                role,
-                by_hint: by_hint.filter(|value| !value.trim().is_empty()),
-                created_at: now_timestamp(),
-                revoked_at: None,
-            };
-            conn.execute(
-                "INSERT INTO collab_invite_tokens
-                 (id, document_id, role, by_hint, created_at, revoked_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
-                vec![
-                    Value::Text(token.id.clone()),
-                    Value::Text(token.document_id.clone()),
-                    Value::Text(token.role.clone()),
-                    opt_value(token.by_hint.clone()),
-                    Value::Text(token.created_at.clone()),
-                ],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            Ok(token)
-        }
-        .await;
-        finish_tx(&conn, result).await
-    }
-
     pub async fn collab_invite_tokens(
         &self,
         library: &str,
@@ -1443,17 +1401,6 @@ impl QuarryStore {
         let library = self.require_library_conn(&conn, library).await?;
         let (document_id, _) = self
             .document_identity_conn(&conn, &library.id, &path)
-            .await?
-            .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
-        self.collab_invite_tokens_for_document_conn(&conn, &document_id)
-            .await
-    }
-
-    pub async fn tmp_collab_invite_tokens(&self, path: &str) -> Result<Vec<CollabInviteToken>> {
-        let path = normalize_path(path)?;
-        let conn = self.conn()?;
-        let (document_id, _) = self
-            .tmp_document_identity_conn(&conn, &path)
             .await?
             .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
         self.collab_invite_tokens_for_document_conn(&conn, &document_id)
@@ -1807,6 +1754,7 @@ impl QuarryStore {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn graph(
         &self,
         library: &str,
@@ -5003,6 +4951,7 @@ fn acquire_lock(config: &StoreConfig) -> Result<LockGuard> {
     }
     let file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(&path)
@@ -6213,5 +6162,41 @@ fn assert_path_exists(path: &Path) -> Result<()> {
         Ok(())
     } else {
         Err(QuarryError::NotFound(path.display().to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tmp_secret_tests {
+    use super::*;
+
+    #[test]
+    fn generated_tmp_secret_is_url_safe_hex() {
+        let secret = TmpDocumentSecret::generate();
+
+        assert_eq!(secret.as_str().len(), TMP_DOCUMENT_SECRET_LEN);
+        assert!(secret
+            .as_str()
+            .chars()
+            .all(|character| character.is_ascii_hexdigit()));
+        assert!(!secret.as_str().contains('/'));
+    }
+
+    #[test]
+    fn tmp_secret_rejects_path_like_values() {
+        let error = TmpDocumentSecret::parse("scratch/note.md")
+            .expect_err("path-like tmp identifiers should be rejected");
+
+        assert!(matches!(
+            error,
+            QuarryError::InvalidPath(message) if message == "invalid tmp document secret"
+        ));
+    }
+
+    #[test]
+    fn tmp_secret_normalizes_uppercase_hex() -> Result<()> {
+        let secret = TmpDocumentSecret::parse("ABCDEF0123456789ABCDEF0123456789")?;
+
+        assert_eq!(secret.as_str(), "abcdef0123456789abcdef0123456789");
+        Ok(())
     }
 }

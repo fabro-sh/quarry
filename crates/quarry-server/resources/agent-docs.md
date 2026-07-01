@@ -31,17 +31,15 @@ Library document invite links look like this:
 http://127.0.0.1:5173/lib/team%20notes/documents/folder/live%20doc.md?token=invite-token
 ```
 
-Tmp document invite links look like this:
+Tmp document links look like this:
 
 ```text
-http://127.0.0.1:5173/tmp/scratch/live%20doc.md?token=invite-token
+http://127.0.0.1:5173/tmp/72cb58585aa73e35758bc1141f79e32e
 ```
 
 Use the link as a locator. The origin is the API origin. For library documents,
 the library is the segment after `/lib/`, and the document path is the portion
-after `/documents/`. For tmp documents, the document path is the portion after
-`/tmp/`. Keep document path segments URL-encoded in REST URLs and preserve `/`
-separators.
+after `/documents/`.
 
 ```sh
 ORIGIN="http://127.0.0.1:5173"
@@ -53,15 +51,17 @@ AGENT_NAME="Codex"
 DOC="$ORIGIN/v1/libraries/$LIBRARY_ENCODED/documents/$PATH_ENCODED"
 ```
 
-For a tmp document, omit the library and build the document API from
-`/v1/tmp/documents/$PATH_ENCODED`:
+For a tmp document, the segment after `/tmp/` is the share secret. It is both
+the document locator and the bearer capability. Anyone with this URL can access
+the tmp document. Omit the library and build the document API from
+`/v1/tmp/documents/$SECRET`:
 
 ```sh
 ORIGIN="http://127.0.0.1:5173"
-PATH_ENCODED="scratch/live%20doc.md"
+SECRET="72cb58585aa73e35758bc1141f79e32e"
 AGENT_ID="ai:codex:abc123"
 AGENT_NAME="Codex"
-DOC="$ORIGIN/v1/tmp/documents/$PATH_ENCODED"
+DOC="$ORIGIN/v1/tmp/documents/$SECRET"
 ```
 
 For a raw document path like `notes/Project Plan.md`, encode each path segment
@@ -69,18 +69,19 @@ and keep slash separators: `notes/Project%20Plan.md`.
 
 Tmp Markdown documents support the same block reads, semantic transactions,
 comments, suggestions, presence, and document event streams as library
-Markdown documents. Tmp docs also expose `$DOC/share` for invite creation.
-They remain temporary documents: they do not have library search, graph, Git,
+Markdown documents. They remain temporary documents: they do not have library search, graph, Git,
 backlinks, promote from library routes, or library pending-event polling.
 
 ## Auth And Locator Tokens
 
-Quarry REST agent APIs are trusted-localhost for now. The `?token=` value in a
-browser invite URL identifies the shared document for browser/collab joins, but
-REST agent endpoints on this host do not currently enforce bearer-token auth.
+Quarry REST agent APIs are trusted-localhost for now. For library document
+invite URLs, the `?token=` value identifies the shared document for
+browser/collab joins, but REST agent endpoints on this host do not currently
+enforce bearer-token auth.
 
-Do not send the locator token as a REST bearer token unless future discovery
-metadata explicitly says to do so. Check `/.well-known/agent.json` when in doubt.
+For tmp documents, the `/tmp/{secret}` URL segment is the bearer capability and
+the document identifier. Do not treat it as an agent identity; use `X-Agent-Id`
+for that.
 
 ## Headers And Identity
 
@@ -389,6 +390,9 @@ List presence for the same document:
 curl -sS "$DOC/presence"
 ```
 
+Library presence entries include the document `path`. Tmp presence entries omit
+`path`; use the requested `$DOC` URL plus `documentId` to correlate them.
+
 ## Events
 
 Events are activity signals for long-lived agents. They are not the source of
@@ -415,6 +419,10 @@ it as `after` on the next poll.
 such as `version_id`/`etag` and may include `origin_id`. Every write path —
 browser checkpoints, agent transactions, Git/FUSE/CLI file writes — emits the
 same event shape.
+
+Library document streams include document paths. Tmp document-scoped streams
+omit `path`, `from`, and `to`; use the requested `$DOC` URL plus `doc_id` to
+correlate tmp events without echoing the capability secret.
 
 Ack processed events when useful:
 
@@ -469,8 +477,8 @@ supported `transaction_operations`, and known limitations.
 
 - REST agent endpoints currently trust localhost and do not enforce bearer-token
   auth.
-- Invite URL tokens are document locators for browser/collab joins, not REST
-  auth tokens.
+- Library invite URL tokens are document locators for browser/collab joins, not
+  REST auth tokens. Tmp URL secrets are bearer capabilities.
 - Block APIs apply to Markdown documents only; other content types are raw
   bytes (`UNSUPPORTED_BLOCK_DOCUMENT`).
 - Same-block merges with live human typing are convergence-only: concurrent

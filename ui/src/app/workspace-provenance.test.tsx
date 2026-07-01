@@ -117,8 +117,9 @@ describe('workspace document mutation provenance', () => {
 
   it('wires tmp Markdown collaboration with agent presence', async () => {
     stubBrowserOrigin('00000000-0000-4000-8000-000000000004');
-    window.history.pushState({}, '', '/tmp/scratch/live.md');
-    const fetch = vi.fn(tmpCollabFetch());
+    const secret = '72cb58585aa73e35758bc1141f79e32e';
+    window.history.pushState({}, '', `/tmp/${secret}`);
+    const fetch = vi.fn(tmpCollabFetch(secret));
     vi.stubGlobal('fetch', fetch);
 
     renderApp();
@@ -138,6 +139,7 @@ describe('workspace document mutation provenance', () => {
 
     const removedTmpSignalRoute = ['han', 'doff'].join('');
     expect(fetch.mock.calls.some(([input]) => String(input).includes(`/${removedTmpSignalRoute}`))).toBe(false);
+    expect(fetch).not.toHaveBeenCalledWith('/v1/tmp/documents', undefined);
   });
 
   it('keeps the selected editor mounted across a checkpoint head move', async () => {
@@ -251,26 +253,13 @@ function provenanceFetch() {
   };
 }
 
-function tmpCollabFetch() {
+function tmpCollabFetch(secret: string) {
   return async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url === '/v1/capabilities') {
       return json({ tmp_documents: true, lib_documents: false });
     }
-    if (url === '/v1/tmp/documents') {
-      return json([
-        {
-          id: 'tmp-doc',
-          path: 'scratch/live.md',
-          head_version_id: 'tmp-v1',
-          content_type: 'text/markdown',
-          byte_size: 5,
-          metadata: { title: 'Tmp' },
-          updated_at: 'now',
-        },
-      ]);
-    }
-    if (url === '/v1/tmp/documents/scratch/live.md') {
+    if (url === `/v1/tmp/documents/${secret}`) {
       return new Response('# Tmp', {
         headers: {
           ETag: '"tmp-v1"',
@@ -279,12 +268,12 @@ function tmpCollabFetch() {
         },
       });
     }
-    if (url === '/v1/tmp/documents/scratch/live.md/presence') {
+    if (url === `/v1/tmp/documents/${secret}/presence`) {
       return json({
         presence: [
           {
             library: null,
-            path: 'scratch/live.md',
+            path: secret,
             documentId: 'tmp-doc',
             agentId: 'ai:codex:tmp',
             status: 'waiting',
@@ -294,7 +283,7 @@ function tmpCollabFetch() {
         ],
       });
     }
-    if (url === '/v1/tmp/documents/scratch/live.md/review?includeResolved=1') {
+    if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
       return json({ documentId: 'tmp-doc', comments: [], suggestions: [], conflicts: [] });
     }
     return new Response('not found', { status: 404 });

@@ -8,6 +8,7 @@ import {
   MSG_QUARRY_CHECKPOINT,
   RustWsProviderWrapper,
   collabWebSocketBaseUrl,
+  tmpCollabWebSocketBaseUrl,
   type WebsocketProviderFactory,
   type WebsocketProviderLike,
 } from './rust-ws-provider';
@@ -20,6 +21,12 @@ describe('RustWsProviderWrapper', () => {
     expect(collabWebSocketBaseUrl({ protocol: 'https:', host: 'quarry.test' })).toBe(
       'wss://quarry.test/v1/collab'
     );
+    expect(
+      tmpCollabWebSocketBaseUrl('72cb58585aa73e35758bc1141f79e32e', {
+        protocol: 'http:',
+        host: '127.0.0.1:5173',
+      })
+    ).toBe('ws://127.0.0.1:5173/v1/tmp/collab/72cb58585aa73e35758bc1141f79e32e');
   });
 
   it('wraps y-websocket with document-id rooms and Plate lifecycle callbacks', () => {
@@ -75,6 +82,30 @@ describe('RustWsProviderWrapper', () => {
     expect(wrapper.isSynced).toBe(false);
     expect(onDisconnect).toHaveBeenCalledOnce();
     expect(onSyncChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('forwards tmp collab base URLs and room names to y-websocket', () => {
+    const doc = new Y.Doc();
+    const awareness = new Awareness(doc);
+    const fakeProvider = new FakeProvider(awareness, doc);
+    const factory = vi.fn<WebsocketProviderFactory>(() => fakeProvider);
+
+    new RustWsProviderWrapper({
+      awareness,
+      doc,
+      options: {
+        baseUrl: 'ws://127.0.0.1:5173/v1/tmp/collab/72cb58585aa73e35758bc1141f79e32e',
+        providerFactory: factory,
+        roomName: 'content',
+      },
+    });
+
+    expect(factory).toHaveBeenCalledWith(
+      'ws://127.0.0.1:5173/v1/tmp/collab/72cb58585aa73e35758bc1141f79e32e',
+      'content',
+      doc,
+      expect.objectContaining({ params: {} })
+    );
   });
 
   it('decodes checkpoint-ack frames and notifies subscribers', () => {

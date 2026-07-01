@@ -57,6 +57,16 @@ describe('collaboration session event classification', () => {
         session
       )
     ).toEqual({ action: 'session_refresh' });
+    expect(
+      classifyLiveDocumentEvent(
+        {
+          type: 'doc.changed',
+          doc_id: 'doc-1',
+          version_id: 'v10',
+        },
+        session
+      )
+    ).toEqual({ action: 'session_refresh' });
   });
 
   it('retargets live sessions on document moves', () => {

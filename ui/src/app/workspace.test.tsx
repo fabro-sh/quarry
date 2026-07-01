@@ -321,27 +321,28 @@ describe('Quarry Browser workspace', () => {
   });
 
   it('loads routed tmp Markdown document controls through tmp APIs', async () => {
-    window.history.pushState({}, '', '/tmp/scratch/note.md');
+    const secret = '72cb58585aa73e35758bc1141f79e32e';
+    window.history.pushState({}, '', `/tmp/${secret}`);
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/v1/libraries') {
         return json([{ id: 'lib-notes', slug: 'notes', created_at: 'now', settings: {} }]);
       }
       if (url === '/v1/libraries/notes/documents') return json([]);
-      if (url === '/v1/tmp/documents/scratch/note.md') {
+      if (url === `/v1/tmp/documents/${secret}`) {
         return new Response('# Tmp\n', {
           headers: {
             ETag: '"tmp-v1"',
             'content-type': 'text/markdown',
+            'x-quarry-document-id': 'tmp-1',
             'x-quarry-expires-at': '2099-01-01T00:00:00Z',
           },
         });
       }
-      if (url === '/v1/tmp/documents/scratch/note.md/presence') return json({ presence: [] });
-      if (url === '/v1/tmp/documents/scratch/note.md/review?includeResolved=1') {
+      if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
         return json({ documentId: 'tmp-1', comments: [], suggestions: [], conflicts: [] });
       }
-      if (url === '/v1/tmp/documents/scratch/note.md/versions') return json([]);
       return new Response('not found', { status: 404 });
     });
     vi.stubGlobal('fetch', fetch);
@@ -351,7 +352,9 @@ describe('Quarry Browser workspace', () => {
     expect(await screen.findByRole('button', { name: 'Document mode' })).toHaveTextContent(
       'Editing'
     );
-    expect(window.location.pathname).toBe('/tmp/scratch/note.md');
+    expect(window.location.pathname).toBe(`/tmp/${secret}`);
+    expect(fetch).not.toHaveBeenCalledWith('/v1/tmp/documents', undefined);
+    expect(screen.queryByLabelText('Document tree')).not.toBeInTheDocument();
     expect(screen.queryByText(/Expires/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add agent' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
@@ -362,39 +365,27 @@ describe('Quarry Browser workspace', () => {
   });
 
   it('uses the tmp workspace and hides library controls when library documents are disabled', async () => {
-    window.history.pushState({}, '', '/tmp/scratch/note.md');
+    const secret = '72cb58585aa73e35758bc1141f79e32e';
+    window.history.pushState({}, '', `/tmp/${secret}`);
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/v1/capabilities') {
         return json({ tmp_documents: true, lib_documents: false });
       }
-      if (url === '/v1/tmp/documents') {
-        return json([
-          {
-            id: 'tmp-1',
-            path: 'scratch/note.md',
-            head_version_id: 'tmp-v1',
-            content_type: 'text/markdown',
-            byte_size: 6,
-            metadata: { title: 'Scratch note' },
-            updated_at: 'now',
-          },
-        ]);
-      }
-      if (url === '/v1/tmp/documents/scratch/note.md') {
+      if (url === `/v1/tmp/documents/${secret}`) {
         return new Response('# Tmp\n', {
           headers: {
             ETag: '"tmp-v1"',
             'content-type': 'text/markdown',
+            'x-quarry-document-id': 'tmp-1',
             'x-quarry-expires-at': '2099-01-01T00:00:00Z',
           },
         });
       }
-      if (url === '/v1/tmp/documents/scratch/note.md/presence') return json({ presence: [] });
-      if (url === '/v1/tmp/documents/scratch/note.md/review?includeResolved=1') {
+      if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
         return json({ documentId: 'tmp-1', comments: [], suggestions: [], conflicts: [] });
       }
-      if (url === '/v1/tmp/documents/scratch/note.md/versions') return json([]);
       return new Response('not found', { status: 404 });
     });
     vi.stubGlobal('fetch', fetch);
@@ -405,8 +396,9 @@ describe('Quarry Browser workspace', () => {
       'Editing'
     );
 
-    expect(window.location.pathname).toBe('/tmp/scratch/note.md');
+    expect(window.location.pathname).toBe(`/tmp/${secret}`);
     expect(fetch).not.toHaveBeenCalledWith('/v1/libraries', undefined);
+    expect(fetch).not.toHaveBeenCalledWith('/v1/tmp/documents', undefined);
     expect(screen.queryByLabelText('Document tree')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Document details')).not.toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: 'Library switcher' })).not.toBeInTheDocument();
@@ -2062,32 +2054,20 @@ describe('Quarry Browser workspace', () => {
   });
 
   it('uploads markdown in tmp mode through the tmp document endpoint', async () => {
-    window.history.pushState({}, '', '/tmp/scratch/note.md');
+    const secret = '72cb58585aa73e35758bc1141f79e32e';
+    window.history.pushState({}, '', `/tmp/${secret}`);
     let putUrl = '';
     let putInit: RequestInit | undefined;
     let documentFetches = 0;
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/v1/libraries') return json([]);
-      if (url === '/v1/tmp/documents') {
-        return json([
-          {
-            id: 'tmp-upload',
-            path: 'scratch/note.md',
-            head_version_id: 'tmp-v1',
-            content_type: 'text/markdown',
-            byte_size: 8,
-            metadata: { title: 'Scratch' },
-            updated_at: 'now',
-          },
-        ]);
-      }
-      if (url === '/v1/tmp/documents/scratch/note.md' && init?.method === 'PUT') {
+      if (url === `/v1/tmp/documents/${secret}` && init?.method === 'PUT') {
         putUrl = url;
         putInit = init;
-        return json(writeOutcome('tmp-upload', 'tmp-v3', 'scratch/note.md'), { ETag: '"tmp-v3"' });
+        return json(writeOutcome('tmp-upload', 'tmp-v3', secret), { ETag: '"tmp-v3"' });
       }
-      if (url === '/v1/tmp/documents/scratch/note.md') {
+      if (url === `/v1/tmp/documents/${secret}`) {
         documentFetches += 1;
         return new Response(documentFetches >= 3 ? '# Tmp uploaded\n' : '# Tmp\n', {
           headers: {
@@ -2096,11 +2076,10 @@ describe('Quarry Browser workspace', () => {
           },
         });
       }
-      if (url === '/v1/tmp/documents/scratch/note.md/presence') return json({ presence: [] });
-      if (url === '/v1/tmp/documents/scratch/note.md/review?includeResolved=1') {
+      if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
         return json({ documentId: 'tmp-upload', comments: [], suggestions: [], conflicts: [] });
       }
-      if (url === '/v1/tmp/documents/scratch/note.md/versions') return json([]);
       return new Response('not found', { status: 404 });
     });
     vi.stubGlobal('fetch', fetch);
@@ -2116,7 +2095,7 @@ describe('Quarry Browser workspace', () => {
     );
 
     await waitFor(() => expect(putInit).toBeTruthy());
-    expect(putUrl).toBe('/v1/tmp/documents/scratch/note.md');
+    expect(putUrl).toBe(`/v1/tmp/documents/${secret}`);
     expect(putInit?.body).toBe('# Tmp uploaded\n');
     expect(putInit?.headers).toMatchObject({
       'If-Match': '"tmp-v2"',
@@ -2124,7 +2103,7 @@ describe('Quarry Browser workspace', () => {
       'X-Quarry-Origin-Id': expect.any(String),
       'X-Quarry-Transaction-Actor': 'Tester',
     });
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/v1/tmp/documents/scratch/note.md/versions', undefined));
+    expect(fetch).not.toHaveBeenCalledWith('/v1/tmp/documents', undefined);
   });
 
   it('blocks markdown upload while the live document has unsaved session state', async () => {

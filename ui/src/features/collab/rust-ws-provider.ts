@@ -64,6 +64,14 @@ export function collabWebSocketBaseUrl(location: Pick<Location, 'host' | 'protoc
   return `${protocol}//${location.host}/v1/collab`;
 }
 
+export function tmpCollabWebSocketBaseUrl(
+  secret: string,
+  location: Pick<Location, 'host' | 'protocol'> = window.location
+) {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${location.host}/v1/tmp/collab/${encodeURIComponent(secret)}`;
+}
+
 export class RustWsProviderWrapper implements UnifiedProvider {
   private _isConnected = false;
   private _isSynced = false;

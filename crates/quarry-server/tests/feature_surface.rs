@@ -76,8 +76,15 @@ async fn document_feature_surface_matches_compiled_features() {
         openapi["paths"]["/v1/tmp/documents"].is_object(),
         tmp_documents
     );
+    if tmp_documents {
+        assert!(openapi["paths"]["/v1/tmp/documents"]["post"].is_object());
+        assert!(openapi["paths"]["/v1/tmp/documents"]["get"].is_null());
+        assert!(openapi["paths"]["/v1/tmp/documents/{secret}/share"].is_null());
+        assert!(openapi["paths"]["/v1/tmp/documents/{secret}/share/{token}/revoke"].is_null());
+        assert!(openapi["paths"]["/v1/tmp/collab/{secret}/{room}"].is_object());
+    }
     assert_eq!(
-        openapi["paths"]["/v1/tmp/documents/{path}/promote"].is_object(),
+        openapi["paths"]["/v1/tmp/documents/{secret}/promote"].is_object(),
         tmp_documents && lib_documents
     );
     assert_eq!(
@@ -85,27 +92,23 @@ async fn document_feature_surface_matches_compiled_features() {
         tmp_documents || lib_documents
     );
     assert_eq!(
-        openapi["paths"]["/v1/tmp/documents/{path}/blocks"].is_object(),
+        openapi["paths"]["/v1/tmp/documents/{secret}/blocks"].is_object(),
         tmp_documents
     );
     assert_eq!(
-        openapi["paths"]["/v1/tmp/documents/{path}/transactions"].is_object(),
+        openapi["paths"]["/v1/tmp/documents/{secret}/transactions"].is_object(),
         tmp_documents
     );
     assert_eq!(
-        openapi["paths"]["/v1/tmp/documents/{path}/review"].is_object(),
+        openapi["paths"]["/v1/tmp/documents/{secret}/review"].is_object(),
         tmp_documents
     );
     assert_eq!(
-        openapi["paths"]["/v1/tmp/documents/{path}/presence"].is_object(),
-        tmp_documents
-    );
-    assert_eq!(
-        openapi["paths"]["/v1/tmp/documents/{path}/share"].is_object(),
+        openapi["paths"]["/v1/tmp/documents/{secret}/presence"].is_object(),
         tmp_documents
     );
     let removed_tmp_signal_path =
-        format!("/v1/tmp/documents/{{path}}/{}", ["han", "doff"].join(""));
+        format!("/v1/tmp/documents/{{secret}}/{}", ["han", "doff"].join(""));
     assert!(openapi["paths"][removed_tmp_signal_path].is_null());
     assert_eq!(openapi["paths"]["/v1/libraries"].is_object(), lib_documents);
     assert_eq!(openapi["paths"]["/v1/events"].is_object(), lib_documents);
@@ -177,7 +180,7 @@ async fn document_feature_surface_matches_compiled_features() {
     assert_eq!(
         response.status(),
         if tmp_documents {
-            StatusCode::OK
+            StatusCode::METHOD_NOT_ALLOWED
         } else {
             StatusCode::NOT_FOUND
         }
@@ -242,7 +245,6 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
             Method::POST,
             "/v1/tmp/documents",
             serde_json::json!({
-                "path": "scratch/live.md",
                 "content": "Alpha.\n",
                 "content_type": "text/markdown"
             }),
@@ -251,6 +253,7 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
         .unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
     let created: Value = response_json(response).await;
+    let secret = created["document"]["path"].as_str().unwrap().to_string();
     let document_id = created["document"]["id"].as_str().unwrap().to_string();
 
     let response = app
@@ -258,7 +261,7 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/v1/tmp/documents/scratch/live.md/blocks")
+                .uri(format!("/v1/tmp/documents/{secret}/blocks"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -276,7 +279,7 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/v1/tmp/documents/scratch/live.md/events/stream")
+                .uri(format!("/v1/tmp/documents/{secret}/events/stream"))
                 .header("X-Agent-Id", "agent-a")
                 .body(Body::empty())
                 .unwrap(),
@@ -290,7 +293,7 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
         .clone()
         .oneshot(json_request(
             Method::POST,
-            "/v1/tmp/documents/scratch/live.md/transactions",
+            &format!("/v1/tmp/documents/{secret}/transactions"),
             serde_json::json!({
                 "client_tx_id": "tmp-tx-1",
                 "base_clock": base_clock,
@@ -319,14 +322,20 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
 
     let event = first_sse_chunk_containing(event_stream_body, "doc.changed").await;
     assert!(event.contains("event: doc.changed"));
-    assert!(event.contains("\"path\":\"scratch/live.md\""));
+    assert!(!event.contains(&secret));
+    assert!(!event.contains("\"path\""));
+    assert!(!event.contains("\"from\""));
+    assert!(!event.contains("\"to\""));
+    assert!(event.contains(&format!("\"doc_id\":\"{document_id}\"")));
+    assert!(event.contains("\"version_id\""));
+    assert!(event.contains("\"etag\""));
 
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/v1/tmp/documents/scratch/live.md")
+                .uri(format!("/v1/tmp/documents/{secret}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -343,7 +352,9 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/v1/tmp/documents/scratch/live.md/review?includeResolved=1")
+                .uri(format!(
+                    "/v1/tmp/documents/{secret}/review?includeResolved=1"
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -360,7 +371,7 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri("/v1/tmp/documents/scratch/live.md/presence")
+                .uri(format!("/v1/tmp/documents/{secret}/presence"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("X-Agent-Id", "agent-a")
                 .body(Body::from(
@@ -373,21 +384,23 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
     assert_eq!(response.status(), StatusCode::OK);
     let presence: Value = response_json(response).await;
     assert_eq!(presence["current"]["documentId"], document_id);
-    assert_eq!(presence["current"]["library"], Value::Null);
-    assert_eq!(presence["current"]["path"], "scratch/live.md");
+    assert_eq!(presence["current"]["agentId"], "agent-a");
+    assert_eq!(presence["current"]["status"], "waiting");
+    assert!(presence["current"]["updatedAt"].as_str().is_some());
+    assert!(presence["current"].get("library").is_none());
+    assert!(presence["current"].get("path").is_none());
+    assert!(presence["presence"][0].get("path").is_none());
 
     let response = app
         .clone()
         .oneshot(json_request(
             Method::POST,
-            "/v1/tmp/documents/scratch/live.md/share",
+            &format!("/v1/tmp/documents/{secret}/share"),
             serde_json::json!({"role":"editor","byHint":"Avery"}),
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let token: Value = response_json(response).await;
-    assert_eq!(token["document_id"], document_id);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     assert!(ack["document_clock"].is_string());
 }
@@ -412,7 +425,6 @@ async fn tmp_collab_websocket_final_checkpoint_persists_typing() {
             Method::POST,
             "/v1/tmp/documents",
             serde_json::json!({
-                "path": "scratch/socket.md",
                 "content": "Hello tmp.\n",
                 "content_type": "text/markdown"
             }),
@@ -421,7 +433,7 @@ async fn tmp_collab_websocket_final_checkpoint_persists_typing() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
     let created: Value = response_json(response).await;
-    let document_id = created["document"]["id"].as_str().unwrap().to_string();
+    let secret = created["document"]["path"].as_str().unwrap().to_string();
 
     let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = probe.local_addr().unwrap();
@@ -432,7 +444,7 @@ async fn tmp_collab_websocket_final_checkpoint_persists_typing() {
     }));
     wait_for_server(addr).await;
 
-    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    let (mut socket, doc) = connect_tmp_session(addr, &secret).await;
     assert_eq!(yjs_plain_text(&doc), "Hello tmp.");
     send_local_edit(&mut socket, &doc, |txn, _root| {
         let block = nth_block_text_in(txn, 0);
@@ -441,7 +453,7 @@ async fn tmp_collab_websocket_final_checkpoint_persists_typing() {
     .await;
     socket.close(None).await.unwrap();
 
-    let markdown = wait_for_tmp_markdown_containing(&app, "scratch/socket.md", "edited").await;
+    let markdown = wait_for_tmp_markdown_containing(&app, &secret, "edited").await;
     assert_eq!(markdown, "Hello tmp edited.\n");
     shutdown_tx.send(()).unwrap();
     server.await.unwrap().unwrap();
@@ -466,7 +478,6 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
             Method::POST,
             "/v1/tmp/documents",
             serde_json::json!({
-                "path": "scratch/note.txt",
                 "content": "draft one",
                 "content_type": "text/plain",
                 "metadata": {"title": "Scratch"}
@@ -480,6 +491,11 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
         .unwrap()
         .to_string();
     let created: Value = response_json(response).await;
+    let secret = created["document"]["path"].as_str().unwrap().to_string();
+    assert_eq!(secret.len(), 32);
+    assert!(secret
+        .chars()
+        .all(|character| character.is_ascii_hexdigit()));
     assert_eq!(created["document"]["library_id"], Value::Null);
     assert!(created["document"]["expires_at"].as_str().is_some());
 
@@ -488,7 +504,7 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/v1/tmp/documents/scratch/note.txt")
+                .uri(format!("/v1/tmp/documents/{secret}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -505,8 +521,21 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
         .clone()
         .oneshot(
             Request::builder()
-                .method(Method::PUT)
+                .method(Method::GET)
                 .uri("/v1/tmp/documents/scratch/note.txt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/tmp/documents/{secret}"))
                 .header(header::IF_MATCH, etag)
                 .header(header::CONTENT_TYPE, "text/plain")
                 .body(Body::from("draft two"))
@@ -521,7 +550,7 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/v1/tmp/documents/scratch/note.txt/versions")
+                .uri(format!("/v1/tmp/documents/{secret}/versions"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -535,7 +564,7 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
         .clone()
         .oneshot(json_request(
             Method::PATCH,
-            "/v1/tmp/documents/scratch/note.txt/ttl",
+            &format!("/v1/tmp/documents/{secret}/ttl"),
             serde_json::json!({"expires_at":"2099-01-01T00:00:00Z"}),
         ))
         .await
@@ -548,7 +577,7 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
         .oneshot(
             Request::builder()
                 .method(Method::DELETE)
-                .uri("/v1/tmp/documents/scratch/note.txt")
+                .uri(format!("/v1/tmp/documents/{secret}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -576,9 +605,9 @@ type WsSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 #[cfg(feature = "tmp-documents")]
-async fn connect_session(addr: std::net::SocketAddr, document_id: &str) -> (WsSocket, Doc) {
+async fn connect_tmp_session(addr: std::net::SocketAddr, secret: &str) -> (WsSocket, Doc) {
     let (mut socket, _) =
-        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/{document_id}"))
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/tmp/collab/{secret}/content"))
             .await
             .unwrap();
     let doc = empty_yjs_doc();
@@ -721,7 +750,11 @@ fn yjs_plain_text(doc: &Doc) -> String {
 }
 
 #[cfg(feature = "tmp-documents")]
-async fn wait_for_tmp_markdown_containing(app: &axum::Router, path: &str, needle: &str) -> String {
+async fn wait_for_tmp_markdown_containing(
+    app: &axum::Router,
+    secret: &str,
+    needle: &str,
+) -> String {
     timeout(Duration::from_secs(5), async {
         loop {
             let response = app
@@ -729,7 +762,7 @@ async fn wait_for_tmp_markdown_containing(app: &axum::Router, path: &str, needle
                 .oneshot(
                     Request::builder()
                         .method(Method::GET)
-                        .uri(format!("/v1/tmp/documents/{path}"))
+                        .uri(format!("/v1/tmp/documents/{secret}"))
                         .body(Body::empty())
                         .unwrap(),
                 )

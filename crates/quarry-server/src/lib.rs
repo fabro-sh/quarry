@@ -10,7 +10,7 @@ use axum::body::Bytes;
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{MatchedPath, Path, Query, Request, State};
 use axum::http::Uri;
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -379,10 +379,8 @@ fn install_tmp_document_routes(router: Router<AppState>) -> Router<AppState> {
         .delete(delete_tmp_document);
 
     router
-        .route(
-            "/v1/tmp/documents",
-            get(list_tmp_documents).post(create_tmp_document),
-        )
+        .route("/v1/tmp/documents", post(create_tmp_document))
+        .route("/v1/tmp/collab/{secret}/{room}", get(tmp_collab_websocket))
         .route("/v1/tmp/documents/{*path}", tmp_document_route)
 }
 
@@ -754,6 +752,10 @@ fn embedded_asset_response(asset_path: &str, asset: rust_embed::EmbeddedFile) ->
         header::CACHE_CONTROL,
         HeaderValue::from_static(browser_cache_control(asset_path)),
     );
+    response.headers_mut().insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
     response
 }
 
@@ -791,8 +793,8 @@ fn browser_ui_not_built() -> Response {
         list_libraries,
         get_library,
         list_documents,
-        list_tmp_documents,
         create_tmp_document,
+        tmp_collab_websocket_openapi,
         get_tmp_document,
         head_tmp_document,
         put_tmp_document,
@@ -806,8 +808,6 @@ fn browser_ui_not_built() -> Response {
         tmp_document_blocks_openapi,
         tmp_document_block_transactions_openapi,
         tmp_document_events_stream_openapi,
-        tmp_document_share_openapi,
-        tmp_document_share_create_openapi,
         tmp_agent_presence_list_openapi,
         tmp_agent_presence_openapi,
         search_documents,
@@ -886,6 +886,9 @@ fn browser_ui_not_built() -> Response {
         AgentPresenceResponse,
         AgentPresenceListResponse,
         AgentPresenceEntry,
+        TmpAgentPresenceResponse,
+        TmpAgentPresenceListResponse,
+        TmpAgentPresenceEntry,
         AgentPendingEventsResponse,
         AgentEventRecord,
         AgentEventsAckRequest,
@@ -1020,7 +1023,7 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
     let origin = request_origin(&headers);
     let api_base = format!("{origin}/v1");
     let document_path = "/v1/libraries/{library}/documents/{path}";
-    let tmp_document_path = "/v1/tmp/documents/{path}";
+    let tmp_document_path = "/v1/tmp/documents/{secret}";
     let lib_documents_enabled = cfg!(feature = "lib-documents");
     let tmp_documents_enabled = cfg!(feature = "tmp-documents");
     let mut endpoints = BTreeMap::new();
@@ -1105,35 +1108,27 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
         );
         endpoints.insert(
             "tmp_presence",
-            discovery_endpoint("POST", "/v1/tmp/documents/{path}/presence", &api_base),
+            discovery_endpoint("POST", "/v1/tmp/documents/{secret}/presence", &api_base),
         );
         endpoints.insert(
             "tmp_presence_list",
-            discovery_endpoint("GET", "/v1/tmp/documents/{path}/presence", &api_base),
+            discovery_endpoint("GET", "/v1/tmp/documents/{secret}/presence", &api_base),
         );
         endpoints.insert(
             "tmp_blocks",
-            discovery_endpoint("GET", "/v1/tmp/documents/{path}/blocks", &api_base),
+            discovery_endpoint("GET", "/v1/tmp/documents/{secret}/blocks", &api_base),
         );
         endpoints.insert(
             "tmp_transactions",
-            discovery_endpoint("POST", "/v1/tmp/documents/{path}/transactions", &api_base),
+            discovery_endpoint("POST", "/v1/tmp/documents/{secret}/transactions", &api_base),
         );
         endpoints.insert(
             "tmp_review",
-            discovery_endpoint("GET", "/v1/tmp/documents/{path}/review", &api_base),
+            discovery_endpoint("GET", "/v1/tmp/documents/{secret}/review", &api_base),
         );
         endpoints.insert(
             "tmp_events_stream",
-            discovery_endpoint("GET", "/v1/tmp/documents/{path}/events/stream", &api_base),
-        );
-        endpoints.insert(
-            "tmp_share",
-            discovery_endpoint("POST", "/v1/tmp/documents/{path}/share", &api_base),
-        );
-        endpoints.insert(
-            "tmp_share_list",
-            discovery_endpoint("GET", "/v1/tmp/documents/{path}/share", &api_base),
+            discovery_endpoint("GET", "/v1/tmp/documents/{secret}/events/stream", &api_base),
         );
     }
     endpoints.insert(
@@ -1169,7 +1164,7 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
         capabilities.extend(["library_documents", "snapshot", "events_pending"]);
     }
     if tmp_documents_enabled {
-        capabilities.extend(["tmp_documents", "share"]);
+        capabilities.extend(["tmp_documents", "capability_urls"]);
     }
     let library_route = |suffix: &str| {
         if lib_documents_enabled {
@@ -1182,7 +1177,7 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
     };
     let tmp_route = |suffix: &str| {
         if tmp_documents_enabled {
-            Some(format!("{api_base}/tmp/documents/{{path}}{suffix}"))
+            Some(format!("{api_base}/tmp/documents/{{secret}}{suffix}"))
         } else {
             None
         }
@@ -1197,12 +1192,12 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
             openapi_url: format!("{api_base}/openapi.json"),
             capabilities,
             auth_note:
-                "Quarry REST agent APIs are trusted-localhost for now; URL tokens identify browser/collab joins and are not enforced as REST bearer auth.",
+                "Tmp document URLs are bearer capabilities: anyone with /tmp/{secret} can access that tmp document. Library REST APIs remain trusted-localhost for now.",
             auth: AgentDiscoveryAuth {
                 mode: "trusted_localhost",
-                token_role: "locator_only",
+                token_role: "tmp_capability_url",
                 required_headers: vec!["Content-Type", "X-Agent-Id"],
-                note: "Invite URL tokens identify shared document joins; REST agent endpoints trust localhost for now.",
+                note: "Tmp document URL secrets authorize tmp access. Use X-Agent-Id to identify each agent.",
             },
             presence_statuses: vec![
                 "reading",
@@ -1233,7 +1228,8 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
             ],
             limitations: vec![
                 "REST agent endpoints trust localhost and do not currently enforce bearer-token auth.",
-                "Invite URL tokens identify browser/collab joins and are not REST bearer tokens.",
+                "Tmp document URL secrets are bearer capabilities; do not log or redistribute them.",
+                "Library invite URL tokens identify browser/collab joins and are not REST bearer tokens.",
                 "Quarry does not currently support rewrite.apply.",
             ],
             route_hints: AgentDiscoveryRouteHints {
@@ -1251,7 +1247,7 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
                     None
                 },
                 tmp_document: if tmp_documents_enabled {
-                    Some(format!("{api_base}/tmp/documents/{{path}}"))
+                    Some(format!("{api_base}/tmp/documents/{{secret}}"))
                 } else {
                     None
                 },
@@ -1260,7 +1256,7 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
                 tmp_transactions: tmp_route("/transactions"),
                 tmp_review: tmp_route("/review"),
                 tmp_events_stream: tmp_route("/events/stream"),
-                tmp_share: tmp_route("/share"),
+                tmp_share: None,
             },
             endpoints,
         },
@@ -1322,7 +1318,10 @@ fn active_openapi() -> utoipa::openapi::OpenApi {
 fn openapi_path_enabled(path: &str) -> bool {
     if path.starts_with("/v1/tmp/documents") {
         return cfg!(feature = "tmp-documents")
-            && (path != "/v1/tmp/documents/{path}/promote" || cfg!(feature = "lib-documents"));
+            && (path != "/v1/tmp/documents/{secret}/promote" || cfg!(feature = "lib-documents"));
+    }
+    if path.starts_with("/v1/tmp/collab") {
+        return cfg!(feature = "tmp-documents");
     }
     if path.starts_with("/v1/collab") {
         return cfg!(feature = "tmp-documents") || cfg!(feature = "lib-documents");
@@ -1354,6 +1353,32 @@ async fn collab_websocket(
             .serve_socket(document_id, socket, shutdown)
             .await;
     })
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/collab/{secret}/{room}",
+    params(("secret" = String, Path), ("room" = String, Path)),
+    responses((status = 101, description = "Yjs collaboration websocket for tmp capability documents"))
+)]
+#[allow(dead_code)]
+async fn tmp_collab_websocket_openapi() {}
+
+async fn tmp_collab_websocket(
+    State(state): State<AppState>,
+    Path((secret, _room)): Path<(String, String)>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
+    let document = state.store.head_tmp_document(&secret).await?;
+    let shutdown = state.shutdown_token();
+    Ok(ws
+        .on_upgrade(move |socket| async move {
+            state
+                .sessions
+                .serve_socket(document.id, socket, shutdown)
+                .await;
+        })
+        .into_response())
 }
 
 #[utoipa::path(
@@ -1425,7 +1450,12 @@ async fn events_for_library(
                                     ) =>
                             {
                                 let event_type = store_event_type(&store_event);
-                                let payload = store_event_payload(&library_slug, &event_type, &store_event);
+                                let payload = store_event_payload(
+                                    &library_slug,
+                                    &event_type,
+                                    &store_event,
+                                    StoreEventPayloadMode::IncludePaths,
+                                );
                                 tracing::debug!(
                                     event = "sse.event.sent",
                                     library = %library_slug,
@@ -1539,7 +1569,12 @@ async fn events_for_tmp_document(
                                     && event_matches_document_filter(&store_event, Some(&document_path)) =>
                             {
                                 let event_type = store_event_type(&store_event);
-                                let payload = store_event_payload("tmp", &event_type, &store_event);
+                                let payload = store_event_payload(
+                                    "tmp",
+                                    &event_type,
+                                    &store_event,
+                                    StoreEventPayloadMode::OmitPaths,
+                                );
                                 let event = Event::default().event(event_type).data(payload.to_string());
                                 return Some((
                                     Ok(event),
@@ -1620,7 +1655,12 @@ async fn agent_events_pending(
         .into_iter()
         .map(|logged| {
             let event_type = store_event_type(&logged.event);
-            let mut data = store_event_payload(&library.slug, &event_type, &logged.event);
+            let mut data = store_event_payload(
+                &library.slug,
+                &event_type,
+                &logged.event,
+                StoreEventPayloadMode::IncludePaths,
+            );
             if let Some(object) = data.as_object_mut() {
                 object.insert("event_id".to_string(), JsonValue::from(logged.id));
             }
@@ -1824,6 +1864,59 @@ pub struct AgentPresenceResponse {
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct AgentPresenceListResponse {
     pub presence: Vec<AgentPresenceEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct TmpAgentPresenceEntry {
+    #[serde(rename = "documentId")]
+    pub document_id: String,
+    #[serde(rename = "agentId")]
+    pub agent_id: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
+}
+
+impl From<AgentPresenceEntry> for TmpAgentPresenceEntry {
+    fn from(entry: AgentPresenceEntry) -> Self {
+        Self {
+            document_id: entry.document_id,
+            agent_id: entry.agent_id,
+            status: entry.status,
+            by: entry.by,
+            updated_at: entry.updated_at,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct TmpAgentPresenceResponse {
+    pub current: TmpAgentPresenceEntry,
+    pub presence: Vec<TmpAgentPresenceEntry>,
+}
+
+impl From<AgentPresenceResponse> for TmpAgentPresenceResponse {
+    fn from(response: AgentPresenceResponse) -> Self {
+        Self {
+            current: response.current.into(),
+            presence: response.presence.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct TmpAgentPresenceListResponse {
+    pub presence: Vec<TmpAgentPresenceEntry>,
+}
+
+impl From<AgentPresenceListResponse> for TmpAgentPresenceListResponse {
+    fn from(response: AgentPresenceListResponse) -> Self {
+        Self {
+            presence: response.presence.into_iter().map(Into::into).collect(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, ToSchema)]
@@ -2032,7 +2125,6 @@ async fn list_documents(
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateTmpDocumentRequest {
-    pub path: Option<String>,
     pub content: Option<String>,
     pub metadata: Option<JsonValue>,
     pub content_type: Option<String>,
@@ -2057,24 +2149,6 @@ pub struct PromoteTmpDocumentRequest {
 }
 
 #[utoipa::path(
-    get,
-    path = "/v1/tmp/documents",
-    params(("prefix" = Option<String>, Query), ("limit" = Option<u64>, Query)),
-    responses((status = 200, body = [DocumentListEntry]))
-)]
-async fn list_tmp_documents(
-    State(state): State<AppState>,
-    Query(query): Query<ListQuery>,
-) -> Result<Json<Vec<DocumentListEntry>>, ApiError> {
-    Ok(Json(
-        state
-            .store
-            .list_tmp_documents(query.prefix.as_deref(), query.limit)
-            .await?,
-    ))
-}
-
-#[utoipa::path(
     post,
     path = "/v1/tmp/documents",
     request_body = CreateTmpDocumentRequest,
@@ -2084,11 +2158,6 @@ async fn create_tmp_document(
     State(state): State<AppState>,
     Json(request): Json<CreateTmpDocumentRequest>,
 ) -> Result<Response, ApiError> {
-    let path = request
-        .path
-        .as_deref()
-        .filter(|path| !path.trim().is_empty())
-        .unwrap_or("untitled.md");
     let content_type = request
         .content_type
         .as_deref()
@@ -2106,13 +2175,11 @@ async fn create_tmp_document(
         .unwrap_or(quarry_storage::TmpTtl::Default);
     let outcome = state
         .store
-        .put_tmp_document(
-            path,
+        .create_tmp_document(
             request.content.unwrap_or_default().into_bytes(),
             metadata,
             &content_type,
             ttl,
-            WritePrecondition::IfNoneMatch,
         )
         .await?;
     json_with_etag(StatusCode::CREATED, &outcome, &outcome.version.id)
@@ -2120,8 +2187,8 @@ async fn create_tmp_document(
 
 #[utoipa::path(
     get,
-    path = "/v1/tmp/documents/{path}",
-    params(("path" = String, Path)),
+    path = "/v1/tmp/documents/{secret}",
+    params(("secret" = String, Path)),
     responses((status = 200, body = String), (status = 410, body = ErrorResponse))
 )]
 async fn get_tmp_document(
@@ -2142,7 +2209,10 @@ async fn get_tmp_document(
     }
     if let Some(path) = path.strip_suffix("/presence") {
         state.store.head_tmp_document(path).await?;
-        return json_response(StatusCode::OK, &state.agent_presence.list(None, path));
+        return json_response(
+            StatusCode::OK,
+            &TmpAgentPresenceListResponse::from(state.agent_presence.list(None, path)),
+        );
     }
     if let Some(path) = path.strip_suffix("/events/stream") {
         let document = state.store.head_tmp_document(path).await?;
@@ -2163,12 +2233,6 @@ async fn get_tmp_document(
         )
         .await?
         .into_response());
-    }
-    if let Some(path) = path.strip_suffix("/share") {
-        return json_response(
-            StatusCode::OK,
-            &state.store.tmp_collab_invite_tokens(path).await?,
-        );
     }
     if let Some(path) = path.strip_suffix("/versions/raw") {
         return json_response(
@@ -2201,8 +2265,8 @@ async fn get_tmp_document(
 
 #[utoipa::path(
     head,
-    path = "/v1/tmp/documents/{path}",
-    params(("path" = String, Path)),
+    path = "/v1/tmp/documents/{secret}",
+    params(("secret" = String, Path)),
     responses((status = 200), (status = 410, body = ErrorResponse))
 )]
 async fn head_tmp_document(
@@ -2236,8 +2300,8 @@ async fn head_tmp_document(
 
 #[utoipa::path(
     put,
-    path = "/v1/tmp/documents/{path}",
-    params(("path" = String, Path)),
+    path = "/v1/tmp/documents/{secret}",
+    params(("secret" = String, Path)),
     request_body = String,
     responses((status = 200, body = WriteOutcome), (status = 412, body = ErrorResponse))
 )]
@@ -2288,8 +2352,8 @@ async fn put_tmp_document(
 
 #[utoipa::path(
     delete,
-    path = "/v1/tmp/documents/{path}",
-    params(("path" = String, Path)),
+    path = "/v1/tmp/documents/{secret}",
+    params(("secret" = String, Path)),
     responses((status = 200, body = TransactionRecord))
 )]
 async fn delete_tmp_document(
@@ -2337,16 +2401,6 @@ async fn post_tmp_document_action(
         return json_response(StatusCode::OK, &response);
     }
 
-    if let Some(path) = path.strip_suffix("/share") {
-        let request: CreateCollabInviteRequest = serde_json::from_value(request)
-            .map_err(|error| QuarryError::InvalidPath(format!("invalid share request: {error}")))?;
-        let token = state
-            .store
-            .create_tmp_collab_invite_token(path, &request.role, request.by_hint)
-            .await?;
-        return json_response(StatusCode::CREATED, &token);
-    }
-
     if let Some(path) = path.strip_suffix("/promote") {
         if !cfg!(feature = "lib-documents") {
             return Err(QuarryError::NotFound(path.to_string()).into());
@@ -2371,8 +2425,8 @@ async fn post_tmp_document_action(
 
 #[utoipa::path(
     get,
-    path = "/v1/tmp/documents/{path}/versions",
-    params(("path" = String, Path)),
+    path = "/v1/tmp/documents/{secret}/versions",
+    params(("secret" = String, Path)),
     responses((status = 200, body = [DocumentHistoryEntry]))
 )]
 #[allow(dead_code)]
@@ -2380,8 +2434,8 @@ async fn tmp_document_versions_openapi() {}
 
 #[utoipa::path(
     get,
-    path = "/v1/tmp/documents/{path}/versions/raw",
-    params(("path" = String, Path)),
+    path = "/v1/tmp/documents/{secret}/versions/raw",
+    params(("secret" = String, Path)),
     responses((status = 200, body = [DocumentVersion]))
 )]
 #[allow(dead_code)]
@@ -2389,8 +2443,8 @@ async fn tmp_document_versions_raw_openapi() {}
 
 #[utoipa::path(
     get,
-    path = "/v1/tmp/documents/{path}/versions/{version}",
-    params(("path" = String, Path), ("version" = String, Path)),
+    path = "/v1/tmp/documents/{secret}/versions/{version}",
+    params(("secret" = String, Path), ("version" = String, Path)),
     responses((status = 200, body = DocumentVersionContent))
 )]
 #[allow(dead_code)]
@@ -2398,8 +2452,8 @@ async fn tmp_document_version_openapi() {}
 
 #[utoipa::path(
     patch,
-    path = "/v1/tmp/documents/{path}/ttl",
-    params(("path" = String, Path)),
+    path = "/v1/tmp/documents/{secret}/ttl",
+    params(("secret" = String, Path)),
     request_body = TtlRequest,
     responses((status = 200, body = TtlResponse), (status = 400, body = ErrorResponse))
 )]
@@ -2408,8 +2462,8 @@ async fn tmp_document_ttl_openapi() {}
 
 #[utoipa::path(
     post,
-    path = "/v1/tmp/documents/{path}/promote",
-    params(("path" = String, Path)),
+    path = "/v1/tmp/documents/{secret}/promote",
+    params(("secret" = String, Path)),
     request_body = PromoteTmpDocumentRequest,
     responses((status = 200, body = DocumentListEntry), (status = 409, body = ErrorResponse))
 )]
@@ -2418,8 +2472,8 @@ async fn tmp_document_promote_openapi() {}
 
 #[utoipa::path(
     get,
-    path = "/v1/tmp/documents/{path}/review",
-    params(("path" = String, Path), ("includeResolved" = Option<DryRunValue>, Query)),
+    path = "/v1/tmp/documents/{secret}/review",
+    params(("secret" = String, Path), ("includeResolved" = Option<DryRunValue>, Query)),
     responses((status = 200, body = AgentReviewResponse), (status = 404, body = ErrorResponse))
 )]
 #[allow(dead_code)]
@@ -2427,8 +2481,8 @@ async fn tmp_document_review_openapi() {}
 
 #[utoipa::path(
     get,
-    path = "/v1/tmp/documents/{path}/blocks",
-    params(("path" = String, Path)),
+    path = "/v1/tmp/documents/{secret}/blocks",
+    params(("secret" = String, Path)),
     responses(
         (status = 200, body = gateway::BlockTreeResponse),
         (status = 404, body = ErrorResponse),
@@ -2440,8 +2494,8 @@ async fn tmp_document_blocks_openapi() {}
 
 #[utoipa::path(
     post,
-    path = "/v1/tmp/documents/{path}/transactions",
-    params(("path" = String, Path)),
+    path = "/v1/tmp/documents/{secret}/transactions",
+    params(("secret" = String, Path)),
     request_body = gateway::BlockTransactionRequest,
     responses(
         (status = 200, body = gateway::BlockTransactionAck),
@@ -2456,8 +2510,8 @@ async fn tmp_document_block_transactions_openapi() {}
 
 #[utoipa::path(
     get,
-    path = "/v1/tmp/documents/{path}/events/stream",
-    params(("path" = String, Path)),
+    path = "/v1/tmp/documents/{secret}/events/stream",
+    params(("secret" = String, Path)),
     responses((status = 200, description = "Tmp document-scoped server-sent event stream"), (status = 404, body = ErrorResponse))
 )]
 #[allow(dead_code)]
@@ -2465,38 +2519,19 @@ async fn tmp_document_events_stream_openapi() {}
 
 #[utoipa::path(
     get,
-    path = "/v1/tmp/documents/{path}/share",
-    params(("path" = String, Path)),
-    responses((status = 200, body = [CollabInviteToken]), (status = 404, body = ErrorResponse))
-)]
-#[allow(dead_code)]
-async fn tmp_document_share_openapi() {}
-
-#[utoipa::path(
-    post,
-    path = "/v1/tmp/documents/{path}/share",
-    params(("path" = String, Path)),
-    request_body = CreateCollabInviteRequest,
-    responses((status = 201, body = CollabInviteToken), (status = 404, body = ErrorResponse))
-)]
-#[allow(dead_code)]
-async fn tmp_document_share_create_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/tmp/documents/{path}/presence",
-    params(("path" = String, Path)),
-    responses((status = 200, body = AgentPresenceListResponse), (status = 404, body = ErrorResponse))
+    path = "/v1/tmp/documents/{secret}/presence",
+    params(("secret" = String, Path)),
+    responses((status = 200, body = TmpAgentPresenceListResponse), (status = 404, body = ErrorResponse))
 )]
 #[allow(dead_code)]
 async fn tmp_agent_presence_list_openapi() {}
 
 #[utoipa::path(
     post,
-    path = "/v1/tmp/documents/{path}/presence",
-    params(("path" = String, Path)),
+    path = "/v1/tmp/documents/{secret}/presence",
+    params(("secret" = String, Path)),
     request_body = AgentPresenceRequest,
-    responses((status = 200, body = AgentPresenceResponse), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = TmpAgentPresenceResponse), (status = 404, body = ErrorResponse))
 )]
 #[allow(dead_code)]
 async fn tmp_agent_presence_openapi() {}
@@ -3182,18 +3217,18 @@ async fn agent_presence_tmp_document(
     headers: &HeaderMap,
     path: &str,
     request: AgentPresenceRequest,
-) -> Result<AgentPresenceResponse, ApiError> {
+) -> Result<TmpAgentPresenceResponse, ApiError> {
     let document = state.store.head_tmp_document(path).await?;
     let agent_id = agent_id_from_headers_or_body(headers, request.agent_id.as_deref())?;
     let status = normalized_agent_status(&request.status)?;
-    Ok(state.agent_presence.update(
+    Ok(TmpAgentPresenceResponse::from(state.agent_presence.update(
         None,
         path,
         &document.id,
         agent_id,
         status,
         request.by.filter(|by| !by.trim().is_empty()),
-    ))
+    )))
 }
 
 async fn agent_document_snapshot(
@@ -3265,8 +3300,8 @@ fn agent_review_response_from_markdown(
     markdown: &str,
     include_resolved: bool,
 ) -> AgentReviewResponse {
-    let blocks = snapshot_blocks(&markdown);
-    let (_, meta) = review_meta_with_inline_comment_bodies(&markdown);
+    let blocks = snapshot_blocks(markdown);
+    let (_, meta) = review_meta_with_inline_comment_bodies(markdown);
     let markers = agent_review_markers(&blocks);
     let comments = agent_review_comments(&markers.comments, &meta, include_resolved);
     let suggestions = agent_review_suggestions(&markers.suggestions, &meta, include_resolved);
@@ -4121,6 +4156,7 @@ fn metadata_from_headers(headers: &HeaderMap, content_type: &str) -> Result<Json
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     #[cfg(feature = "lib-documents")]
@@ -4210,6 +4246,31 @@ mod tests {
             classify_browser_request("/lib/notes", true, false, true),
             BrowserResponse::IndexHtml
         );
+    }
+
+    #[test]
+    fn browser_asset_responses_disable_referrers() {
+        let response = embedded_asset_response(
+            "assets/index-abc123.js",
+            test_embedded_asset(b"console.log('hello')"),
+        );
+        assert_eq!(
+            response.headers()[HeaderName::from_static("referrer-policy")],
+            "no-referrer"
+        );
+
+        let response = embedded_asset_response("index.html", test_embedded_asset(b"<html></html>"));
+        assert_eq!(
+            response.headers()[HeaderName::from_static("referrer-policy")],
+            "no-referrer"
+        );
+    }
+
+    fn test_embedded_asset(data: &'static [u8]) -> rust_embed::EmbeddedFile {
+        rust_embed::EmbeddedFile {
+            data: std::borrow::Cow::Borrowed(data),
+            metadata: rust_embed::Metadata::__rust_embed_new([0; 32], None, None),
+        }
     }
 
     #[test]
@@ -4366,7 +4427,12 @@ mod tests {
         };
 
         let event_type = store_event_type(&event);
-        let payload = store_event_payload("notes", &event_type, &event);
+        let payload = store_event_payload(
+            "notes",
+            &event_type,
+            &event,
+            StoreEventPayloadMode::IncludePaths,
+        );
 
         assert_eq!(event_type, "doc.changed");
         assert_eq!(payload["type"], "doc.changed");
@@ -4376,6 +4442,14 @@ mod tests {
         assert_eq!(payload["version_id"], "version-1");
         assert_eq!(payload["etag"], "\"version-1\"");
         assert_eq!(payload["origin_id"], "browser:session-1");
+
+        let tmp_payload =
+            store_event_payload("tmp", &event_type, &event, StoreEventPayloadMode::OmitPaths);
+        assert_eq!(tmp_payload["type"], "doc.changed");
+        assert_eq!(tmp_payload["library"], "tmp");
+        assert_eq!(tmp_payload["doc_id"], "doc-1");
+        assert_eq!(tmp_payload["version_id"], "version-1");
+        assert!(tmp_payload.get("path").is_none());
     }
 
     #[test]
@@ -4396,7 +4470,12 @@ mod tests {
             origin_id: Some("browser:session-1".to_string()),
         };
         let event_type = store_event_type(&delete);
-        let payload = store_event_payload("notes", &event_type, &delete);
+        let payload = store_event_payload(
+            "notes",
+            &event_type,
+            &delete,
+            StoreEventPayloadMode::IncludePaths,
+        );
         assert_eq!(event_type, "doc.deleted");
         assert_eq!(payload["doc_id"], "doc-1");
         assert_eq!(payload["origin_id"], "browser:session-1");
@@ -4417,12 +4496,27 @@ mod tests {
             origin_id: Some("browser:session-1".to_string()),
         };
         let event_type = store_event_type(&move_event);
-        let payload = store_event_payload("notes", &event_type, &move_event);
+        let payload = store_event_payload(
+            "notes",
+            &event_type,
+            &move_event,
+            StoreEventPayloadMode::IncludePaths,
+        );
         assert_eq!(event_type, "doc.moved");
         assert_eq!(payload["from"], "notes/daily.md");
         assert_eq!(payload["to"], "notes/archive.md");
         assert_eq!(payload["doc_id"], "doc-1");
         assert_eq!(payload["origin_id"], "browser:session-1");
+
+        let tmp_payload = store_event_payload(
+            "tmp",
+            &event_type,
+            &move_event,
+            StoreEventPayloadMode::OmitPaths,
+        );
+        assert!(tmp_payload.get("path").is_none());
+        assert!(tmp_payload.get("from").is_none());
+        assert!(tmp_payload.get("to").is_none());
     }
 
     #[test]
@@ -4444,7 +4538,12 @@ mod tests {
         };
 
         let event_type = store_event_type(&event);
-        let payload = store_event_payload("notes", &event_type, &event);
+        let payload = store_event_payload(
+            "notes",
+            &event_type,
+            &event,
+            StoreEventPayloadMode::IncludePaths,
+        );
 
         assert_eq!(event_type, "conflict.created");
         assert_eq!(payload["type"], "conflict.created");
@@ -4472,7 +4571,12 @@ mod tests {
         };
 
         let event_type = store_event_type(&event);
-        let payload = store_event_payload("notes", &event_type, &event);
+        let payload = store_event_payload(
+            "notes",
+            &event_type,
+            &event,
+            StoreEventPayloadMode::IncludePaths,
+        );
 
         assert_eq!(event_type, "library.reindexed");
         assert_eq!(payload["type"], "library.reindexed");
@@ -4498,7 +4602,12 @@ mod tests {
         };
 
         let event_type = store_event_type(&event);
-        let payload = store_event_payload("notes", &event_type, &event);
+        let payload = store_event_payload(
+            "notes",
+            &event_type,
+            &event,
+            StoreEventPayloadMode::IncludePaths,
+        );
 
         assert_eq!(event_type, "links.indexed");
         assert_eq!(payload["type"], "links.indexed");
@@ -4525,7 +4634,12 @@ mod tests {
         };
 
         let event_type = store_event_type(&event);
-        let payload = store_event_payload("notes", &event_type, &event);
+        let payload = store_event_payload(
+            "notes",
+            &event_type,
+            &event,
+            StoreEventPayloadMode::IncludePaths,
+        );
 
         assert_eq!(event_type, "git.sync.completed");
         assert_eq!(payload["type"], "git.sync.completed");
@@ -4661,35 +4775,55 @@ fn store_event_type(event: &StoreEvent) -> String {
     .to_string()
 }
 
-fn store_event_payload(library: &str, event_type: &str, event: &StoreEvent) -> JsonValue {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StoreEventPayloadMode {
+    IncludePaths,
+    OmitPaths,
+}
+
+fn store_event_payload(
+    library: &str,
+    event_type: &str,
+    event: &StoreEvent,
+    mode: StoreEventPayloadMode,
+) -> JsonValue {
     let mut payload = serde_json::json!({
         "type": event_type,
         "library": library,
-        "path": event.path.clone(),
         "source": event.source.clone(),
         "tx_id": event.tx_id.clone()
     });
     if let Some(object) = payload.as_object_mut() {
-        if matches!(
-            &event.kind,
-            StoreEventKind::DocumentMove | StoreEventKind::DirectoryMove
-        ) {
+        if mode == StoreEventPayloadMode::IncludePaths {
             object.insert(
-                "from".to_string(),
+                "path".to_string(),
                 event
                     .path
                     .clone()
                     .map(JsonValue::String)
                     .unwrap_or(JsonValue::Null),
             );
-            object.insert(
-                "to".to_string(),
-                event
-                    .new_path
-                    .clone()
-                    .map(JsonValue::String)
-                    .unwrap_or(JsonValue::Null),
-            );
+            if matches!(
+                &event.kind,
+                StoreEventKind::DocumentMove | StoreEventKind::DirectoryMove
+            ) {
+                object.insert(
+                    "from".to_string(),
+                    event
+                        .path
+                        .clone()
+                        .map(JsonValue::String)
+                        .unwrap_or(JsonValue::Null),
+                );
+                object.insert(
+                    "to".to_string(),
+                    event
+                        .new_path
+                        .clone()
+                        .map(JsonValue::String)
+                        .unwrap_or(JsonValue::Null),
+                );
+            }
         }
         if let Some(conflict_id) = &event.conflict_id {
             object.insert(

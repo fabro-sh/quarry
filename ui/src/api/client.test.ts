@@ -5,7 +5,6 @@ import {
   BlockTransactionError,
   createCollabInvite,
   createDocument,
-  createTmpCollabInvite,
   createTmpDocument,
   deleteDocument,
   deleteTmpDocument,
@@ -254,7 +253,7 @@ describe('Quarry API client', () => {
     );
     vi.stubGlobal('fetch', fetch);
 
-    await createTmpDocument({ path: 'scratch/new.md', content: '# New', contentType: 'text/markdown' });
+    await createTmpDocument({ content: '# New', contentType: 'text/markdown' });
 
     expect(fetch).toHaveBeenCalledWith(
       '/v1/tmp/documents',
@@ -262,7 +261,6 @@ describe('Quarry API client', () => {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          path: 'scratch/new.md',
           content: '# New',
           content_type: 'text/markdown',
           metadata: undefined,
@@ -289,21 +287,26 @@ describe('Quarry API client', () => {
         new Response(JSON.stringify({ version: { id: 'v2' } }), {
           headers: { ETag: '"v2"', 'content-type': 'application/json' },
         })
-      );
+    );
     vi.stubGlobal('fetch', fetch);
+    const secret = '72cb58585aa73e35758bc1141f79e32e';
 
-    await expect(getTmpDocument('scratch/note.txt')).resolves.toMatchObject({
+    await expect(getTmpDocument(secret)).resolves.toMatchObject({
       content: 'tmp body',
       documentId: 'tmp-1',
       etag: '"v1"',
       expiresAt: '2099-01-01T00:00:00Z',
+      path: secret,
     });
-    await putTmpDocument('scratch/note.txt', 'next', '"v1"', 'text/plain');
+    await putTmpDocument(secret, 'next', '"v1"', 'text/plain');
 
-    expect(fetch).toHaveBeenNthCalledWith(1, '/v1/tmp/documents/scratch/note.txt');
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      '/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e'
+    );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
-      '/v1/tmp/documents/scratch/note.txt',
+      '/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e',
       expect.objectContaining({
         method: 'PUT',
         headers: expect.objectContaining({ 'If-Match': '"v1"', 'content-type': 'text/plain' }),
@@ -319,30 +322,31 @@ describe('Quarry API client', () => {
       })
     );
     vi.stubGlobal('fetch', fetch);
+    const secret = '72cb58585aa73e35758bc1141f79e32e';
 
-    await tmpVersions('scratch/note.txt');
-    await tmpDocumentVersion('scratch/note.txt', 'v1');
-    await setTmpDocumentTtl('scratch/note.txt', '2099-01-01T00:00:00Z');
-    await promoteTmpDocument('scratch/note.txt', {
+    await tmpVersions(secret);
+    await tmpDocumentVersion(secret, 'v1');
+    await setTmpDocumentTtl(secret, '2099-01-01T00:00:00Z');
+    await promoteTmpDocument(secret, {
       library: 'notes',
       path: 'promoted/note.txt',
       ifMatch: 'v2',
     });
-    await deleteTmpDocument('scratch/note.txt');
+    await deleteTmpDocument(secret);
 
     expect(fetch).toHaveBeenNthCalledWith(
       1,
-      '/v1/tmp/documents/scratch/note.txt/versions',
+      '/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e/versions',
       undefined
     );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
-      '/v1/tmp/documents/scratch/note.txt/versions/v1',
+      '/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e/versions/v1',
       undefined
     );
     expect(fetch).toHaveBeenNthCalledWith(
       3,
-      '/v1/tmp/documents/scratch/note.txt/ttl',
+      '/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e/ttl',
       expect.objectContaining({
         method: 'PATCH',
         body: JSON.stringify({ expires_at: '2099-01-01T00:00:00Z' }),
@@ -350,7 +354,7 @@ describe('Quarry API client', () => {
     );
     expect(fetch).toHaveBeenNthCalledWith(
       4,
-      '/v1/tmp/documents/scratch/note.txt/promote',
+      '/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e/promote',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -362,12 +366,12 @@ describe('Quarry API client', () => {
     );
     expect(fetch).toHaveBeenNthCalledWith(
       5,
-      '/v1/tmp/documents/scratch/note.txt',
+      '/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e',
       expect.objectContaining({ method: 'DELETE' })
     );
   });
 
-  it('exposes tmp collaboration review presence share and transaction helpers', async () => {
+  it('exposes tmp collaboration review presence and transaction helpers', async () => {
     const fetch = vi.fn(async () =>
       new Response(
         JSON.stringify({
@@ -377,7 +381,15 @@ describe('Quarry API client', () => {
           by_hint: 'Avery',
           created_at: 'now',
           revoked_at: null,
-          presence: [],
+          presence: [
+            {
+              documentId: 'tmp-1',
+              agentId: 'agent-tmp',
+              status: 'waiting',
+              by: 'Codex',
+              updatedAt: 'now',
+            },
+          ],
           documentId: 'tmp-1',
           comments: [],
           suggestions: [],
@@ -392,51 +404,49 @@ describe('Quarry API client', () => {
       )
     );
     vi.stubGlobal('fetch', fetch);
+    const secret = '72cb58585aa73e35758bc1141f79e32e';
 
-    await createTmpCollabInvite('scratch/live.md', { byHint: 'Avery' });
-    await listTmpAgentPresence('scratch/live.md');
-    await getTmpDocumentBlocks('scratch/live.md');
-    await getTmpDocumentReview('scratch/live.md');
+    const tmpPresence = await listTmpAgentPresence(secret);
+    expect(tmpPresence.presence[0]).toMatchObject({
+      documentId: 'tmp-1',
+      agentId: 'agent-tmp',
+      status: 'waiting',
+    });
+    expect(tmpPresence.presence[0]).not.toHaveProperty('path');
+    await getTmpDocumentBlocks(secret);
+    await getTmpDocumentReview(secret);
     const transaction: BlockTransactionRequest = {
       client_tx_id: 'tmp-tx-1',
       base_clock: 'tmp-v1',
       actor: { kind: 'browser', id: 'browser:1' },
       ops: [{ op: 'replace_block_content', block_id: 'b1', text: 'Updated' }],
     };
-    await postTmpBlockTransaction('scratch/live.md', transaction);
+    await postTmpBlockTransaction(secret, transaction);
 
     expect(fetch).toHaveBeenNthCalledWith(
       1,
-      '/v1/tmp/documents/scratch/live.md/share',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({ byHint: 'Avery', role: 'editor' }),
-      })
+      '/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e/presence',
+      undefined
     );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
-      '/v1/tmp/documents/scratch/live.md/presence',
+      '/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e/blocks',
       undefined
     );
     expect(fetch).toHaveBeenNthCalledWith(
       3,
-      '/v1/tmp/documents/scratch/live.md/blocks',
+      '/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e/review?includeResolved=1',
       undefined
     );
     expect(fetch).toHaveBeenNthCalledWith(
       4,
-      '/v1/tmp/documents/scratch/live.md/review?includeResolved=1',
-      undefined
-    );
-    expect(fetch).toHaveBeenNthCalledWith(
-      5,
-      '/v1/tmp/documents/scratch/live.md/transactions',
+      '/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e/transactions',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify(transaction),
       })
     );
-    expect(fetch).toHaveBeenCalledTimes(5);
+    expect(fetch).toHaveBeenCalledTimes(4);
   });
 
   it('sets and clears library document TTLs', async () => {

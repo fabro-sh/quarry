@@ -2289,27 +2289,25 @@ async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() {
     .unwrap();
 
     let tmp = store
-        .put_tmp_document(
-            "scratch/note.md",
+        .create_tmp_document(
             b"draft one".to_vec(),
             serde_json::json!({"title":"Scratch"}),
             "text/markdown",
             TmpTtl::Default,
-            WritePrecondition::IfNoneMatch,
         )
         .await
         .unwrap();
+    let secret = tmp.document.path.clone();
+    assert_eq!(secret.len(), 32);
+    assert!(secret
+        .chars()
+        .all(|character| character.is_ascii_hexdigit()));
     assert!(tmp.document.expires_at.is_some());
     assert_eq!(tmp.document.library_id, None);
 
-    let listed = store.list_tmp_documents(None, None).await.unwrap();
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].path, "scratch/note.md");
-    assert!(listed[0].expires_at.is_some());
-
     let updated = store
         .put_tmp_document(
-            "scratch/note.md",
+            &secret,
             b"draft two".to_vec(),
             serde_json::json!({"title":"Scratch"}),
             "text/markdown",
@@ -2321,14 +2319,11 @@ async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() {
     assert_eq!(updated.document.id, tmp.document.id);
     assert_ne!(updated.version.id, tmp.version.id);
 
-    let raw_versions = store
-        .raw_tmp_version_history("scratch/note.md")
-        .await
-        .unwrap();
+    let raw_versions = store.raw_tmp_version_history(&secret).await.unwrap();
     assert_eq!(raw_versions.len(), 2);
     let first_version_id = tmp.version.id.clone();
     let first = store
-        .tmp_document_version("scratch/note.md", &first_version_id)
+        .tmp_document_version(&secret, &first_version_id)
         .await
         .unwrap();
     assert_eq!(first.content, "draft one");
@@ -2336,7 +2331,7 @@ async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() {
     let library = store.create_library("promoted").await.unwrap();
     store
         .promote_tmp_document(
-            "scratch/note.md",
+            &secret,
             &library.slug,
             "notes/scratch.md",
             WritePrecondition::IfMatch(updated.version.id.clone()),
@@ -2344,7 +2339,7 @@ async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() {
         .await
         .unwrap();
 
-    assert!(store.get_tmp_document("scratch/note.md").await.is_err());
+    assert!(store.get_tmp_document(&secret).await.is_err());
     let promoted = store
         .get_document(&library.slug, "notes/scratch.md")
         .await
@@ -2372,28 +2367,22 @@ async fn expired_documents_are_gone_and_excluded_from_live_queries() {
     .await
     .unwrap();
 
-    store
-        .put_tmp_document(
-            "expired.md",
+    let expired = store
+        .create_tmp_document(
             b"old".to_vec(),
             serde_json::json!({}),
             "text/plain",
             TmpTtl::Default,
-            WritePrecondition::None,
         )
         .await
         .unwrap();
+    let expired_secret = expired.document.path.clone();
     store
-        .set_tmp_document_ttl("expired.md", Some("2000-01-01T00:00:00Z".to_string()))
+        .set_tmp_document_ttl(&expired_secret, Some("2000-01-01T00:00:00Z".to_string()))
         .await
         .unwrap();
-    let err = store.get_tmp_document("expired.md").await.unwrap_err();
+    let err = store.get_tmp_document(&expired_secret).await.unwrap_err();
     assert!(matches!(err, QuarryError::Gone(_)));
-    assert!(store
-        .list_tmp_documents(None, None)
-        .await
-        .unwrap()
-        .is_empty());
 
     let library = store.create_library("ttl").await.unwrap();
     store
@@ -2639,6 +2628,28 @@ async fn imports_block_document_and_exports_stably_across_restart() {
             .content,
         NORMALIZED_BLOCK_FIXTURE.as_bytes()
     );
+}
+
+#[tokio::test]
+async fn tmp_block_import_rejects_path_like_identifiers() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+
+    let error = store
+        .import_tmp_block_document(
+            "scratch/note.md",
+            "# Tmp\n",
+            serde_json::json!({}),
+            "text/markdown",
+            WritePrecondition::None,
+        )
+        .await
+        .expect_err("tmp block imports should require capability secrets");
+
+    assert!(matches!(
+        error,
+        QuarryError::InvalidPath(message) if message == "invalid tmp document secret"
+    ));
 }
 
 #[tokio::test]

@@ -22,9 +22,9 @@ export function workspaceRouteForDocument(library: string, path: string) {
   return `${libraryPath}/documents/${pathSegments(path)}`;
 }
 
-export function tmpWorkspaceRouteForDocument(path: string) {
-  if (!path) return '/tmp';
-  return `/tmp/${pathSegments(path)}`;
+export function tmpWorkspaceRouteForDocument(secret: string) {
+  if (!secret) return '/tmp';
+  return `/tmp/${encodeURIComponent(secret)}`;
 }
 
 export function buildTokenizedDocumentUrl({
@@ -34,10 +34,10 @@ export function buildTokenizedDocumentUrl({
   scope = 'library',
   token,
 }: TokenizedDocumentUrlParams) {
-  const route =
-    scope === 'tmp'
-      ? tmpWorkspaceRouteForDocument(path)
-      : workspaceRouteForDocument(requiredLibrary(library), path);
+  if (scope === 'tmp') {
+    return new URL(tmpWorkspaceRouteForDocument(path), normalizedOrigin(origin)).toString();
+  }
+  const route = workspaceRouteForDocument(requiredLibrary(library), path);
   const url = new URL(route, normalizedOrigin(origin));
   url.searchParams.set('token', token);
   return url.toString();
@@ -51,7 +51,7 @@ export function buildAddAgentPrompt({
   tokenizedDocUrl,
 }: AddAgentPromptParams) {
   const apiBase = `${normalizedOrigin(origin)}/v1`;
-  const documentPath = pathSegments(path);
+  const documentPath = scope === 'tmp' ? encodeURIComponent(path) : pathSegments(path);
   const libraryName = scope === 'library' ? requiredLibrary(library) : '';
   const librarySegment = scope === 'library' ? encodeURIComponent(libraryName) : '';
   const documentApi =
@@ -68,13 +68,17 @@ export function buildAddAgentPrompt({
     pendingApi === null
       ? '   If you cannot keep a stream open, re-POST presence at least once per minute while active (presence expires after 60 seconds).'
       : `   If you cannot keep a stream open, poll GET ${pendingApi} and re-POST ${documentApi}/presence at least once per minute while active (presence expires after 60 seconds).`;
+  const authNotice =
+    scope === 'tmp'
+      ? 'Tmp document URLs are bearer capabilities. Anyone with this URL can access this tmp document; do not treat the secret as an agent identity.'
+      : 'Quarry local REST APIs are trusted-localhost for now. The token in the URL identifies the shared document for browser/collab join, but REST agent endpoints on this host do not currently enforce bearer-token auth.';
 
   return `Quarry is a local-first collaborative Markdown editor with presence, comments, suggestions, and block edit APIs.
 
 Join this Quarry document using this locator URL:
 ${tokenizedDocUrl}
 
-Quarry local REST APIs are trusted-localhost for now. The token in the URL identifies the shared document for browser/collab join, but REST agent endpoints on this host do not currently enforce bearer-token auth.
+${authNotice}
 
 API base: ${apiBase}
 ${scopeLine}

@@ -113,6 +113,7 @@ pub(crate) async fn put_tmp_block_document(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn put_scoped_block_document(
     state: &AppState,
     scope: DocumentScopeRef,
