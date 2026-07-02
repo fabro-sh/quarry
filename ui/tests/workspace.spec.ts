@@ -247,6 +247,32 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(reloadedEditor.locator('img')).toHaveAttribute('src', /^data:image\/png;base64,/);
   });
 
+  test('retitles a tmp document page when a remote collaborator rewrites the H1', async ({ page }) => {
+    const secret = '5d41402abc4b2a76b9719d911017c592';
+    const api = await installMockApi(page, {
+      documents: [],
+      tmpDocuments: [
+        { content: '# Untitled\n', id: 'tmp-title', metadata: { title: 'Untitled' }, path: secret, version: 'tmp-v1' },
+      ],
+    });
+
+    await page.goto(`/tmp/${secret}`);
+    await expect(page).toHaveTitle('Untitled · Quarry');
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Untitled');
+
+    // The page seeds the collab room from the canonical content; wait for the
+    // seed before writing to the room as a remote collaborator would.
+    const room = `tmp:${secret}/content`;
+    await expect.poll(() => api.collab.roomText(room)).toContain('Untitled');
+    const roomDoc = api.collab.roomDoc(room);
+    if (!roomDoc) throw new Error('room doc missing');
+    appendToBlockContaining(roomDoc, 'Untitled', ' Roadmap');
+
+    await expect(editor).toContainText('Untitled Roadmap');
+    await expect(page).toHaveTitle('Untitled Roadmap · Quarry');
+  });
+
   test('renders a mermaid code block as a diagram with a Code/Preview toggle', async ({ page }) => {
     await installMockApi(page, {
       documents: [

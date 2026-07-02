@@ -691,23 +691,6 @@ function Workspace() {
     () => (isTmpDocument ? getTmpDocument(selectedPath) : getDocument(activeLibrary, selectedPath)),
     { revalidateOnFocus: false }
   );
-  useEffect(() => {
-    if (!selectedPath) {
-      window.document.title = 'Quarry';
-      return;
-    }
-
-    const isMarkdown = document && isMarkdownDocument(selectedPath, document.contentType);
-    if (isMarkdown && document?.content) {
-      const h1 = extractFirstH1(document.content);
-      if (h1) {
-        window.document.title = `${h1} · Quarry`;
-        return;
-      }
-    }
-
-    window.document.title = `${documentBasename(selectedPath)} · Quarry`;
-  }, [selectedPath, document]);
   const { data: search = { results: [], cursor: null } } = useSWR(
     libDocumentsEnabled && isLibraryDocument && activeLibrary && searchQuery
       ? ['/v1/search', activeLibrary, searchQuery]
@@ -887,6 +870,20 @@ function Workspace() {
   const selectedDocumentBodyReady = Boolean(
     loadedDocumentForSelection && activeLoadedDocument
   );
+  // Title from the live editor mirror once the body is mounted: collab
+  // writes (the only write path for tmp documents) never touch the SWR
+  // snapshot, which can stay at its seeded "# Untitled" forever. Before the
+  // body is ready `content` may still hold the previous document, so fall
+  // back to the snapshot.
+  const titleContent = selectedDocumentBodyReady ? content : document?.content;
+  useEffect(() => {
+    if (!selectedPath) {
+      window.document.title = 'Quarry';
+      return;
+    }
+    const h1 = selectedIsMarkdown && titleContent ? extractFirstH1(titleContent) : null;
+    window.document.title = `${h1 ?? documentBasename(selectedPath)} · Quarry`;
+  }, [selectedIsMarkdown, selectedPath, titleContent]);
   const collabDocumentId = selectedDocumentBodyReady
     ? activeLoadedDocument?.documentId || loadedDocumentForSelection?.documentId || ''
     : '';
