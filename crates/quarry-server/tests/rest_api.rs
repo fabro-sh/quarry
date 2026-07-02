@@ -7409,6 +7409,109 @@ async fn markdown_put_overlapping_edits_become_conflict_review_items() {
     assert_eq!(conflicts[0]["canonicalMarkdown"], "Bravo, canonical.\n");
 }
 
+/// Half-resolved git merges: incoming content carrying `<<<<<<<` marker soup
+/// still commits (writes never fail) but flags a conflict review item in the
+/// same transaction.
+const CONFLICT_MARKER_SOUP: &str =
+    "<<<<<<< HEAD\nOurs line.\n=======\nTheirs line.\n>>>>>>> feature\n";
+
+#[tokio::test]
+async fn markdown_put_with_conflict_markers_flags_a_review_item() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "soup.md", "Alpha.\n").await;
+
+    put_block_markdown(
+        &app,
+        "soup.md",
+        &format!("Alpha.\n\n{CONFLICT_MARKER_SOUP}"),
+    )
+    .await;
+
+    let markdown = get_document_markdown(&app, "soup.md").await;
+    assert_ne!(markdown, "Alpha.\n", "the soup write still committed");
+    let review = get_block_review(&app, "soup.md", false).await;
+    let conflicts = review["conflicts"].as_array().unwrap();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0]["status"], "open");
+    assert_eq!(conflicts[0]["incomingMarkdown"], CONFLICT_MARKER_SOUP);
+    assert!(conflicts[0]["afterBlockId"].is_null());
+}
+
+#[tokio::test]
+async fn first_import_with_conflict_markers_flags_a_review_item() {
+    let (_root, app, _store) = block_test_app().await;
+
+    put_block_markdown(
+        &app,
+        "soup-new.md",
+        &format!("# Notes\n\n{CONFLICT_MARKER_SOUP}"),
+    )
+    .await;
+
+    let review = get_block_review(&app, "soup-new.md", false).await;
+    let conflicts = review["conflicts"].as_array().unwrap();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0]["incomingMarkdown"], CONFLICT_MARKER_SOUP);
+}
+
+#[tokio::test]
+async fn unchanged_conflict_markers_do_not_stack_flags() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "soup-again.md", "Alpha.\n").await;
+    put_block_markdown(
+        &app,
+        "soup-again.md",
+        &format!("Alpha.\n\n{CONFLICT_MARKER_SOUP}"),
+    )
+    .await;
+
+    put_block_markdown(
+        &app,
+        "soup-again.md",
+        &format!("Alpha.\n\n{CONFLICT_MARKER_SOUP}\nMore prose.\n"),
+    )
+    .await;
+
+    let review = get_block_review(&app, "soup-again.md", true).await;
+    assert_eq!(review["conflicts"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn dismissed_conflict_marker_flags_stay_dismissed() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "soup-dismissed.md", "Alpha.\n").await;
+    put_block_markdown(
+        &app,
+        "soup-dismissed.md",
+        &format!("Alpha.\n\n{CONFLICT_MARKER_SOUP}"),
+    )
+    .await;
+    let review = get_block_review(&app, "soup-dismissed.md", false).await;
+    let conflict_id = review["conflicts"][0]["id"].as_str().unwrap().to_string();
+    commit_block_transaction(
+        &app,
+        "soup-dismissed.md",
+        block_tx(
+            "tx-dismiss-soup",
+            serde_json::json!([{ "op": "comment.resolve", "item_id": conflict_id }]),
+        ),
+    )
+    .await;
+
+    put_block_markdown(
+        &app,
+        "soup-dismissed.md",
+        &format!("Alpha.\n\n{CONFLICT_MARKER_SOUP}\nMore prose.\n"),
+    )
+    .await;
+
+    let open_review = get_block_review(&app, "soup-dismissed.md", false).await;
+    assert_eq!(open_review["conflicts"].as_array().unwrap().len(), 0);
+    let full_review = get_block_review(&app, "soup-dismissed.md", true).await;
+    assert_eq!(full_review["conflicts"].as_array().unwrap().len(), 1);
+    assert_eq!(full_review["conflicts"][0]["status"], "resolved");
+}
+
 /// The agent-docs `insert_block` example must be a WORKING request: extract
 /// the documented transaction body verbatim from the served docs, point its
 /// `base_clock` at the real document, and commit it. Vocabulary drift between

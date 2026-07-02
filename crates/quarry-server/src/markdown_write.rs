@@ -54,7 +54,8 @@ use quarry_collab_codec::{
 use quarry_core::{DocumentSource, QuarryError, WriteOutcome, WritePrecondition};
 use quarry_storage::{
     document_kind, merge_json, split_markdown_frontmatter, BlockMarkdownWrite,
-    BlockMarkdownWriteOutcome, BlockMarkdownWriter, BlockWriteBase, DocumentKind, DocumentScopeRef,
+    BlockMarkdownWriteOutcome, BlockMarkdownWriter, BlockReviewKind, BlockWriteBase, DocumentKind,
+    DocumentScopeRef,
 };
 use serde_json::Value as JsonValue;
 use std::future::Future;
@@ -360,6 +361,7 @@ async fn write_markdown_with(
         .unwrap_or("text/markdown")
         .to_string();
     gateway::require_block_document(&write.path, &content_type)?;
+    let marker_hunk = first_conflict_marker_hunk(&write.markdown);
 
     // First import: the document does not exist yet — every block takes a
     // fresh id through the Phase 1 import path.
@@ -388,12 +390,16 @@ async fn write_markdown_with(
                     transaction,
                 )
                 .await?;
+            let conflicts = match &marker_hunk {
+                Some(hunk) => flag_imported_conflict_markers(state, &write, hunk).await,
+                None => 0,
+            };
             let canonical_body = canonical_body(state, &outcome.document.id).await?;
             return Ok(BlockMarkdownWriteOutcome {
                 outcome,
                 changed: true,
                 canonical_body,
-                conflicts: 0,
+                conflicts,
             });
         }
         Err(error) => return Err(error.into()),
@@ -491,6 +497,20 @@ async fn write_markdown_with(
                     canonical_markdown: conflict.canonical_markdown,
                 }),
         );
+        // Incoming conflict-marker soup (a half-resolved git merge) commits
+        // as content — writes never fail — but flags a review item in the
+        // same transaction. Skipping hunks a conflict item already carries
+        // keeps repeated saves from stacking flags and honors dismissals.
+        if let Some(hunk) = &marker_hunk {
+            let already_flagged = snapshot.review_items.iter().any(|item| {
+                item.kind == BlockReviewKind::Conflict
+                    && item.body.as_deref() == Some(hunk.as_str())
+            });
+            if !already_flagged {
+                conflicts += 1;
+                ops.push(conflict_marker_flag_op(hunk));
+            }
+        }
         let ops_json = serde_json::to_value(&ops)
             .map_err(|error| GatewayFailure::Api(QuarryError::Json(error).into()))?;
         Ok(TransactionPlan { ops, ops_json })
@@ -589,6 +609,106 @@ fn log_block_write_started(write: &BlockMarkdownWrite, document_id: Option<&str>
 fn split_frontmatter_owned(markdown: &str) -> Result<(JsonValue, String), QuarryError> {
     let (frontmatter, body) = split_markdown_frontmatter(markdown)?;
     Ok((frontmatter, body.to_string()))
+}
+
+/// The first complete git conflict hunk (`<<<<<<<` … `=======` … `>>>>>>>`)
+/// in the incoming markdown — the evidence excerpt for the review flag.
+/// Requiring the full ordered triple keeps ordinary content (a setext
+/// heading's `=======` underline, a quoted marker line) from
+/// false-positiving on a single marker line.
+fn first_conflict_marker_hunk(markdown: &str) -> Option<String> {
+    let lines: Vec<&str> = markdown.lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| is_conflict_marker(line, "<<<<<<<"))?;
+    let separator = start
+        + 1
+        + lines[start + 1..]
+            .iter()
+            .position(|line| *line == "=======")?;
+    let end = separator
+        + 1
+        + lines[separator + 1..]
+            .iter()
+            .position(|line| is_conflict_marker(line, ">>>>>>>"))?;
+    Some(format!("{}\n", lines[start..=end].join("\n")))
+}
+
+fn is_conflict_marker(line: &str, marker: &str) -> bool {
+    line == marker
+        || line
+            .strip_prefix(marker)
+            .is_some_and(|rest| rest.starts_with(' '))
+}
+
+/// The review flag for detected marker soup: a document-start conflict item
+/// carrying the hunk as the incoming side. No base/canonical sides — this is
+/// a warning about the incoming content, not a diff3 artifact.
+fn conflict_marker_flag_op(hunk: &str) -> BlockOp {
+    BlockOp::ConflictAdd {
+        after_block_id: None,
+        base_markdown: String::new(),
+        incoming_markdown: hunk.to_string(),
+        canonical_markdown: String::new(),
+    }
+}
+
+/// Flags marker soup on a first import: the import path commits without a
+/// gateway plan, so the flag rides a follow-up single-op transaction.
+/// Failing to flag warns but never fails the write that already landed.
+async fn flag_imported_conflict_markers(
+    state: &AppState,
+    write: &BlockMarkdownWrite,
+    hunk: &str,
+) -> usize {
+    let ctx = TransactionContext {
+        client_tx_id: Uuid::new_v4().to_string(),
+        base_clock: None,
+        actor: BlockTransactionActor {
+            kind: write.surface.clone(),
+            id: None,
+            label: write.actor_label.clone(),
+        },
+    };
+    let settings = TransactionSettings {
+        source: write.source.clone(),
+        origin_id: None,
+        metadata: None,
+        transaction: quarry_storage::TransactionMetadata::default(),
+    };
+    let mut plan = |_snapshot: &quarry_storage::BlockMutationState| {
+        let ops = vec![conflict_marker_flag_op(hunk)];
+        let ops_json = serde_json::to_value(&ops)
+            .map_err(|error| GatewayFailure::Api(QuarryError::Json(error).into()))?;
+        Ok(TransactionPlan { ops, ops_json })
+    };
+    let result = gateway::execute_block_transaction(
+        state,
+        &write.scope,
+        &write.path,
+        &ctx,
+        &settings,
+        &mut plan,
+    )
+    .await;
+    match result {
+        Ok(_) => 1,
+        Err(failure) => {
+            let path = match &write.scope {
+                DocumentScopeRef::Library { .. } => write.path.clone(),
+                DocumentScopeRef::Tmp => {
+                    log_redaction::redact_tmp_document_identifier(&write.path).into_owned()
+                }
+            };
+            tracing::warn!(
+                event = "document.block_write.marker_flag_failed",
+                path = %path,
+                error = %failure_to_quarry(failure),
+                "conflict markers detected but the review flag failed to commit"
+            );
+            0
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -906,5 +1026,49 @@ mod tests {
             })
             .expect("child insert present");
         assert_eq!(child, ("line".to_string(), "code".to_string(), 0));
+    }
+
+    #[test]
+    fn finds_the_first_complete_conflict_hunk() {
+        let markdown =
+            "Intro.\n\n<<<<<<< HEAD\nOurs line.\n=======\nTheirs line.\n>>>>>>> feature\n\nOutro.\n";
+
+        assert_eq!(
+            first_conflict_marker_hunk(markdown).as_deref(),
+            Some("<<<<<<< HEAD\nOurs line.\n=======\nTheirs line.\n>>>>>>> feature\n")
+        );
+    }
+
+    #[test]
+    fn detects_markers_in_crlf_content() {
+        let markdown = "<<<<<<< HEAD\r\nOurs.\r\n=======\r\nTheirs.\r\n>>>>>>> main\r\n";
+
+        assert_eq!(
+            first_conflict_marker_hunk(markdown).as_deref(),
+            Some("<<<<<<< HEAD\nOurs.\n=======\nTheirs.\n>>>>>>> main\n")
+        );
+    }
+
+    // A paragraph followed by `=======` is a setext heading — ordinary
+    // markdown, not a merge artifact.
+    #[test]
+    fn ignores_a_setext_heading_underline_without_the_other_markers() {
+        assert_eq!(first_conflict_marker_hunk("Title\n=======\nBody.\n"), None);
+    }
+
+    #[test]
+    fn ignores_an_unclosed_conflict_hunk() {
+        assert_eq!(
+            first_conflict_marker_hunk("<<<<<<< HEAD\nOurs.\n=======\nTheirs.\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn ignores_markers_out_of_order() {
+        assert_eq!(
+            first_conflict_marker_hunk(">>>>>>> feature\n=======\n<<<<<<< HEAD\n"),
+            None
+        );
     }
 }
