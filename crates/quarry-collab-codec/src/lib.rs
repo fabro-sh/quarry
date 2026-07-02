@@ -6,6 +6,7 @@ pub mod review;
 pub mod rows;
 pub mod session_doc;
 pub mod slate;
+pub mod text_diff;
 pub mod trailing;
 pub mod yjs_builder;
 
@@ -28,6 +29,10 @@ pub use session_doc::{
     seed_session_nodes, SessionAnchor, SessionAnchorKind, SessionProjection,
 };
 pub use slate::{Attrs, Node};
+pub use text_diff::{
+    utf16_text_diff, utf16_text_diff_hunks, utf16_text_diff_hunks_bounded, TextDiff,
+    MULTI_HUNK_CHAR_LIMIT,
+};
 pub use trailing::{is_empty_paragraph, strip_trailing_empty_paragraphs};
 pub use yjs_builder::{
     apply_built, apply_review_patch_to_map, build_nodes, encode_update_v1_from_built,
