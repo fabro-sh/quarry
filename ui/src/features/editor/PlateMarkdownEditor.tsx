@@ -442,12 +442,14 @@ export function PlateMarkdownEditor({
   const initialValueRef = useRef<PlateValue | null>(null);
   const initialSerializedRef = useRef<string | null>(null);
   const initialReviewMetaRef = useRef<ReviewMeta | null>(null);
+  const initialParsedContentRef = useRef<string | null>(null);
   const initialReviewStoreHydratedRef = useRef(false);
   if (!initialValueRef.current) {
     const { value, meta } = markdownToReview(content);
     initialValueRef.current = value as PlateValue;
     initialSerializedRef.current = serializeWithMeta(value as PlateValue, meta);
     initialReviewMetaRef.current = meta;
+    initialParsedContentRef.current = content;
   }
   const lastContentRef = useRef(content);
   const lastSerializedRef = useRef(initialSerializedRef.current ?? '');
@@ -528,9 +530,22 @@ export function PlateMarkdownEditor({
 
   useEffect(() => {
     if (!collabEnabled || !collab) return;
-    const { value, meta } = markdownToReview(content);
+    // Reuse the render-time parse + serialization when it was for this same
+    // content — markdownToReview is pure, and parsing plus serializing a
+    // large document twice doubles the mount stall. Epoch remounts and
+    // document switches see a different `content` string and parse fresh.
+    const reusable =
+      initialParsedContentRef.current === content &&
+      initialValueRef.current !== null &&
+      initialReviewMetaRef.current !== null &&
+      initialSerializedRef.current !== null;
+    const { value, meta } = reusable
+      ? { value: initialValueRef.current as PlateValue, meta: initialReviewMetaRef.current as ReviewMeta }
+      : markdownToReview(content);
     lastContentRef.current = content;
-    lastSerializedRef.current = reviewToMarkdown(value as never, meta);
+    lastSerializedRef.current = reusable
+      ? (initialSerializedRef.current as string)
+      : reviewToMarkdown(value as never, meta);
     storeHydrate(meta);
     setCollabInitCompleted(false);
 
@@ -779,8 +794,11 @@ export function PlateMarkdownEditor({
   // value, so an editor-value change won't fire. Mirror store changes too.
   // The review store is a module-global singleton; safe because Quarry mounts
   // exactly one editor at a time (this subscription assumes a single editor).
+  // Only meta changes affect the serialized document — hover/active flips
+  // (the review rail) must not cost a full-document serialization.
   useEffect(() => {
-    return useReviewStore.subscribe(() => {
+    return useReviewStore.subscribe((state, previous) => {
+      if (state.meta === previous.meta) return;
       scheduleMirrorPublish({ guardUnhydratedBlank: collabEnabled });
     });
   }, [collabEnabled, scheduleMirrorPublish]);

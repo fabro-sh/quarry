@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { emptyReviewMeta } from '../review/rfm-types';
 import { useReviewStore } from '../review/review-store';
-import { reviewToMarkdown } from '../review/rfm-codec';
+import { markdownToReview, reviewToMarkdown } from '../review/rfm-codec';
 import { PlateMarkdownEditor } from './PlateMarkdownEditor';
 
 vi.mock('../review/rfm-codec', async () => {
@@ -13,6 +13,7 @@ vi.mock('../review/rfm-codec', async () => {
   );
   return {
     ...actual,
+    markdownToReview: vi.fn(actual.markdownToReview),
     reviewToMarkdown: vi.fn(actual.reviewToMarkdown),
   };
 });
@@ -45,6 +46,7 @@ function resetReviewStore() {
 
 beforeEach(() => {
   resetReviewStore();
+  vi.mocked(markdownToReview).mockClear();
   vi.mocked(reviewToMarkdown).mockClear();
 });
 
@@ -101,6 +103,88 @@ describe('PlateMarkdownEditor serialization work', () => {
       expect(onChange).toHaveBeenCalledTimes(1);
       expect(onChange).toHaveBeenCalledWith(expect.stringContaining('Guideabc'));
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not serialize when only hover/active review state changes', async () => {
+    vi.useFakeTimers();
+    try {
+      render(<PlateMarkdownEditor content="# Guide" mode="editing" onChange={vi.fn()} />);
+      // Two drain rounds: mount normalization fires a Slate onChange whose
+      // debounced publish is scheduled during the first round.
+      await act(async () => {
+        vi.runAllTimers();
+      });
+      await act(async () => {
+        vi.runAllTimers();
+      });
+      const callsAfterMount = vi.mocked(reviewToMarkdown).mock.calls.length;
+
+      // Hovering / selecting a comment in the review rail flips store state
+      // that has nothing to do with the document body.
+      act(() => {
+        useReviewStore.getState().setActiveId('comment-1');
+        useReviewStore.getState().setHoverId('comment-2');
+      });
+      await act(async () => {
+        vi.runAllTimers();
+      });
+
+      expect(vi.mocked(reviewToMarkdown)).toHaveBeenCalledTimes(callsAfterMount);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('parses and serializes a collab document once at mount, not twice', async () => {
+    vi.useFakeTimers();
+    // Collab mount needs a WebSocket; connections that never open are enough
+    // for init (seeding is local, only sync needs the socket).
+    class NeverOpeningWebSocket {
+      static readonly CONNECTING = 0;
+      static readonly OPEN = 1;
+      static readonly CLOSING = 2;
+      static readonly CLOSED = 3;
+      url: string;
+      readyState = 0;
+      binaryType = 'blob';
+      onopen: ((event: unknown) => void) | null = null;
+      onclose: ((event: unknown) => void) | null = null;
+      onerror: ((event: unknown) => void) | null = null;
+      onmessage: ((event: unknown) => void) | null = null;
+      constructor(url: string | URL) {
+        this.url = String(url);
+      }
+      close() {
+        this.readyState = 3;
+      }
+      send() {}
+    }
+    vi.stubGlobal('WebSocket', NeverOpeningWebSocket);
+    try {
+      const { unmount } = render(
+        <PlateMarkdownEditor
+          collab={{ documentId: 'doc-mount-cost', sessionId: 'browser:perf' }}
+          content={'# Mount\n\nBody text.\n'}
+          mode="editing"
+          onChange={vi.fn()}
+        />
+      );
+      // Let the mount effects and the 0ms Yjs init timer run (bounded
+      // advances — runAllTimers would chase the reconnect probe forever).
+      await act(async () => {
+        vi.advanceTimersByTime(50);
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(400);
+      });
+
+      expect(vi.mocked(markdownToReview)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(reviewToMarkdown)).toHaveBeenCalledTimes(1);
+      unmount();
+    } finally {
+      vi.unstubAllGlobals();
       vi.useRealTimers();
     }
   });
