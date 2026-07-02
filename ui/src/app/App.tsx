@@ -3185,7 +3185,7 @@ function SaveStatusIndicator({ saveState }: { saveState: CollabSaveState }) {
         faded && 'opacity-0'
       )}
     >
-      {saveState === 'reconnecting' ? (
+      {saveState === 'reconnecting' || saveState === 'save_failed' ? (
         <AlertTriangle className="shrink-0 text-warn-ink" size={14} />
       ) : null}
       {saveStateLabel(saveState)}

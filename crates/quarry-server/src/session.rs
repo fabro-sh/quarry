@@ -132,6 +132,12 @@ pub(crate) const REVIEW_ROOT: &str = "review";
 /// comparing it against the local doc (`rust-ws-provider.ts`).
 pub const MSG_QUARRY_CHECKPOINT: u8 = 113;
 
+/// Top-level websocket message type broadcast when a checkpoint attempt
+/// fails: no payload — the signal is "the last save attempt did not commit"
+/// (details live in the server logs). The browser's save state surfaces it
+/// as "Save failed" until a later checkpoint ack covers the doc.
+pub const MSG_QUARRY_CHECKPOINT_FAILED: u8 = 114;
+
 type AwarenessRef = Arc<RwLock<Awareness>>;
 
 /// The attribution label for a checkpoint: every connected client's
@@ -575,7 +581,10 @@ impl LiveSession {
     }
 
     /// Commits a coalesced `browser_session` checkpoint of the current doc
-    /// state. Caller holds the document mutex. `Ok(None)` = clean.
+    /// state. Caller holds the document mutex. `Ok(None)` = clean. A failed
+    /// commit broadcasts [`MSG_QUARRY_CHECKPOINT_FAILED`] before returning,
+    /// so still-connected browsers show "Save failed" instead of an
+    /// indefinite "Saving…" while the retry loop spins.
     pub(crate) async fn checkpoint_browser_session(
         &self,
         store: &QuarryStore,
@@ -584,8 +593,13 @@ impl LiveSession {
         if !self.is_dirty() {
             return Ok(None);
         }
-        let outcome = self.commit_doc_state(store, &mut awareness).await?;
-        Ok(Some(outcome))
+        match self.commit_doc_state(store, &mut awareness).await {
+            Ok(outcome) => Ok(Some(outcome)),
+            Err(error) => {
+                let _ = self.broadcast_tx.send(checkpoint_failed_frame());
+                Err(error)
+            }
+        }
     }
 
     pub(crate) fn is_dirty(&self) -> bool {
@@ -778,6 +792,12 @@ fn checkpoint_ack_frame(snapshot: &[u8]) -> Vec<u8> {
     let mut encoder = EncoderV1::new();
     encoder.write_var(MSG_QUARRY_CHECKPOINT);
     encoder.write_buf(snapshot);
+    encoder.to_vec()
+}
+
+fn checkpoint_failed_frame() -> Vec<u8> {
+    let mut encoder = EncoderV1::new();
+    encoder.write_var(MSG_QUARRY_CHECKPOINT_FAILED);
     encoder.to_vec()
 }
 

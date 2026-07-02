@@ -4,7 +4,7 @@ mod log_redaction;
 mod markdown_write;
 mod session;
 
-pub use session::MSG_QUARRY_CHECKPOINT;
+pub use session::{MSG_QUARRY_CHECKPOINT, MSG_QUARRY_CHECKPOINT_FAILED};
 
 use axum::body::Body;
 use axum::body::Bytes;

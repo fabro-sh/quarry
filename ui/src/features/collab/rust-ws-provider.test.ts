@@ -6,6 +6,7 @@ import * as Y from 'yjs';
 
 import {
   MSG_QUARRY_CHECKPOINT,
+  MSG_QUARRY_CHECKPOINT_FAILED,
   RustWsProviderWrapper,
   collabWebSocketBaseUrl,
   tmpCollabWebSocketBaseUrl,
@@ -132,6 +133,33 @@ describe('RustWsProviderWrapper', () => {
     expect(received).toHaveLength(1);
   });
 
+  it('flags save failure on a checkpoint-failed frame and clears it on the next ack', () => {
+    const doc = new Y.Doc();
+    const awareness = new Awareness(doc);
+    const fakeProvider = new FakeProvider(awareness, doc);
+    const wrapper = new RustWsProviderWrapper({
+      awareness,
+      doc,
+      options: { providerFactory: () => fakeProvider, roomName: 'doc-1' },
+    });
+
+    const notified = vi.fn();
+    const unsubscribe = wrapper.onCheckpointFailure(notified);
+    expect(wrapper.saveFailed).toBe(false);
+
+    fakeProvider.receiveFrame(checkpointFailedFrame());
+    expect(wrapper.saveFailed).toBe(true);
+    expect(notified).toHaveBeenCalledOnce();
+
+    // A later successful commit clears the failure.
+    fakeProvider.receiveFrame(checkpointFrame(Y.encodeSnapshot(Y.snapshot(doc))));
+    expect(wrapper.saveFailed).toBe(false);
+
+    unsubscribe();
+    fakeProvider.receiveFrame(checkpointFailedFrame());
+    expect(notified).toHaveBeenCalledOnce();
+  });
+
   it('stops the underlying provider on disconnect instead of letting it rejoin with a stale doc', async () => {
     const doc = new Y.Doc();
     const awareness = new Awareness(doc);
@@ -178,6 +206,12 @@ function checkpointFrame(snapshot: Uint8Array): Uint8Array {
   const encoder = encoding.createEncoder();
   encoding.writeVarUint(encoder, MSG_QUARRY_CHECKPOINT);
   encoding.writeVarUint8Array(encoder, snapshot);
+  return encoding.toUint8Array(encoder);
+}
+
+function checkpointFailedFrame(): Uint8Array {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, MSG_QUARRY_CHECKPOINT_FAILED);
   return encoding.toUint8Array(encoder);
 }
 

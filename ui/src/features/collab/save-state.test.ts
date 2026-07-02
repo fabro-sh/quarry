@@ -59,24 +59,47 @@ describe('checkpointCoversDoc', () => {
 
 describe('collabSaveState', () => {
   it('reports reconnecting whenever the socket is down or unsynced', () => {
-    expect(collabSaveState({ connected: false, synced: false, covered: true })).toBe(
-      'reconnecting'
-    );
-    expect(collabSaveState({ connected: true, synced: false, covered: true })).toBe(
-      'reconnecting'
-    );
+    expect(
+      collabSaveState({ connected: false, synced: false, covered: true, saveFailed: false })
+    ).toBe('reconnecting');
+    expect(
+      collabSaveState({ connected: true, synced: false, covered: true, saveFailed: false })
+    ).toBe('reconnecting');
   });
 
   it('reports saving until the checkpoint covers the doc, then saved', () => {
-    expect(collabSaveState({ connected: true, synced: true, covered: false })).toBe('saving');
-    expect(collabSaveState({ connected: true, synced: true, covered: true })).toBe('saved');
+    expect(
+      collabSaveState({ connected: true, synced: true, covered: false, saveFailed: false })
+    ).toBe('saving');
+    expect(
+      collabSaveState({ connected: true, synced: true, covered: true, saveFailed: false })
+    ).toBe('saved');
+  });
+
+  it('reports save_failed when the last checkpoint attempt failed', () => {
+    expect(
+      collabSaveState({ connected: true, synced: true, covered: false, saveFailed: true })
+    ).toBe('save_failed');
+  });
+
+  it('lets a covering ack win over a stale failure flag', () => {
+    expect(
+      collabSaveState({ connected: true, synced: true, covered: true, saveFailed: true })
+    ).toBe('saved');
+  });
+
+  it('lets reconnecting win over a failure flag', () => {
+    expect(
+      collabSaveState({ connected: false, synced: false, covered: false, saveFailed: true })
+    ).toBe('reconnecting');
   });
 });
 
 describe('saveStateLabel', () => {
-  it('maps the three states to their UI labels', () => {
+  it('maps the four states to their UI labels', () => {
     expect(saveStateLabel('saved')).toBe('Saved');
     expect(saveStateLabel('saving')).toBe('Saving…');
+    expect(saveStateLabel('save_failed')).toBe('Save failed');
     expect(saveStateLabel('reconnecting')).toBe('Reconnecting (read-only)');
   });
 });

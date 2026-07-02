@@ -6179,6 +6179,53 @@ async fn checkpoint_commits_broadcast_snapshot_ack_frames() {
     server.abort();
 }
 
+/// A checkpoint that cannot project (here: a bare text node at block level,
+/// a shape the session projection rejects) broadcasts a
+/// `MSG_QUARRY_CHECKPOINT_FAILED` frame so still-connected browsers surface
+/// "Save failed" instead of a benign "Saving…".
+#[tokio::test]
+async fn failing_checkpoints_broadcast_a_checkpoint_failed_frame() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "Failure probe.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    send_local_edit(&mut socket, &doc, |txn, root| {
+        root.insert(txn, 0, "bare text at block level");
+    })
+    .await;
+
+    next_checkpoint_failure(&mut socket, &doc).await;
+    server.abort();
+}
+
+/// Waits for the next `MSG_QUARRY_CHECKPOINT_FAILED` frame, applying
+/// interleaved y-sync messages and skipping ack frames.
+async fn next_checkpoint_failure<S>(socket: &mut S, doc: &Doc)
+where
+    S: Stream<Item = Result<TungsteniteMessage, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let message = socket.next().await.unwrap().unwrap();
+            let TungsteniteMessage::Binary(bytes) = message else {
+                continue;
+            };
+            use yrs::encoding::read::Read;
+            let mut cursor = yrs::encoding::read::Cursor::new(bytes.as_ref());
+            match cursor.read_var::<u8>() {
+                Ok(quarry_server::MSG_QUARRY_CHECKPOINT_FAILED) => break,
+                Ok(quarry_server::MSG_QUARRY_CHECKPOINT) => continue,
+                _ => {
+                    apply_yjs_message(doc, bytes.as_ref());
+                }
+            }
+        }
+    })
+    .await
+    .expect("no checkpoint-failed frame arrived")
+}
+
 /// Waits for the next `MSG_QUARRY_CHECKPOINT` frame, applying interleaved
 /// y-sync messages to the local doc (updates broadcast before their ack).
 async fn next_checkpoint_ack<S>(socket: &mut S, doc: &Doc) -> Vec<u8>

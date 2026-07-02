@@ -887,6 +887,7 @@ function CollabSaveStateBridge({
   const isSynced = Boolean(usePluginOption(YjsPlugin, '_isSynced'));
   const providers = usePluginOption(YjsPlugin, '_providers');
   const [covered, setCovered] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
 
   useEffect(() => {
     const provider = providers?.find(
@@ -897,19 +898,25 @@ function CollabSaveStateBridge({
     const doc = awareness?.doc;
     if (!provider || !doc) {
       setCovered(false);
+      setSaveFailed(false);
       return;
     }
-    const recompute = () => setCovered(checkpointCoversDoc(provider.lastCheckpoint, doc));
+    const recompute = () => {
+      setCovered(checkpointCoversDoc(provider.lastCheckpoint, doc));
+      setSaveFailed(provider.saveFailed);
+    };
     recompute();
     const unsubscribeAck = provider.onCheckpoint(recompute);
+    const unsubscribeFailure = provider.onCheckpointFailure(recompute);
     doc.on('update', recompute);
     return () => {
       unsubscribeAck();
+      unsubscribeFailure();
       doc.off('update', recompute);
     };
   }, [editor, providers]);
 
-  const state = collabSaveState({ connected: isConnected, synced: isSynced, covered });
+  const state = collabSaveState({ connected: isConnected, synced: isSynced, covered, saveFailed });
   useEffect(() => {
     onSaveStateChange(state);
   }, [onSaveStateChange, state]);

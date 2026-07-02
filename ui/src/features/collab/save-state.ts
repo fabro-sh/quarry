@@ -19,7 +19,7 @@ import * as Y from 'yjs';
 // a deletion advances no clock but must still flip the state to Saving…
 // until a checkpoint covers it.
 
-export type CollabSaveState = 'saved' | 'saving' | 'reconnecting';
+export type CollabSaveState = 'saved' | 'saving' | 'save_failed' | 'reconnecting';
 
 /** Whether the last acked checkpoint covers everything in the local doc. */
 export function checkpointCoversDoc(ackedSnapshot: Uint8Array | null, doc: Y.Doc): boolean {
@@ -35,15 +35,21 @@ export function collabSaveState(input: {
   connected: boolean;
   synced: boolean;
   covered: boolean;
+  saveFailed: boolean;
 }): CollabSaveState {
   if (!input.connected || !input.synced) return 'reconnecting';
-  return input.covered ? 'saved' : 'saving';
+  if (input.covered) return 'saved';
+  // A failed checkpoint retries on the next edit; the flag clears on the
+  // next successful ack (see rust-ws-provider.ts). Until then, "Saving…"
+  // would misread as benign progress while nothing is being persisted.
+  return input.saveFailed ? 'save_failed' : 'saving';
 }
 
 export function saveStateLabel(state: CollabSaveState): string {
   const label: Record<CollabSaveState, string> = {
     saved: 'Saved',
     saving: 'Saving…',
+    save_failed: 'Save failed',
     reconnecting: 'Reconnecting (read-only)',
   };
   return label[state];

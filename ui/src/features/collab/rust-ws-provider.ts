@@ -19,6 +19,11 @@ export const RUST_WS_PROVIDER_TYPE = 'rust-ws';
 // `crates/quarry-server/src/session.rs`.
 export const MSG_QUARRY_CHECKPOINT = 113;
 
+// Broadcast when a checkpoint attempt fails: no payload — the signal is "the
+// last save attempt did not commit" (details live in server logs). The save
+// state surfaces it as "Save failed" until a later ack covers the doc.
+export const MSG_QUARRY_CHECKPOINT_FAILED = 114;
+
 export interface RustWsProviderOptions {
   roomName: string;
   baseUrl?: string;
@@ -76,7 +81,9 @@ export class RustWsProviderWrapper implements UnifiedProvider {
   private _isConnected = false;
   private _isSynced = false;
   private _lastCheckpoint: Uint8Array | null = null;
+  private _saveFailed = false;
   private readonly checkpointListeners = new Set<(snapshot: Uint8Array) => void>();
+  private readonly checkpointFailureListeners = new Set<() => void>();
   private readonly onConnect?: () => void;
   private readonly onDisconnect?: () => void;
   private readonly onError?: (error: Error) => void;
@@ -119,6 +126,9 @@ export class RustWsProviderWrapper implements UnifiedProvider {
     if (this.provider.messageHandlers) {
       this.provider.messageHandlers[MSG_QUARRY_CHECKPOINT] = (_encoder, decoder) => {
         this.receiveCheckpoint(decoding.readVarUint8Array(decoder));
+      };
+      this.provider.messageHandlers[MSG_QUARRY_CHECKPOINT_FAILED] = () => {
+        this.receiveCheckpointFailure();
       };
     }
 
@@ -176,6 +186,11 @@ export class RustWsProviderWrapper implements UnifiedProvider {
     return this._lastCheckpoint;
   }
 
+  /** Whether the last checkpoint attempt failed (cleared by the next ack). */
+  get saveFailed(): boolean {
+    return this._saveFailed;
+  }
+
   /** Subscribes to checkpoint-ack frames; returns the unsubscribe. */
   onCheckpoint(listener: (snapshot: Uint8Array) => void): () => void {
     this.checkpointListeners.add(listener);
@@ -184,10 +199,26 @@ export class RustWsProviderWrapper implements UnifiedProvider {
     };
   }
 
+  /** Subscribes to checkpoint-failure frames; returns the unsubscribe. */
+  onCheckpointFailure(listener: () => void): () => void {
+    this.checkpointFailureListeners.add(listener);
+    return () => {
+      this.checkpointFailureListeners.delete(listener);
+    };
+  }
+
   private receiveCheckpoint(snapshot: Uint8Array) {
     this._lastCheckpoint = snapshot;
+    this._saveFailed = false;
     for (const listener of this.checkpointListeners) {
       listener(snapshot);
+    }
+  }
+
+  private receiveCheckpointFailure() {
+    this._saveFailed = true;
+    for (const listener of this.checkpointFailureListeners) {
+      listener();
     }
   }
 
@@ -210,6 +241,7 @@ export class RustWsProviderWrapper implements UnifiedProvider {
     this._isConnected = false;
     this._isSynced = false;
     this.checkpointListeners.clear();
+    this.checkpointFailureListeners.clear();
   }
 }
 
