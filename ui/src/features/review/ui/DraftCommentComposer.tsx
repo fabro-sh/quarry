@@ -12,10 +12,19 @@ export function DraftCommentComposer({ editor, anchorText }: { editor: PlateEdit
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    const focusInput = () => inputRef.current?.focus({ preventScroll: true });
+    const input = inputRef.current;
+    if (!input) return;
+    const focusInput = () => input.focus({ preventScroll: true });
     focusInput();
-    const frame = window.requestAnimationFrame(focusInput);
-    return () => window.cancelAnimationFrame(frame);
+    // The editor reclaims selection focus asynchronously after the floating
+    // toolbar closes, at a delay that grows with machine load — a one-shot
+    // refocus can lose that race. Hold focus against reclaims briefly.
+    input.addEventListener('focusout', focusInput);
+    const settle = window.setTimeout(() => input.removeEventListener('focusout', focusInput), 600);
+    return () => {
+      window.clearTimeout(settle);
+      input.removeEventListener('focusout', focusInput);
+    };
   }, []);
 
   function submit() {
