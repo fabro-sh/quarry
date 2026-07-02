@@ -183,7 +183,7 @@ struct LockGuard {
 
 struct StagedChange {
     path: String,
-    change_type: String,
+    change_type: ChangeType,
     old_version_id: Option<String>,
     new_version_id: Option<String>,
     new_path: Option<String>,
@@ -2650,15 +2650,15 @@ impl QuarryStore {
             while let Some(row) = rows.next().await.map_err(map_turso_error)? {
                 changes.push(StagedChange {
                     path: text(&row, 0)?,
-                    change_type: text(&row, 1)?,
+                    change_type: parse_storage_enum(&text(&row, 1)?)?,
                     old_version_id: opt_text(&row, 2)?,
                     new_version_id: opt_text(&row, 3)?,
                     new_path: opt_text(&row, 4)?,
                 });
             }
             for change in &changes {
-                match change.change_type.as_str() {
-                    "put" | "metadata" => {
+                match &change.change_type {
+                    ChangeType::Put | ChangeType::Metadata => {
                         self.ensure_staged_head_unchanged_conn(
                             &conn,
                             &tx.library_id,
@@ -2667,7 +2667,7 @@ impl QuarryStore {
                         )
                         .await?;
                     }
-                    "delete" => {
+                    ChangeType::Delete => {
                         self.ensure_staged_head_unchanged_conn(
                             &conn,
                             &tx.library_id,
@@ -2676,7 +2676,7 @@ impl QuarryStore {
                         )
                         .await?;
                     }
-                    "move" => {
+                    ChangeType::Move => {
                         let new_path = change.new_path.as_deref().ok_or_else(|| {
                             QuarryError::Storage("move change missing new path".to_string())
                         })?;
@@ -2690,14 +2690,11 @@ impl QuarryStore {
                         self.ensure_move_target_available_conn(&conn, &tx.library_id, new_path)
                             .await?;
                     }
-                    other => {
-                        return Err(QuarryError::Storage(format!("unknown change type {other}")));
-                    }
                 }
             }
             for change in changes {
-                match change.change_type.as_str() {
-                    "put" | "metadata" => {
+                match change.change_type {
+                    ChangeType::Put | ChangeType::Metadata => {
                         let version_id = change.new_version_id.ok_or_else(|| {
                             QuarryError::Storage("put change missing new version".to_string())
                         })?;
@@ -2722,7 +2719,7 @@ impl QuarryStore {
                         });
                         events.push(links_indexed_event(tx.library_id.clone(), change.path.clone()));
                     }
-                    "delete" => {
+                    ChangeType::Delete => {
                         if let Some((doc_id, _)) =
                             self.document_identity_conn(&conn, &tx.library_id, &change.path).await?
                         {
@@ -2752,7 +2749,7 @@ impl QuarryStore {
                         });
                         events.push(links_indexed_event(tx.library_id.clone(), change.path.clone()));
                     }
-                    "move" => {
+                    ChangeType::Move => {
                         let new_path = change.new_path.ok_or_else(|| {
                             QuarryError::Storage("move change missing new path".to_string())
                         })?;
@@ -2784,9 +2781,6 @@ impl QuarryStore {
                             origin_id: None,
                         });
                         events.push(links_indexed_event(tx.library_id.clone(), new_path));
-                    }
-                    other => {
-                        return Err(QuarryError::Storage(format!("unknown change type {other}")));
                     }
                 }
             }
@@ -5709,6 +5703,16 @@ fn parse_history_time(value: &str) -> Option<DateTime<Utc>> {
         .map(|time| time.with_timezone(&Utc))
 }
 
+fn parse_storage_enum<T>(value: &str) -> Result<T>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    value
+        .parse::<T>()
+        .map_err(|err| QuarryError::Storage(err.to_string()))
+}
+
 fn version_from_row(row: &Row) -> Result<DocumentVersion> {
     let mut version = DocumentVersion {
         id: text(row, 0)?,
@@ -5726,23 +5730,12 @@ fn version_from_row(row: &Row) -> Result<DocumentVersion> {
         created_at: text(row, 8)?,
     };
     if let Some(source) = opt_text(row, 9)? {
-        version.transaction_source = Some(document_source_from_str(&source)?);
+        version.transaction_source = Some(parse_storage_enum(&source)?);
         version.transaction_actor = opt_text(row, 10)?;
         version.transaction_message = opt_text(row, 11)?;
         version.transaction_provenance = Some(serde_json::from_str(&text(row, 12)?)?);
     }
     Ok(version)
-}
-
-fn document_source_from_str(source: &str) -> Result<DocumentSource> {
-    match source {
-        "rest" => Ok(DocumentSource::Rest),
-        "git" => Ok(DocumentSource::Git),
-        "fuse" => Ok(DocumentSource::Fuse),
-        "cli" => Ok(DocumentSource::Cli),
-        "system" => Ok(DocumentSource::System),
-        other => Err(QuarryError::Storage(format!("invalid source {other}"))),
-    }
 }
 
 fn links_indexed_event(library_id: String, path: String) -> StoreEvent {
@@ -5767,14 +5760,9 @@ fn transaction_from_row(row: &Row) -> Result<TransactionRecord> {
     Ok(TransactionRecord {
         id: text(row, 0)?,
         library_id: text(row, 1)?,
-        state: match text(row, 2)?.as_str() {
-            "open" => TransactionState::Open,
-            "committed" => TransactionState::Committed,
-            "rolled_back" => TransactionState::RolledBack,
-            other => return Err(QuarryError::Storage(format!("invalid tx state {other}"))),
-        },
+        state: parse_storage_enum(&text(row, 2)?)?,
         actor: opt_text(row, 3)?,
-        source: document_source_from_str(&text(row, 4)?)?,
+        source: parse_storage_enum(&text(row, 4)?)?,
         message: opt_text(row, 5)?,
         provenance: serde_json::from_str(&text(row, 6)?)?,
         created_at: text(row, 7)?,
@@ -5790,15 +5778,7 @@ fn conflict_from_row(row: &Row) -> Result<ConflictRecord> {
         conflict_path: opt_text(row, 8)?,
         ours_version_id: opt_text(row, 3)?,
         theirs_version_id: opt_text(row, 4)?,
-        status: match text(row, 5)?.as_str() {
-            "open" => ConflictStatus::Open,
-            "resolved" => ConflictStatus::Resolved,
-            other => {
-                return Err(QuarryError::Storage(format!(
-                    "invalid conflict status {other}"
-                )))
-            }
-        },
+        status: parse_storage_enum(&text(row, 5)?)?,
         discovered_at: text(row, 6)?,
         resolved_at: opt_text(row, 7)?,
     })

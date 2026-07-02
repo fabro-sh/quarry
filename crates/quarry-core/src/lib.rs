@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::str::FromStr;
 use thiserror::Error;
 use utoipa::ToSchema;
 
@@ -44,6 +45,22 @@ pub enum QuarryError {
     Git(String),
 }
 
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[error("invalid {kind} {value}")]
+pub struct ParseEnumError {
+    kind: &'static str,
+    value: String,
+}
+
+impl ParseEnumError {
+    fn new(kind: &'static str, value: &str) -> Self {
+        Self {
+            kind,
+            value: value.to_string(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct Library {
     pub id: String,
@@ -74,6 +91,21 @@ impl DocumentSource {
     }
 }
 
+impl FromStr for DocumentSource {
+    type Err = ParseEnumError;
+
+    fn from_str(source: &str) -> std::result::Result<Self, Self::Err> {
+        match source {
+            "rest" => Ok(Self::Rest),
+            "git" => Ok(Self::Git),
+            "fuse" => Ok(Self::Fuse),
+            "cli" => Ok(Self::Cli),
+            "system" => Ok(Self::System),
+            other => Err(ParseEnumError::new("document source", other)),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TransactionState {
@@ -88,6 +120,19 @@ impl TransactionState {
             Self::Open => "open",
             Self::Committed => "committed",
             Self::RolledBack => "rolled_back",
+        }
+    }
+}
+
+impl FromStr for TransactionState {
+    type Err = ParseEnumError;
+
+    fn from_str(state: &str) -> std::result::Result<Self, Self::Err> {
+        match state {
+            "open" => Ok(Self::Open),
+            "committed" => Ok(Self::Committed),
+            "rolled_back" => Ok(Self::RolledBack),
+            other => Err(ParseEnumError::new("transaction state", other)),
         }
     }
 }
@@ -112,6 +157,20 @@ impl ChangeType {
     }
 }
 
+impl FromStr for ChangeType {
+    type Err = ParseEnumError;
+
+    fn from_str(change_type: &str) -> std::result::Result<Self, Self::Err> {
+        match change_type {
+            "put" => Ok(Self::Put),
+            "delete" => Ok(Self::Delete),
+            "move" => Ok(Self::Move),
+            "metadata" => Ok(Self::Metadata),
+            other => Err(ParseEnumError::new("change type", other)),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ConflictStatus {
@@ -124,6 +183,18 @@ impl ConflictStatus {
         match self {
             Self::Open => "open",
             Self::Resolved => "resolved",
+        }
+    }
+}
+
+impl FromStr for ConflictStatus {
+    type Err = ParseEnumError;
+
+    fn from_str(status: &str) -> std::result::Result<Self, Self::Err> {
+        match status {
+            "open" => Ok(Self::Open),
+            "resolved" => Ok(Self::Resolved),
+            other => Err(ParseEnumError::new("conflict status", other)),
         }
     }
 }
@@ -442,6 +513,36 @@ pub fn parent_dirs(path: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn core_enums_parse_from_their_storage_strings() {
+        assert_eq!("rest".parse::<DocumentSource>(), Ok(DocumentSource::Rest));
+        assert_eq!("git".parse::<DocumentSource>(), Ok(DocumentSource::Git));
+        assert_eq!("fuse".parse::<DocumentSource>(), Ok(DocumentSource::Fuse));
+        assert_eq!("cli".parse::<DocumentSource>(), Ok(DocumentSource::Cli));
+        assert_eq!(
+            "system".parse::<DocumentSource>(),
+            Ok(DocumentSource::System)
+        );
+
+        assert_eq!(
+            "committed".parse::<TransactionState>(),
+            Ok(TransactionState::Committed)
+        );
+        assert_eq!("move".parse::<ChangeType>(), Ok(ChangeType::Move));
+        assert_eq!(
+            "resolved".parse::<ConflictStatus>(),
+            Ok(ConflictStatus::Resolved)
+        );
+    }
+
+    #[test]
+    fn core_enums_reject_unknown_storage_strings() {
+        assert!("unknown".parse::<DocumentSource>().is_err());
+        assert!("unknown".parse::<TransactionState>().is_err());
+        assert!("unknown".parse::<ChangeType>().is_err());
+        assert!("unknown".parse::<ConflictStatus>().is_err());
+    }
 
     #[test]
     fn document_version_omits_inline_content_from_json() {
