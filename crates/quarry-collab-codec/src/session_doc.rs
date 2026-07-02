@@ -84,10 +84,13 @@
 use crate::markdown_writer::{is_known_inline_mark, slate_to_markdown};
 use crate::rows::{is_utf16_boundary, utf16_len, BlockRow, LinkRange, MarkRun};
 use crate::slate::{Attrs, Node};
+use crate::text_diff::{utf16_text_diff_hunks, TextDiff};
 use crate::yjs_builder::{apply_built, xmltext_to_slate};
 use crate::Unsupported;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::sync::Arc;
+use yrs::types::Attrs as YrsAttrs;
 use yrs::{Map, MapRef, Out, ReadTxn, Text, TransactionMut, Xml, XmlTextRef};
 
 const INLINE_LINK_TYPE: &str = "a";
@@ -959,9 +962,17 @@ fn read_review_section<T: ReadTxn>(
 /// FROM. Blocks whose pre and desired images are identical are never
 /// touched, even if their live content has drifted: concurrent keystrokes
 /// that raced the caller's snapshot survive in blocks the change did not
-/// target. Blocks the change did target are rewritten to the desired image
-/// (a same-block race converges to the desired content — awkward merges are
-/// the accepted Gate B behavior).
+/// target.
+///
+/// Targeted all-text blocks are SPLICED: a current-vs-desired character diff
+/// edits only the changed spans, so peer cursors and unchanged marks in the
+/// same block survive, while the projection still converges byte-identically
+/// to the desired image (a same-block race still lands on the desired
+/// content — the accepted Gate B behavior). Splices insert with explicit
+/// attributes (`insert_with_attributes` negates everything unmentioned, so
+/// inserted runs never inherit neighboring formatting) and reconcile marks
+/// over unchanged text with `format`. Blocks carrying inline elements
+/// (links/embeds) fall back to a wholesale rewrite.
 ///
 /// Elements whose id appears in neither `pre` nor `desired` are *foreign*
 /// (concurrent browser-created blocks or runtime scaffold) and are left in
@@ -1126,17 +1137,194 @@ fn reconcile_element(
             .collect();
         return reconcile_children_inner(txn, element, &pre_by_id, desired_children, &known_ids);
     }
-    if current_children != desired_children {
-        let len = element.len(txn);
-        if len > 0 {
-            element.remove_range(txn, 0, len);
-        }
-        let mut offset = 0u32;
-        for child in desired_children {
-            offset += insert_inline(txn, element, offset, child);
-        }
+    if current_children != desired_children
+        && !splice_inline_children(txn, element, current_children, desired_children)?
+    {
+        clobber_inline_children(txn, element, desired_children);
     }
     Ok(())
+}
+
+/// Rewrites the element's inline content wholesale: the fallback for blocks
+/// the splice cannot represent (inline links/embeds, or a live element whose
+/// length disagrees with its projection). Deleting every item kills
+/// collaborator cursors in the block — the splice exists to avoid this.
+fn clobber_inline_children(
+    txn: &mut TransactionMut<'_>,
+    element: &XmlTextRef,
+    desired_children: &[Node],
+) {
+    let len = element.len(txn);
+    if len > 0 {
+        element.remove_range(txn, 0, len);
+    }
+    let mut offset = 0u32;
+    for child in desired_children {
+        offset += insert_inline(txn, element, offset, child);
+    }
+}
+
+/// One flattened inline text run: `[start, end)` in UTF-16 units of the
+/// block's flat text, carrying the run's marks.
+struct InlineRun {
+    start: u32,
+    end: u32,
+    marks: Attrs,
+}
+
+/// Flattens all-text inline children to (flat text, contiguous runs).
+/// `None` when any child is an inline element (link/embed) — the flat-offset
+/// math cannot represent those, so the caller falls back to a rewrite.
+fn flatten_text_children(children: &[Node]) -> Option<(String, Vec<InlineRun>)> {
+    let mut flat = String::new();
+    let mut runs = Vec::new();
+    for child in children {
+        let Node::Text { text, marks } = child else {
+            return None;
+        };
+        if text.is_empty() {
+            continue;
+        }
+        let start = utf16_len(&flat);
+        flat.push_str(text);
+        runs.push(InlineRun {
+            start,
+            end: utf16_len(&flat),
+            marks: marks.clone(),
+        });
+    }
+    Some((flat, runs))
+}
+
+/// Edits only the changed spans of a targeted all-text block, so collaborator
+/// cursors (Yjs relative positions) in untouched text survive the agent's
+/// edit. Diffs CURRENT-vs-desired — not pre-vs-desired — so the projection
+/// converges byte-identically to the old rewrite (Gate B: a same-block race
+/// still lands on the desired content). `Ok(false)` = caller must rewrite.
+fn splice_inline_children(
+    txn: &mut TransactionMut<'_>,
+    element: &XmlTextRef,
+    current_children: &[Node],
+    desired_children: &[Node],
+) -> Result<bool, Unsupported> {
+    let Some((current_flat, _)) = flatten_text_children(current_children) else {
+        return Ok(false);
+    };
+    let Some((desired_flat, desired_runs)) = flatten_text_children(desired_children) else {
+        return Ok(false);
+    };
+    // Defensive: `remove_range` panics past the element's end, so never
+    // trust the projection over the live length (embeds and other
+    // non-countable surprises fall back to the rewrite instead).
+    if element.len(txn) != utf16_len(&current_flat) {
+        return Ok(false);
+    }
+    let hunks = utf16_text_diff_hunks(&current_flat, &desired_flat);
+    apply_text_hunks(txn, element, &hunks, &desired_flat, &desired_runs);
+    reconcile_mark_runs(txn, element, &desired_flat, &desired_runs)?;
+    Ok(true)
+}
+
+/// Applies text hunks in ascending order; each hunk is expressed in the
+/// coordinates left by the ones before it, so no offset adjustment is
+/// needed. Inserted spans split at desired-run boundaries and carry each
+/// run's explicit marks — yrs `insert_with_attributes` negates every
+/// unmentioned attribute around the insert, so nothing is inherited from
+/// neighboring formatting.
+fn apply_text_hunks(
+    txn: &mut TransactionMut<'_>,
+    element: &XmlTextRef,
+    hunks: &[TextDiff],
+    desired_flat: &str,
+    desired_runs: &[InlineRun],
+) {
+    for hunk in hunks {
+        if hunk.old_mid_end > hunk.prefix {
+            element.remove_range(txn, hunk.prefix, hunk.old_mid_end - hunk.prefix);
+        }
+        let mut offset = hunk.prefix;
+        while offset < hunk.new_mid_end {
+            let run = desired_runs
+                .iter()
+                .find(|run| run.start <= offset && offset < run.end)
+                .expect("desired runs cover the desired flat text contiguously");
+            let piece_end = run.end.min(hunk.new_mid_end);
+            let piece = utf16_slice(desired_flat, offset, piece_end);
+            element.insert_with_attributes(txn, offset, &piece, splice_attrs(&run.marks));
+            offset = piece_end;
+        }
+    }
+}
+
+/// Formats spans whose marks differ from the desired runs: added/changed
+/// keys are set, stale keys removed via `Any::Null` (which yrs treats as
+/// attribute removal). Runs after the text phase, so this only ever serves
+/// mark changes on unchanged text — e.g. a comment overlay — without
+/// rewriting a single character. Adjacent spans with identical patches need
+/// no coalescing: yrs elides redundant format markers per call.
+fn reconcile_mark_runs(
+    txn: &mut TransactionMut<'_>,
+    element: &XmlTextRef,
+    desired_flat: &str,
+    desired_runs: &[InlineRun],
+) -> Result<(), Unsupported> {
+    let projected = xmltext_to_slate(txn, element)?;
+    let Node::Element { children, .. } = projected else {
+        return Err(Unsupported::new("spliced block must project to an element"));
+    };
+    let Some((current_flat, current_runs)) = flatten_text_children(&children) else {
+        return Err(Unsupported::new("spliced block no longer projects to text"));
+    };
+    debug_assert_eq!(
+        current_flat, desired_flat,
+        "the text phase must land exactly on the desired flat text"
+    );
+
+    let mut boundaries: Vec<u32> = current_runs
+        .iter()
+        .chain(desired_runs)
+        .flat_map(|run| [run.start, run.end])
+        .collect();
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    let unformatted = Attrs::new();
+    for window in boundaries.windows(2) {
+        let (start, end) = (window[0], window[1]);
+        let current_marks = marks_at(&current_runs, start);
+        let desired_marks = marks_at(desired_runs, start);
+        if current_marks == desired_marks {
+            continue;
+        }
+        let current_marks = current_marks.unwrap_or(&unformatted);
+        let desired_marks = desired_marks.unwrap_or(&unformatted);
+        let mut patch = YrsAttrs::new();
+        for (key, value) in desired_marks {
+            if current_marks.get(key) != Some(value) {
+                patch.insert(Arc::from(key.as_str()), json_to_any(value));
+            }
+        }
+        for key in current_marks.keys() {
+            if !desired_marks.contains_key(key) {
+                patch.insert(Arc::from(key.as_str()), yrs::Any::Null);
+            }
+        }
+        element.format(txn, start, end - start, patch);
+    }
+    Ok(())
+}
+
+/// The marks active at `offset`; `None` = unformatted (no run covers it).
+fn marks_at(runs: &[InlineRun], offset: u32) -> Option<&Attrs> {
+    runs.iter()
+        .find(|run| run.start <= offset && offset < run.end)
+        .map(|run| &run.marks)
+}
+
+fn splice_attrs(marks: &Attrs) -> YrsAttrs {
+    marks
+        .iter()
+        .map(|(key, value)| (Arc::from(key.as_str()), json_to_any(value)))
+        .collect()
 }
 
 fn insert_inline(

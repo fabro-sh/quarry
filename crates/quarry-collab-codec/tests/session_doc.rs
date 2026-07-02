@@ -19,8 +19,8 @@ use yrs::branch::{Branch, BranchID};
 use yrs::types::text::YChange;
 use yrs::updates::decoder::Decode;
 use yrs::{
-    Doc, GetString, Offset, OffsetKind, Options, Out, ReadTxn, StateVector, Text, Transact,
-    TransactionMut, Update, WriteTxn, Xml, XmlTextRef,
+    Assoc, Doc, GetString, IndexedSequence, Offset, OffsetKind, Options, Out, ReadTxn, StateVector,
+    StickyIndex, Text, Transact, TransactionMut, Update, WriteTxn, Xml, XmlTextRef,
 };
 
 const ROOT: &str = "content";
@@ -868,6 +868,252 @@ fn reconcile_preserves_concurrent_keystrokes_in_untouched_blocks() {
     let projection = project(&doc_children(&doc));
     assert_eq!(projection.rows[0].text, "Humans type here. 123");
     assert_eq!(projection.rows[1].text, "Agent rewrote the target block.");
+}
+
+// ---------------------------------------------------------------------------
+// Minimal splices: cursors survive agent edits within the same block
+// ---------------------------------------------------------------------------
+
+/// A collaborator cursor stand-in: yrs sticky indices anchor to the same Yjs
+/// items slate-yjs relative positions do, so surviving a reconcile here means
+/// browser cursors survive it too.
+fn place_sticky(doc: &Doc, block_id: &str, offset: u32) -> StickyIndex {
+    let txn = doc.transact();
+    let root = content_root(&txn);
+    let text = block_text(&txn, &root, block_id);
+    text.sticky_index(&txn, offset, Assoc::After)
+        .expect("sticky index placed")
+}
+
+fn resolve_sticky(doc: &Doc, sticky: &StickyIndex) -> Option<u32> {
+    let txn = doc.transact();
+    sticky.get_offset(&txn).map(|offset| offset.index)
+}
+
+fn utf16_offset_of(text: &str, needle: &str) -> u32 {
+    let byte = text.find(needle).expect("needle present");
+    quarry_collab_codec::utf16_len(&text[..byte])
+}
+
+#[test]
+fn splice_preserves_sticky_cursor_in_the_edited_block() {
+    let text = "Cursor parks here. The agent rewrites this entire tail section.";
+    let rows = vec![block("b1", None, 0, "p", text)];
+    let doc = seeded_doc(&rows, &[]);
+    let cursor = place_sticky(&doc, "b1", utf16_offset_of(text, "parks"));
+
+    let mut desired_rows = rows.clone();
+    desired_rows[0].text = "Cursor parks here. A fully rewritten tail.".to_string();
+    reconcile(&doc, &doc_image(&rows, &[]), &doc_image(&desired_rows, &[]));
+
+    assert_eq!(project(&doc_children(&doc)).rows, desired_rows);
+    assert_eq!(
+        resolve_sticky(&doc, &cursor),
+        Some(utf16_offset_of(&desired_rows[0].text, "parks")),
+        "a cursor before the edited tail keeps its character"
+    );
+}
+
+#[test]
+fn splice_preserves_sticky_cursor_when_both_block_ends_change() {
+    let text = "Left edge changes. cursor anchor sits here. Right edge changes.";
+    let rows = vec![block("b1", None, 0, "p", text)];
+    let doc = seeded_doc(&rows, &[]);
+    let cursor = place_sticky(&doc, "b1", utf16_offset_of(text, "anchor"));
+
+    let mut desired_rows = rows.clone();
+    desired_rows[0].text = "L-edit! cursor anchor sits here. R-edit!".to_string();
+    reconcile(&doc, &doc_image(&rows, &[]), &doc_image(&desired_rows, &[]));
+
+    assert_eq!(project(&doc_children(&doc)).rows, desired_rows);
+    assert_eq!(
+        resolve_sticky(&doc, &cursor),
+        Some(utf16_offset_of(&desired_rows[0].text, "anchor")),
+        "a cursor between two edited spans keeps its character"
+    );
+}
+
+#[test]
+fn splice_measures_utf16_offsets_for_surrogate_pairs() {
+    let text = "😀 stays put. The tail changes.";
+    let rows = vec![block("b1", None, 0, "p", text)];
+    let doc = seeded_doc(&rows, &[]);
+    let cursor = place_sticky(&doc, "b1", utf16_offset_of(text, "stays"));
+
+    let mut desired_rows = rows.clone();
+    desired_rows[0].text = "😀 stays put. A new tail!".to_string();
+    reconcile(&doc, &doc_image(&rows, &[]), &doc_image(&desired_rows, &[]));
+
+    assert_eq!(project(&doc_children(&doc)).rows, desired_rows);
+    assert_eq!(
+        resolve_sticky(&doc, &cursor),
+        Some(utf16_offset_of(&desired_rows[0].text, "stays")),
+        "utf16 offsets stay aligned past the surrogate pair"
+    );
+}
+
+#[test]
+fn oversized_middle_splices_as_a_single_hunk_and_converges() {
+    let text = format!("Keep this prefix. {}", "x".repeat(5000));
+    let rows = vec![block("b1", None, 0, "p", &text)];
+    let doc = seeded_doc(&rows, &[]);
+    let cursor = place_sticky(&doc, "b1", utf16_offset_of(&text, "this"));
+
+    // The changed middle exceeds MULTI_HUNK_CHAR_LIMIT: the diff degrades to
+    // one prefix/suffix hunk, which is still a splice — the prefix survives.
+    let mut desired_rows = rows.clone();
+    desired_rows[0].text = format!("Keep this prefix. {}", "y".repeat(5001));
+    reconcile(&doc, &doc_image(&rows, &[]), &doc_image(&desired_rows, &[]));
+
+    assert_eq!(project(&doc_children(&doc)).rows, desired_rows);
+    assert_eq!(
+        resolve_sticky(&doc, &cursor),
+        Some(utf16_offset_of(&desired_rows[0].text, "this")),
+        "a cursor in the untrimmed prefix survives the fallback hunk"
+    );
+}
+
+#[test]
+fn splice_projection_matches_desired_for_a_plain_text_edit() {
+    let rows = vec![block("b1", None, 0, "p", "Alpha beta gamma.")];
+    let doc = seeded_doc(&rows, &[]);
+
+    let mut desired_rows = rows.clone();
+    desired_rows[0].text = "Alpha changed gamma.".to_string();
+    reconcile(&doc, &doc_image(&rows, &[]), &doc_image(&desired_rows, &[]));
+
+    assert_eq!(project(&doc_children(&doc)).rows, desired_rows);
+}
+
+#[test]
+fn splice_projection_matches_desired_for_a_mark_only_change() {
+    let rows = vec![block("b1", None, 0, "p", "Make this bold now.")];
+    let doc = seeded_doc(&rows, &[]);
+    let cursor = place_sticky(&doc, "b1", utf16_offset_of("Make this bold now.", "now"));
+
+    let mut desired_rows = rows.clone();
+    desired_rows[0].marks = vec![mark(10, 14, "bold")];
+    reconcile(&doc, &doc_image(&rows, &[]), &doc_image(&desired_rows, &[]));
+
+    assert_eq!(project(&doc_children(&doc)).rows, desired_rows);
+    assert_eq!(
+        resolve_sticky(&doc, &cursor),
+        Some(utf16_offset_of("Make this bold now.", "now")),
+        "a mark-only change never rewrites text"
+    );
+}
+
+#[test]
+fn splice_removes_stale_marks_from_unchanged_text() {
+    let mut rows = vec![block("b1", None, 0, "p", "No longer bold text.")];
+    rows[0].marks = vec![mark(10, 14, "bold")];
+    let doc = seeded_doc(&rows, &[]);
+
+    let mut desired_rows = rows.clone();
+    desired_rows[0].marks = Vec::new();
+    reconcile(&doc, &doc_image(&rows, &[]), &doc_image(&desired_rows, &[]));
+
+    assert_eq!(project(&doc_children(&doc)).rows, desired_rows);
+}
+
+#[test]
+fn splice_projection_matches_desired_for_combined_text_and_mark_change() {
+    let rows = vec![block("b1", None, 0, "p", "Alpha beta gamma.")];
+    let doc = seeded_doc(&rows, &[]);
+
+    let mut desired_rows = rows.clone();
+    desired_rows[0].text = "Alpha beta gamma, extended.".to_string();
+    desired_rows[0].marks = vec![mark(0, 5, "bold")];
+    reconcile(&doc, &doc_image(&rows, &[]), &doc_image(&desired_rows, &[]));
+
+    assert_eq!(project(&doc_children(&doc)).rows, desired_rows);
+}
+
+#[test]
+fn splice_insert_at_a_bold_end_boundary_carries_exact_marks() {
+    let mut rows = vec![block("b1", None, 0, "p", "Bold rest.")];
+    rows[0].marks = vec![mark(0, 4, "bold")];
+    let doc = seeded_doc(&rows, &[]);
+
+    // Plain text inserted exactly at the bold run's end boundary must NOT
+    // inherit the mark: the splice passes explicit (empty) attrs.
+    let mut desired_rows = rows.clone();
+    desired_rows[0].text = "BoldXX rest.".to_string();
+    reconcile(&doc, &doc_image(&rows, &[]), &doc_image(&desired_rows, &[]));
+
+    assert_eq!(project(&doc_children(&doc)).rows, desired_rows);
+}
+
+#[test]
+fn blocks_with_inline_links_fall_back_and_still_converge() {
+    let mut rows = vec![block("b1", None, 0, "p", "See the docs site for details.")];
+    rows[0].links = vec![LinkRange {
+        start: 8,
+        end: 17,
+        url: "https://example.test/docs".to_string(),
+    }];
+    let doc = seeded_doc(&rows, &[]);
+
+    let mut desired_rows = rows.clone();
+    desired_rows[0].text = "See the docs site for more info.".to_string();
+    reconcile(&doc, &doc_image(&rows, &[]), &doc_image(&desired_rows, &[]));
+
+    assert_eq!(project(&doc_children(&doc)).rows, desired_rows);
+}
+
+#[test]
+fn splice_handles_empty_to_nonempty_and_nonempty_to_empty_blocks() {
+    let rows = vec![
+        block("b1", None, 0, "p", ""),
+        block("b2", None, 1, "p", "Emptied."),
+        block("b3", None, 2, "p", "Tail stays."),
+    ];
+    let doc = seeded_doc(&rows, &[]);
+
+    let mut desired_rows = rows.clone();
+    desired_rows[0].text = "Filled.".to_string();
+    desired_rows[1].text = String::new();
+    reconcile(&doc, &doc_image(&rows, &[]), &doc_image(&desired_rows, &[]));
+
+    // Empty paragraphs are invisible to the row projection (editor scaffold),
+    // so the emptied b2 projects out; the filled b1 projects in.
+    let expected = vec![
+        block("b1", None, 0, "p", "Filled."),
+        block("b3", None, 1, "p", "Tail stays."),
+    ];
+    assert_eq!(project(&doc_children(&doc)).rows, expected);
+}
+
+/// Gate B pin: a keystroke that raced into the TARGET block still converges
+/// to the desired content — the splice diffs current-vs-desired, so the
+/// projection is byte-identical to the old rewrite.
+#[test]
+fn concurrent_same_block_keystroke_still_converges_to_desired() {
+    let rows = vec![block("b1", None, 0, "p", "Agent target block.")];
+    let doc = seeded_doc(&rows, &[]);
+
+    apply_browser_edit(&doc, |txn, root| {
+        let typing = block_text(txn, root, "b1");
+        typing.insert(txn, 12, " RACE");
+    });
+    let mut desired_rows = rows.clone();
+    desired_rows[0].text = "Agent rewrote the target block.".to_string();
+    reconcile(&doc, &doc_image(&rows, &[]), &doc_image(&desired_rows, &[]));
+
+    assert_eq!(project(&doc_children(&doc)).rows, desired_rows);
+}
+
+#[test]
+fn splice_does_not_recreate_the_block_element() {
+    let rows = vec![block("b1", None, 0, "p", "Same element, new tail.")];
+    let doc = seeded_doc(&rows, &[]);
+    let before = branch_ids(&doc);
+
+    let mut desired_rows = rows.clone();
+    desired_rows[0].text = "Same element, spliced tail!".to_string();
+    reconcile(&doc, &doc_image(&rows, &[]), &doc_image(&desired_rows, &[]));
+
+    assert_eq!(branch_ids(&doc), before);
 }
 
 // ---------------------------------------------------------------------------
