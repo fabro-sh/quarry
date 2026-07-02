@@ -1046,7 +1046,7 @@ mod linux_mount {
                     self.set_len(&path, size).await.map_err(to_errno)?;
                 }
             }
-            let mode = set_attr.mode.map(|mode| (mode & 0o7777) as u32);
+            let mode = set_attr.mode.map(|mode| mode & 0o7777);
             let mtime = set_attr.mtime.map(timestamp_to_rfc3339);
             if mode.is_some() || mtime.is_some() {
                 let attr = self.attr(&path).await.map_err(to_errno)?;
