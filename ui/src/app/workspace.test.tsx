@@ -1945,14 +1945,19 @@ describe('Quarry Browser workspace', () => {
     await waitFor(() => expect(createObjectURL).toHaveBeenCalled());
     expect(downloadName).toBe('readme.md');
     expect(downloadedBlobs).toHaveLength(1);
-    // jsdom's Blob exposes neither .text() nor .arrayBuffer(); FileReader is
-    // the one reader it supports.
-    const downloadedText = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = () => reject(reader.error);
-      reader.readAsText(downloadedBlobs[0]);
-    });
+    // Which realm the blob comes from depends on the Node version running
+    // vitest: Node's Blob exposes .text() but is rejected by jsdom's
+    // FileReader, while jsdom's Blob only supports FileReader.
+    const downloadedBlob = downloadedBlobs[0];
+    const downloadedText =
+      typeof downloadedBlob.text === 'function'
+        ? await downloadedBlob.text()
+        : await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result));
+            reader.onerror = () => reject(reader.error);
+            reader.readAsText(downloadedBlob);
+          });
     expect(downloadedText).toBe('---\ntitle: Readme\n---\n\n# Readme\nBody\n');
     click.mockRestore();
   });
