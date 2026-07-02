@@ -555,12 +555,14 @@ impl QuarryStore {
                         .await?;
                 }
             }
-            let provenance = transaction.provenance.unwrap_or_else(|| match &resolved_scope {
-                ResolvedDocumentScope::Library { .. } => {
-                    serde_json::json!({ "mode": "block_import" })
-                }
-                ResolvedDocumentScope::Tmp => serde_json::json!({ "mode": "tmp_block_import" }),
-            });
+            let provenance = transaction
+                .provenance
+                .unwrap_or_else(|| match &resolved_scope {
+                    ResolvedDocumentScope::Library { .. } => {
+                        serde_json::json!({ "mode": "block_import" })
+                    }
+                    ResolvedDocumentScope::Tmp => serde_json::json!({ "mode": "tmp_block_import" }),
+                });
             let tx = insert_transaction_conn(
                 &conn,
                 resolved_scope.transaction_library_id(),

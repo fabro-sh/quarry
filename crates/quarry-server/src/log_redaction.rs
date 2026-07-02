@@ -33,9 +33,8 @@ fn redact_segment_after_prefix(path: &str, prefix: &str) -> Option<String> {
         return None;
     }
 
-    let mut redacted = String::with_capacity(
-        path.len() + TMP_SECRET_PLACEHOLDER.len() - TMP_DOCUMENT_SECRET_LEN,
-    );
+    let mut redacted =
+        String::with_capacity(path.len() + TMP_SECRET_PLACEHOLDER.len() - TMP_DOCUMENT_SECRET_LEN);
     redacted.push_str(prefix);
     redacted.push_str(TMP_SECRET_PLACEHOLDER);
     redacted.push_str(rest);
