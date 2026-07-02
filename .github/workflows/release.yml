@@ -6,16 +6,23 @@ on:
       - "v*"
   workflow_dispatch:
 
-permissions:
-  contents: write
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
 
 jobs:
   linux-x86_64:
     name: Linux x86_64 release artifact
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub release and upload artifacts to it
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Install system prerequisites
         run: |
@@ -23,10 +30,14 @@ jobs:
           sudo apt-get install -y build-essential cmake pkg-config libssl-dev git fuse3
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
 
       - name: Install Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          no-cache: true
 
       - name: Build browser bundle
         working-directory: ui
@@ -47,7 +58,7 @@ jobs:
           shasum -a 256 dist/quarry-x86_64-unknown-linux-gnu.tar.gz > dist/quarry-x86_64-unknown-linux-gnu.tar.gz.sha256
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: quarry-x86_64-unknown-linux-gnu
           path: |
@@ -56,8 +67,11 @@ jobs:
 
       - name: Attach files to GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/quarry-x86_64-unknown-linux-gnu.tar.gz
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME"
+          gh release upload "$GITHUB_REF_NAME" --clobber \
+            dist/quarry-x86_64-unknown-linux-gnu.tar.gz \
             dist/quarry-x86_64-unknown-linux-gnu.tar.gz.sha256
