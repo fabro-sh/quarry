@@ -132,6 +132,7 @@ import { SuggestionPlugin } from '@platejs/suggestion/react';
 
 import { cn } from '../../lib/utils';
 import { type PlateValue } from './markdown-codec';
+import { remarkBreakSemantics } from './remark-break-semantics';
 import { remarkInlineMarks } from './remark-inline-marks';
 import { reviewKit } from './review-kit';
 import { ImageKit, ImageProvider, type ImageApi } from './image-element';
@@ -338,7 +339,7 @@ const plateMarkdownPlugins = [
   }),
   ...reviewKit,
   MarkdownPlugin.configure({
-    options: { remarkPlugins: [remarkGfm, remarkInlineMarks], rules: { ...wikiLinkMdRules, ...mermaidMdRules, ...tableMdRules, ...rawMarkdownMdRules } },
+    options: { remarkPlugins: [remarkGfm, remarkInlineMarks, remarkBreakSemantics], rules: { ...wikiLinkMdRules, ...mermaidMdRules, ...tableMdRules, ...rawMarkdownMdRules } },
   }),
 ] as const;
 

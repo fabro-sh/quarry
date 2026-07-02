@@ -467,9 +467,8 @@ impl EventParser {
                     );
                     break;
                 }
-                Event::SoftBreak | Event::HardBreak => {
-                    children.push(Node::text("\n", Attrs::new()))
-                }
+                Event::SoftBreak => children.push(Node::text(" ", Attrs::new())),
+                Event::HardBreak => children.push(Node::text("\n", Attrs::new())),
                 other => {
                     return Err(Unsupported::new(format!(
                         "unsupported table cell event {other:?}"
@@ -503,7 +502,12 @@ impl EventParser {
                     marks.insert("code".to_string(), json!(true));
                     children.push(Node::text(code.to_string(), marks));
                 }
-                Event::SoftBreak | Event::HardBreak => {
+                // CommonMark: a soft break is collapsible whitespace, a hard
+                // break is a real line break.
+                Event::SoftBreak => {
+                    children.push(Node::text(" ", context.marks.clone()));
+                }
+                Event::HardBreak => {
                     children.push(Node::text("\n", context.marks.clone()));
                 }
                 Event::Html(html) | Event::InlineHtml(html) => {
@@ -655,7 +659,10 @@ impl EventParser {
                     marks.insert("code".to_string(), json!(true));
                     children.push(Node::text(code.to_string(), marks));
                 }
-                Event::SoftBreak | Event::HardBreak => {
+                Event::SoftBreak => {
+                    children.push(Node::text(" ", context.marks.clone()));
+                }
+                Event::HardBreak => {
                     children.push(Node::text("\n", context.marks.clone()));
                 }
                 Event::Html(html) | Event::InlineHtml(html) => {

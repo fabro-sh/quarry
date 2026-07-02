@@ -3,6 +3,7 @@ import { createSlateEditor, type Descendant } from 'platejs';
 import remarkGfm from 'remark-gfm';
 
 import { baseMarkdownPlugins } from '../editor/markdown-codec';
+import { remarkBreakSemantics } from '../editor/remark-break-semantics';
 import { remarkInlineMarks } from '../editor/remark-inline-marks';
 import { mermaidMdRules } from '../editor/mermaid';
 import { tableMdRules } from '../editor/table';
@@ -62,7 +63,7 @@ function serializerEditor(meta: ReviewMeta) {
     plugins: [
       ...baseMarkdownPlugins,
       MarkdownPlugin.configure({
-        options: { remarkPlugins: [remarkGfm, remarkInlineMarks], rules: reviewMdRules(stable) },
+        options: { remarkPlugins: [remarkGfm, remarkInlineMarks, remarkBreakSemantics], rules: reviewMdRules(stable) },
       }),
     ],
   });

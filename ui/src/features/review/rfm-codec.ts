@@ -3,6 +3,7 @@ import { createSlateEditor, type Descendant } from 'platejs';
 import remarkGfm from 'remark-gfm';
 
 import { baseMarkdownPlugins, stripTrailingEmptyParagraphs } from '../editor/markdown-codec';
+import { remarkBreakSemantics } from '../editor/remark-break-semantics';
 import { remarkInlineMarks } from '../editor/remark-inline-marks';
 import { stripPlaceholders } from '../editor/image';
 import { applyMermaid } from '../editor/mermaid';
@@ -30,7 +31,7 @@ function deserializeEditor() {
     plugins: [
       ...baseMarkdownPlugins,
       MarkdownPlugin.configure({
-        options: { remarkPlugins: [remarkGfm, remarkInlineMarks], rules: tableMdRules },
+        options: { remarkPlugins: [remarkGfm, remarkInlineMarks, remarkBreakSemantics], rules: tableMdRules },
       }),
     ],
   });

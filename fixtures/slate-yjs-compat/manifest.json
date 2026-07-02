@@ -15,6 +15,7 @@
     "blocks",
     "table",
     "utf16",
+    "break-semantics",
     "zero-width-placeholder",
     "critic-markup",
     "review-heading-comment",

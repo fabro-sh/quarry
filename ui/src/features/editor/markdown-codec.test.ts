@@ -194,4 +194,45 @@ describe('markdown codec', () => {
     const markdown = 'if a < b and {x} then y\n';
     expect(plateValueToMarkdown(markdownToPlateValue(markdown))).toBe(markdown);
   });
+
+  // CommonMark break semantics: a soft break (word-wrap newline) is
+  // collapsible whitespace, a hard break is a real line break. Mirrors the
+  // Rust codec (crates/quarry-collab-codec) — parity is pinned by the
+  // slate-yjs compat fixtures.
+  it('joins soft-wrapped paragraph lines with spaces', () => {
+    const value = markdownToPlateValue('para one\nwrapped line two\n');
+    expect(value).toEqual([{ type: 'p', children: [{ text: 'para one wrapped line two' }] }]);
+  });
+
+  it('joins soft-wrapped lines inside emphasis keeping the mark', () => {
+    const value = markdownToPlateValue('*foo\nbar*\n');
+    expect(value).toEqual([{ type: 'p', children: [{ text: 'foo bar', italic: true }] }]);
+  });
+
+  it('serializes embedded newlines as backslash hard breaks', () => {
+    const value = [{ type: 'p', children: [{ text: 'a\nb' }] }];
+    expect(plateValueToMarkdown(value)).toBe('a\\\nb\n');
+  });
+
+  it('round-trips a backslash hard break', () => {
+    const markdown = 'line one\\\nline two\n';
+    expect(plateValueToMarkdown(markdownToPlateValue(markdown))).toBe(markdown);
+  });
+
+  it('normalizes a two-space hard break to a backslash break', () => {
+    const value = markdownToPlateValue('line one  \nline two\n');
+    expect(plateValueToMarkdown(value)).toBe('line one\\\nline two\n');
+  });
+
+  it('round-trips a hard break inside a list item', () => {
+    // `*` bullet: Plate's serializer normalizes bullets to `*`, a pre-existing
+    // divergence from the Rust writer's `-` (fixtures pin only the parse side).
+    const markdown = '* first\\\n  second\n';
+    expect(plateValueToMarkdown(markdownToPlateValue(markdown))).toBe(markdown);
+  });
+
+  it('round-trips a hard break inside a blockquote', () => {
+    const markdown = '> first\\\n> second\n';
+    expect(plateValueToMarkdown(markdownToPlateValue(markdown))).toBe(markdown);
+  });
 });

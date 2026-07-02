@@ -3,8 +3,9 @@
 //! The output is deterministic and idempotent: parsing the output and writing
 //! it again yields byte-identical Markdown. Exact preservation of the input
 //! bytes is a non-goal (one-time normalization is accepted): loose lists
-//! tighten, hard breaks soften, setext headings become ATX, `<sup>`/`^x^`
-//! forms normalize, and punctuation that could re-parse as syntax is
+//! tighten, soft breaks collapse to spaces, two-space hard breaks become
+//! backslash breaks, setext headings become ATX, `<sup>`/`^x^` forms
+//! normalize, and punctuation that could re-parse as syntax is
 //! backslash-escaped.
 
 use crate::slate::{Attrs, Node};
@@ -196,7 +197,7 @@ fn render_block(node: &Node) -> Result<String, Unsupported> {
         return Err(Unsupported::new("bare text node at block level"));
     };
     match ty.as_str() {
-        "p" => Ok(tidy_lines(&render_inline(children, true)?)),
+        "p" => Ok(harden_breaks(&tidy_lines(&render_inline(children, true)?))),
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
             let level = ty[1..].parse::<usize>().expect("heading level digit");
             // ATX headings are single-line: a multi-line setext heading joins
@@ -261,13 +262,13 @@ fn render_list_item(node: &Node, key: ListItemKey, number: u64) -> Result<String
     };
     let prefix = "    ".repeat(key.indent as usize - 1);
     let continuation = format!("{prefix}{}", " ".repeat(marker.len()));
-    let inline = tidy_lines(&render_inline(children, true)?);
+    let inline = harden_breaks(&tidy_lines(&render_inline(children, true)?));
     let body = inline.replace('\n', &format!("\n{continuation}"));
     Ok(format!("{prefix}{marker}{body}"))
 }
 
 fn render_blockquote(children: &[Node]) -> Result<String, Unsupported> {
-    let inline = tidy_lines(&render_inline(children, true)?);
+    let inline = harden_breaks(&tidy_lines(&render_inline(children, true)?));
     let quoted: Vec<String> = inline
         .split('\n')
         .map(|line| {
@@ -344,7 +345,9 @@ fn render_table_cell(cell: &Node) -> Result<String, Unsupported> {
             _ => Err(Unsupported::new("table cell without paragraph content")),
         })
         .collect::<Result<_, _>>()?;
-    Ok(inline.join(" ").trim().to_string())
+    // GFM table rows are single lines; a raw newline inside `| ... |` would
+    // corrupt the table, so cell breaks flatten to spaces like headings do.
+    Ok(inline.join(" ").replace('\n', " ").trim().to_string())
 }
 
 fn render_alignment_row(attrs: &Attrs, columns: usize) -> String {
@@ -379,6 +382,24 @@ fn plain_text(nodes: &[Node]) -> String {
             Node::Text { text, .. } => out.push_str(text),
             Node::Element { children, .. } => out.push_str(&plain_text(children)),
         }
+    }
+    out
+}
+
+/// A `\n` in inline text is a hard break; emit it as a backslash break so it
+/// survives re-parse (a bare newline re-parses as a soft break and collapses
+/// to a space). Newline runs are left alone: `\n\n` is the paragraph
+/// separator inside blockquote content, not a break.
+fn harden_breaks(inline: &str) -> String {
+    let mut out = String::with_capacity(inline.len());
+    let mut chars = inline.chars().peekable();
+    let mut previous = None;
+    while let Some(ch) = chars.next() {
+        if ch == '\n' && previous != Some('\n') && chars.peek() != Some(&'\n') {
+            out.push('\\');
+        }
+        out.push(ch);
+        previous = Some(ch);
     }
     out
 }

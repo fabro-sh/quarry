@@ -589,3 +589,112 @@ fn whitespace_only_mark_run_drops_the_meaningless_delimiters() {
     assert_eq!(once, "a b\n");
     assert_eq!(reexport(&once), once);
 }
+
+// CommonMark break semantics: a soft break (word-wrap newline) is collapsible
+// whitespace, a hard break is a real line break. Soft breaks join with a
+// space on import; `\n` in block text exports as a backslash hard break so it
+// survives re-parse.
+
+#[test]
+fn soft_wrapped_paragraph_joins_into_one_line() {
+    let rows = import("para one\nwrapped line two\n");
+
+    assert_eq!(rows[0].text, "para one wrapped line two");
+    assert_eq!(
+        reexport("para one\nwrapped line two\n"),
+        "para one wrapped line two\n"
+    );
+}
+
+#[test]
+fn backslash_hard_break_survives_round_trip() {
+    let markdown = "line one\\\nline two\n";
+
+    let rows = import(markdown);
+    assert_eq!(rows[0].text, "line one\nline two");
+    assert_eq!(reexport(markdown), markdown);
+}
+
+#[test]
+fn two_space_hard_break_normalizes_to_backslash() {
+    assert_eq!(reexport("line one  \nline two\n"), "line one\\\nline two\n");
+}
+
+#[test]
+fn hard_break_round_trips_inside_a_list_item() {
+    let markdown = "- first\\\n  second\n";
+
+    assert_eq!(reexport(markdown), markdown);
+}
+
+#[test]
+fn hard_break_round_trips_inside_a_blockquote() {
+    let markdown = "> first\\\n> second\n";
+
+    assert_eq!(reexport(markdown), markdown);
+}
+
+#[test]
+fn soft_wrap_inside_emphasis_joins_with_a_space() {
+    let rows = import("*foo\nbar*\n");
+
+    assert_eq!(rows[0].text, "foo bar");
+    assert_eq!(
+        rows[0].marks,
+        vec![MarkRun {
+            start: 0,
+            end: 7,
+            marks: attrs([("italic", json!(true))]),
+        }]
+    );
+}
+
+#[test]
+fn table_cell_newlines_export_as_spaces() {
+    // Unreachable from GFM source (table rows are single lines) but legal via
+    // gateway ops; a raw newline inside `| ... |` would corrupt the table.
+    let rows = vec![
+        BlockRow {
+            block_id: "b1".to_string(),
+            parent_block_id: None,
+            position: 0,
+            block_type: "table".to_string(),
+            attrs: attrs([] as [(&str, serde_json::Value); 0]),
+            text: String::new(),
+            marks: vec![],
+            links: vec![],
+        },
+        BlockRow {
+            block_id: "b2".to_string(),
+            parent_block_id: Some("b1".to_string()),
+            position: 0,
+            block_type: "tr".to_string(),
+            attrs: attrs([] as [(&str, serde_json::Value); 0]),
+            text: String::new(),
+            marks: vec![],
+            links: vec![],
+        },
+        BlockRow {
+            block_id: "b3".to_string(),
+            parent_block_id: Some("b2".to_string()),
+            position: 0,
+            block_type: "th".to_string(),
+            attrs: attrs([] as [(&str, serde_json::Value); 0]),
+            text: String::new(),
+            marks: vec![],
+            links: vec![],
+        },
+        BlockRow {
+            block_id: "b4".to_string(),
+            parent_block_id: Some("b3".to_string()),
+            position: 0,
+            block_type: "p".to_string(),
+            attrs: attrs([] as [(&str, serde_json::Value); 0]),
+            text: "a\nb".to_string(),
+            marks: vec![],
+            links: vec![],
+        },
+    ];
+
+    assert_eq!(export(&rows), "| a b |\n| --- |\n");
+}

@@ -59,6 +59,13 @@ const CASES: FixtureCase[] = [
     markdown: `# \u{1f600} UTF16\n\nA \u{1f44d} **B**\n`,
   },
   {
+    name: 'break-semantics',
+    supported: true,
+    // CommonMark breaks: soft-wrapped lines join with spaces (even across an
+    // inline mark), a backslash hard break stays a literal `\n` in the text.
+    markdown: 'para one\nwrapped *and\nmarked* tail\n\nhard one\\\nhard two\n',
+  },
+  {
     name: 'zero-width-placeholder',
     supported: true,
     markdown: '\u{200b}\n\n',

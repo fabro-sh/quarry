@@ -23,6 +23,7 @@ import { MarkdownPlugin } from '@platejs/markdown';
 import { BaseParagraphPlugin, createSlateEditor, ElementApi, KEYS, type Descendant } from 'platejs';
 import remarkGfm from 'remark-gfm';
 
+import { remarkBreakSemantics } from './remark-break-semantics';
 import { remarkInlineMarks } from './remark-inline-marks';
 import { stripPlaceholders } from './image';
 import { applyMermaid, BaseMermaidPlugin, mermaidMdRules } from './mermaid';
@@ -113,7 +114,7 @@ function editor() {
       ...baseMarkdownPlugins,
       MarkdownPlugin.configure({
         options: {
-          remarkPlugins: [remarkGfm, remarkInlineMarks],
+          remarkPlugins: [remarkGfm, remarkInlineMarks, remarkBreakSemantics],
           rules: { ...wikiLinkMdRules, ...mermaidMdRules, ...tableMdRules, ...rawMarkdownMdRules },
         },
       }),

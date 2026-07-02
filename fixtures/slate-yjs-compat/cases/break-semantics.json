@@ -1,0 +1,55 @@
+{
+  "name": "break-semantics",
+  "supported": true,
+  "markdown": "para one\nwrapped *and\nmarked* tail\n\nhard one\\\nhard two\n",
+  "canonicalPlate": [
+    {
+      "children": [
+        {
+          "text": "para one wrapped "
+        },
+        {
+          "italic": true,
+          "text": "and marked"
+        },
+        {
+          "text": " tail"
+        }
+      ],
+      "type": "p"
+    },
+    {
+      "children": [
+        {
+          "text": "hard one\nhard two"
+        }
+      ],
+      "type": "p"
+    }
+  ],
+  "observableState": [
+    {
+      "type": "p",
+      "children": [
+        {
+          "text": "para one wrapped "
+        },
+        {
+          "italic": true,
+          "text": "and marked"
+        },
+        {
+          "text": " tail"
+        }
+      ]
+    },
+    {
+      "type": "p",
+      "children": [
+        {
+          "text": "hard one\nhard two"
+        }
+      ]
+    }
+  ]
+}
