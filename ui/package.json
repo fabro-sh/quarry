@@ -38,6 +38,7 @@
     "@slate-yjs/core": "1.0.2",
     "@slate-yjs/react": "1.1.0",
     "cmdk": "1.1.1",
+    "comlink": "^4.4.2",
     "lib0": "^0.2.117",
     "lucide-react": "0.555.0",
     "mdast-util-mdx-jsx": "^3.2.0",

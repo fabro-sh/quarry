@@ -175,6 +175,8 @@ import {
 import { collabDebug } from '../collab/collab-debug';
 import { registerUnloadGuard } from '../collab/unload-guard';
 import { RawMarkdownPlugin, rawMarkdownMdRules } from './raw-markdown';
+import { serializeMirror } from './mirror-serialize';
+import { getMirrorSerializer } from './mirror-serializer';
 
 registerRustWsProviderType();
 
@@ -426,12 +428,11 @@ export function PlateMarkdownEditor({
   const collabCursorName = storedAuthor() ?? '';
 
   // The review codec serializes both the value (inline CriticMarkup) and the
-  // store's metadata (YAML endmatter). `syncSuggestionsFromValue` mirrors any
+  // store's metadata (YAML endmatter). `serializeMirror` mirrors any
   // suggestion marks Plate created (via withSuggestion) into the metadata so
   // they survive the round-trip. Shared by every save path.
   const serializeWithMeta = useCallback(
-    (value: PlateValue, meta: ReviewMeta): string =>
-      reviewToMarkdown(value as never, syncSuggestionsFromValue(meta, value as never)),
+    (value: PlateValue, meta: ReviewMeta): string => serializeMirror(value as never, meta),
     []
   );
   const serialize = useCallback(
@@ -691,17 +692,21 @@ export function PlateMarkdownEditor({
 
   const mirrorPublishTimerRef = useRef<number | null>(null);
   const mirrorPublishGuardRef = useRef(false);
+  const mirrorPublishReceiptRef = useRef(0);
   const cancelMirrorPublish = useCallback(() => {
     if (mirrorPublishTimerRef.current !== null) {
       window.clearTimeout(mirrorPublishTimerRef.current);
       mirrorPublishTimerRef.current = null;
     }
     mirrorPublishGuardRef.current = false;
+    // Drop in-flight worker receipts too, not just the pending timer.
+    mirrorPublishReceiptRef.current += 1;
   }, []);
   // The debounced mirror publish (MIRROR_PUBLISH_DEBOUNCE_MS). Serializes
   // `editor.children` at fire time, so coalesced triggers publish the latest
-  // value. The blank guard is sticky across a batch: any trigger that needs
-  // it keeps the batch guarded.
+  // value; the serialization itself runs in the mirror worker so a large
+  // document can't block the main thread. The blank guard is sticky across a
+  // batch: any trigger that needs it keeps the batch guarded.
   const scheduleMirrorPublish = useCallback(
     (options: { guardUnhydratedBlank?: boolean } = {}) => {
       if (options.guardUnhydratedBlank) mirrorPublishGuardRef.current = true;
@@ -712,10 +717,19 @@ export function PlateMarkdownEditor({
         mirrorPublishTimerRef.current = null;
         const guardUnhydratedBlank = mirrorPublishGuardRef.current;
         mirrorPublishGuardRef.current = false;
-        publishSerializedValue(editor.children as PlateValue, { guardUnhydratedBlank });
+        const receipt = ++mirrorPublishReceiptRef.current;
+        void getMirrorSerializer()
+          .serialize(editor.children as never, storeGetMeta())
+          .then((markdown) => {
+            // Superseded in the serializer (null) or here (receipt moved on:
+            // a newer publish, an editor swap, or an unmount).
+            if (markdown === null) return;
+            if (receipt !== mirrorPublishReceiptRef.current) return;
+            publishSerializedMarkdown(markdown, { guardUnhydratedBlank });
+          });
       }, MIRROR_PUBLISH_DEBOUNCE_MS);
     },
-    [editor, publishSerializedValue]
+    [editor, publishSerializedMarkdown, storeGetMeta]
   );
   // A pending publish belongs to this editor instance: when the editor is
   // swapped (document change, collab epoch) or unmounted, firing it would
