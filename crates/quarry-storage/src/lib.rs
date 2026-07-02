@@ -154,6 +154,146 @@ pub struct StoreEvent {
     pub origin_id: Option<String>,
 }
 
+impl StoreEvent {
+    fn new(kind: StoreEventKind, library_id: String) -> Self {
+        Self {
+            kind,
+            library_id,
+            path: None,
+            new_path: None,
+            source: None,
+            tx_id: None,
+            doc_id: None,
+            version_id: None,
+            conflict_id: None,
+            peer_id: None,
+            applied: None,
+            conflicts: None,
+            origin_id: None,
+        }
+    }
+
+    pub fn document_put(
+        library_id: String,
+        path: String,
+        source: DocumentSource,
+        tx_id: String,
+        doc_id: String,
+        version_id: String,
+        origin_id: Option<String>,
+    ) -> Self {
+        let mut event = Self::new(StoreEventKind::DocumentPut, library_id);
+        event.path = Some(path);
+        event.source = Some(source);
+        event.tx_id = Some(tx_id);
+        event.doc_id = Some(doc_id);
+        event.version_id = Some(version_id);
+        event.origin_id = origin_id;
+        event
+    }
+
+    pub fn document_delete(
+        library_id: String,
+        path: String,
+        source: DocumentSource,
+        tx_id: String,
+        doc_id: Option<String>,
+        origin_id: Option<String>,
+    ) -> Self {
+        let mut event = Self::new(StoreEventKind::DocumentDelete, library_id);
+        event.path = Some(path);
+        event.source = Some(source);
+        event.tx_id = Some(tx_id);
+        event.doc_id = doc_id;
+        event.origin_id = origin_id;
+        event
+    }
+
+    pub fn document_move(
+        library_id: String,
+        path: String,
+        new_path: String,
+        source: DocumentSource,
+        tx_id: String,
+        doc_id: Option<String>,
+        origin_id: Option<String>,
+    ) -> Self {
+        let mut event = Self::new(StoreEventKind::DocumentMove, library_id);
+        event.path = Some(path);
+        event.new_path = Some(new_path);
+        event.source = Some(source);
+        event.tx_id = Some(tx_id);
+        event.doc_id = doc_id;
+        event.origin_id = origin_id;
+        event
+    }
+
+    pub fn links_indexed(library_id: String, path: String) -> Self {
+        let mut event = Self::new(StoreEventKind::LinksIndexed, library_id);
+        event.path = Some(path);
+        event
+    }
+
+    pub fn directory_put(library_id: String, path: String, source: DocumentSource) -> Self {
+        let mut event = Self::new(StoreEventKind::DirectoryPut, library_id);
+        event.path = Some(path);
+        event.source = Some(source);
+        event
+    }
+
+    pub fn directory_delete(library_id: String, path: String, source: DocumentSource) -> Self {
+        let mut event = Self::new(StoreEventKind::DirectoryDelete, library_id);
+        event.path = Some(path);
+        event.source = Some(source);
+        event
+    }
+
+    pub fn directory_move(
+        library_id: String,
+        path: String,
+        new_path: String,
+        source: DocumentSource,
+    ) -> Self {
+        let mut event = Self::new(StoreEventKind::DirectoryMove, library_id);
+        event.path = Some(path);
+        event.new_path = Some(new_path);
+        event.source = Some(source);
+        event
+    }
+
+    pub fn conflict_created(library_id: String, path: String, conflict_id: String) -> Self {
+        let mut event = Self::new(StoreEventKind::ConflictCreated, library_id);
+        event.path = Some(path);
+        event.conflict_id = Some(conflict_id);
+        event
+    }
+
+    pub fn conflict_resolved(library_id: String, path: String, conflict_id: String) -> Self {
+        let mut event = Self::new(StoreEventKind::ConflictResolved, library_id);
+        event.path = Some(path);
+        event.conflict_id = Some(conflict_id);
+        event
+    }
+
+    pub fn library_reindexed(library_id: String) -> Self {
+        Self::new(StoreEventKind::LibraryReindexed, library_id)
+    }
+
+    pub fn git_sync_completed(
+        library_id: String,
+        peer_id: String,
+        applied: usize,
+        conflicts: usize,
+    ) -> Self {
+        let mut event = Self::new(StoreEventKind::GitSyncCompleted, library_id);
+        event.source = Some(DocumentSource::Git);
+        event.peer_id = Some(peer_id);
+        event.applied = Some(applied);
+        event.conflicts = Some(conflicts);
+        event
+    }
+}
+
 #[derive(Clone)]
 pub struct QuarryStore {
     db: Database,
@@ -454,21 +594,11 @@ impl QuarryStore {
         }
         .await;
         let (metadata, library_id) = finish_tx(&conn, result).await?;
-        self.emit_event(StoreEvent {
-            kind: StoreEventKind::DirectoryPut,
+        self.emit_event(StoreEvent::directory_put(
             library_id,
-            path: Some(path),
-            new_path: None,
-            source: Some(DocumentSource::Fuse),
-            tx_id: None,
-            doc_id: None,
-            version_id: None,
-            conflict_id: None,
-            peer_id: None,
-            applied: None,
-            conflicts: None,
-            origin_id: None,
-        });
+            path,
+            DocumentSource::Fuse,
+        ));
         Ok(metadata)
     }
 
@@ -521,21 +651,11 @@ impl QuarryStore {
         }
         .await;
         let (metadata, library_id) = finish_tx(&conn, result).await?;
-        self.emit_event(StoreEvent {
-            kind: StoreEventKind::DirectoryPut,
+        self.emit_event(StoreEvent::directory_put(
             library_id,
-            path: Some(path),
-            new_path: None,
-            source: Some(source_for_event),
-            tx_id: None,
-            doc_id: None,
-            version_id: None,
-            conflict_id: None,
-            peer_id: None,
-            applied: None,
-            conflicts: None,
-            origin_id: None,
-        });
+            path,
+            source_for_event,
+        ));
         Ok(metadata)
     }
 
@@ -646,21 +766,12 @@ impl QuarryStore {
         }
         .await;
         let library_id = finish_tx(&conn, result).await?;
-        self.emit_event(StoreEvent {
-            kind: StoreEventKind::DirectoryMove,
+        self.emit_event(StoreEvent::directory_move(
             library_id,
-            path: Some(from_path),
-            new_path: Some(to_path),
-            source: Some(source_for_event),
-            tx_id: None,
-            doc_id: None,
-            version_id: None,
-            conflict_id: None,
-            peer_id: None,
-            applied: None,
-            conflicts: None,
-            origin_id: None,
-        });
+            from_path,
+            to_path,
+            source_for_event,
+        ));
         Ok(())
     }
 
@@ -688,21 +799,11 @@ impl QuarryStore {
         }
         .await;
         let library_id = finish_tx(&conn, result).await?;
-        self.emit_event(StoreEvent {
-            kind: StoreEventKind::DirectoryDelete,
+        self.emit_event(StoreEvent::directory_delete(
             library_id,
-            path: Some(path),
-            new_path: None,
-            source: Some(DocumentSource::Fuse),
-            tx_id: None,
-            doc_id: None,
-            version_id: None,
-            conflict_id: None,
-            peer_id: None,
-            applied: None,
-            conflicts: None,
-            origin_id: None,
-        });
+            path,
+            DocumentSource::Fuse,
+        ));
         Ok(())
     }
 
@@ -981,22 +1082,16 @@ impl QuarryStore {
     }
 
     pub fn emit_document_put_events(&self, outcome: &WriteOutcome, origin_id: Option<String>) {
-        self.emit_event(StoreEvent {
-            kind: StoreEventKind::DocumentPut,
-            library_id: outcome.transaction.library_id.clone(),
-            path: Some(outcome.document.path.clone()),
-            new_path: None,
-            source: Some(outcome.transaction.source.clone()),
-            tx_id: Some(outcome.transaction.id.clone()),
-            doc_id: Some(outcome.document.id.clone()),
-            version_id: Some(outcome.version.id.clone()),
-            conflict_id: None,
-            peer_id: None,
-            applied: None,
-            conflicts: None,
+        self.emit_event(StoreEvent::document_put(
+            outcome.transaction.library_id.clone(),
+            outcome.document.path.clone(),
+            outcome.transaction.source.clone(),
+            outcome.transaction.id.clone(),
+            outcome.document.id.clone(),
+            outcome.version.id.clone(),
             origin_id,
-        });
-        self.emit_event(links_indexed_event(
+        ));
+        self.emit_event(StoreEvent::links_indexed(
             outcome.transaction.library_id.clone(),
             outcome.document.path.clone(),
         ));
@@ -1730,21 +1825,7 @@ impl QuarryStore {
         }
         .await;
         let (library_id, report) = finish_tx(&conn, result).await?;
-        self.emit_event(StoreEvent {
-            kind: StoreEventKind::LibraryReindexed,
-            library_id,
-            path: None,
-            new_path: None,
-            source: None,
-            tx_id: None,
-            doc_id: None,
-            version_id: None,
-            conflict_id: None,
-            peer_id: None,
-            applied: None,
-            conflicts: None,
-            origin_id: None,
-        });
+        self.emit_event(StoreEvent::library_reindexed(library_id));
         Ok(report)
     }
 
@@ -1757,21 +1838,12 @@ impl QuarryStore {
     ) -> Result<()> {
         let conn = self.conn()?;
         let library = self.require_library_conn(&conn, library).await?;
-        self.emit_event(StoreEvent {
-            kind: StoreEventKind::GitSyncCompleted,
-            library_id: library.id,
-            path: None,
-            new_path: None,
-            source: Some(DocumentSource::Git),
-            tx_id: None,
-            doc_id: None,
-            version_id: None,
-            conflict_id: None,
-            peer_id: Some(peer_id.to_string()),
-            applied: Some(applied),
-            conflicts: Some(conflicts),
-            origin_id: None,
-        });
+        self.emit_event(StoreEvent::git_sync_completed(
+            library.id,
+            peer_id.to_string(),
+            applied,
+            conflicts,
+        ));
         Ok(())
     }
 
@@ -2193,22 +2265,15 @@ impl QuarryStore {
         }
         .await;
         let (tx, doc_id) = finish_tx(&conn, result).await?;
-        self.emit_event(StoreEvent {
-            kind: StoreEventKind::DocumentDelete,
-            library_id: tx.library_id.clone(),
-            path: Some(path.clone()),
-            new_path: None,
-            source: Some(source_for_event),
-            tx_id: Some(tx.id.clone()),
-            doc_id: Some(doc_id),
-            version_id: None,
-            conflict_id: None,
-            peer_id: None,
-            applied: None,
-            conflicts: None,
+        self.emit_event(StoreEvent::document_delete(
+            tx.library_id.clone(),
+            path.clone(),
+            source_for_event,
+            tx.id.clone(),
+            Some(doc_id),
             origin_id,
-        });
-        self.emit_event(links_indexed_event(tx.library_id.clone(), path));
+        ));
+        self.emit_event(StoreEvent::links_indexed(tx.library_id.clone(), path));
         Ok(tx)
     }
 
@@ -2285,22 +2350,16 @@ impl QuarryStore {
         }
         .await;
         let (tx, doc_id) = finish_tx(&conn, result).await?;
-        self.emit_event(StoreEvent {
-            kind: StoreEventKind::DocumentMove,
-            library_id: tx.library_id.clone(),
-            path: Some(from_path.clone()),
-            new_path: Some(to_path.clone()),
-            source: Some(source_for_event),
-            tx_id: Some(tx.id.clone()),
-            doc_id: Some(doc_id),
-            version_id: None,
-            conflict_id: None,
-            peer_id: None,
-            applied: None,
-            conflicts: None,
+        self.emit_event(StoreEvent::document_move(
+            tx.library_id.clone(),
+            from_path.clone(),
+            to_path.clone(),
+            source_for_event,
+            tx.id.clone(),
+            Some(doc_id),
             origin_id,
-        });
-        self.emit_event(links_indexed_event(tx.library_id.clone(), to_path));
+        ));
+        self.emit_event(StoreEvent::links_indexed(tx.library_id.clone(), to_path));
         Ok(tx)
     }
 
@@ -2379,22 +2438,16 @@ impl QuarryStore {
         }
         .await;
         let (tx, doc_id) = finish_tx(&conn, result).await?;
-        self.emit_event(StoreEvent {
-            kind: StoreEventKind::DocumentMove,
-            library_id: tx.library_id.clone(),
-            path: Some(from_path.clone()),
-            new_path: Some(to_path.clone()),
-            source: Some(source_for_event),
-            tx_id: Some(tx.id.clone()),
-            doc_id: Some(doc_id),
-            version_id: None,
-            conflict_id: None,
-            peer_id: None,
-            applied: None,
-            conflicts: None,
-            origin_id: None,
-        });
-        self.emit_event(links_indexed_event(tx.library_id.clone(), to_path));
+        self.emit_event(StoreEvent::document_move(
+            tx.library_id.clone(),
+            from_path.clone(),
+            to_path.clone(),
+            source_for_event,
+            tx.id.clone(),
+            Some(doc_id),
+            None,
+        ));
+        self.emit_event(StoreEvent::links_indexed(tx.library_id.clone(), to_path));
         Ok(tx)
     }
 
@@ -2702,22 +2755,19 @@ impl QuarryStore {
                         publish_put_conn(&conn, &doc_id, &version_id).await?;
                         blocks::clear_block_state_conn(&conn, &doc_id).await?;
                         ensure_path_inodes_conn(&conn, &tx.library_id, &change.path).await?;
-                        events.push(StoreEvent {
-                            kind: StoreEventKind::DocumentPut,
-                            library_id: tx.library_id.clone(),
-                            path: Some(change.path.clone()),
-                            new_path: None,
-                            source: Some(tx.source.clone()),
-                            tx_id: Some(tx.id.clone()),
-                            doc_id: Some(doc_id),
-                            version_id: Some(version_id),
-                            conflict_id: None,
-                            peer_id: None,
-                            applied: None,
-                            conflicts: None,
-                            origin_id: None,
-                        });
-                        events.push(links_indexed_event(tx.library_id.clone(), change.path.clone()));
+                        events.push(StoreEvent::document_put(
+                            tx.library_id.clone(),
+                            change.path.clone(),
+                            tx.source.clone(),
+                            tx.id.clone(),
+                            doc_id,
+                            version_id,
+                            None,
+                        ));
+                        events.push(StoreEvent::links_indexed(
+                            tx.library_id.clone(),
+                            change.path.clone(),
+                        ));
                     }
                     ChangeType::Delete => {
                         if let Some((doc_id, _)) =
@@ -2732,22 +2782,18 @@ impl QuarryStore {
                             blocks::clear_block_state_conn(&conn, &doc_id).await?;
                             delete_path_inode_conn(&conn, &tx.library_id, &change.path).await?;
                         }
-                        events.push(StoreEvent {
-                            kind: StoreEventKind::DocumentDelete,
-                            library_id: tx.library_id.clone(),
-                            path: Some(change.path.clone()),
-                            new_path: None,
-                            source: Some(tx.source.clone()),
-                            tx_id: Some(tx.id.clone()),
-                            doc_id: None,
-                            version_id: None,
-                            conflict_id: None,
-                            peer_id: None,
-                            applied: None,
-                            conflicts: None,
-                            origin_id: None,
-                        });
-                        events.push(links_indexed_event(tx.library_id.clone(), change.path.clone()));
+                        events.push(StoreEvent::document_delete(
+                            tx.library_id.clone(),
+                            change.path.clone(),
+                            tx.source.clone(),
+                            tx.id.clone(),
+                            None,
+                            None,
+                        ));
+                        events.push(StoreEvent::links_indexed(
+                            tx.library_id.clone(),
+                            change.path.clone(),
+                        ));
                     }
                     ChangeType::Move => {
                         let new_path = change.new_path.ok_or_else(|| {
@@ -2765,22 +2811,16 @@ impl QuarryStore {
                         .map_err(map_turso_error)?;
                         move_path_inode_conn(&conn, &tx.library_id, &change.path, &new_path)
                             .await?;
-                        events.push(StoreEvent {
-                            kind: StoreEventKind::DocumentMove,
-                            library_id: tx.library_id.clone(),
-                            path: Some(change.path.clone()),
-                            new_path: Some(new_path.clone()),
-                            source: Some(tx.source.clone()),
-                            tx_id: Some(tx.id.clone()),
-                            doc_id: None,
-                            version_id: None,
-                            conflict_id: None,
-                            peer_id: None,
-                            applied: None,
-                            conflicts: None,
-                            origin_id: None,
-                        });
-                        events.push(links_indexed_event(tx.library_id.clone(), new_path));
+                        events.push(StoreEvent::document_move(
+                            tx.library_id.clone(),
+                            change.path.clone(),
+                            new_path.clone(),
+                            tx.source.clone(),
+                            tx.id.clone(),
+                            None,
+                            None,
+                        ));
+                        events.push(StoreEvent::links_indexed(tx.library_id.clone(), new_path));
                     }
                 }
             }
@@ -3038,21 +3078,11 @@ impl QuarryStore {
         }
         .await;
         let conflict = finish_tx(&conn, result).await?;
-        self.emit_event(StoreEvent {
-            kind: StoreEventKind::ConflictCreated,
-            library_id: conflict.library_id.clone(),
-            path: Some(conflict.path.clone()),
-            new_path: None,
-            source: None,
-            tx_id: None,
-            doc_id: None,
-            version_id: None,
-            conflict_id: Some(conflict.id.clone()),
-            peer_id: None,
-            applied: None,
-            conflicts: None,
-            origin_id: None,
-        });
+        self.emit_event(StoreEvent::conflict_created(
+            conflict.library_id.clone(),
+            conflict.path.clone(),
+            conflict.id.clone(),
+        ));
         Ok(conflict)
     }
 
@@ -3076,21 +3106,11 @@ impl QuarryStore {
         }
         .await;
         let conflict = finish_tx(&conn, result).await?;
-        self.emit_event(StoreEvent {
-            kind: StoreEventKind::ConflictResolved,
-            library_id: conflict.library_id.clone(),
-            path: Some(conflict.path.clone()),
-            new_path: None,
-            source: None,
-            tx_id: None,
-            doc_id: None,
-            version_id: None,
-            conflict_id: Some(conflict.id.clone()),
-            peer_id: None,
-            applied: None,
-            conflicts: None,
-            origin_id: None,
-        });
+        self.emit_event(StoreEvent::conflict_resolved(
+            conflict.library_id.clone(),
+            conflict.path.clone(),
+            conflict.id.clone(),
+        ));
         Ok(conflict)
     }
 
@@ -5738,24 +5758,6 @@ fn version_from_row(row: &Row) -> Result<DocumentVersion> {
     Ok(version)
 }
 
-fn links_indexed_event(library_id: String, path: String) -> StoreEvent {
-    StoreEvent {
-        kind: StoreEventKind::LinksIndexed,
-        library_id,
-        path: Some(path),
-        new_path: None,
-        source: None,
-        tx_id: None,
-        doc_id: None,
-        version_id: None,
-        conflict_id: None,
-        peer_id: None,
-        applied: None,
-        conflicts: None,
-        origin_id: None,
-    }
-}
-
 fn transaction_from_row(row: &Row) -> Result<TransactionRecord> {
     Ok(TransactionRecord {
         id: text(row, 0)?,
@@ -6250,6 +6252,55 @@ fn assert_path_exists(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tmp_secret_tests {
     use super::*;
+
+    #[test]
+    fn store_event_constructors_populate_only_relevant_fields() {
+        assert_eq!(
+            StoreEvent::document_put(
+                "lib".to_string(),
+                "docs/readme.md".to_string(),
+                DocumentSource::Rest,
+                "tx1".to_string(),
+                "doc1".to_string(),
+                "v1".to_string(),
+                Some("origin-1".to_string()),
+            ),
+            StoreEvent {
+                kind: StoreEventKind::DocumentPut,
+                library_id: "lib".to_string(),
+                path: Some("docs/readme.md".to_string()),
+                new_path: None,
+                source: Some(DocumentSource::Rest),
+                tx_id: Some("tx1".to_string()),
+                doc_id: Some("doc1".to_string()),
+                version_id: Some("v1".to_string()),
+                conflict_id: None,
+                peer_id: None,
+                applied: None,
+                conflicts: None,
+                origin_id: Some("origin-1".to_string()),
+            }
+        );
+
+        assert_eq!(
+            StoreEvent::git_sync_completed("lib".to_string(), "peer".to_string(), 3, 1),
+            StoreEvent {
+                kind: StoreEventKind::GitSyncCompleted,
+                library_id: "lib".to_string(),
+                path: None,
+                new_path: None,
+                source: Some(DocumentSource::Git),
+                tx_id: None,
+                doc_id: None,
+                version_id: None,
+                conflict_id: None,
+                peer_id: Some("peer".to_string()),
+                applied: Some(3),
+                conflicts: Some(1),
+                origin_id: None,
+            }
+        );
+    }
 
     #[test]
     fn generated_tmp_secret_is_url_safe_hex() {
