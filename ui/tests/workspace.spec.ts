@@ -207,18 +207,7 @@ test.describe('Quarry Browser smoke flows', () => {
 
     // Drop a 1x1 PNG onto the editor (a real File in a DataTransfer, with drop
     // coordinates so Plate can resolve the caret location).
-    const dataTransfer = await page.evaluateHandle(() => {
-      const dt = new DataTransfer();
-      const bytes = Uint8Array.from(
-        atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='),
-        (c) => c.charCodeAt(0)
-      );
-      const file = new File([bytes], 'pic.png', { type: 'image/png' });
-      dt.items.add(file);
-      return dt;
-    });
-    const box = (await editor.boundingBox())!;
-    await editor.dispatchEvent('drop', { dataTransfer, clientX: box.x + 40, clientY: box.y + 20 });
+    await dropTinyPng(page, editor);
 
     // The upload PUTs the bytes to assets/<hash>.png and the image renders from
     // the serve endpoint.
@@ -230,6 +219,32 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.reload();
     await page.getByRole('treeitem', { name: /Imgdoc/ }).click();
     await expect(editor.locator('img')).toHaveAttribute('src', /assets\/[0-9a-f]+\.png/);
+  });
+
+  test('drops an image into a tmp document as an inline data URL and round-trips it', async ({ page }) => {
+    const secret = '72cb58585aa73e35758bc1141f79e32e';
+    await installMockApi(page, {
+      documents: [],
+      tmpDocuments: [
+        { content: 'Drop here.\n', id: 'tmp-img', metadata: { title: 'Tmp image' }, path: secret, version: 'tmp-v1' },
+      ],
+    });
+
+    await page.goto(`/tmp/${secret}`);
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Drop here.');
+    await editor.click();
+
+    await dropTinyPng(page, editor);
+
+    const img = editor.locator('img');
+    await expect(img).toHaveAttribute('src', /^data:image\/png;base64,/);
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
+
+    await page.reload();
+    const reloadedEditor = page.getByLabel('Plate markdown editor');
+    await expect(reloadedEditor).toContainText('Drop here.');
+    await expect(reloadedEditor.locator('img')).toHaveAttribute('src', /^data:image\/png;base64,/);
   });
 
   test('renders a mermaid code block as a diagram with a Code/Preview toggle', async ({ page }) => {
@@ -1831,6 +1846,21 @@ async function emitMockEventSource(page: Page, type: string, payload: Record<str
   );
 }
 
+async function dropTinyPng(page: Page, editor: Locator) {
+  const dataTransfer = await page.evaluateHandle(() => {
+    const dt = new DataTransfer();
+    const bytes = Uint8Array.from(
+      atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='),
+      (c) => c.charCodeAt(0)
+    );
+    const file = new File([bytes], 'pic.png', { type: 'image/png' });
+    dt.items.add(file);
+    return dt;
+  });
+  const box = (await editor.boundingBox())!;
+  await editor.dispatchEvent('drop', { dataTransfer, clientX: box.x + 40, clientY: box.y + 20 });
+}
+
 async function expectNoAxeViolations(page: Page, context: string) {
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations, `${context} has accessibility violations`).toEqual([]);
@@ -1853,6 +1883,7 @@ async function installMockApi(
     documentsByLibrary?: Record<string, MockDocument[]>;
     libraries?: MockLibrary[];
     links?: Record<string, { backlinks?: MockLink[]; outgoing?: MockLink[] }>;
+    tmpDocuments?: MockDocument[];
     versions?: Record<string, MockVersion[]>;
   }
 ) {
@@ -1870,6 +1901,7 @@ async function installMockApi(
 
   const defaultDocuments =
     documentsByLibrary.get('notes') ?? documentsByLibrary.get(libraries[0]?.slug ?? '') ?? new Map<string, MockDocument>();
+  const tmpDocuments = new Map((options.tmpDocuments ?? []).map((document) => [document.path, { ...document }]));
 
   const collab = await installMockCollabServer(page);
 
@@ -1885,6 +1917,7 @@ async function installMockApi(
     restoredVersions: [] as string[],
     saveHeaders: [] as string[],
     savedBodies: [] as { body: string; path: string }[],
+    tmpDocuments,
     versions: options.versions ?? {},
   };
 
@@ -1896,6 +1929,62 @@ async function installMockApi(
     if (path === '/v1/libraries') {
       await route.fulfill({
         json: libraries.map((library) => ({ ...library, created_at: 'now', settings: {} })),
+      });
+      return;
+    }
+
+    const tmpDocumentPath = tmpDocumentPathFromEndpoint(path);
+    if (tmpDocumentPath?.resourcePath === 'presence' && request.method() === 'GET') {
+      await route.fulfill({ json: { presence: [] } });
+      return;
+    }
+
+    if (tmpDocumentPath?.resourcePath === 'review' && request.method() === 'GET') {
+      const document = state.tmpDocuments.get(tmpDocumentPath.secret);
+      await route.fulfill({
+        json: {
+          documentId: document?.id ?? '',
+          baseToken: document?.version ?? '',
+          comments: [],
+          suggestions: [],
+          conflicts: [],
+        },
+      });
+      return;
+    }
+
+    if (tmpDocumentPath?.resourcePath === '' && request.method() === 'GET') {
+      const document = state.tmpDocuments.get(tmpDocumentPath.secret);
+      if (!document) {
+        await notFound(route);
+        return;
+      }
+      const headers: Record<string, string> = {
+        ETag: `"${document.version}"`,
+        'content-type': documentContentType(document),
+        'x-quarry-document-id': document.id,
+      };
+      await route.fulfill({ body: document.content, headers });
+      return;
+    }
+
+    if (tmpDocumentPath?.resourcePath === '' && request.method() === 'PUT') {
+      const ifMatch = request.headers()['if-match'];
+      if (ifMatch) state.saveHeaders.push(ifMatch);
+      const requestBody = request.postData() ?? '';
+      state.savedBodies.push({ body: requestBody, path: tmpDocumentPath.secret });
+      const previous = state.tmpDocuments.get(tmpDocumentPath.secret);
+      const document: MockDocument = {
+        content: requestBody,
+        id: previous?.id ?? `tmp-${tmpDocumentPath.secret}`,
+        metadata: previous?.metadata ?? {},
+        path: tmpDocumentPath.secret,
+        version: 'tmp-saved',
+      };
+      state.tmpDocuments.set(tmpDocumentPath.secret, document);
+      await route.fulfill({
+        headers: { ETag: `"${document.version}"` },
+        json: writeOutcome(document),
       });
       return;
     }
@@ -2175,6 +2264,20 @@ function libraryPathFromEndpoint(path: string) {
   }
   return {
     library: remainingPath.slice(0, separatorIndex),
+    resourcePath: remainingPath.slice(separatorIndex + 1),
+  };
+}
+
+function tmpDocumentPathFromEndpoint(path: string) {
+  const prefix = '/v1/tmp/documents/';
+  if (!path.startsWith(prefix)) return null;
+  const remainingPath = path.slice(prefix.length);
+  const separatorIndex = remainingPath.indexOf('/');
+  if (separatorIndex === -1) {
+    return { secret: remainingPath, resourcePath: '' };
+  }
+  return {
+    secret: remainingPath.slice(0, separatorIndex),
     resourcePath: remainingPath.slice(separatorIndex + 1),
   };
 }

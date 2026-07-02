@@ -82,7 +82,11 @@ describe('markdown codec', () => {
   });
 
   it('round-trips image references', () => {
-    const cases = ['![](assets/abc.png)\n', 'Before.\n\n![](assets/y.jpg)\n\nAfter.\n'];
+    const cases = [
+      '![](assets/abc.png)\n',
+      'Before.\n\n![](assets/y.jpg)\n\nAfter.\n',
+      '![](data:image/png;base64,aGk=)\n',
+    ];
     for (const md of cases) {
       expect(plateValueToMarkdown(markdownToPlateValue(md))).toBe(md);
     }

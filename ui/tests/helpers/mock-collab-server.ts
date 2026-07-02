@@ -94,9 +94,8 @@ export async function installMockCollabServer(
     }, CHECKPOINT_DEBOUNCE_MS);
   }
 
-  await page.routeWebSocket(/\/v1\/collab\/[^/]+$/, (ws) => {
-    const documentId = decodeURIComponent(new URL(ws.url()).pathname.split('/').at(-1) ?? '');
-    const room = ensureRoom(documentId);
+  const connectRoom = (ws: WebSocketRoute, roomId: string) => {
+    const room = ensureRoom(roomId);
     room.sockets.add(ws);
     // Join-time ack: the committed state as of now (matches session.rs).
     ws.send(checkpointFrame(room.doc));
@@ -123,6 +122,16 @@ export async function installMockCollabServer(
     ws.onClose(() => {
       room.sockets.delete(ws);
     });
+  };
+
+  await page.routeWebSocket(/\/v1\/collab\/[^/]+$/, (ws) => {
+    const documentId = decodeURIComponent(new URL(ws.url()).pathname.split('/').at(-1) ?? '');
+    connectRoom(ws, documentId);
+  });
+
+  await page.routeWebSocket(/\/v1\/tmp\/collab\/[^/]+\/[^/]+$/, (ws) => {
+    const pathname = new URL(ws.url()).pathname;
+    connectRoom(ws, decodeURIComponent(pathname.replace(/^\/v1\/tmp\/collab\//, 'tmp:')));
   });
 
   return {

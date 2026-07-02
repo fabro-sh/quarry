@@ -2,10 +2,10 @@ import type { Descendant, TElement } from 'platejs';
 
 import { documentHref } from '../../api/client';
 
-// Dropped images are stored as content-addressed documents under `assets/` and
-// referenced with ordinary `![](assets/<hash>.<ext>)` markdown. The img node
-// keeps the relative path (portable, and resolvable by the backend's link
-// index); only rendering turns it into a serve URL.
+// Library document images are stored as content-addressed documents under
+// `assets/` and referenced with ordinary `![](assets/<hash>.<ext>)` markdown.
+// The img node keeps the relative path (portable, and resolvable by the
+// backend's link index); only rendering turns it into a serve URL.
 
 const TYPE_EXT: Record<string, string> = {
   'image/png': 'png',
@@ -29,6 +29,21 @@ export async function imageAssetPath(file: File): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
   const hash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
   return `assets/${hash}.${imageExtension(file.type, file.name)}`;
+}
+
+export function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error('failed to read image file'));
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error('failed to read image file as a data URL'));
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 /** Resolve an img node's url to a renderable src: relative paths hit the serve

@@ -141,7 +141,7 @@ import {
 } from '../features/editor/MarkdownEditor';
 import { AgentAvatar } from '../features/agents/AgentAvatar';
 import { agentKind } from '../features/agents/agents';
-import { imageAssetPath, resolveImageSrc } from '../features/editor/image';
+import { fileToDataUrl, imageAssetPath, resolveImageSrc } from '../features/editor/image';
 import {
   DEFAULT_AUTHOR,
   hasStoredAuthor,
@@ -771,6 +771,12 @@ function Workspace() {
       },
     }),
     [activeLibrary, mutate]
+  );
+  const tmpImageApi = useMemo<ImageApi>(
+    () => ({
+      upload: fileToDataUrl,
+    }),
+    []
   );
   // The versions pane is hidden in the tmp island layout, so the version
   // list only ever loads for library documents.
@@ -1493,7 +1499,7 @@ function Workspace() {
                   contentType={selectedContentType}
                   documentId={collabDocumentId}
                   href={isTmpDocument ? tmpDocumentHref(selectedPath) : documentHref(activeLibrary, selectedPath)}
-                  image={isLibraryDocument ? imageApi : undefined}
+                  image={isTmpDocument ? tmpImageApi : isLibraryDocument ? imageApi : undefined}
                   mode={editorMode}
                   path={selectedPath}
                   wikiLink={wikiLink}
