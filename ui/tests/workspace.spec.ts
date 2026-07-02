@@ -569,8 +569,9 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.goto('/');
 
     const switcher = page.getByRole('combobox', { name: 'Library switcher' });
-    await expect(switcher).toHaveValue('personal');
-    await switcher.selectOption('work');
+    await expect(switcher).toContainText('personal');
+    await switcher.click();
+    await page.getByRole('menuitem', { name: 'work' }).click();
 
     await expect(page).toHaveURL(/\/lib\/work$/);
     await expect(page.getByRole('treeitem', { name: /Work/ })).toBeVisible();
@@ -612,12 +613,16 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.goto('/');
 
     const switcher = page.getByRole('combobox', { name: 'Library switcher' });
-    await expect(switcher.locator('option')).toHaveCount(2);
     await switcher.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('menuitem')).toHaveCount(2);
     await page.keyboard.press('ArrowDown');
+    await expect(page.getByRole('menuitem', { name: 'personal' })).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    await expect(page.getByRole('menuitem', { name: 'work' })).toBeFocused();
     await page.keyboard.press('Enter');
 
-    await expect(switcher).toHaveValue('work');
+    await expect(switcher).toContainText('work');
     await expect(page).toHaveURL(/\/lib\/work$/);
 
     await page.getByRole('treeitem', { name: /Daily/ }).focus();
@@ -738,9 +743,9 @@ test.describe('Quarry Browser smoke flows', () => {
     await expectNoAxeViolations(page, 'command palette');
     await page.keyboard.press('Escape');
 
-    await page.getByRole('tab', { name: 'Conflicts' }).click();
+    await page.getByRole('tab', { name: 'Versions' }).click();
     await expect(page.getByText('conflict.md open')).toBeVisible();
-    await expectNoAxeViolations(page, 'conflicts tab');
+    await expectNoAxeViolations(page, 'conflicts list in versions tab');
 
     await page.getByLabel('Open conflict conflict-a11y').click();
     await expect(page.getByRole('dialog', { name: 'Resolve conflict' })).toBeVisible();
@@ -1643,7 +1648,7 @@ test.describe('Quarry Browser smoke flows', () => {
 
     await page.goto('/');
 
-    await page.getByRole('tab', { name: 'Conflicts' }).click();
+    await page.getByRole('tab', { name: 'Versions' }).click();
     await expect(page.getByText('conflict.md open')).toBeVisible();
     await expect(page.getByText('Sibling conflict.sibling.md')).toBeVisible();
     await page.getByLabel('Open conflict conflict-git').click();
@@ -1696,7 +1701,7 @@ test.describe('Quarry Browser smoke flows', () => {
 
     await page.goto('/');
 
-    await page.getByRole('tab', { name: 'Conflicts' }).focus();
+    await page.getByRole('tab', { name: 'Versions' }).focus();
     await page.keyboard.press('Enter');
     await expect(page.getByText('conflict.md open')).toBeVisible();
 

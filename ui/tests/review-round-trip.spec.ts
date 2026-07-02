@@ -32,6 +32,7 @@ const COMMENTED_META: MockRoomReviewMeta = {
 
 test.describe('Review round-trip', () => {
   test.beforeEach(async ({ page }) => {
+    await seedAuthor(page);
     await disableEventSource(page);
   });
 
@@ -121,6 +122,14 @@ test.describe('Review round-trip', () => {
       .toEqual({});
   });
 });
+
+// Seed a stored author so the onboarding dialog (shown when no author is set)
+// doesn't gate the workspace these flows exercise.
+async function seedAuthor(page: Page, name = 'Tester') {
+  await page.addInitScript((author) => {
+    window.localStorage.setItem('quarry:author', author);
+  }, name);
+}
 
 async function disableEventSource(page: Page) {
   await page.addInitScript(() => {
