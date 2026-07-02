@@ -4339,6 +4339,61 @@ async fn block_routes_reject_raw_documents_with_a_typed_error() {
 }
 
 #[tokio::test]
+async fn markdown_put_rejects_raw_downgrade_without_opt_in() {
+    let (_root, app, store) = block_test_app().await;
+    put_block_markdown(&app, "guide", "# Guide\n\nBody.\n").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/guide")
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body(Body::from("raw body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("Markdown block document"));
+
+    let document = store.get_document("blocks", "guide").await.unwrap();
+    assert_eq!(document.version.content_type, "text/markdown");
+    assert_eq!(
+        String::from_utf8(document.content).unwrap(),
+        "# Guide\n\nBody.\n"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/guide")
+                .header(header::CONTENT_TYPE, "text/plain")
+                .header("x-quarry-allow-document-kind-change", "true")
+                .body(Body::from("raw body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let document = store.get_document("blocks", "guide").await.unwrap();
+    assert_eq!(document.version.content_type, "text/plain");
+    assert_eq!(document.content, b"raw body".to_vec());
+    assert_eq!(
+        store.load_block_tree(&document.id).await.unwrap(),
+        Vec::<quarry_collab_codec::BlockRow>::new()
+    );
+}
+
+#[tokio::test]
 async fn block_transaction_insert_block_commits_one_version_and_emits_events() {
     let (_root, app, store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "First.\n").await;
@@ -8024,6 +8079,103 @@ async fn tmp_session_and_markdown_write_logs_do_not_emit_capability_secret() {
 
     socket.close(None).await.unwrap();
     server.abort();
+}
+
+#[cfg(feature = "tmp-documents")]
+#[tokio::test]
+async fn tmp_markdown_put_rejects_raw_downgrade_without_opt_in() {
+    let (_root, app, store) = block_test_app().await;
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/tmp/documents",
+            serde_json::json!({
+                "content": "# Draft\n\nBody.\n",
+                "content_type": "text/markdown",
+                "expires_at": "2099-01-01T00:00:00Z"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let etag = response.headers()[header::ETAG]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let created = response_json(response).await;
+    let secret = created["document"]["path"].as_str().unwrap().to_string();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/tmp/documents/{secret}"))
+                .header(header::CONTENT_TYPE, "text/plain")
+                .header(header::IF_MATCH, etag.clone())
+                .body(Body::from("raw body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("Markdown block document"));
+
+    let document = store.get_tmp_document(&secret).await.unwrap();
+    assert_eq!(document.version.content_type, "text/markdown");
+    assert_eq!(
+        String::from_utf8(document.content).unwrap(),
+        "# Draft\n\nBody.\n"
+    );
+    let blocks = get_tmp_block_tree(&app, &secret).await;
+    assert_eq!(blocks["blocks"][0]["text"], "Draft");
+    let latest_etag = format!(
+        "\"{}\"",
+        store
+            .head_tmp_document(&secret)
+            .await
+            .unwrap()
+            .head_version_id
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/tmp/documents/{secret}"))
+                .header(header::CONTENT_TYPE, "text/plain")
+                .header(header::IF_MATCH, latest_etag)
+                .header("x-quarry-allow-document-kind-change", "true")
+                .body(Body::from("raw body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let document = store.get_tmp_document(&secret).await.unwrap();
+    assert_eq!(document.version.content_type, "text/plain");
+    assert_eq!(document.content, b"raw body".to_vec());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/tmp/documents/{secret}/blocks"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    assert_typed_error(status, &body, "UNSUPPORTED_BLOCK_DOCUMENT", false);
 }
 
 #[cfg(feature = "tmp-documents")]

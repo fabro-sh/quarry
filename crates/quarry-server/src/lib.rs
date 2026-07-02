@@ -62,6 +62,7 @@ pub struct AppState {
 
 const AGENT_EVENT_JOURNAL_CAPACITY: usize = 4096;
 const REQUEST_ID_HEADER: &str = "x-quarry-request-id";
+const ALLOW_DOCUMENT_KIND_CHANGE_HEADER: &str = "x-quarry-allow-document-kind-change";
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Default)]
@@ -2340,10 +2341,10 @@ async fn put_tmp_document(
     let precondition = precondition_from_headers(&headers)?;
     let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
     let transaction = transaction_metadata_from_headers(&headers)?;
+    let incoming_kind = quarry_storage::document_kind(&path, &content_type);
+    reject_block_document_downgrade_for_tmp(&state.store, &headers, &path, incoming_kind).await?;
 
-    if quarry_storage::document_kind(&path, &content_type)
-        == quarry_storage::DocumentKind::BlockDocument
-    {
+    if incoming_kind == quarry_storage::DocumentKind::BlockDocument {
         return gateway::gateway_reply(
             markdown_write::put_tmp_block_document(
                 &state,
@@ -2971,15 +2972,22 @@ async fn put_document(
     let precondition = precondition_from_headers(&headers)?;
     let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
     let transaction = transaction_metadata_from_headers(&headers)?;
+    let incoming_kind = quarry_storage::document_kind(&path, &content_type);
 
     // Phase 4: a BlockDocument PUT is a whole-file write reconciled via
     // diff3 against the canonical block rows — block ids and review anchors
     // survive, true conflicts become review items, and a live session
     // receives the merge as a collaborator edit. RawDocuments keep the
     // untouched legacy byte path below.
-    if quarry_storage::document_kind(&path, &content_type)
-        == quarry_storage::DocumentKind::BlockDocument
-    {
+    reject_block_document_downgrade_for_library(
+        &state.store,
+        &headers,
+        &library,
+        &path,
+        incoming_kind,
+    )
+    .await?;
+    if incoming_kind == quarry_storage::DocumentKind::BlockDocument {
         return gateway::gateway_reply(
             markdown_write::put_block_document(
                 &state,
@@ -4167,6 +4175,78 @@ fn content_type(headers: &HeaderMap) -> String {
         .and_then(|value| value.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_string()
+}
+
+async fn reject_block_document_downgrade_for_tmp(
+    store: &QuarryStore,
+    headers: &HeaderMap,
+    path: &str,
+    incoming_kind: quarry_storage::DocumentKind,
+) -> Result<(), ApiError> {
+    if incoming_kind != quarry_storage::DocumentKind::RawDocument
+        || document_kind_change_allowed(headers)
+    {
+        return Ok(());
+    }
+    match store.head_tmp_document(path).await {
+        Ok(document) => reject_block_document_downgrade(
+            path,
+            &document.path,
+            &document.content_type,
+            incoming_kind,
+        ),
+        Err(QuarryError::NotFound(_)) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn reject_block_document_downgrade_for_library(
+    store: &QuarryStore,
+    headers: &HeaderMap,
+    library: &str,
+    path: &str,
+    incoming_kind: quarry_storage::DocumentKind,
+) -> Result<(), ApiError> {
+    if incoming_kind != quarry_storage::DocumentKind::RawDocument
+        || document_kind_change_allowed(headers)
+    {
+        return Ok(());
+    }
+    match store.head_document(library, path).await {
+        Ok(document) => reject_block_document_downgrade(
+            path,
+            &document.path,
+            &document.content_type,
+            incoming_kind,
+        ),
+        Err(QuarryError::NotFound(_)) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn reject_block_document_downgrade(
+    request_path: &str,
+    stored_path: &str,
+    stored_content_type: &str,
+    incoming_kind: quarry_storage::DocumentKind,
+) -> Result<(), ApiError> {
+    let current_kind = quarry_storage::document_kind(stored_path, stored_content_type);
+    if current_kind == quarry_storage::DocumentKind::BlockDocument
+        && incoming_kind == quarry_storage::DocumentKind::RawDocument
+    {
+        return Err(QuarryError::Conflict(format!(
+            "refusing to change {request_path} from a Markdown block document to a raw document; send {ALLOW_DOCUMENT_KIND_CHANGE_HEADER}: true to opt in"
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+fn document_kind_change_allowed(headers: &HeaderMap) -> bool {
+    headers
+        .get(ALLOW_DOCUMENT_KIND_CHANGE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
 }
 
 fn metadata_from_headers(headers: &HeaderMap, content_type: &str) -> Result<JsonValue, ApiError> {
