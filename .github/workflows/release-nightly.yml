@@ -32,18 +32,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version=$(cargo metadata --no-deps --format-version 1 |
-            jq -r '.packages[] | select(.name == "quarry") | .version')
-          tag="v${version}-nightly.$(date -u +%Y%m%d)"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           last_tag=$(git describe --tags --match 'v*-nightly.*' --abbrev=0 2>/dev/null || true)
           if [[ -n "$last_tag" ]] && [[ "$(git rev-parse HEAD)" == "$(git rev-parse "$last_tag^{commit}")" ]]; then
             echo "HEAD already released as $last_tag — nothing to release."
             echo "skip=true" >> "$GITHUB_OUTPUT"
-          elif gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists — nothing to release."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          version=$(cargo metadata --no-deps --format-version 1 |
+            jq -r '.packages[] | select(.name == "quarry") | .version')
+          # Deleted releases leave their tag name immutable, so probe for the
+          # first free name rather than assuming today's date tag is usable.
+          base="v${version}-nightly.$(date -u +%Y%m%d)"
+          tag="$base"
+          n=1
+          while git rev-parse -q --verify "refs/tags/$tag" >/dev/null ||
+              gh release view "$tag" >/dev/null 2>&1; do
+            n=$((n + 1))
+            tag="$base.$n"
+          done
+          echo "Releasing $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build
