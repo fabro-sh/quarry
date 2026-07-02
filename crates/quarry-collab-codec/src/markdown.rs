@@ -39,7 +39,7 @@ pub(crate) fn slate_from_block_events(
     events: Vec<Event<'static>>,
 ) -> Result<Vec<Node>, Unsupported> {
     let mut parser = EventParser { events, index: 0 };
-    normalize_insert_nodes(parser.parse_top_level()?).pipe(Ok)
+    Ok(normalize_insert_nodes(parser.parse_top_level()?))
 }
 
 pub(crate) fn browser_compatible_markdown_options() -> Options {
@@ -67,14 +67,6 @@ pub(crate) fn browser_compatible_markdown_options() -> Options {
         | Options::ENABLE_SUBSCRIPT
         | Options::ENABLE_WIKILINKS
 }
-
-trait Pipe: Sized {
-    fn pipe<T>(self, f: impl FnOnce(Self) -> T) -> T {
-        f(self)
-    }
-}
-
-impl<T> Pipe for T {}
 
 struct EventParser {
     events: Vec<Event<'static>>,
