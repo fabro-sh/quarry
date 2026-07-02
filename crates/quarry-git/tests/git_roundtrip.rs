@@ -1375,8 +1375,11 @@ fn seed_remote(remote_path: &Path, files: &[(&str, Vec<u8>)]) {
 }
 
 fn filesystem_supports_case_distinct_paths(root: &Path) -> bool {
-    let upper = root.join("CaseProbe");
-    let lower = root.join("caseprobe");
+    // Probe inside a throwaway subdirectory: on a case-sensitive filesystem
+    // the probe files would otherwise linger in `root` and get imported.
+    let probe = tempfile::tempdir_in(root).unwrap();
+    let upper = probe.path().join("CaseProbe");
+    let lower = probe.path().join("caseprobe");
     std::fs::write(&upper, b"upper").unwrap();
     std::fs::write(&lower, b"lower").unwrap();
     std::fs::read(&upper).unwrap() == b"upper" && std::fs::read(&lower).unwrap() == b"lower"
