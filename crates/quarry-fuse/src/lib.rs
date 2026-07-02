@@ -1465,6 +1465,9 @@ mod linux_mount {
     fn to_errno(error: QuarryError) -> Errno {
         match error {
             QuarryError::NotFound(_) => Errno::from(libc::ENOENT),
+            // Expired tmp documents are gone for good; to a filesystem
+            // caller that is indistinguishable from not-found.
+            QuarryError::Gone(_) => Errno::from(libc::ENOENT),
             QuarryError::InvalidPath(_) => Errno::from(libc::EINVAL),
             QuarryError::PreconditionFailed(_) => Errno::from(libc::EIO),
             QuarryError::Conflict(message) if message.contains("not empty") => {
