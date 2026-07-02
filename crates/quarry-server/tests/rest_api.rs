@@ -6177,6 +6177,79 @@ async fn shutdown_closes_live_collab_socket_and_runs_final_checkpoint() {
         .unwrap();
 }
 
+/// A session-mode gateway transaction targeting the block a collaborator's
+/// cursor sits in must SPLICE (only changed spans edited): the cursor's Yjs
+/// item survives and a sticky index keeps resolving to the same character.
+#[tokio::test]
+async fn session_transaction_splices_so_cursors_in_the_edited_block_survive() {
+    use yrs::{Assoc, IndexedSequence};
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(
+        &app,
+        "live.md",
+        "Cursor anchor paragraph for Blair. The agent will rewrite this tail shortly.\n",
+    )
+    .await;
+    let document_id = document_id_of(&store, "live.md").await;
+    let tree = get_block_tree(&app, "live.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    // The browser's caret nudge: type one character, delete it again (the
+    // e2e does exactly this to make Slate adopt a programmatic selection).
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.insert(txn, 13, "x");
+    })
+    .await;
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.remove_range(txn, 13, 1);
+    })
+    .await;
+    // The collaborator's caret right after "Cursor anchor" (offset 13).
+    let cursor = {
+        let mut txn = doc.transact_mut();
+        let block = nth_block_text_in(&mut txn, 0);
+        block
+            .sticky_index(&txn, 13, Assoc::After)
+            .expect("sticky index placed")
+    };
+
+    commit_block_transaction(
+        &app,
+        "live.md",
+        block_tx(
+            "tx-splice",
+            serde_json::json!([{
+                "op": "replace_block_content",
+                "block_id": block_id,
+                "text": "Cursor anchor paragraph for Blair. A freshly spliced tail took its place."
+            }]),
+        ),
+    )
+    .await;
+    wait_for_yjs_plain_text(
+        &mut socket,
+        &doc,
+        "Cursor anchor paragraph for Blair. A freshly spliced tail took its place.",
+    )
+    .await;
+
+    let txn = doc.transact();
+    let resolved = cursor
+        .get_offset(&txn)
+        .expect("sticky index resolves")
+        .index;
+    assert_eq!(
+        resolved, 13,
+        "the cursor's item must survive the same-block splice"
+    );
+    drop(txn);
+    socket.close(None).await.unwrap();
+    server.abort();
+}
+
 /// Phase 5 checkpoint-ack protocol: a custom `MSG_QUARRY_CHECKPOINT` frame
 /// carrying the committed doc snapshot is sent to each new subscriber on
 /// join and broadcast after every durable commit (debounced checkpoint or

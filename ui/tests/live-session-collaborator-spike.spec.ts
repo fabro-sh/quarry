@@ -344,6 +344,112 @@ test('remote cursor stays anchored to its character across an agent edit above i
   }
 });
 
+test('remote cursor stays anchored to its character across an agent edit in the same block', async ({
+  browser,
+  request,
+}, testInfo) => {
+  const library = uniqueLibrary('spike-sameblock', testInfo.workerIndex);
+  await seedDocument(request, library, [
+    '# Same-block cursor spike',
+    '',
+    'Cursor anchor paragraph for Blair. The agent will rewrite this tail shortly.',
+    '',
+  ]);
+
+  const userA = await openHumanDocument(browser, library, 'Avery');
+  const userB = await openHumanDocument(browser, library, 'Blair');
+  try {
+    await expect(editorOf(userA.page)).toContainText('rewrite this tail shortly.');
+    await expect(editorOf(userB.page)).toContainText('rewrite this tail shortly.');
+
+    await setCaretAfterText(userB.page, 'Cursor anchor');
+    await userB.page.keyboard.type('x');
+    await userB.page.keyboard.press('Backspace');
+    const remoteCaret = editorOf(userA.page)
+      .locator('xpath=..')
+      .locator('div[aria-hidden="true"]', { hasText: 'Blair' });
+    await expect(remoteCaret).toBeVisible({ timeout: 15_000 });
+    await expect
+      .poll(
+        async () => {
+          const anchor = await anchorCharRect(userA.page);
+          const caret = await remoteCaret.boundingBox();
+          if (!caret) return Number.POSITIVE_INFINITY;
+          return Math.max(Math.abs(caret.x - anchor.right), Math.abs(caret.y - anchor.top));
+        },
+        { timeout: 10_000 }
+      )
+      .toBeLessThanOrEqual(6);
+
+    // The agent rewrites the tail of the very block B's caret sits in,
+    // through the GATEWAY (the real agent surface): the session reconciler
+    // splices only the changed span, so the anchored prefix's Yjs items —
+    // and with them B's cursor — survive. (The old wholesale rewrite deleted
+    // every item in the block and threw the caret to its start.)
+    const blocksResponse = await request.get(`${documentApiUrl(library)}/blocks`);
+    expect(blocksResponse.ok()).toBeTruthy();
+    const tree = (await blocksResponse.json()) as {
+      blocks: Array<{ block_id: string; text: string }>;
+    };
+    const target = tree.blocks.find((candidate) =>
+      candidate.text.includes('Cursor anchor paragraph for Blair.')
+    );
+    expect(target).toBeTruthy();
+    const transaction = await request.post(`${documentApiUrl(library)}/transactions`, {
+      data: {
+        client_tx_id: 'tx-spike-same-block',
+        actor: { kind: 'agent', id: 'ai:codex:spike', label: 'Codex' },
+        ops: [
+          {
+            op: 'replace_block_content',
+            block_id: target!.block_id,
+            text: 'Cursor anchor paragraph for Blair. A freshly spliced tail took its place.',
+          },
+        ],
+      },
+    });
+    expect(transaction.ok()).toBeTruthy();
+    await expect(editorOf(userA.page)).toContainText('freshly spliced tail');
+    await expect(editorOf(userB.page)).toContainText('freshly spliced tail');
+
+    // B's remote caret still hugs the same logical character…
+    await expect
+      .poll(
+        async () => {
+          const anchor = await anchorCharRect(userA.page);
+          const caret = await remoteCaret.boundingBox();
+          if (!caret) return Number.POSITIVE_INFINITY;
+          return Math.max(Math.abs(caret.x - anchor.right), Math.abs(caret.y - anchor.top));
+        },
+        { timeout: 10_000 }
+      )
+      .toBeLessThanOrEqual(6);
+
+    // …and B's own selection is still collapsed right after "anchor".
+    const selection = await userB.page.evaluate(() => {
+      const sel = window.getSelection();
+      if (!sel || !sel.anchorNode) return null;
+      return {
+        collapsed: sel.isCollapsed,
+        offset: sel.anchorOffset,
+        text: sel.anchorNode.textContent ?? '',
+      };
+    });
+    expect(selection?.collapsed).toBe(true);
+    expect(selection?.text).toContain('Cursor anchor paragraph for Blair.');
+    expect(selection?.offset).toBe('Cursor anchor'.length);
+
+    await expectBrowsersConverged(userA.page, userB.page);
+    await expectNoConflictUi(userA.page);
+    await expectNoConflictUi(userB.page);
+    expect(userA.pageErrors).toEqual([]);
+    expect(userB.pageErrors).toEqual([]);
+  } finally {
+    await userA.context.close();
+    await userB.context.close();
+  }
+});
+
 function uniqueLibrary(prefix: string, workerIndex: number) {
   return `${prefix}-${Date.now().toString(36)}-${workerIndex}`;
 }
