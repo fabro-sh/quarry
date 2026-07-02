@@ -86,6 +86,10 @@ AGENT_NAME="Codex"
 DOC="$ORIGIN/v1/tmp/documents/$SECRET"
 ```
 
+Tmp documents are Markdown-only scratch documents. Write them with
+`Content-Type: text/markdown`; non-Markdown media types return 415, and
+canonical UTF-8 Markdown over 1 MiB returns 413.
+
 ## Core Workflow
 
 1. Show presence.
@@ -233,9 +237,9 @@ curl -sS -X PUT "$DOC" \
 ```
 
 - `Content-Type: text/markdown` is required for whole-document Markdown
-  writes. Do not rely on client defaults: form submission media types such as
-  `application/x-www-form-urlencoded` are rejected for extensionless tmp
-  document URLs, and missing `Content-Type` is rejected there too.
+  writes. Do not rely on client defaults. Tmp document URLs require a Markdown
+  media type, reject missing or non-Markdown `Content-Type` with 415, and
+  reject canonical UTF-8 Markdown larger than 1 MiB with 413.
 - Send `If-Match` with the clock you last read. It selects the merge base:
   the write is diff3-merged against the current document, so concurrent
   edits survive instead of being overwritten. A known-but-stale clock still
@@ -245,10 +249,11 @@ curl -sS -X PUT "$DOC" \
   `conflicts` in `GET $DOC/review` — never write failures.
 - Use `PUT` to create or rewrite documents wholesale; use block transactions
   for surgical edits, comments, and suggestions on existing content.
-- Quarry refuses to change an existing Markdown block document into a raw
+- For library documents, Quarry refuses to change an existing Markdown block document into a raw
   document unless you explicitly opt in with
   `X-Quarry-Allow-Document-Kind-Change: true`. Agents should not send that
   header for normal Markdown authoring or editing.
+- Tmp documents cannot be changed into raw documents.
 
 After a `PUT`, re-read `GET $DOC/blocks`: ambiguous Markdown can land as
 `raw_markdown` blocks, preserved verbatim but not block-addressable.
@@ -317,6 +322,7 @@ once. `retryable: false` = the ops as stated can never succeed; rebuild.
 | `SUGGESTION_ALREADY_RESOLVED` (422) | Someone decided first; re-read `/review` |
 | `UNSUPPORTED_MARKDOWN` (422) | The content is refused (e.g. CriticMarkup); fix the content |
 | `UNSUPPORTED_BLOCK_DOCUMENT` (422) | Not a Markdown document; block APIs do not apply |
+| `PAYLOAD_TOO_LARGE` (413) | Tmp Markdown content exceeds 1 MiB; shorten it |
 | `INVALID_TRANSACTION` (400) | Malformed envelope/op; fix the request |
 | `UNKNOWN_BLOCK_TYPE` (400) | `block_type` outside the vocabulary; the message lists valid types |
 

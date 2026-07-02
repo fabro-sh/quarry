@@ -137,6 +137,7 @@
         "tags": [],
         "operationId": "create_tmp_document",
         "requestBody": {
+          "description": "Create a Markdown-only tmp scratch document. content_type defaults to text/markdown; any supplied value must be a Markdown media type. Canonical UTF-8 Markdown is limited to 1 MiB.",
           "content": {
             "application/json": {
               "schema": {
@@ -153,6 +154,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WriteOutcome"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Tmp Markdown content exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Tmp documents are Markdown-only",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -232,34 +253,12 @@
                 "null"
               ]
             }
-          },
-          {
-            "name": "X-Quarry-Allow-Document-Kind-Change",
-            "in": "header",
-            "description": "Set to true to intentionally change an existing Markdown block document into a raw document",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
           }
         ],
         "requestBody": {
-          "description": "Whole-document Markdown writes require Content-Type: text/markdown. Extensionless tmp documents reject missing Content-Type and form submission media types such as application/x-www-form-urlencoded.",
+          "description": "Tmp documents are Markdown-only scratch documents. Whole-document writes require Content-Type: text/markdown (or another accepted Markdown media type) and canonical UTF-8 Markdown no larger than 1 MiB.",
           "content": {
-            "application/octet-stream": {
-              "schema": {
-                "type": "string"
-              }
-            },
             "text/markdown": {
-              "schema": {
-                "type": "string"
-              }
-            },
-            "text/plain": {
               "schema": {
                 "type": "string"
               }
@@ -278,16 +277,6 @@
               }
             }
           },
-          "409": {
-            "description": "Existing Markdown document would be changed into a raw document without X-Quarry-Allow-Document-Kind-Change: true",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
           "412": {
             "description": "",
             "content": {
@@ -298,8 +287,18 @@
               }
             }
           },
+          "413": {
+            "description": "Tmp Markdown body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "415": {
-            "description": "Extensionless tmp write omitted Content-Type or used a form submission media type",
+            "description": "Tmp writes require a Markdown Content-Type",
             "content": {
               "application/json": {
                 "schema": {
@@ -631,6 +630,16 @@
             }
           },
           "412": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockTransactionError"
+                }
+              }
+            }
+          },
+          "413": {
             "description": "",
             "content": {
               "application/json": {

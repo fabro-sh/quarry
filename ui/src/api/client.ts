@@ -42,7 +42,6 @@ export interface DocumentMutationOptions {
 export interface CreateTmpDocumentRequest {
   content?: string;
   metadata?: Record<string, unknown>;
-  contentType?: string;
   expiresAt?: string;
 }
 
@@ -203,7 +202,7 @@ export async function createTmpDocument(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       content: request.content,
-      content_type: request.contentType,
+      content_type: 'text/markdown',
       metadata: request.metadata,
       expires_at: request.expiresAt,
     }),
@@ -234,12 +233,11 @@ export function putTmpDocument(
   secret: string,
   content: string,
   etag: string,
-  contentType = 'text/markdown',
   options: DocumentMutationOptions = {}
 ) {
   const headers = mutationHeaders(options, {
     'If-Match': etag,
-    'content-type': contentType,
+    'content-type': 'text/markdown',
   });
   return writeTmpDocument(secret, content, headers);
 }

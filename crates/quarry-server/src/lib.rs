@@ -9,6 +9,7 @@ pub use session::{MSG_QUARRY_CHECKPOINT, MSG_QUARRY_CHECKPOINT_FAILED};
 use axum::body::Body;
 use axum::body::Bytes;
 use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::DefaultBodyLimit;
 use axum::extract::{MatchedPath, Path, Query, Request, State};
 use axum::http::Uri;
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
@@ -64,6 +65,8 @@ const AGENT_EVENT_JOURNAL_CAPACITY: usize = 4096;
 const REQUEST_ID_HEADER: &str = "x-quarry-request-id";
 const ALLOW_DOCUMENT_KIND_CHANGE_HEADER: &str = "x-quarry-allow-document-kind-change";
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
+const TMP_DOCUMENT_HTTP_BODY_LIMIT: usize =
+    quarry_storage::TMP_DOCUMENT_MARKDOWN_MAX_BYTES + 16 * 1024;
 
 #[derive(Clone, Default)]
 struct AgentEventJournal {
@@ -385,10 +388,14 @@ fn install_tmp_document_routes(router: Router<AppState>) -> Router<AppState> {
         .post(post_tmp_document_action)
         .put(put_tmp_document)
         .patch(patch_tmp_document_action)
-        .delete(delete_tmp_document);
+        .delete(delete_tmp_document)
+        .layer(DefaultBodyLimit::max(TMP_DOCUMENT_HTTP_BODY_LIMIT));
 
     router
-        .route("/v1/tmp/documents", post(create_tmp_document))
+        .route(
+            "/v1/tmp/documents",
+            post(create_tmp_document).layer(DefaultBodyLimit::max(TMP_DOCUMENT_HTTP_BODY_LIMIT)),
+        )
         .route("/v1/tmp/collab/{secret}/{room}", get(tmp_collab_websocket))
         .route("/v1/tmp/documents/{*path}", tmp_document_route)
 }
@@ -2169,23 +2176,32 @@ pub struct PromoteTmpDocumentRequest {
 #[utoipa::path(
     post,
     path = "/v1/tmp/documents",
-    request_body = CreateTmpDocumentRequest,
-    responses((status = 201, body = WriteOutcome))
+    request_body(
+        content = CreateTmpDocumentRequest,
+        description = "Create a Markdown-only tmp scratch document. content_type defaults to text/markdown; any supplied value must be a Markdown media type. Canonical UTF-8 Markdown is limited to 1 MiB."
+    ),
+    responses(
+        (status = 201, body = WriteOutcome),
+        (status = 413, description = "Tmp Markdown content exceeds 1 MiB", body = ErrorResponse),
+        (status = 415, description = "Tmp documents are Markdown-only", body = ErrorResponse)
+    )
 )]
 async fn create_tmp_document(
     State(state): State<AppState>,
     Json(request): Json<CreateTmpDocumentRequest>,
 ) -> Result<Response, ApiError> {
-    let content_type = request
+    let requested_content_type = request
         .content_type
         .as_deref()
-        .unwrap_or("text/markdown")
-        .to_string();
+        .unwrap_or(quarry_storage::TMP_DOCUMENT_DEFAULT_CONTENT_TYPE);
+    let content_type =
+        quarry_storage::normalize_tmp_markdown_content_type(requested_content_type)?.to_string();
     let mut metadata = request.metadata.unwrap_or_else(|| serde_json::json!({}));
     if let JsonValue::Object(object) = &mut metadata {
-        object
-            .entry("content_type")
-            .or_insert_with(|| JsonValue::String(content_type.clone()));
+        object.insert(
+            "content_type".to_string(),
+            JsonValue::String(content_type.clone()),
+        );
     }
     let ttl = request
         .expires_at
@@ -2336,26 +2352,19 @@ async fn head_tmp_document(
             "If-None-Match" = Option<String>,
             Header,
             description = "Use * to create a new tmp document at this capability path"
-        ),
-        (
-            "X-Quarry-Allow-Document-Kind-Change" = Option<String>,
-            Header,
-            description = "Set to true to intentionally change an existing Markdown block document into a raw document"
         )
     ),
     request_body(
-        description = "Whole-document Markdown writes require Content-Type: text/markdown. Extensionless tmp documents reject missing Content-Type and form submission media types such as application/x-www-form-urlencoded.",
+        description = "Tmp documents are Markdown-only scratch documents. Whole-document writes require Content-Type: text/markdown (or another accepted Markdown media type) and canonical UTF-8 Markdown no larger than 1 MiB.",
         content(
-            (String = "text/markdown"),
-            (String = "text/plain"),
-            (String = "application/octet-stream")
+            (String = "text/markdown")
         )
     ),
     responses(
         (status = 200, body = WriteOutcome),
-        (status = 409, description = "Existing Markdown document would be changed into a raw document without X-Quarry-Allow-Document-Kind-Change: true", body = ErrorResponse),
         (status = 412, body = ErrorResponse),
-        (status = 415, description = "Extensionless tmp write omitted Content-Type or used a form submission media type", body = ErrorResponse)
+        (status = 413, description = "Tmp Markdown body exceeds 1 MiB", body = ErrorResponse),
+        (status = 415, description = "Tmp writes require a Markdown Content-Type", body = ErrorResponse)
     )
 )]
 async fn put_tmp_document(
@@ -2365,44 +2374,24 @@ async fn put_tmp_document(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     touch_agent_presence(&state, &headers, None, &path).await?;
-    let content_type = content_type(&headers);
-    reject_ambiguous_extensionless_tmp_content_type(&headers, &path, &content_type)?;
-    let metadata = metadata_from_headers(&headers, &content_type)?;
+    let content_type = require_tmp_markdown_content_type(&headers)?;
+    let metadata = tmp_metadata_from_headers(&headers, &content_type)?;
     let precondition = precondition_from_headers(&headers)?;
     let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
     let transaction = transaction_metadata_from_headers(&headers)?;
-    let incoming_kind = quarry_storage::document_kind(&path, &content_type);
-    reject_block_document_downgrade_for_tmp(&state.store, &headers, &path, incoming_kind).await?;
 
-    if incoming_kind == quarry_storage::DocumentKind::BlockDocument {
-        return gateway::gateway_reply(
-            markdown_write::put_tmp_block_document(
-                &state,
-                &path,
-                body.to_vec(),
-                metadata,
-                precondition,
-                origin_id,
-                transaction,
-            )
-            .await,
-        );
-    }
-
-    let outcome = state
-        .store
-        .put_tmp_document_with_transaction(
+    gateway::gateway_reply(
+        markdown_write::put_tmp_block_document(
+            &state,
             &path,
             body.to_vec(),
             metadata,
-            &content_type,
-            quarry_storage::TmpTtl::Unchanged,
             precondition,
             origin_id,
             transaction,
         )
-        .await?;
-    json_with_etag(StatusCode::OK, &outcome, &outcome.version.id)
+        .await,
+    )
 }
 
 #[utoipa::path(
@@ -2558,6 +2547,7 @@ async fn tmp_document_blocks_openapi() {}
         (status = 400, body = gateway::BlockTransactionError),
         (status = 404, body = gateway::BlockTransactionError),
         (status = 412, body = gateway::BlockTransactionError),
+        (status = 413, body = gateway::BlockTransactionError),
         (status = 422, body = gateway::BlockTransactionError)
     )
 )]
@@ -4164,6 +4154,8 @@ impl From<QuarryError> for ApiError {
             QuarryError::Busy(_) => StatusCode::SERVICE_UNAVAILABLE,
             QuarryError::InvalidPath(_) => StatusCode::BAD_REQUEST,
             QuarryError::InvalidInput(_) => StatusCode::BAD_REQUEST,
+            QuarryError::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            QuarryError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         Self {
@@ -4225,6 +4217,7 @@ fn api_error_reason_code(status: StatusCode) -> &'static str {
         StatusCode::SERVICE_UNAVAILABLE => "busy",
         StatusCode::BAD_REQUEST => "bad_request",
         StatusCode::UNSUPPORTED_MEDIA_TYPE => "unsupported_media_type",
+        StatusCode::PAYLOAD_TOO_LARGE => "payload_too_large",
         _ => "internal_error",
     }
 }
@@ -4237,69 +4230,34 @@ fn content_type(headers: &HeaderMap) -> String {
         .to_string()
 }
 
-fn reject_ambiguous_extensionless_tmp_content_type(
-    headers: &HeaderMap,
-    path: &str,
-    content_type: &str,
-) -> Result<(), ApiError> {
-    if tmp_path_has_extension(path) {
-        return Ok(());
-    }
-    let has_valid_content_type = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .is_some();
-    if !has_valid_content_type || is_form_content_type(content_type) {
+fn require_tmp_markdown_content_type(headers: &HeaderMap) -> Result<String, ApiError> {
+    let Some(value) = headers.get(header::CONTENT_TYPE) else {
         return Err(ApiError {
             status: StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            message: "tmp Markdown writes require Content-Type: text/markdown".to_string(),
+            message: "tmp writes require Content-Type: text/markdown".to_string(),
         });
-    }
-    Ok(())
+    };
+    let content_type = value.to_str().map_err(|_| ApiError {
+        status: StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        message: "tmp writes require Content-Type: text/markdown".to_string(),
+    })?;
+    Ok(quarry_storage::normalize_tmp_markdown_content_type(content_type)?.to_string())
 }
 
-fn tmp_path_has_extension(path: &str) -> bool {
-    path.rsplit('/').next().is_some_and(|segment| {
-        let Some((_, extension)) = segment.rsplit_once('.') else {
-            return false;
-        };
-        !extension.is_empty()
-    })
-}
-
-fn is_form_content_type(content_type: &str) -> bool {
-    matches!(
-        content_type
-            .split(';')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
-        "application/x-www-form-urlencoded" | "multipart/form-data"
-    )
-}
-
-async fn reject_block_document_downgrade_for_tmp(
-    store: &QuarryStore,
+fn tmp_metadata_from_headers(
     headers: &HeaderMap,
-    path: &str,
-    incoming_kind: quarry_storage::DocumentKind,
-) -> Result<(), ApiError> {
-    if incoming_kind != quarry_storage::DocumentKind::RawDocument
-        || document_kind_change_allowed(headers)
-    {
-        return Ok(());
-    }
-    match store.head_tmp_document(path).await {
-        Ok(document) => reject_block_document_downgrade(
-            path,
-            &document.path,
-            &document.content_type,
-            incoming_kind,
-        ),
-        Err(QuarryError::NotFound(_)) => Ok(()),
-        Err(error) => Err(error.into()),
+    content_type: &str,
+) -> Result<JsonValue, ApiError> {
+    let mut metadata = metadata_from_headers(headers, content_type)?;
+    match &mut metadata {
+        JsonValue::Object(object) => {
+            object.insert(
+                "content_type".to_string(),
+                JsonValue::String(content_type.to_string()),
+            );
+            Ok(metadata)
+        }
+        _ => Ok(serde_json::json!({ "content_type": content_type })),
     }
 }
 

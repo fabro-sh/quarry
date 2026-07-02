@@ -378,7 +378,8 @@ export type BlockTransactionErrorCode =
   | 'UNSUPPORTED_MARKDOWN'
   | 'INVALID_TRANSACTION'
   | 'UNKNOWN_BLOCK_TYPE'
-  | 'UNSUPPORTED_BLOCK_DOCUMENT';
+  | 'UNSUPPORTED_BLOCK_DOCUMENT'
+  | 'PAYLOAD_TOO_LARGE';
 
 export interface BlockTransactionErrorPayload {
   code: BlockTransactionErrorCode;

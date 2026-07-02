@@ -39,6 +39,7 @@
 //! | `SUGGESTION_ALREADY_RESOLVED` | 422 | no |
 //! | `UNSUPPORTED_MARKDOWN` | 422 | no |
 //! | `UNSUPPORTED_BLOCK_DOCUMENT` | 422 | no |
+//! | `PAYLOAD_TOO_LARGE` | 413 | no |
 //! | `INVALID_TRANSACTION` | 400 | no |
 //!
 //! `retryable: true` means "refetch `/blocks` and resubmit with a fresh
@@ -189,6 +190,7 @@ pub(crate) enum GatewayErrorCode {
     InvalidTransaction,
     UnknownBlockType,
     UnsupportedBlockDocument,
+    PayloadTooLarge,
 }
 
 impl GatewayErrorCode {
@@ -204,6 +206,7 @@ impl GatewayErrorCode {
             Self::InvalidTransaction => "INVALID_TRANSACTION",
             Self::UnknownBlockType => "UNKNOWN_BLOCK_TYPE",
             Self::UnsupportedBlockDocument => "UNSUPPORTED_BLOCK_DOCUMENT",
+            Self::PayloadTooLarge => "PAYLOAD_TOO_LARGE",
         }
     }
 
@@ -216,6 +219,7 @@ impl GatewayErrorCode {
             Self::StaleBase | Self::BlockMoveConflict => StatusCode::PRECONDITION_FAILED,
             Self::BlockDeleted | Self::AnchorNotFound => StatusCode::NOT_FOUND,
             Self::InvalidTransaction | Self::UnknownBlockType => StatusCode::BAD_REQUEST,
+            Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::SuggestionInvalidated
             | Self::SuggestionAlreadyResolved
             | Self::UnsupportedMarkdown
@@ -297,6 +301,10 @@ impl From<QuarryError> for GatewayFailure {
             QuarryError::UnsupportedMarkdown(unsupported) => Self::Typed(GatewayError::new(
                 GatewayErrorCode::UnsupportedMarkdown,
                 unsupported.to_string(),
+            )),
+            QuarryError::PayloadTooLarge(message) => Self::Typed(GatewayError::new(
+                GatewayErrorCode::PayloadTooLarge,
+                message,
             )),
             other => Self::Api(other.into()),
         }

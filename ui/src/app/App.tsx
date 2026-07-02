@@ -969,7 +969,6 @@ function Workspace() {
     const initialContentType = 'text/markdown';
     const created = await createTmpDocument({
       content: initialContent,
-      contentType: initialContentType,
       metadata: { title: 'Untitled' },
     });
     const secret = created.outcome.document?.path ?? '';
@@ -1150,7 +1149,7 @@ function Workspace() {
         tmp ? getTmpDocument(path) : getDocument(library, path),
       ]);
       const saved = tmp
-        ? await putTmpDocument(path, text, latest.etag, 'text/markdown', browserMutationOptions())
+        ? await putTmpDocument(path, text, latest.etag, browserMutationOptions())
         : await putDocument(library, path, text, latest.etag, 'text/markdown', browserMutationOptions());
       setEtag(saved.etag || `"${saved.outcome.version.id}"`);
       setSelectedVersionId(null);

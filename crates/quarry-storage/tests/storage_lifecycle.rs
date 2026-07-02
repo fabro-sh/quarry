@@ -3,8 +3,8 @@ use quarry_core::{
 };
 use quarry_storage::{
     group_version_history, BlockMutationCommit, BlockMutationOutcome, BlockReviewItem,
-    BlockReviewKind, BlockReviewState, NewBlockReviewItem, QuarryStore, StoreConfig,
-    StoreEventKind, TmpTtl, TransactionMetadata,
+    BlockReviewKind, BlockReviewState, DocumentScopeRef, NewBlockReviewItem, QuarryStore,
+    StoreConfig, StoreEventKind, TmpTtl, TransactionMetadata,
 };
 use std::time::Duration;
 
@@ -2371,7 +2371,7 @@ async fn expired_documents_are_gone_and_excluded_from_live_queries() {
         .create_tmp_document(
             b"old".to_vec(),
             serde_json::json!({}),
-            "text/plain",
+            "text/markdown",
             TmpTtl::Default,
         )
         .await
@@ -2488,6 +2488,239 @@ async fn open_block_store(root: &std::path::Path) -> QuarryStore {
     })
     .await
     .unwrap()
+}
+
+#[tokio::test]
+async fn tmp_documents_accept_markdown_media_types_and_normalize_parameters() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+
+    let outcome = store
+        .create_tmp_document(
+            b"# Scratch\n".to_vec(),
+            serde_json::json!({}),
+            "text/x-markdown; charset=utf-8",
+            TmpTtl::Default,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.version.content_type, "text/x-markdown");
+    assert_eq!(outcome.version.metadata["content_type"], "text/x-markdown");
+    assert_eq!(
+        store
+            .get_tmp_document(&outcome.document.path)
+            .await
+            .unwrap()
+            .content,
+        b"# Scratch\n"
+    );
+
+    let scalar_metadata = store
+        .create_tmp_document(
+            b"Scalar metadata still gets content type.\n".to_vec(),
+            serde_json::json!("ignored for tmp documents"),
+            "application/markdown",
+            TmpTtl::Default,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        scalar_metadata.version.metadata,
+        serde_json::json!({"content_type": "application/markdown"})
+    );
+}
+
+#[tokio::test]
+async fn tmp_documents_reject_non_markdown_media_types_on_create_and_update() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+
+    for content_type in ["text/plain", "application/json", "image/png"] {
+        let error = store
+            .create_tmp_document(
+                b"not markdown".to_vec(),
+                serde_json::json!({}),
+                content_type,
+                TmpTtl::Default,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, QuarryError::UnsupportedMediaType(_)),
+            "{content_type} should be rejected, got {error:?}"
+        );
+    }
+
+    let valid = store
+        .create_tmp_document(
+            b"still markdown".to_vec(),
+            serde_json::json!({}),
+            "text/markdown",
+            TmpTtl::Default,
+        )
+        .await
+        .unwrap();
+
+    for content_type in ["text/plain", "application/json", "image/png"] {
+        let error = store
+            .put_tmp_document(
+                &valid.document.path,
+                b"replacement".to_vec(),
+                serde_json::json!({}),
+                content_type,
+                TmpTtl::Unchanged,
+                WritePrecondition::IfMatch(valid.version.id.clone()),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, QuarryError::UnsupportedMediaType(_)),
+            "{content_type} should be rejected, got {error:?}"
+        );
+    }
+
+    let head = store.head_tmp_document(&valid.document.path).await.unwrap();
+    assert_eq!(head.head_version_id, valid.version.id);
+}
+
+#[tokio::test]
+async fn tmp_documents_reject_invalid_utf8_on_create_and_update() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+
+    let error = store
+        .create_tmp_document(
+            vec![0xff],
+            serde_json::json!({}),
+            "text/markdown",
+            TmpTtl::Default,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, QuarryError::InvalidInput(_)));
+
+    let valid = store
+        .create_tmp_document(
+            b"valid markdown".to_vec(),
+            serde_json::json!({}),
+            "text/markdown",
+            TmpTtl::Default,
+        )
+        .await
+        .unwrap();
+    let error = store
+        .put_tmp_document(
+            &valid.document.path,
+            vec![0xff],
+            serde_json::json!({}),
+            "text/markdown",
+            TmpTtl::Unchanged,
+            WritePrecondition::IfMatch(valid.version.id.clone()),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, QuarryError::InvalidInput(_)));
+
+    let head = store.head_tmp_document(&valid.document.path).await.unwrap();
+    assert_eq!(head.head_version_id, valid.version.id);
+}
+
+#[tokio::test]
+async fn tmp_documents_enforce_one_mib_canonical_markdown_limit() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+
+    let exact = vec![b'a'; quarry_storage::TMP_DOCUMENT_MARKDOWN_MAX_BYTES];
+    let outcome = store
+        .create_tmp_document(
+            exact,
+            serde_json::json!({}),
+            "text/markdown",
+            TmpTtl::Default,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome.version.byte_size,
+        quarry_storage::TMP_DOCUMENT_MARKDOWN_MAX_BYTES as u64
+    );
+
+    let too_large = vec![b'a'; quarry_storage::TMP_DOCUMENT_MARKDOWN_MAX_BYTES + 1];
+    let error = store
+        .create_tmp_document(
+            too_large,
+            serde_json::json!({}),
+            "text/markdown",
+            TmpTtl::Default,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, QuarryError::PayloadTooLarge(_)));
+}
+
+#[tokio::test]
+async fn tmp_block_mutation_rejects_oversized_normalized_markdown_without_moving_head() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_block_store(root.path()).await;
+    let created = store
+        .create_tmp_document(
+            b"Original.\n".to_vec(),
+            serde_json::json!({}),
+            "text/markdown",
+            TmpTtl::Default,
+        )
+        .await
+        .unwrap();
+    let secret = created.document.path.clone();
+    let imported = store
+        .import_tmp_block_document(
+            &secret,
+            "Original.\n",
+            serde_json::json!({}),
+            "text/markdown",
+            WritePrecondition::IfMatch(created.version.id.clone()),
+        )
+        .await
+        .unwrap();
+    let state = store
+        .block_mutation_state_for_scope(&DocumentScopeRef::Tmp, &secret, "oversized-tx")
+        .await
+        .unwrap();
+    let oversized = "a".repeat(quarry_storage::TMP_DOCUMENT_MARKDOWN_MAX_BYTES + 1);
+
+    let error = store
+        .commit_block_mutation_for_scope(
+            &DocumentScopeRef::Tmp,
+            BlockMutationCommit {
+                document_id: state.document_id.clone(),
+                expected_head_version_id: state.head_version_id.clone(),
+                client_tx_id: "oversized-tx".to_string(),
+                actor_kind: "agent".to_string(),
+                actor_id: None,
+                transaction_actor: None,
+                transaction_message: None,
+                transaction_provenance: None,
+                origin_id: None,
+                source: DocumentSource::Rest,
+                recorded_ops: serde_json::json!({ "ops": [] }),
+                metadata: state.metadata.clone(),
+                content_type: state.content_type.clone(),
+                rows: state.rows.clone(),
+                review_items: state.review_items.clone(),
+                normalized_markdown: oversized,
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, QuarryError::PayloadTooLarge(_)));
+    let head = store.head_tmp_document(&secret).await.unwrap();
+    assert_eq!(head.head_version_id, imported.version.id);
+    assert_eq!(
+        store.load_block_tree(&state.document_id).await.unwrap(),
+        state.rows
+    );
 }
 
 const BLOCK_FIXTURE: &str = "\

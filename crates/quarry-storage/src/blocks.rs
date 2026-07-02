@@ -524,7 +524,15 @@ impl QuarryStore {
             DocumentScopeRef::Library { .. } => normalize_path(path)?,
             DocumentScopeRef::Tmp => TmpDocumentSecret::parse(path)?.as_str().to_string(),
         };
-        if document_kind(&path, content_type) == DocumentKind::RawDocument {
+        let content_type = match scope {
+            DocumentScopeRef::Library { .. } => content_type.to_string(),
+            DocumentScopeRef::Tmp => normalize_tmp_markdown_content_type(content_type)?.to_string(),
+        };
+        let metadata = match scope {
+            DocumentScopeRef::Library { .. } => metadata,
+            DocumentScopeRef::Tmp => tmp_metadata_with_content_type(metadata, &content_type),
+        };
+        if document_kind(&path, &content_type) == DocumentKind::RawDocument {
             return Err(QuarryError::Unsupported(format!(
                 "cannot import {path} ({content_type}) as a block document"
             )));
@@ -538,6 +546,9 @@ impl QuarryStore {
             render_markdown_frontmatter(&merged_metadata)?,
             block_rows_to_markdown(&rows)?
         );
+        if matches!(scope, DocumentScopeRef::Tmp) {
+            validate_tmp_markdown_text(&normalized)?;
+        }
 
         let _operation_guard = self.normal_write_gate().await;
         let _guard = self.acquire_write_lock().await;
@@ -598,7 +609,7 @@ impl QuarryStore {
                     &tx.id,
                     normalized.into_bytes(),
                     metadata,
-                    content_type,
+                    &content_type,
                 )
                 .await?;
             insert_change_conn(
@@ -1070,6 +1081,14 @@ impl QuarryStore {
         scope: &DocumentScopeRef,
         commit: BlockMutationCommit,
     ) -> Result<BlockMutationOutcome> {
+        let mut commit = commit;
+        if matches!(scope, DocumentScopeRef::Tmp) {
+            let content_type =
+                normalize_tmp_markdown_content_type(&commit.content_type)?.to_string();
+            validate_tmp_markdown_text(&commit.normalized_markdown)?;
+            commit.metadata = tmp_metadata_with_content_type(commit.metadata, &content_type);
+            commit.content_type = content_type;
+        }
         validate_review_items_against_rows(&commit.rows, &commit.review_items)?;
         let _operation_guard = self.normal_write_gate().await;
         let _guard = self.acquire_write_lock().await;

@@ -114,7 +114,7 @@ async fn request_tracing_redacts_tmp_capability_paths_without_redacting_library_
             "/v1/tmp/documents",
             serde_json::json!({
                 "content": "tmp presence",
-                "content_type": "text/plain"
+                "content_type": "text/markdown"
             }),
         ))
         .await
@@ -681,7 +681,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
             "/v1/tmp/documents",
             serde_json::json!({
                 "content": "draft one",
-                "content_type": "text/plain",
+                "content_type": "text/markdown",
                 "metadata": {"title": "Scratch"}
             }),
         ))
@@ -772,7 +772,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
                 .method(Method::PUT)
                 .uri(format!("/v1/tmp/documents/{secret}"))
                 .header(header::IF_MATCH, etag)
-                .header(header::CONTENT_TYPE, "text/plain")
+                .header(header::CONTENT_TYPE, "text/markdown")
                 .body(Body::from("draft two"))
                 .unwrap(),
         )
@@ -893,7 +893,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
     assert_eq!(response.headers()["x-quarry-document-id"], document_id);
     assert_eq!(
         to_bytes(response.into_body(), usize::MAX).await.unwrap(),
-        "draft two"
+        "draft two\n"
     );
 
     let response = app
@@ -1347,7 +1347,7 @@ async fn tmp_agent_presence_omits_capability_path() {
             "/v1/tmp/documents",
             serde_json::json!({
                 "content": "tmp presence",
-                "content_type": "text/plain"
+                "content_type": "text/markdown"
             }),
         ))
         .await
@@ -1748,7 +1748,7 @@ async fn tmp_document_read_with_agent_header_auto_joins_presence() {
             "/v1/tmp/documents",
             serde_json::json!({
                 "content": "tmp presence",
-                "content_type": "text/plain"
+                "content_type": "text/markdown"
             }),
         ))
         .await
@@ -8099,8 +8099,8 @@ async fn tmp_session_and_markdown_write_logs_do_not_emit_capability_secret() {
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn tmp_put_rejects_ambiguous_content_type_for_extensionless_paths() {
-    let (_root, app, _store) = block_test_app().await;
+async fn tmp_put_requires_markdown_content_type() {
+    let (_root, app, store) = block_test_app().await;
     let secret = "0123456789abcdef0123456789abcdef";
 
     let response = app
@@ -8120,7 +8120,7 @@ async fn tmp_put_rejects_ambiguous_content_type_for_extensionless_paths() {
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert_eq!(
         body["error"],
-        "tmp Markdown writes require Content-Type: text/markdown"
+        "tmp writes require Content-Type: text/markdown"
     );
 
     let response = app
@@ -8141,7 +8141,7 @@ async fn tmp_put_rejects_ambiguous_content_type_for_extensionless_paths() {
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert_eq!(
         body["error"],
-        "tmp Markdown writes require Content-Type: text/markdown"
+        "unsupported media type: tmp documents are Markdown-only; unsupported content type application/x-www-form-urlencoded"
     );
 
     let response = app
@@ -8150,21 +8150,114 @@ async fn tmp_put_rejects_ambiguous_content_type_for_extensionless_paths() {
             Request::builder()
                 .method(Method::PUT)
                 .uri(format!("/v1/tmp/documents/{secret}"))
-                .header(header::CONTENT_TYPE, "text/markdown")
+                .header(header::CONTENT_TYPE, "application/json")
                 .header(header::IF_NONE_MATCH, "*")
                 .body(Body::from("# Draft\n"))
                 .unwrap(),
         )
         .await
         .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(
+        body["error"],
+        "unsupported media type: tmp documents are Markdown-only; unsupported content type application/json"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/tmp/documents/{secret}"))
+                .header(header::CONTENT_TYPE, "application/markdown; charset=utf-8")
+                .header(header::IF_NONE_MATCH, "*")
+                .header(
+                    "x-quarry-metadata",
+                    r#"{"content_type":"text/plain","title":"kept"}"#,
+                )
+                .body(Body::from("# Draft\n"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    let document = store.get_tmp_document(secret).await.unwrap();
+    assert_eq!(document.version.content_type, "application/markdown");
+    assert_eq!(
+        document.version.metadata,
+        serde_json::json!({"content_type": "application/markdown", "title": "kept"})
+    );
     let blocks = get_tmp_block_tree(&app, secret).await;
     assert_eq!(blocks["blocks"][0]["text"], "Draft");
 }
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn tmp_markdown_put_rejects_raw_downgrade_without_opt_in() {
+async fn tmp_create_and_put_reject_oversized_markdown() {
+    let (_root, app, _store) = block_test_app().await;
+    let oversized = "a".repeat(quarry_storage::TMP_DOCUMENT_MARKDOWN_MAX_BYTES + 1);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/tmp/documents",
+            serde_json::json!({
+                "content": oversized,
+                "content_type": "text/markdown",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/tmp/documents",
+            serde_json::json!({
+                "content": "# Draft\n",
+                "content_type": "text/markdown",
+                "expires_at": "2099-01-01T00:00:00Z"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let etag = response.headers()[header::ETAG]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let created = response_json(response).await;
+    let secret = created["document"]["path"].as_str().unwrap().to_string();
+
+    let oversized = "a".repeat(quarry_storage::TMP_DOCUMENT_MARKDOWN_MAX_BYTES + 1);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/tmp/documents/{secret}"))
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header(header::IF_MATCH, etag)
+                .body(Body::from(oversized))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(body["code"], "PAYLOAD_TOO_LARGE");
+    assert_eq!(body["retryable"], false);
+}
+
+#[cfg(feature = "tmp-documents")]
+#[tokio::test]
+async fn tmp_markdown_put_rejects_non_markdown_content_type() {
     let (_root, app, store) = block_test_app().await;
     let response = app
         .clone()
@@ -8202,11 +8295,11 @@ async fn tmp_markdown_put_rejects_raw_downgrade_without_opt_in() {
         .unwrap();
     let status = response.status();
     let body = response_json(response).await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert!(body["error"]
-        .as_str()
-        .unwrap()
-        .contains("Markdown block document"));
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(
+        body["error"],
+        "unsupported media type: tmp documents are Markdown-only; unsupported content type text/plain"
+    );
 
     let document = store.get_tmp_document(&secret).await.unwrap();
     assert_eq!(document.version.content_type, "text/markdown");
@@ -8239,30 +8332,25 @@ async fn tmp_markdown_put_rejects_raw_downgrade_without_opt_in() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let document = store.get_tmp_document(&secret).await.unwrap();
-    assert_eq!(document.version.content_type, "text/plain");
-    assert_eq!(document.content, b"raw body".to_vec());
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!("/v1/tmp/documents/{secret}/blocks"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
     let status = response.status();
     let body = response_json(response).await;
-    assert_typed_error(status, &body, "UNSUPPORTED_BLOCK_DOCUMENT", false);
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(
+        body["error"],
+        "unsupported media type: tmp documents are Markdown-only; unsupported content type text/plain"
+    );
+    let document = store.get_tmp_document(&secret).await.unwrap();
+    assert_eq!(document.version.content_type, "text/markdown");
+    assert_eq!(
+        String::from_utf8(document.content).unwrap(),
+        "# Draft\n\nBody.\n"
+    );
 }
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn tmp_raw_text_put_bypasses_the_block_model() {
-    let (_root, app, store) = block_test_app().await;
+async fn tmp_create_rejects_non_markdown_content_type() {
+    let (_root, app, _store) = block_test_app().await;
     let response = app
         .clone()
         .oneshot(json_request(
@@ -8276,34 +8364,12 @@ async fn tmp_raw_text_put_bypasses_the_block_model() {
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let etag = response.headers()[header::ETAG]
-        .to_str()
-        .unwrap()
-        .to_string();
-    let created = response_json(response).await;
-    let secret = created["document"]["path"].as_str().unwrap().to_string();
-
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::PUT)
-                .uri(format!("/v1/tmp/documents/{secret}"))
-                .header(header::CONTENT_TYPE, "text/plain")
-                .header(header::IF_MATCH, etag)
-                .body(Body::from("draft two"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let document = store.get_tmp_document(&secret).await.unwrap();
-    assert_eq!(document.content, b"draft two".to_vec());
+    let status = response.status();
+    let body = response_json(response).await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert_eq!(
-        store.load_block_tree(&document.id).await.unwrap(),
-        Vec::<quarry_collab_codec::BlockRow>::new()
+        body["error"],
+        "unsupported media type: tmp documents are Markdown-only; unsupported content type text/plain"
     );
 }
 

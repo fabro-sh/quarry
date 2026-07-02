@@ -35,11 +35,26 @@ use uuid::Uuid;
 
 const TMP_TRANSACTION_LIBRARY_ID: &str = "__tmp__";
 pub const TMP_DOCUMENT_SECRET_LEN: usize = 32;
+pub const TMP_DOCUMENT_MARKDOWN_MAX_BYTES: usize = 1024 * 1024;
+pub const TMP_DOCUMENT_DEFAULT_CONTENT_TYPE: &str = "text/markdown";
 
 /// True when `value` has the exact shape of a tmp document capability secret.
 pub fn is_tmp_document_secret(value: &str) -> bool {
     value.len() == TMP_DOCUMENT_SECRET_LEN
         && value.chars().all(|character| character.is_ascii_hexdigit())
+}
+
+/// Returns the canonical Markdown media type for tmp-document writes.
+///
+/// Parameters such as `; charset=utf-8` are tolerated, but tmp documents are
+/// intentionally Markdown-only. Library documents keep the broader raw/binary
+/// content path.
+pub fn normalize_tmp_markdown_content_type(content_type: &str) -> Result<&'static str> {
+    normalize_markdown_content_type(content_type).ok_or_else(|| {
+        QuarryError::UnsupportedMediaType(format!(
+            "tmp documents are Markdown-only; unsupported content type {content_type}"
+        ))
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1085,6 +1100,8 @@ impl QuarryStore {
     ) -> Result<WriteOutcome> {
         let secret = TmpDocumentSecret::parse(path)?;
         let path = secret.as_str().to_string();
+        let (content, metadata, content_type) =
+            validate_tmp_markdown_write(content, metadata, content_type)?;
         let _operation_guard = self.normal_write_gate().await;
         let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
@@ -1115,7 +1132,7 @@ impl QuarryStore {
             let (doc_id, old_version_id) =
                 ensure_tmp_document_conn(&conn, &path, &expires_at, &now_timestamp()).await?;
             let version = self
-                .insert_version_conn(&conn, &doc_id, &tx.id, content, metadata, content_type)
+                .insert_version_conn(&conn, &doc_id, &tx.id, content, metadata, &content_type)
                 .await?;
             insert_change_conn(
                 &conn,
@@ -6060,6 +6077,47 @@ pub fn merge_json(target: &mut JsonValue, patch: JsonValue) {
     }
 }
 
+fn validate_tmp_markdown_bytes(content: &[u8]) -> Result<()> {
+    if content.len() > TMP_DOCUMENT_MARKDOWN_MAX_BYTES {
+        return Err(QuarryError::PayloadTooLarge(format!(
+            "tmp Markdown documents are limited to {} bytes",
+            TMP_DOCUMENT_MARKDOWN_MAX_BYTES
+        )));
+    }
+    std::str::from_utf8(content).map_err(|_| {
+        QuarryError::InvalidInput("tmp Markdown documents must be valid UTF-8".to_string())
+    })?;
+    Ok(())
+}
+
+fn validate_tmp_markdown_text(markdown: &str) -> Result<()> {
+    validate_tmp_markdown_bytes(markdown.as_bytes())
+}
+
+fn tmp_metadata_with_content_type(mut metadata: JsonValue, content_type: &str) -> JsonValue {
+    match &mut metadata {
+        JsonValue::Object(object) => {
+            object.insert(
+                "content_type".to_string(),
+                JsonValue::String(content_type.to_string()),
+            );
+            metadata
+        }
+        _ => serde_json::json!({ "content_type": content_type }),
+    }
+}
+
+fn validate_tmp_markdown_write(
+    content: Vec<u8>,
+    metadata: JsonValue,
+    content_type: &str,
+) -> Result<(Vec<u8>, JsonValue, String)> {
+    let content_type = normalize_tmp_markdown_content_type(content_type)?.to_string();
+    validate_tmp_markdown_bytes(&content)?;
+    let metadata = tmp_metadata_with_content_type(metadata, &content_type);
+    Ok((content, metadata, content_type))
+}
+
 fn merge_markdown_frontmatter_metadata(
     content: &[u8],
     metadata: JsonValue,
@@ -6115,11 +6173,25 @@ fn markdown_frontmatter_close(text: &str) -> Option<(usize, usize)> {
         .min_by_key(|(index, _)| *index)
 }
 
+fn normalize_markdown_content_type(content_type: &str) -> Option<&'static str> {
+    match content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "text/markdown" => Some("text/markdown"),
+        "text/x-markdown" => Some("text/x-markdown"),
+        "application/markdown" => Some("application/markdown"),
+        "application/x-markdown" => Some("application/x-markdown"),
+        _ => None,
+    }
+}
+
 fn is_markdown_content_type(content_type: &str) -> bool {
-    matches!(
-        content_type.split(';').next().unwrap_or("").trim(),
-        "text/markdown" | "text/x-markdown" | "application/markdown" | "application/x-markdown"
-    )
+    normalize_markdown_content_type(content_type).is_some()
 }
 
 fn normalize_collab_invite_role(role: &str) -> Result<String> {

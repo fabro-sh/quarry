@@ -24,6 +24,10 @@ pub enum QuarryError {
     Conflict(String),
     #[error("storage busy: {0}")]
     Busy(String),
+    #[error("unsupported media type: {0}")]
+    UnsupportedMediaType(String),
+    #[error("payload too large: {0}")]
+    PayloadTooLarge(String),
     #[error("unsupported: {0}")]
     Unsupported(String),
     #[error("unsupported markdown: {0}")]

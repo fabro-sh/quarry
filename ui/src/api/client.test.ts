@@ -253,7 +253,7 @@ describe('Quarry API client', () => {
     );
     vi.stubGlobal('fetch', fetch);
 
-    await createTmpDocument({ content: '# New', contentType: 'text/markdown' });
+    await createTmpDocument({ content: '# New' });
 
     expect(fetch).toHaveBeenCalledWith(
       '/v1/tmp/documents',
@@ -277,7 +277,7 @@ describe('Quarry API client', () => {
         new Response('tmp body', {
           headers: {
             ETag: '"v1"',
-            'content-type': 'text/plain',
+            'content-type': 'text/markdown',
             'x-quarry-document-id': 'tmp-1',
             'x-quarry-expires-at': '2099-01-01T00:00:00Z',
           },
@@ -298,7 +298,7 @@ describe('Quarry API client', () => {
       expiresAt: '2099-01-01T00:00:00Z',
       path: secret,
     });
-    await putTmpDocument(secret, 'next', '"v1"', 'text/plain');
+    await putTmpDocument(secret, 'next', '"v1"');
 
     expect(fetch).toHaveBeenNthCalledWith(
       1,
@@ -309,7 +309,7 @@ describe('Quarry API client', () => {
       '/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e',
       expect.objectContaining({
         method: 'PUT',
-        headers: expect.objectContaining({ 'If-Match': '"v1"', 'content-type': 'text/plain' }),
+        headers: expect.objectContaining({ 'If-Match': '"v1"', 'content-type': 'text/markdown' }),
         body: 'next',
       })
     );

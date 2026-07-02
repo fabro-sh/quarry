@@ -479,7 +479,7 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
             "/v1/tmp/documents",
             serde_json::json!({
                 "content": "draft one",
-                "content_type": "text/plain",
+                "content_type": "text/markdown",
                 "metadata": {"title": "Scratch"}
             }),
         ))
@@ -537,7 +537,7 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
                 .method(Method::PUT)
                 .uri(format!("/v1/tmp/documents/{secret}"))
                 .header(header::IF_MATCH, etag)
-                .header(header::CONTENT_TYPE, "text/plain")
+                .header(header::CONTENT_TYPE, "text/markdown")
                 .body(Body::from("draft two"))
                 .unwrap(),
         )

@@ -71,6 +71,9 @@ Tmp Markdown documents support the same block reads, semantic transactions,
 comments, suggestions, presence, and document event streams as library
 Markdown documents. They remain temporary documents: they do not have library search, graph, Git,
 backlinks, promote from library routes, or library pending-event polling.
+Tmp documents are Markdown-only scratch documents. Use `Content-Type:
+text/markdown` for writes; non-Markdown media types are rejected with 415, and
+canonical UTF-8 Markdown larger than 1 MiB is rejected with 413.
 
 ## Auth And Locator Tokens
 
@@ -316,9 +319,9 @@ curl -sS -X PUT "$DOC" \
 Semantics:
 
 - `Content-Type: text/markdown` is required for whole-document Markdown
-  writes. Do not rely on client defaults: extensionless tmp document URLs
-  reject missing `Content-Type` and form submission media types such as
-  `application/x-www-form-urlencoded` with 415.
+  writes. Do not rely on client defaults. Tmp document URLs require a Markdown
+  media type, reject missing or non-Markdown `Content-Type` with 415, and
+  reject canonical UTF-8 Markdown larger than 1 MiB with 413.
 - `If-Match` selects the MERGE BASE, not a strict precondition: the write is
   diff3-merged (`base`, your file, current canonical) so edits that landed
   after your read survive instead of being overwritten. A known-but-stale
@@ -330,12 +333,14 @@ Semantics:
 - True merge conflicts never fail the write: each one commits atomically as
   a conflict artifact and surfaces in `GET $DOC/review` under `conflicts`.
 - A byte-identical body is a no-op (no new version).
-- Quarry refuses to change an existing Markdown block document into a raw
+- For library documents, Quarry refuses to change an existing Markdown block document into a raw
   document unless the request explicitly opts in with
   `X-Quarry-Allow-Document-Kind-Change: true`. Do not send that header for
   normal Markdown authoring or editing.
+- Tmp documents cannot be changed into raw documents.
 - Markdown content failures include CriticMarkup (typed
-  `UNSUPPORTED_MARKDOWN`), invalid frontmatter YAML, or non-UTF-8 bytes.
+  `UNSUPPORTED_MARKDOWN`), invalid frontmatter YAML, non-UTF-8 bytes, or tmp
+  content over the 1 MiB Markdown limit.
 
 The response carries the new version; live browser sessions receive the merge
 as a collaborator edit, same as transactions.
@@ -462,6 +467,7 @@ stated can never succeed — rebuild the request instead of retrying it.
 | `SUGGESTION_ALREADY_RESOLVED` | 422 | no | accept/reject raced a prior decision |
 | `UNSUPPORTED_MARKDOWN` | 422 | no | content the codec refuses (e.g. CriticMarkup) |
 | `UNSUPPORTED_BLOCK_DOCUMENT` | 422 | no | block APIs on a non-Markdown document |
+| `PAYLOAD_TOO_LARGE` | 413 | no | tmp Markdown content exceeds 1 MiB |
 | `INVALID_TRANSACTION` | 400 | no | malformed envelope or op |
 | `UNKNOWN_BLOCK_TYPE` | 400 | no | a `block_type` outside the vocabulary; the message lists valid types |
 

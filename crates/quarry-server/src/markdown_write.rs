@@ -925,6 +925,9 @@ fn failure_to_quarry(failure: GatewayFailure) -> QuarryError {
             GatewayErrorCode::UnsupportedMarkdown => QuarryError::UnsupportedMarkdown(
                 quarry_collab_codec::Unsupported::new(error.message().to_string()),
             ),
+            GatewayErrorCode::PayloadTooLarge => {
+                QuarryError::PayloadTooLarge(error.message().to_string())
+            }
             code => QuarryError::InvalidInput(format!("{}: {}", code.as_str(), error.message())),
         },
         GatewayFailure::Api(error) => match error.status() {
@@ -934,6 +937,12 @@ fn failure_to_quarry(failure: GatewayFailure) -> QuarryError {
             }
             StatusCode::CONFLICT => QuarryError::Conflict(error.message().to_string()),
             StatusCode::SERVICE_UNAVAILABLE => QuarryError::Busy(error.message().to_string()),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE => {
+                QuarryError::UnsupportedMediaType(error.message().to_string())
+            }
+            StatusCode::PAYLOAD_TOO_LARGE => {
+                QuarryError::PayloadTooLarge(error.message().to_string())
+            }
             StatusCode::BAD_REQUEST => QuarryError::InvalidInput(error.message().to_string()),
             _ => QuarryError::Storage(error.message().to_string()),
         },
