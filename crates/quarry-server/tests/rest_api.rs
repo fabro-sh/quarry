@@ -8083,6 +8083,71 @@ async fn tmp_session_and_markdown_write_logs_do_not_emit_capability_secret() {
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
+async fn tmp_put_rejects_ambiguous_content_type_for_extensionless_paths() {
+    let (_root, app, _store) = block_test_app().await;
+    let secret = "0123456789abcdef0123456789abcdef";
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/tmp/documents/{secret}"))
+                .header(header::IF_NONE_MATCH, "*")
+                .body(Body::from("# Draft\n"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(
+        body["error"],
+        "tmp Markdown writes require Content-Type: text/markdown"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/tmp/documents/{secret}"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::IF_NONE_MATCH, "*")
+                .body(Body::from("# Draft\n"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(
+        body["error"],
+        "tmp Markdown writes require Content-Type: text/markdown"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/tmp/documents/{secret}"))
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header(header::IF_NONE_MATCH, "*")
+                .body(Body::from("# Draft\n"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let blocks = get_tmp_block_tree(&app, secret).await;
+    assert_eq!(blocks["blocks"][0]["text"], "Draft");
+}
+
+#[cfg(feature = "tmp-documents")]
+#[tokio::test]
 async fn tmp_markdown_put_rejects_raw_downgrade_without_opt_in() {
     let (_root, app, store) = block_test_app().await;
     let response = app

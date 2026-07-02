@@ -2337,6 +2337,7 @@ async fn put_tmp_document(
 ) -> Result<Response, ApiError> {
     touch_agent_presence(&state, &headers, None, &path).await?;
     let content_type = content_type(&headers);
+    reject_ambiguous_extensionless_tmp_content_type(&headers, &path, &content_type)?;
     let metadata = metadata_from_headers(&headers, &content_type)?;
     let precondition = precondition_from_headers(&headers)?;
     let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
@@ -4165,6 +4166,7 @@ fn api_error_reason_code(status: StatusCode) -> &'static str {
         StatusCode::CONFLICT => "conflict",
         StatusCode::SERVICE_UNAVAILABLE => "busy",
         StatusCode::BAD_REQUEST => "bad_request",
+        StatusCode::UNSUPPORTED_MEDIA_TYPE => "unsupported_media_type",
         _ => "internal_error",
     }
 }
@@ -4175,6 +4177,49 @@ fn content_type(headers: &HeaderMap) -> String {
         .and_then(|value| value.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_string()
+}
+
+fn reject_ambiguous_extensionless_tmp_content_type(
+    headers: &HeaderMap,
+    path: &str,
+    content_type: &str,
+) -> Result<(), ApiError> {
+    if tmp_path_has_extension(path) {
+        return Ok(());
+    }
+    let has_valid_content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some();
+    if !has_valid_content_type || is_form_content_type(content_type) {
+        return Err(ApiError {
+            status: StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            message: "tmp Markdown writes require Content-Type: text/markdown".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn tmp_path_has_extension(path: &str) -> bool {
+    path.rsplit('/').next().is_some_and(|segment| {
+        let Some((_, extension)) = segment.rsplit_once('.') else {
+            return false;
+        };
+        !extension.is_empty()
+    })
+}
+
+fn is_form_content_type(content_type: &str) -> bool {
+    matches!(
+        content_type
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "application/x-www-form-urlencoded" | "multipart/form-data"
+    )
 }
 
 async fn reject_block_document_downgrade_for_tmp(
