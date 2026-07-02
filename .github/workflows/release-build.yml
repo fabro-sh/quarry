@@ -62,7 +62,7 @@ jobs:
         run: |
           mkdir -p "dist/quarry-$TARGET"
           cp "target/$TARGET/release/quarry" "dist/quarry-$TARGET/"
-          cp README.md "dist/quarry-$TARGET/"
+          cp README.md LICENSE "dist/quarry-$TARGET/"
           cp -R docs "dist/quarry-$TARGET/"
           tar -C dist -czf "dist/quarry-$TARGET.tar.gz" "quarry-$TARGET"
           (cd dist && shasum -a 256 "quarry-$TARGET.tar.gz" > "quarry-$TARGET.tar.gz.sha256")

@@ -78,6 +78,6 @@ Quarry is young and moving fast. It is currently single-user and local-only: the
 - [Operations](docs/operations/) — install, Git sync, FUSE, conflicts, backup/restore
 - Agent-facing docs — served at `/agent-docs` by every Quarry server
 
-License: MIT
+License: [MIT](LICENSE)
 
 If Quarry looks useful to you, a ⭐ helps other people find it.
