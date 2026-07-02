@@ -2325,9 +2325,38 @@ async fn head_tmp_document(
 #[utoipa::path(
     put,
     path = "/v1/tmp/documents/{secret}",
-    params(("secret" = String, Path)),
-    request_body = String,
-    responses((status = 200, body = WriteOutcome), (status = 412, body = ErrorResponse))
+    params(
+        ("secret" = String, Path),
+        (
+            "If-Match" = Option<String>,
+            Header,
+            description = "Optional ETag/document clock used as the merge base for Markdown writes"
+        ),
+        (
+            "If-None-Match" = Option<String>,
+            Header,
+            description = "Use * to create a new tmp document at this capability path"
+        ),
+        (
+            "X-Quarry-Allow-Document-Kind-Change" = Option<String>,
+            Header,
+            description = "Set to true to intentionally change an existing Markdown block document into a raw document"
+        )
+    ),
+    request_body(
+        description = "Whole-document Markdown writes require Content-Type: text/markdown. Extensionless tmp documents reject missing Content-Type and form submission media types such as application/x-www-form-urlencoded.",
+        content(
+            (String = "text/markdown"),
+            (String = "text/plain"),
+            (String = "application/octet-stream")
+        )
+    ),
+    responses(
+        (status = 200, body = WriteOutcome),
+        (status = 409, description = "Existing Markdown document would be changed into a raw document without X-Quarry-Allow-Document-Kind-Change: true", body = ErrorResponse),
+        (status = 412, body = ErrorResponse),
+        (status = 415, description = "Extensionless tmp write omitted Content-Type or used a form submission media type", body = ErrorResponse)
+    )
 )]
 async fn put_tmp_document(
     State(state): State<AppState>,
@@ -2957,9 +2986,38 @@ async fn head_document(
 #[utoipa::path(
     put,
     path = "/v1/libraries/{library}/documents/{path}",
-    params(("library" = String, Path), ("path" = String, Path)),
-    request_body = String,
-    responses((status = 200, body = WriteOutcome), (status = 412, body = ErrorResponse))
+    params(
+        ("library" = String, Path),
+        ("path" = String, Path),
+        (
+            "If-Match" = Option<String>,
+            Header,
+            description = "Optional ETag/document clock used as the merge base for Markdown writes"
+        ),
+        (
+            "If-None-Match" = Option<String>,
+            Header,
+            description = "Use * to create a new document"
+        ),
+        (
+            "X-Quarry-Allow-Document-Kind-Change" = Option<String>,
+            Header,
+            description = "Set to true to intentionally change an existing Markdown block document into a raw document"
+        )
+    ),
+    request_body(
+        description = "Whole-document Markdown writes require Content-Type: text/markdown. Raw writes must use an explicit raw media type; existing Markdown documents reject raw kind changes unless X-Quarry-Allow-Document-Kind-Change: true is sent.",
+        content(
+            (String = "text/markdown"),
+            (String = "text/plain"),
+            (String = "application/octet-stream")
+        )
+    ),
+    responses(
+        (status = 200, body = WriteOutcome),
+        (status = 409, description = "Existing Markdown document would be changed into a raw document without X-Quarry-Allow-Document-Kind-Change: true", body = ErrorResponse),
+        (status = 412, body = ErrorResponse)
+    )
 )]
 async fn put_document(
     State(state): State<AppState>,

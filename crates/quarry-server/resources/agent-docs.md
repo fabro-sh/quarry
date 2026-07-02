@@ -315,6 +315,10 @@ curl -sS -X PUT "$DOC" \
 
 Semantics:
 
+- `Content-Type: text/markdown` is required for whole-document Markdown
+  writes. Do not rely on client defaults: extensionless tmp document URLs
+  reject missing `Content-Type` and form submission media types such as
+  `application/x-www-form-urlencoded` with 415.
 - `If-Match` selects the MERGE BASE, not a strict precondition: the write is
   diff3-merged (`base`, your file, current canonical) so edits that landed
   after your read survive instead of being overwritten. A known-but-stale
@@ -326,7 +330,11 @@ Semantics:
 - True merge conflicts never fail the write: each one commits atomically as
   a conflict artifact and surfaces in `GET $DOC/review` under `conflicts`.
 - A byte-identical body is a no-op (no new version).
-- Write failures are content errors only: CriticMarkup (typed
+- Quarry refuses to change an existing Markdown block document into a raw
+  document unless the request explicitly opts in with
+  `X-Quarry-Allow-Document-Kind-Change: true`. Do not send that header for
+  normal Markdown authoring or editing.
+- Markdown content failures include CriticMarkup (typed
   `UNSUPPORTED_MARKDOWN`), invalid frontmatter YAML, or non-UTF-8 bytes.
 
 The response carries the new version; live browser sessions receive the merge

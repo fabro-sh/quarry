@@ -232,6 +232,10 @@ curl -sS -X PUT "$DOC" \
   --data-binary @article.md
 ```
 
+- `Content-Type: text/markdown` is required for whole-document Markdown
+  writes. Do not rely on client defaults: form submission media types such as
+  `application/x-www-form-urlencoded` are rejected for extensionless tmp
+  document URLs, and missing `Content-Type` is rejected there too.
 - Send `If-Match` with the clock you last read. It selects the merge base:
   the write is diff3-merged against the current document, so concurrent
   edits survive instead of being overwritten. A known-but-stale clock still
@@ -241,6 +245,10 @@ curl -sS -X PUT "$DOC" \
   `conflicts` in `GET $DOC/review` — never write failures.
 - Use `PUT` to create or rewrite documents wholesale; use block transactions
   for surgical edits, comments, and suggestions on existing content.
+- Quarry refuses to change an existing Markdown block document into a raw
+  document unless you explicitly opt in with
+  `X-Quarry-Allow-Document-Kind-Change: true`. Agents should not send that
+  header for normal Markdown authoring or editing.
 
 After a `PUT`, re-read `GET $DOC/blocks`: ambiguous Markdown can land as
 `raw_markdown` blocks, preserved verbatim but not block-addressable.
