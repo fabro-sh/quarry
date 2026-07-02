@@ -271,7 +271,7 @@ impl SessionHub {
                             tracing::warn!(
                                 event = "collab.session.refused",
                                 %document_id,
-                                %error,
+                                ?error,
                                 reason_code = "seed_failed",
                                 "collab session refused: seeding from rows failed"
                             );
@@ -304,7 +304,7 @@ impl SessionHub {
                 %document_id,
                 %collab_session_id,
                 outcome = "protocol_error",
-                reason = %error,
+                reason = ?error,
                 "collab websocket closed with protocol error"
             ),
         }
@@ -317,7 +317,7 @@ impl SessionHub {
                 tracing::warn!(
                     event = "collab.session.final_checkpoint_failed",
                     %document_id,
-                    %error,
+                    ?error,
                     "final session checkpoint failed; un-checkpointed edits are lost"
                 );
             }
@@ -502,7 +502,7 @@ impl LiveSession {
                         tracing::warn!(
                             event = "collab.session.checkpoint_failed",
                             document_id = %session.document_id,
-                            %error,
+                            ?error,
                             "debounced session checkpoint failed; will retry on the next edit"
                         );
                     }
