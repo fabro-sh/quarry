@@ -172,6 +172,7 @@ import {
   type CollabSaveState,
 } from '../collab/save-state';
 import { collabDebug } from '../collab/collab-debug';
+import { registerUnloadGuard } from '../collab/unload-guard';
 import { RawMarkdownPlugin, rawMarkdownMdRules } from './raw-markdown';
 
 registerRustWsProviderType();
@@ -915,6 +916,17 @@ function CollabSaveStateBridge({
       doc.off('update', recompute);
     };
   }, [editor, providers]);
+
+  // Closing the tab while the last checkpoint does not cover the doc loses
+  // the uncovered edits (the session doc never syncs back after a remount).
+  // Coverage — not the display state — is the honest dirty signal: it also
+  // warns for typed-then-disconnected, but stays quiet when a disconnect
+  // happens with everything already durable.
+  const coveredRef = useRef(covered);
+  useEffect(() => {
+    coveredRef.current = covered;
+  }, [covered]);
+  useEffect(() => registerUnloadGuard(window, () => !coveredRef.current), []);
 
   const state = collabSaveState({ connected: isConnected, synced: isSynced, covered, saveFailed });
   useEffect(() => {
