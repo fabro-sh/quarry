@@ -7101,6 +7101,93 @@ async fn browser_created_comment_checkpoints_into_review_rows() {
     server.abort();
 }
 
+/// Resolving a comment from the browser (a meta-map status flip; the text
+/// mark stays) must keep the anchor in the committed rows so the NEXT
+/// session still seeds the resolved comment's mark.
+#[tokio::test]
+async fn browser_resolved_comment_keeps_its_anchor_for_the_next_seed() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "Resolve keeps anchors.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+    let tree = get_block_tree(&app, "live.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    // The agent comments through the gateway WHILE the session is live —
+    // the op lands in the session doc as a collaborator edit (the e2e
+    // agent-smoke sequence).
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    commit_block_transaction(
+        &app,
+        "live.md",
+        block_tx(
+            "tx-comment",
+            serde_json::json!([{
+                "op": "comment.add",
+                "block_id": block_id,
+                "start": 8,
+                "end": 13,
+                "body": "Anchored while resolved"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "live.md", false).await;
+    let comment = &review["comments"][0];
+    let comment_id = comment["id"].as_str().unwrap().to_string();
+    let created_at = comment["at"].as_str().unwrap().to_string();
+    wait_for_yjs_comment_mark(&mut socket, &doc, &comment_id).await;
+    // The browser resolve: the meta entry gains status=resolved, the text
+    // mark is left in place (review-store.ts resolveComment).
+    let meta_json = serde_json::json!({
+        "by": "Avery",
+        "at": created_at,
+        "body": "Anchored while resolved",
+        "status": "resolved"
+    })
+    .to_string();
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let review = txn.get_or_insert_map(REVIEW_ROOT);
+        let comments: yrs::MapRef = review.get_or_init(txn, "comments");
+        comments.insert(
+            txn,
+            comment_id.as_str(),
+            yrs::Any::from_json(&meta_json).unwrap(),
+        );
+    })
+    .await;
+    socket.close(None).await.unwrap();
+
+    let review = timeout(Duration::from_secs(5), async {
+        loop {
+            let review = get_block_review(&app, "live.md", true).await;
+            let comment = &review["comments"][0];
+            if comment["status"] == "resolved" {
+                break review;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("the checkpoint commits the resolution");
+    let comment = &review["comments"][0];
+    assert_eq!(
+        (
+            comment["anchor"]["startOffset"].as_u64(),
+            comment["anchor"]["endOffset"].as_u64()
+        ),
+        (Some(8), Some(13)),
+        "resolution must not collapse the anchor: {comment}"
+    );
+
+    // A fresh session seeds the resolved comment's mark again.
+    let (_socket, doc) = connect_session(addr, &document_id).await;
+    assert!(
+        yjs_has_comment_mark(&doc, &comment_id),
+        "the reseeded doc carries the resolved comment's mark"
+    );
+    server.abort();
+}
+
 #[tokio::test]
 async fn browser_review_map_body_edit_checkpoints_into_review_rows() {
     let (_root, addr, app, store, server) = spawn_session_server().await;

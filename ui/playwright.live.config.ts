@@ -37,7 +37,9 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `cargo run -p quarry -- --root "${liveRoot}" serve --addr 127.0.0.1:7832`,
+      // The live suite drives the library surface (`/v1/libraries`, Git
+      // sync-backed documents), which is feature-gated off in default builds.
+      command: `cargo run -p quarry --features lib-documents -- --root "${liveRoot}" serve --addr 127.0.0.1:7832`,
       cwd: repoRoot,
       gracefulShutdown: { signal: 'SIGTERM', timeout: 2_000 },
       name: 'quarry',

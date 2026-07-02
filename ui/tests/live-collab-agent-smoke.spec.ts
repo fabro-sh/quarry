@@ -34,6 +34,7 @@ interface ReviewItem {
   body?: string;
   content?: string;
   quote: string;
+  anchor?: { blockId: string; startOffset: number; endOffset: number };
 }
 
 interface ReviewResponse {
@@ -231,10 +232,24 @@ test('humans and an agent collaborate on one live document without conflicts', a
     userB = await openHumanDocument(browser, library, 'Blair');
     editorA = userA.page.getByLabel('Plate markdown editor');
     editorB = userB.page.getByLabel('Plate markdown editor');
-    // A fresh session reseeds from rows: the resolved comment's marks are
-    // still anchored, while the card stays hidden.
-    await expect(editorA.locator(`[data-comment-id="${commentId}"]`)).toBeVisible();
-    await expect(editorB.locator(`[data-comment-id="${commentId}"]`)).toBeVisible();
+    // A fresh session reseeds from rows: the resolved comment keeps its
+    // anchor (so it can be reopened later) but earns no highlight and no
+    // card — only open comments render `data-comment-id` (review-leaves.tsx,
+    // "stop highlighting resolved comments in the editor").
+    await expect(editorA).toContainText('Agent comment target appears here.');
+    await expect(editorB).toContainText('Agent comment target appears here.');
+    await expect(editorA.locator(`[data-comment-id="${commentId}"]`)).toHaveCount(0);
+    await expect(editorB.locator(`[data-comment-id="${commentId}"]`)).toHaveCount(0);
+    const resolvedReview = await waitForReview(
+      request,
+      library,
+      (review) =>
+        review.comments.some((item) => item.id === commentId && item.status === 'resolved'),
+      true
+    );
+    const resolvedEntry = resolvedReview.comments.find((item) => item.id === commentId)!;
+    expect(resolvedEntry.anchor).toBeTruthy();
+    expect(resolvedEntry.anchor!.startOffset).toBeLessThan(resolvedEntry.anchor!.endOffset);
     await expect(
       userA.page.getByTestId('comment-card').filter({ hasText: 'Agent comment landed.' })
     ).toHaveCount(0);
