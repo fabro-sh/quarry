@@ -129,7 +129,7 @@ enum Command {
     #[cfg(feature = "lib-documents")]
     Mount(MountCommand),
     #[cfg(feature = "lib-documents")]
-    Get(DocumentPathCommand),
+    Get(GetCommand),
     #[cfg(feature = "lib-documents")]
     Put(PutCommand),
     #[cfg(feature = "lib-documents")]
@@ -194,10 +194,29 @@ struct DocumentPathCommand {
 
 #[cfg(feature = "lib-documents")]
 #[derive(Debug, Args)]
+struct GetCommand {
+    library: String,
+    path: String,
+
+    /// Print the head version id to stderr. Pass it back to
+    /// `put --base-version` so edits committed in between merge three-way
+    /// instead of being silently reverted.
+    #[arg(long)]
+    show_version: bool,
+}
+
+#[cfg(feature = "lib-documents")]
+#[derive(Debug, Args)]
 struct PutCommand {
     library: String,
     path: String,
     file: PathBuf,
+
+    /// Merge against this version's content (from `get --show-version` or an
+    /// earlier put) instead of the current canonical state, so concurrent
+    /// edits survive or surface as conflict review items.
+    #[arg(long)]
+    base_version: Option<String>,
 }
 
 #[cfg(feature = "lib-documents")]
@@ -385,6 +404,9 @@ pub async fn run() -> Result<()> {
         Command::Get(command) => {
             let store = open_at(&cli.root, None, None).await?;
             let document = store.get_document(&command.library, &command.path).await?;
+            if command.show_version {
+                eprintln!("{}", document.version.id);
+            }
             print!("{}", String::from_utf8_lossy(&document.content));
             Ok(())
         }
@@ -401,12 +423,34 @@ pub async fn run() -> Result<()> {
             let outcome = if quarry_storage::document_kind(&command.path, &content_type)
                 == DocumentKind::BlockDocument
             {
-                // Phase 4: markdown puts reconcile via diff3. The CLI is the
-                // two-way degenerate case — the base IS the current
-                // canonical state, so the file content applies with block
-                // ids preserved and can never conflict. The CLI process owns
-                // the database exclusively, so no live session can exist;
-                // the writer trivially runs rows-mode.
+                // Phase 4: markdown puts reconcile via diff3. Without
+                // --base-version the base IS the current canonical state —
+                // the two-way degenerate merge that applies the file
+                // wholesale and can neither conflict nor DETECT a conflict,
+                // silently reverting anything committed since the CLI's
+                // read. With --base-version the write is a true three-way
+                // merge against that version's content. The CLI process
+                // owns the database exclusively, so no live session can
+                // exist; the writer trivially runs rows-mode.
+                let base = match &command.base_version {
+                    Some(version_id) => {
+                        let version = store
+                            .document_version(&command.library, &command.path, version_id)
+                            .await
+                            .with_context(|| {
+                                format!(
+                                    "--base-version {version_id} does not name a known \
+                                     version of {}",
+                                    command.path
+                                )
+                            })?;
+                        BlockWriteBase::Markdown {
+                            markdown: version.content,
+                            version_id: Some(version_id.clone()),
+                        }
+                    }
+                    None => BlockWriteBase::CurrentCanonical,
+                };
                 let state = quarry_server::app_state(store.clone());
                 let _markdown_writer = quarry_server::install_markdown_writer(&state);
                 let markdown = String::from_utf8(bytes).map_err(|_| {
@@ -421,7 +465,7 @@ pub async fn run() -> Result<()> {
                         path: command.path.clone(),
                         markdown,
                         metadata: json!({"content_type": content_type}),
-                        base: BlockWriteBase::CurrentCanonical,
+                        base,
                         source: DocumentSource::Cli,
                         surface: "cli".to_string(),
                         actor_label: None,
@@ -429,6 +473,13 @@ pub async fn run() -> Result<()> {
                     .await?
                     .outcome
             } else {
+                if command.base_version.is_some() {
+                    bail!(
+                        "--base-version applies only to markdown documents; {} ({content_type}) \
+                         is stored as raw bytes",
+                        command.path
+                    );
+                }
                 store
                     .put_document(
                         &command.library,
