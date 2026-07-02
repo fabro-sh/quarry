@@ -11,15 +11,15 @@ concurrency:
 
 permissions: {}
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  nightly:
-    name: Nightly release
+  plan:
+    name: Plan
     runs-on: ubuntu-latest
     permissions:
-      contents: write # create the nightly tag/release and upload artifacts
+      contents: read
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      skip: ${{ steps.plan.outputs.skip }}
     steps:
       - name: Check out repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -45,52 +45,39 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install system prerequisites
-        if: steps.plan.outputs.skip != 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libssl-dev fuse3
+  build:
+    name: Build
+    needs: plan
+    if: needs.plan.outputs.skip != 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-build.yml
 
-      - name: Install Rust
-        if: steps.plan.outputs.skip != 'true'
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-
-      - name: Install Bun
-        if: steps.plan.outputs.skip != 'true'
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+  publish:
+    name: Publish
+    needs: [plan, build]
+    if: needs.plan.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the nightly tag/release and upload artifacts
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          no-cache: true
+          persist-credentials: false
 
-      - name: Build browser bundle
-        if: steps.plan.outputs.skip != 'true'
-        working-directory: ui
-        run: |
-          bun install --frozen-lockfile
-          bun run build
-
-      - name: Build release binary
-        if: steps.plan.outputs.skip != 'true'
-        run: cargo build --locked --release -p quarry --target x86_64-unknown-linux-gnu
-
-      - name: Package artifact
-        if: steps.plan.outputs.skip != 'true'
-        run: |
-          mkdir -p dist/quarry-x86_64-unknown-linux-gnu
-          cp target/x86_64-unknown-linux-gnu/release/quarry dist/quarry-x86_64-unknown-linux-gnu/
-          cp README.md dist/quarry-x86_64-unknown-linux-gnu/
-          cp -R docs dist/quarry-x86_64-unknown-linux-gnu/
-          tar -C dist -czf dist/quarry-x86_64-unknown-linux-gnu.tar.gz quarry-x86_64-unknown-linux-gnu
-          shasum -a 256 dist/quarry-x86_64-unknown-linux-gnu.tar.gz > dist/quarry-x86_64-unknown-linux-gnu.tar.gz.sha256
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          pattern: artifacts-quarry-*
+          merge-multiple: true
 
       - name: Create nightly prerelease
-        if: steps.plan.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.plan.outputs.tag }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           gh release create "$TAG" --target "$GITHUB_SHA" \
             --prerelease --generate-notes --title "$TAG" \
-            dist/quarry-x86_64-unknown-linux-gnu.tar.gz \
-            dist/quarry-x86_64-unknown-linux-gnu.tar.gz.sha256
+            dist/*

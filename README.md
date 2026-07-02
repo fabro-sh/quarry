@@ -24,14 +24,21 @@ Open `http://127.0.0.1:7831`, create a document, and start typing. Then hand the
 
 ## Quickstart
 
-Build from source (Rust stable required):
+Install with Homebrew (macOS and Linux, pre-compiled binaries):
+
+```sh
+brew tap fabro-sh/quarry ssh://git@github.com/fabro-sh/quarry.git
+brew install fabro-sh/quarry/quarry
+```
+
+Or build from source (Rust stable required):
 
 ```sh
 cargo build --release -p quarry
 install -Dm755 target/release/quarry ~/.local/bin/quarry
 ```
 
-Or grab a Linux tarball from a tagged GitHub release. Then:
+Or grab a tarball for your platform from [GitHub Releases](https://github.com/fabro-sh/quarry/releases) — stable releases and nightly prereleases ship macOS (Apple silicon and Intel) and Linux x86_64 binaries. Then:
 
 ```sh
 quarry init .quarry
