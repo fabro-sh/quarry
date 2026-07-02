@@ -46,18 +46,20 @@
 //!
 //! ## Vocabulary decisions (binding, from the Phase 0 findings)
 //!
-//! - `replace_block_content` computes the minimal common-prefix/suffix UTF-16
-//!   diff between old and new text. Review anchors entirely inside the
-//!   preserved prefix keep their offsets; anchors in the preserved suffix
-//!   shift by the length delta; anchors overlapping the changed middle die —
-//!   open comments orphan, open suggestions invalidate, and dead anchors
-//!   collapse to `start == end` at the change site (Gate A rule). A pure
-//!   insertion at an anchor's start boundary is excluded from the anchor
-//!   (never grows leftward); at its end boundary it is also excluded (never
-//!   grows rightward); strictly interior inserts grow the anchor. Mark/link
-//!   ranges adjust the same way except overlap clamps to the preserved
-//!   portions instead of dying (an interior insert grows a formatting run —
-//!   the Gate A formatting-inheritance rule).
+//! - `replace_block_content` computes a multi-hunk character-level UTF-16
+//!   diff between old and new text (falling back to the single minimal
+//!   common-prefix/suffix hunk when the changed middle exceeds
+//!   [`MULTI_HUNK_CHAR_LIMIT`]). Review anchors entirely inside preserved
+//!   spans — including unchanged text BETWEEN hunks — keep their offsets,
+//!   shifted by the length delta of the hunks before them; anchors
+//!   overlapping a changed hunk die — open comments orphan, open suggestions
+//!   invalidate, and dead anchors collapse to `start == end` at the change
+//!   site (Gate A rule). Per hunk, a pure insertion at an anchor's start
+//!   boundary is excluded from the anchor (never grows leftward); at its end
+//!   boundary it is also excluded (never grows rightward); strictly interior
+//!   inserts grow the anchor. Mark/link ranges adjust the same way except
+//!   overlap clamps to the preserved portions instead of dying (an interior
+//!   insert grows a formatting run — the Gate A formatting-inheritance rule).
 //! - `set_block_type` changes `block_type` while preserving `block_id`, text,
 //!   marks, links, children, and anchors (design delta 3). If `attrs` is
 //!   provided it replaces the block's attrs wholesale (the caller normalizes
@@ -668,7 +670,7 @@ fn unquote_clock(token: &str) -> Option<String> {
 /// units. The changed span is `[prefix, old_mid_end)` in the old text and
 /// `[prefix, new_mid_end)` in the new text; a suffix offset `o` maps to
 /// `o - old_mid_end + new_mid_end`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TextDiff {
     prefix: u32,
     old_mid_end: u32,
@@ -758,6 +760,135 @@ fn adjust_anchor(diff: TextDiff, start: u32, end: u32) -> AnchorFate {
     } else {
         AnchorFate::Dead(diff.prefix)
     }
+}
+
+/// Changed middles larger than this (chars per side, after prefix/suffix
+/// trimming) fall back to the single-hunk diff: Myers is O((N+M)·D), and a
+/// fully rewritten middle has few surviving anchors to buy anyway.
+const MULTI_HUNK_CHAR_LIMIT: usize = 4096;
+
+/// The changed spans between two texts as [`TextDiff`] hunks, ascending. Each
+/// hunk is expressed in the coordinates left by applying the hunks before it,
+/// so adjustment is a fold of the single-hunk rules — anchors and ranges in
+/// unchanged interior spans survive edits on both sides of them. Over
+/// [`MULTI_HUNK_CHAR_LIMIT`] the diff falls back to the one
+/// common-prefix/suffix hunk.
+fn utf16_text_diff_hunks(old: &str, new: &str) -> Vec<TextDiff> {
+    utf16_text_diff_hunks_bounded(old, new, MULTI_HUNK_CHAR_LIMIT)
+}
+
+fn utf16_text_diff_hunks_bounded(old: &str, new: &str, char_limit: usize) -> Vec<TextDiff> {
+    let old_chars: Vec<(usize, char)> = old.char_indices().collect();
+    let new_chars: Vec<(usize, char)> = new.char_indices().collect();
+    let max_common = old_chars.len().min(new_chars.len());
+    let mut prefix = 0usize;
+    while prefix < max_common && old_chars[prefix].1 == new_chars[prefix].1 {
+        prefix += 1;
+    }
+    let mut suffix = 0usize;
+    while suffix < max_common - prefix
+        && old_chars[old_chars.len() - 1 - suffix].1 == new_chars[new_chars.len() - 1 - suffix].1
+    {
+        suffix += 1;
+    }
+    let old_mid_chars = old_chars.len() - prefix - suffix;
+    let new_mid_chars = new_chars.len() - prefix - suffix;
+    if old_mid_chars.max(new_mid_chars) > char_limit {
+        return vec![utf16_text_diff(old, new)];
+    }
+    let old_mid = mid_slice(old, &old_chars, prefix, suffix);
+    let new_mid = mid_slice(new, &new_chars, prefix, suffix);
+    let prefix_units: u32 = old_chars[..prefix]
+        .iter()
+        .map(|(_, ch)| ch.len_utf16() as u32)
+        .sum();
+
+    // Walk the char-level changes, grouping contiguous non-equal runs into
+    // hunks. `new_pos` tracks the UTF-16 position in the new text, which IS
+    // the intermediate coordinate a hunk starts at (everything before it has
+    // already been rewritten by earlier hunks).
+    let mut hunks = Vec::new();
+    let mut new_pos = prefix_units;
+    let mut hunk_start: Option<u32> = None;
+    let mut old_units = 0u32;
+    let mut new_units = 0u32;
+    for change in similar::TextDiff::from_chars(old_mid, new_mid).iter_all_changes() {
+        let units = change.value().encode_utf16().count() as u32;
+        match change.tag() {
+            similar::ChangeTag::Equal => {
+                if let Some(start) = hunk_start.take() {
+                    hunks.push(TextDiff {
+                        prefix: start,
+                        old_mid_end: start + old_units,
+                        new_mid_end: start + new_units,
+                    });
+                    old_units = 0;
+                    new_units = 0;
+                }
+                new_pos += units;
+            }
+            similar::ChangeTag::Delete => {
+                hunk_start.get_or_insert(new_pos);
+                old_units += units;
+            }
+            similar::ChangeTag::Insert => {
+                hunk_start.get_or_insert(new_pos);
+                new_units += units;
+                new_pos += units;
+            }
+        }
+    }
+    if let Some(start) = hunk_start {
+        hunks.push(TextDiff {
+            prefix: start,
+            old_mid_end: start + old_units,
+            new_mid_end: start + new_units,
+        });
+    }
+    hunks
+}
+
+/// The byte slice between the common char prefix and suffix.
+fn mid_slice<'a>(text: &'a str, chars: &[(usize, char)], prefix: usize, suffix: usize) -> &'a str {
+    let start = chars.get(prefix).map_or(text.len(), |(byte, _)| *byte);
+    let end = chars
+        .get(chars.len() - suffix)
+        .map_or(text.len(), |(byte, _)| *byte);
+    &text[start..end]
+}
+
+/// Folds an anchor through the hunks in order. One killing hunk makes the
+/// anchor dead; the collapsed point keeps riding the remaining hunks so it
+/// lands on a valid offset in the final text.
+fn adjust_anchor_multi(hunks: &[TextDiff], start: u32, end: u32) -> AnchorFate {
+    let mut dead = false;
+    let (mut start, mut end) = (start, end);
+    for hunk in hunks {
+        match adjust_anchor(*hunk, start, end) {
+            AnchorFate::Keep(next_start, next_end) => {
+                start = next_start;
+                end = next_end;
+            }
+            AnchorFate::Dead(at) => {
+                dead = true;
+                start = at;
+                end = at;
+            }
+        }
+    }
+    if dead {
+        AnchorFate::Dead(start)
+    } else {
+        AnchorFate::Keep(start, end)
+    }
+}
+
+/// Folds a mark/link range through the hunks; `None` once the range has
+/// vanished entirely inside a changed span.
+fn adjust_range_multi(hunks: &[TextDiff], start: u32, end: u32) -> Option<(u32, u32)> {
+    hunks.iter().try_fold((start, end), |(start, end), hunk| {
+        adjust_range(*hunk, start, end)
+    })
 }
 
 /// Mark/link ranges clamp to the preserved prefix/suffix instead of dying;
@@ -1483,13 +1614,13 @@ fn replace_block_text(
         .blocks
         .get_mut(block_id)
         .expect("checked just above");
-    let diff = utf16_text_diff(&block.text, &new_text);
+    let hunks = utf16_text_diff_hunks(&block.text, &new_text);
     block.text = new_text;
     block.marks = block
         .marks
         .iter()
         .filter_map(|run| {
-            adjust_range(diff, run.start, run.end).map(|(start, end)| MarkRun {
+            adjust_range_multi(&hunks, run.start, run.end).map(|(start, end)| MarkRun {
                 start,
                 end,
                 marks: run.marks.clone(),
@@ -1500,7 +1631,7 @@ fn replace_block_text(
         .links
         .iter()
         .filter_map(|link| {
-            adjust_range(diff, link.start, link.end).map(|(start, end)| LinkRange {
+            adjust_range_multi(&hunks, link.start, link.end).map(|(start, end)| LinkRange {
                 start,
                 end,
                 url: link.url.clone(),
@@ -1511,7 +1642,7 @@ fn replace_block_text(
         if item.block_id != block_id || protected_item == Some(item.id.as_str()) {
             continue;
         }
-        match adjust_anchor(diff, item.start_offset, item.end_offset) {
+        match adjust_anchor_multi(&hunks, item.start_offset, item.end_offset) {
             AnchorFate::Keep(start, end) => {
                 item.start_offset = start;
                 item.end_offset = end;
@@ -3034,6 +3165,84 @@ mod tests {
     fn range_entirely_inside_the_middle_vanishes() {
         let diff = utf16_text_diff("aaa MIDDLE zzz", "aaa OTHER zzz");
         assert_eq!(adjust_range(diff, 5, 9), None);
+    }
+
+    #[test]
+    fn interior_anchor_survives_edits_at_both_ends() {
+        // "middle" sits at [4, 10); both ends change with different deltas.
+        let hunks = utf16_text_diff_hunks("AAA middle ZZZ", "BBBB middle YY");
+        assert_eq!(adjust_anchor_multi(&hunks, 4, 10), AnchorFate::Keep(5, 11));
+    }
+
+    #[test]
+    fn interior_range_survives_edits_at_both_ends() {
+        let hunks = utf16_text_diff_hunks("AAA middle ZZZ", "BBBB middle YY");
+        assert_eq!(adjust_range_multi(&hunks, 4, 10), Some((5, 11)));
+    }
+
+    #[test]
+    fn end_boundary_insertion_in_a_later_hunk_stays_excluded() {
+        // The anchor never grows rightward, even when the boundary insert is
+        // the second hunk of a multi-hunk edit.
+        let hunks = utf16_text_diff_hunks("AAA anchor", "BBB anchorXX");
+        assert_eq!(adjust_anchor_multi(&hunks, 4, 10), AnchorFate::Keep(4, 10));
+    }
+
+    #[test]
+    fn multi_hunk_offsets_measure_utf16_units_for_surrogate_pairs() {
+        // 😀 is two UTF-16 units; "mid" sits at [3, 6) between two edits.
+        let hunks = utf16_text_diff_hunks("😀 mid a", "🎉🎉 mid b");
+        assert_eq!(adjust_anchor_multi(&hunks, 3, 6), AnchorFate::Keep(5, 8));
+    }
+
+    #[test]
+    fn anchor_overlapping_one_of_several_hunks_still_dies() {
+        // "ZZZ" at [11, 14) overlaps the second hunk; the anchor collapses
+        // there even though the first hunk left it intact.
+        let hunks = utf16_text_diff_hunks("AAA middle ZZZ", "BBBB middle YY");
+        assert!(matches!(
+            adjust_anchor_multi(&hunks, 11, 14),
+            AnchorFate::Dead(_)
+        ));
+    }
+
+    #[test]
+    fn oversized_changed_middles_fall_back_to_the_single_hunk() {
+        let hunks = utf16_text_diff_hunks_bounded("AAA middle ZZZ", "BBBB middle YY", 4);
+        assert_eq!(
+            hunks,
+            vec![utf16_text_diff("AAA middle ZZZ", "BBBB middle YY")]
+        );
+    }
+
+    #[test]
+    fn replace_block_content_keeps_an_interior_comment_when_both_ends_change() {
+        let state = state_with_rows(vec![paragraph("p1", 0, "AAA middle ZZZ")]);
+        let commented = apply_ops(
+            &state,
+            &[op(json!({
+                "op": "comment.add", "block_id": "p1", "start": 4, "end": 10, "body": "keep me"
+            }))],
+            &actor(),
+            "tx-comment",
+        )
+        .unwrap();
+        let mut with_comment = state_with_rows(commented.rows.clone());
+        with_comment.review_items = commented.review_items.clone();
+
+        let applied = apply_ops(
+            &with_comment,
+            &[op(json!({
+                "op": "replace_block_content", "block_id": "p1", "text": "BBBB middle YY"
+            }))],
+            &actor(),
+            "tx-replace",
+        )
+        .unwrap();
+
+        let item = &applied.review_items[0];
+        assert_eq!(item.state, BlockReviewState::Open);
+        assert_eq!((item.start_offset, item.end_offset), (5, 11));
     }
 
     #[test]
