@@ -1521,3 +1521,312 @@ async fn git_sync_raw_documents_bypass_the_block_model() {
         Vec::<quarry_storage::BlockRow>::new()
     );
 }
+
+/// A pure git-side rename (identical bytes at a new path) pairs the delete
+/// and the create into an identity-preserving document move: the document
+/// id, block ids, review anchors, and the peer's shadow base all survive.
+#[tokio::test]
+async fn sync_pairs_pure_git_renames_into_identity_preserving_moves() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_store(root.path()).await;
+    let library = store.create_library("gitrename").await.unwrap();
+    let outcome = store
+        .import_block_document(
+            &library.slug,
+            "notes/old.md",
+            "# Title\n\nAlpha.\n\nBravo.\n",
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let document_id = outcome.document.id.clone();
+    let ids_before: Vec<String> = store
+        .load_block_tree(&document_id)
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.block_id.clone())
+        .collect();
+    let anchor = store
+        .put_block_review_item(quarry_storage::NewBlockReviewItem {
+            document_id: document_id.clone(),
+            block_id: ids_before[1].clone(),
+            kind: quarry_storage::BlockReviewKind::Comment,
+            start_offset: 0,
+            end_offset: 5,
+            body: Some("anchored on alpha".to_string()),
+            replacement: None,
+            author: Some("Avery".to_string()),
+            state: quarry_storage::BlockReviewState::Open,
+            quote: None,
+            context_before: None,
+            context_after: None,
+            parent_item_id: None,
+        })
+        .await
+        .unwrap();
+
+    let repo = tempfile::tempdir().unwrap();
+    let peer = store
+        .create_git_peer(
+            &library.slug,
+            serde_json::json!({"repo": repo.path(), "branch": "main"}),
+        )
+        .await
+        .unwrap();
+    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+
+    std::fs::rename(
+        repo.path().join("notes/old.md"),
+        repo.path().join("notes/new.md"),
+    )
+    .unwrap();
+    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    assert!(result.conflicts.is_empty());
+
+    let moved = store
+        .get_document(&library.slug, "notes/new.md")
+        .await
+        .unwrap();
+    assert_eq!(
+        moved.id, document_id,
+        "the rename preserves the document id"
+    );
+    assert!(store
+        .get_document(&library.slug, "notes/old.md")
+        .await
+        .is_err());
+    let ids_after: Vec<String> = store
+        .load_block_tree(&document_id)
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.block_id.clone())
+        .collect();
+    assert_eq!(ids_after, ids_before, "block ids survive the rename");
+    let items = store.list_block_review_items(&document_id).await.unwrap();
+    let kept = items.iter().find(|item| item.id == anchor.id).unwrap();
+    assert_eq!(kept.state, quarry_storage::BlockReviewState::Open);
+    assert_eq!(kept.block_id, ids_before[1]);
+    let shadow = store
+        .block_shadow_base("git", &peer.id, &document_id)
+        .await
+        .unwrap()
+        .expect("the peer's shadow base rides the document id");
+    assert_eq!(shadow.base_markdown, "# Title\n\nAlpha.\n\nBravo.\n");
+
+    assert!(!repo.path().join("notes/old.md").exists());
+    assert!(repo.path().join("notes/new.md").exists());
+    let old_state = store
+        .sync_state(&peer.id, "notes/old.md")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(old_state.last_synced_doc_version_id, None);
+    assert_eq!(old_state.last_synced_git_oid, None);
+    let new_state = store
+        .sync_state(&peer.id, "notes/new.md")
+        .await
+        .unwrap()
+        .expect("the new path carries the sync state");
+    assert!(new_state.last_synced_doc_version_id.is_some());
+}
+
+/// Rename-and-edit between syncs does not byte-match, so it stays the
+/// conservative delete + create — fresh identity, no guessed pairing.
+#[tokio::test]
+async fn sync_treats_renamed_and_edited_files_as_delete_plus_create() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_store(root.path()).await;
+    let library = store.create_library("gitrenameedit").await.unwrap();
+    let outcome = store
+        .import_block_document(
+            &library.slug,
+            "notes/old.md",
+            "Alpha.\n",
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let peer = store
+        .create_git_peer(
+            &library.slug,
+            serde_json::json!({"repo": repo.path(), "branch": "main"}),
+        )
+        .await
+        .unwrap();
+    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+
+    let text = std::fs::read_to_string(repo.path().join("notes/old.md")).unwrap();
+    std::fs::remove_file(repo.path().join("notes/old.md")).unwrap();
+    std::fs::write(
+        repo.path().join("notes/new.md"),
+        text.replace("Alpha.", "Alpha, edited."),
+    )
+    .unwrap();
+    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    assert!(result.conflicts.is_empty());
+
+    let created = store
+        .get_document(&library.slug, "notes/new.md")
+        .await
+        .unwrap();
+    assert_ne!(
+        created.id, outcome.document.id,
+        "no pairing without a byte match"
+    );
+    assert!(store
+        .get_document(&library.slug, "notes/old.md")
+        .await
+        .is_err());
+}
+
+/// Duplicate content on either side makes pairing ambiguous; the sync
+/// refuses to guess and falls back to delete + create for all of them.
+#[tokio::test]
+async fn sync_refuses_to_pair_renames_with_duplicate_content() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_store(root.path()).await;
+    let library = store.create_library("gitrenamedup").await.unwrap();
+    let first = store
+        .import_block_document(
+            &library.slug,
+            "notes/one.md",
+            "Same body.\n",
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let second = store
+        .import_block_document(
+            &library.slug,
+            "notes/two.md",
+            "Same body.\n",
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let peer = store
+        .create_git_peer(
+            &library.slug,
+            serde_json::json!({"repo": repo.path(), "branch": "main", "max_delete_percent": 100}),
+        )
+        .await
+        .unwrap();
+    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+
+    std::fs::rename(
+        repo.path().join("notes/one.md"),
+        repo.path().join("notes/uno.md"),
+    )
+    .unwrap();
+    std::fs::rename(
+        repo.path().join("notes/two.md"),
+        repo.path().join("notes/dos.md"),
+    )
+    .unwrap();
+    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    assert!(result.conflicts.is_empty());
+
+    let uno = store
+        .get_document(&library.slug, "notes/uno.md")
+        .await
+        .unwrap();
+    let dos = store
+        .get_document(&library.slug, "notes/dos.md")
+        .await
+        .unwrap();
+    assert_ne!(uno.id, first.document.id);
+    assert_ne!(uno.id, second.document.id);
+    assert_ne!(dos.id, first.document.id);
+    assert_ne!(dos.id, second.document.id);
+}
+
+/// A bulk folder rename used to look like a mass deletion and trip the
+/// delete-safety abort; paired renames no longer count as deletions.
+#[tokio::test]
+async fn sync_bulk_renames_pass_the_delete_safety_limit() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open_store(root.path()).await;
+    let library = store.create_library("gitrenamebulk").await.unwrap();
+    let alpha = store
+        .import_block_document(
+            &library.slug,
+            "notes/alpha.md",
+            "Alpha body.\n",
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let bravo = store
+        .import_block_document(
+            &library.slug,
+            "notes/bravo.md",
+            "Bravo body.\n",
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let peer = store
+        .create_git_peer(
+            &library.slug,
+            serde_json::json!({"repo": repo.path(), "branch": "main", "max_delete_percent": 50}),
+        )
+        .await
+        .unwrap();
+    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+
+    std::fs::create_dir_all(repo.path().join("archive")).unwrap();
+    std::fs::rename(
+        repo.path().join("notes/alpha.md"),
+        repo.path().join("archive/alpha.md"),
+    )
+    .unwrap();
+    std::fs::rename(
+        repo.path().join("notes/bravo.md"),
+        repo.path().join("archive/bravo.md"),
+    )
+    .unwrap();
+
+    // 2 of 2 tracked paths gone would exceed the 50% delete cap; paired
+    // renames must not count as deletions.
+    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    assert!(result.conflicts.is_empty());
+    assert_eq!(
+        store
+            .get_document(&library.slug, "archive/alpha.md")
+            .await
+            .unwrap()
+            .id,
+        alpha.document.id
+    );
+    assert_eq!(
+        store
+            .get_document(&library.slug, "archive/bravo.md")
+            .await
+            .unwrap()
+            .id,
+        bravo.document.id
+    );
+}

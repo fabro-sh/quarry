@@ -243,11 +243,28 @@ async fn sync_peer_inner(
         .collect();
     paths.extend(sync_states.keys().cloned());
 
+    // Pure git-side renames: a clean delete and a clean create whose bytes
+    // match exactly — unique on both sides, the reconciler's no-guess move
+    // rule — pair into an identity-preserving document move instead of
+    // delete + create. Block ids, review anchors, version history, and the
+    // peer's shadow base all ride the document id.
+    let renames = pair_renames(
+        store,
+        &library_record.slug,
+        &paths,
+        &doc_map,
+        &git_map,
+        &sync_states,
+    )
+    .await?;
+    let renamed_from: BTreeSet<String> = renames.iter().map(|rename| rename.from.clone()).collect();
+
     enforce_delete_safety(
         &paths,
         &doc_map,
         &git_map,
         &sync_states,
+        &renamed_from,
         peer.max_delete_percent,
     )?;
 
@@ -255,8 +272,36 @@ async fn sync_peer_inner(
     let mut conflict_paths = Vec::new();
     let mut conflicts = Vec::new();
     let mut deleted_sync_paths = BTreeSet::new();
+    let mut renamed_paths = renamed_from.clone();
+
+    for rename in &renames {
+        store
+            .move_document(
+                &library_record.slug,
+                &rename.from,
+                &rename.to,
+                DocumentSource::Git,
+            )
+            .await?;
+        tracing::info!(
+            event = "git.sync.rename_paired",
+            library = library_record.slug,
+            peer_id,
+            from = %rename.from,
+            to = %rename.to,
+            "git-side rename paired into an identity-preserving move"
+        );
+        // The old path's sync state clears below; the moved document exports
+        // at its new path, which records the new state.
+        deleted_sync_paths.insert(rename.from.clone());
+        renamed_paths.insert(rename.to.clone());
+        imported_paths.push(rename.to.clone());
+    }
 
     for path in paths {
+        if renamed_paths.contains(&path) {
+            continue;
+        }
         let doc = doc_map.get(&path);
         let git = git_map.get(&path);
         let state = sync_states.get(&path);
@@ -1281,11 +1326,73 @@ fn conflict_sibling_path(path: &str) -> String {
     format!("{path}.conflict-git-{timestamp}")
 }
 
+struct RenamePair {
+    from: String,
+    to: String,
+}
+
+/// Pairs clean git-side deletes (document unchanged since the last sync,
+/// file gone) with clean creates (a path this peer never synced) whose bytes
+/// match exactly. Duplicate content on either side makes the pairing
+/// ambiguous — no pairing happens, delete + create proceeds as before.
+async fn pair_renames(
+    store: &QuarryStore,
+    library: &str,
+    paths: &BTreeSet<String>,
+    doc_map: &HashMap<String, DocumentListEntry>,
+    git_map: &HashMap<String, GitFile>,
+    sync_states: &HashMap<String, SyncStateEntry>,
+) -> Result<Vec<RenamePair>> {
+    let mut deletes_by_content: HashMap<Vec<u8>, Vec<String>> = HashMap::new();
+    let mut creates_by_content: HashMap<Vec<u8>, Vec<String>> = HashMap::new();
+    for path in paths {
+        let state = sync_states.get(path);
+        let last_doc = state.and_then(|state| state.last_synced_doc_version_id.as_deref());
+        let last_git = state.and_then(|state| state.last_synced_git_oid.as_deref());
+        match (doc_map.get(path), git_map.get(path)) {
+            (Some(doc), None) => {
+                let doc_unchanged = Some(doc.head_version_id.as_str()) == last_doc;
+                if doc_unchanged && last_git.is_some() {
+                    let content = store.get_document(library, path).await?.content;
+                    deletes_by_content
+                        .entry(content)
+                        .or_default()
+                        .push(path.clone());
+                }
+            }
+            (None, Some(git)) if last_doc.is_none() => {
+                creates_by_content
+                    .entry(git.content.clone())
+                    .or_default()
+                    .push(path.clone());
+            }
+            _ => {}
+        }
+    }
+
+    let mut pairs: Vec<RenamePair> = deletes_by_content
+        .into_iter()
+        .filter_map(|(content, from_paths)| {
+            let to_paths = creates_by_content.get(&content)?;
+            match (&from_paths[..], &to_paths[..]) {
+                ([from], [to]) => Some(RenamePair {
+                    from: from.clone(),
+                    to: to.clone(),
+                }),
+                _ => None,
+            }
+        })
+        .collect();
+    pairs.sort_by(|left, right| left.from.cmp(&right.from));
+    Ok(pairs)
+}
+
 fn enforce_delete_safety(
     paths: &BTreeSet<String>,
     doc_map: &HashMap<String, DocumentListEntry>,
     git_map: &HashMap<String, GitFile>,
     sync_states: &HashMap<String, SyncStateEntry>,
+    renamed_from: &BTreeSet<String>,
     max_delete_percent: u8,
 ) -> Result<()> {
     let tracked = sync_states
@@ -1301,6 +1408,9 @@ fn enforce_delete_safety(
     let delete_candidates = paths
         .iter()
         .filter(|path| {
+            if renamed_from.contains(*path) {
+                return false;
+            }
             let Some(state) = sync_states.get(*path) else {
                 return false;
             };
