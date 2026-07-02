@@ -1,33 +1,47 @@
-name: Release
+name: Release Stable
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: release-stable
   cancel-in-progress: false
 
 permissions: {}
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  linux-x86_64:
-    name: Linux x86_64 release artifact
+  stable:
+    name: Stable release
     runs-on: ubuntu-latest
     permissions:
-      contents: write # create the GitHub release and upload artifacts to it
+      contents: write # create the release tag/release and upload artifacts
     steps:
       - name: Check out repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
 
+      - name: Plan stable release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 |
+            jq -r '.packages[] | select(.name == "quarry") | .version')
+          tag="v${version}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists — bump the workspace version first." >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
       - name: Install system prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libssl-dev git fuse3
+          sudo apt-get install -y build-essential cmake pkg-config libssl-dev fuse3
 
       - name: Install Rust
         run: |
@@ -46,7 +60,7 @@ jobs:
           bun run build
 
       - name: Build release binary
-        run: cargo build --release -p quarry --target x86_64-unknown-linux-gnu
+        run: cargo build --locked --release -p quarry --target x86_64-unknown-linux-gnu
 
       - name: Package artifact
         run: |
@@ -57,21 +71,12 @@ jobs:
           tar -C dist -czf dist/quarry-x86_64-unknown-linux-gnu.tar.gz quarry-x86_64-unknown-linux-gnu
           shasum -a 256 dist/quarry-x86_64-unknown-linux-gnu.tar.gz > dist/quarry-x86_64-unknown-linux-gnu.tar.gz.sha256
 
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: quarry-x86_64-unknown-linux-gnu
-          path: |
-            dist/quarry-x86_64-unknown-linux-gnu.tar.gz
-            dist/quarry-x86_64-unknown-linux-gnu.tar.gz.sha256
-
-      - name: Attach files to GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.plan.outputs.tag }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
-            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME"
-          gh release upload "$GITHUB_REF_NAME" --clobber \
+          gh release create "$TAG" --target "$GITHUB_SHA" \
+            --generate-notes --title "$TAG" \
             dist/quarry-x86_64-unknown-linux-gnu.tar.gz \
             dist/quarry-x86_64-unknown-linux-gnu.tar.gz.sha256
