@@ -25,7 +25,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::future::Future;
 use std::io::{ErrorKind, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -6237,15 +6237,6 @@ fn map_turso_error(err: turso::Error) -> QuarryError {
         QuarryError::Busy(err.to_string())
     } else {
         QuarryError::Storage(err.to_string())
-    }
-}
-
-#[allow(dead_code)]
-fn assert_path_exists(path: &Path) -> Result<()> {
-    if path.exists() {
-        Ok(())
-    } else {
-        Err(QuarryError::NotFound(path.display().to_string()))
     }
 }
 
