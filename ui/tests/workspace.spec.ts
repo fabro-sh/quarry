@@ -616,7 +616,8 @@ test.describe('Quarry Browser smoke flows', () => {
     await switcher.focus();
     await page.keyboard.press('Enter');
     await expect(page.getByRole('menuitem')).toHaveCount(2);
-    await page.keyboard.press('ArrowDown');
+    // Radix focuses the first item asynchronously on keyboard-open; wait for
+    // that instead of racing it with an ArrowDown.
     await expect(page.getByRole('menuitem', { name: 'personal' })).toBeFocused();
     await page.keyboard.press('ArrowDown');
     await expect(page.getByRole('menuitem', { name: 'work' })).toBeFocused();
