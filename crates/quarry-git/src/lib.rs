@@ -17,6 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use utoipa::ToSchema;
+use uuid::Uuid;
 use walkdir::WalkDir;
 
 #[derive(Clone, Debug)]
@@ -666,12 +667,12 @@ pub async fn export_worktree(
             fs::create_dir_all(parent)?;
         }
         if options.frontmatter_markdown && document.path.ends_with(".md") {
-            fs::write(
+            write_atomic(
                 &output,
-                markdown_with_frontmatter(&document.metadata, &document.content)?,
+                &markdown_with_frontmatter(&document.metadata, &document.content)?,
             )?;
         } else {
-            fs::write(&output, &document.content)?;
+            write_atomic(&output, &document.content)?;
             write_sidecar(repo_dir, &document.path, &document.metadata)?;
         }
         exported_paths.push(document.path);
@@ -778,6 +779,25 @@ fn markdown_with_frontmatter(metadata: &JsonValue, content: &[u8]) -> Result<Vec
     Ok(output)
 }
 
+/// Writes via a sibling temp file plus rename so a crash mid-write leaves
+/// either the old file or the new one, never a truncated hybrid.
+fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
+    let Some(file_name) = path.file_name() else {
+        return Err(QuarryError::InvalidPath(path.display().to_string()));
+    };
+    let tmp = path.with_file_name(format!(
+        "{}.quarry-tmp-{}",
+        file_name.to_string_lossy(),
+        Uuid::new_v4()
+    ));
+    fs::write(&tmp, contents)?;
+    if let Err(error) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(error.into());
+    }
+    Ok(())
+}
+
 fn write_sidecar(repo_dir: &Path, path: &str, metadata: &JsonValue) -> Result<()> {
     if metadata == &serde_json::json!({}) {
         return Ok(());
@@ -786,7 +806,7 @@ fn write_sidecar(repo_dir: &Path, path: &str, metadata: &JsonValue) -> Result<()
     if let Some(parent) = sidecar.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(sidecar, serde_yaml::to_string(metadata)?)?;
+    write_atomic(&sidecar, serde_yaml::to_string(metadata)?.as_bytes())?;
     Ok(())
 }
 
@@ -845,7 +865,7 @@ fn write_marker(repo_dir: &Path, library_id: &str, library_slug: &str) -> Result
         library_id: library_id.to_string(),
         library_slug: library_slug.to_string(),
     };
-    fs::write(path, serde_json::to_string_pretty(&marker)?)?;
+    write_atomic(&path, serde_json::to_string_pretty(&marker)?.as_bytes())?;
     Ok(())
 }
 
@@ -1329,5 +1349,37 @@ mod tests {
             redact_remote_url("git@example.com:acme/repo.git"),
             "git@example.com:acme/repo.git"
         );
+    }
+
+    // A read-only destination distinguishes rename from open-and-truncate:
+    // rename(2) only needs directory write permission, while an in-place
+    // write fails — and would leave a truncated file on a crash mid-write.
+    #[test]
+    fn write_atomic_replaces_a_read_only_destination() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let dest = dir.path().join("doc.md");
+        fs::write(&dest, "old")?;
+        let mut permissions = fs::metadata(&dest)?.permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&dest, permissions)?;
+
+        write_atomic(&dest, b"new")?;
+
+        assert_eq!(fs::read(&dest)?, b"new");
+        Ok(())
+    }
+
+    #[test]
+    fn write_atomic_leaves_no_temp_file_behind() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let dest = dir.path().join("doc.md");
+
+        write_atomic(&dest, b"content")?;
+
+        let names: Vec<_> = fs::read_dir(dir.path())?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<std::io::Result<_>>()?;
+        assert_eq!(names, ["doc.md"]);
+        Ok(())
     }
 }
