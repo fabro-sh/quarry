@@ -293,6 +293,22 @@ impl<'writer> MakeWriter<'writer> for CapturedLogs {
 }
 
 fn capture_debug_logs() -> (CapturedLogs, tracing::dispatcher::DefaultGuard) {
+    // tracing-core's callsite-interest cache has a lock-free fast path when
+    // at most one dispatcher is registered (`Rebuilder::JustOne`): a callsite
+    // FIRST hit on a subscriber-less test thread while this capture
+    // subscriber is the only registered dispatcher caches `Interest::never`
+    // computed from THAT thread's absent default — and the capturing test's
+    // own events at that callsite are then skipped (its assertions see an
+    // EMPTY capture) until a later subscriber registration rebuilds the
+    // cache. Keeping a permanent global no-op dispatcher registered means
+    // two dispatchers are live during every capture, forcing callsite
+    // registration through the locked path that consults them all.
+    // Reproduced by looping this file's first two tests with 2 threads.
+    static GLOBAL_NO_OP: std::sync::Once = std::sync::Once::new();
+    GLOBAL_NO_OP.call_once(|| {
+        let _ =
+            tracing::subscriber::set_global_default(tracing::subscriber::NoSubscriber::default());
+    });
     let logs = CapturedLogs::default();
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::new("quarry_server=debug"))
