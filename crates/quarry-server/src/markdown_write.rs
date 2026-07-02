@@ -464,6 +464,8 @@ async fn write_markdown_with(
     };
 
     let mut conflicts = 0usize;
+    let mut op_count = 0usize;
+    let mut degraded = false;
     let mut plan = |snapshot: &quarry_storage::BlockMutationState| {
         let base = match &base_body {
             Some(body) => ReconcileBase::Markdown(body),
@@ -479,6 +481,7 @@ async fn write_markdown_with(
             )
         })?;
         conflicts = reconciled.conflicts.len();
+        degraded = reconciled.degraded;
         let top_ids: Vec<String> = snapshot
             .rows
             .iter()
@@ -486,6 +489,7 @@ async fn write_markdown_with(
             .map(|row| row.block_id.clone())
             .collect();
         let mut ops = sequential_ops(&top_ids, &reconciled.ops);
+        op_count = ops.len();
         ops.extend(
             reconciled
                 .conflicts
@@ -563,6 +567,24 @@ async fn write_markdown_with(
             ))
         }
     };
+    if degraded {
+        tracing::warn!(
+            event = "document.block_write.lcs_degraded",
+            path = %loggable_path(&write),
+            surface = %write.surface,
+            "reconcile exceeded the LCS budget and fell back to bounded \
+             positional pairing; move detection was lost for this write"
+        );
+    }
+    tracing::info!(
+        event = "document.block_write.reconciled",
+        path = %loggable_path(&write),
+        surface = %write.surface,
+        result = %reconcile_result(op_count, conflicts),
+        op_count,
+        conflict_count = conflicts,
+        "whole-file write reconciled"
+    );
     let canonical_body = canonical_body(state, &committed.outcome.document.id).await?;
     Ok(BlockMarkdownWriteOutcome {
         outcome: *committed.outcome,
@@ -570,6 +592,29 @@ async fn write_markdown_with(
         canonical_body,
         conflicts,
     })
+}
+
+/// The outcome vocabulary of the per-reconcile log: `conflicts` when review
+/// items were recorded, `merged` when content ops applied cleanly, `clean`
+/// when the incoming file normalized to the canonical state.
+fn reconcile_result(op_count: usize, conflicts: usize) -> &'static str {
+    if conflicts > 0 {
+        "conflicts"
+    } else if op_count > 0 {
+        "merged"
+    } else {
+        "clean"
+    }
+}
+
+/// Tmp paths are capability secrets; never log them raw.
+fn loggable_path(write: &BlockMarkdownWrite) -> String {
+    match &write.scope {
+        DocumentScopeRef::Library { .. } => write.path.clone(),
+        DocumentScopeRef::Tmp => {
+            log_redaction::redact_tmp_document_identifier(&write.path).into_owned()
+        }
+    }
 }
 
 async fn canonical_body(state: &AppState, document_id: &str) -> Result<String, GatewayFailure> {
@@ -694,15 +739,9 @@ async fn flag_imported_conflict_markers(
     match result {
         Ok(_) => 1,
         Err(failure) => {
-            let path = match &write.scope {
-                DocumentScopeRef::Library { .. } => write.path.clone(),
-                DocumentScopeRef::Tmp => {
-                    log_redaction::redact_tmp_document_identifier(&write.path).into_owned()
-                }
-            };
             tracing::warn!(
                 event = "document.block_write.marker_flag_failed",
-                path = %path,
+                path = %loggable_path(write),
                 error = %failure_to_quarry(failure),
                 "conflict markers detected but the review flag failed to commit"
             );

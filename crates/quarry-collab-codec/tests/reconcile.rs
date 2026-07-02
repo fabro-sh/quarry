@@ -1234,7 +1234,20 @@ fn oversized_documents_degrade_to_positional_pairing_with_preserved_ids() {
         ]
     );
     assert_eq!(result.conflicts, []);
+    assert!(
+        result.degraded,
+        "an over-limit reconcile must report its degraded mode"
+    );
     let merged = apply_ops(&canonical, &result.ops);
     assert_eq!(merged.len(), block_count);
     assert_eq!(ids_of(&merged), id_refs);
+}
+
+#[test]
+fn in_budget_reconciles_do_not_report_degradation() {
+    let canonical = base_canonical();
+
+    let result = run(ReconcileBase::Markdown(BASE), BASE, &canonical);
+
+    assert!(!result.degraded);
 }

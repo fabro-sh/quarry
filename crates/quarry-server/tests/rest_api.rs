@@ -7409,6 +7409,50 @@ async fn markdown_put_overlapping_edits_become_conflict_review_items() {
     assert_eq!(conflicts[0]["canonicalMarkdown"], "Bravo, canonical.\n");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn whole_file_writes_log_a_reconcile_outcome() {
+    let (logs, _guard) = capture_debug_logs();
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "obs.md", "Alpha.\n").await;
+    logs.clear();
+
+    put_block_markdown(&app, "obs.md", "Alpha changed.\n").await;
+
+    let output = logs.output();
+    assert!(
+        output.contains("document.block_write.reconciled"),
+        "reconciled writes should log their outcome:\n{output}"
+    );
+    assert!(
+        output.contains("result=merged"),
+        "the outcome log should classify the merge:\n{output}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn oversized_reconciles_warn_about_lcs_degradation() {
+    let (logs, _guard) = capture_debug_logs();
+    let (_root, app, _store) = block_test_app().await;
+    // 1030² changed-middle cells exceed the 2^20 LCS budget; every block
+    // differs so prefix/suffix trimming cannot shrink the matrix.
+    let base: String = (0..1030)
+        .map(|index| format!("Base {index}.\n\n"))
+        .collect();
+    put_block_markdown(&app, "big.md", &base).await;
+    logs.clear();
+
+    let incoming: String = (0..1030)
+        .map(|index| format!("Incoming {index}.\n\n"))
+        .collect();
+    put_block_markdown(&app, "big.md", &incoming).await;
+
+    let output = logs.output();
+    assert!(
+        output.contains("document.block_write.lcs_degraded"),
+        "degraded reconciles should warn:\n{output}"
+    );
+}
+
 /// Half-resolved git merges: incoming content carrying `<<<<<<<` marker soup
 /// still commits (writes never fail) but flags a conflict review item in the
 /// same transaction.

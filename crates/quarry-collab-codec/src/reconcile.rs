@@ -196,6 +196,11 @@ pub struct ReconcileConflict {
 pub struct ReconcileOutcome {
     pub ops: Vec<ReconcileOp>,
     pub conflicts: Vec<ReconcileConflict>,
+    /// True when any alignment exceeded [`LCS_CELL_LIMIT`] and degraded to
+    /// bounded positional pairing (move detection and fine-grained region
+    /// separation were lost for this write). Callers own surfacing it — the
+    /// codec never logs.
+    pub degraded: bool,
 }
 
 /// Three-way merge of a whole-file Markdown write against the canonical block
@@ -229,8 +234,8 @@ pub fn reconcile(
         ReconcileBase::CurrentCanonical => canonical.clone(),
     };
 
-    let base_to_incoming = lcs_matching(&base, &incoming);
-    let base_to_canonical = lcs_matching(&base, &canonical);
+    let (base_to_incoming, incoming_degraded) = lcs_matching(&base, &incoming);
+    let (base_to_canonical, canonical_degraded) = lcs_matching(&base, &canonical);
     let anchors = stable_anchors(&base_to_incoming, &base_to_canonical);
     let segments = build_segments(base.len(), incoming.len(), canonical.len(), &anchors);
 
@@ -323,11 +328,11 @@ pub fn reconcile(
     // cell limit as the LCS it is skipped entirely (degraded mode loses move
     // detection — module docs).
     let mut moved_by_insert: HashMap<usize, usize> = HashMap::new();
-    let move_candidates = if delete_candidates
+    let move_pairing_degraded = delete_candidates
         .len()
         .saturating_mul(insert_candidates.len())
-        > LCS_CELL_LIMIT
-    {
+        > LCS_CELL_LIMIT;
+    let move_candidates = if move_pairing_degraded {
         &[][..]
     } else {
         &insert_candidates[..]
@@ -441,7 +446,11 @@ pub fn reconcile(
         with_trailing.extend(ops);
         ops = with_trailing;
     }
-    Ok(ReconcileOutcome { ops, conflicts })
+    Ok(ReconcileOutcome {
+        ops,
+        conflicts,
+        degraded: incoming_degraded || canonical_degraded || move_pairing_degraded,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -634,19 +643,24 @@ fn pair_replace_ops(base: &Shape, incoming: &Shape, block_id: &str) -> Option<Ve
 // Alignment: bounded exact-equality LCS with pinned tie-breaks.
 // ---------------------------------------------------------------------------
 
-/// Exact-equality LCS matching between two block sequences. Deterministic tie
-/// rules: equal blocks always match (front to back); on equal-score ties the
-/// left (base) side advances first, i.e. deletions before insertions.
+/// Exact-equality LCS matching between two block sequences, plus whether the
+/// matching degraded. Deterministic tie rules: equal blocks always match
+/// (front to back); on equal-score ties the left (base) side advances first,
+/// i.e. deletions before insertions.
 ///
 /// The common prefix is trimmed before the DP (identical outcome — the
 /// spike's walk always pairs equal heads). When the remaining matrix exceeds
 /// [`LCS_CELL_LIMIT`] cells the matching degrades to prefix + suffix runs
 /// with an unmatched middle (module docs).
-fn lcs_matching(a: &[TopBlock], b: &[TopBlock]) -> Vec<(usize, usize)> {
+fn lcs_matching(a: &[TopBlock], b: &[TopBlock]) -> (Vec<(usize, usize)>, bool) {
     lcs_matching_bounded(a, b, LCS_CELL_LIMIT)
 }
 
-fn lcs_matching_bounded(a: &[TopBlock], b: &[TopBlock], cell_limit: usize) -> Vec<(usize, usize)> {
+fn lcs_matching_bounded(
+    a: &[TopBlock],
+    b: &[TopBlock],
+    cell_limit: usize,
+) -> (Vec<(usize, usize)>, bool) {
     let common = a.len().min(b.len());
     let mut prefix = 0usize;
     while prefix < common && a[prefix].shape == b[prefix].shape {
@@ -669,7 +683,7 @@ fn lcs_matching_bounded(a: &[TopBlock], b: &[TopBlock], cell_limit: usize) -> Ve
                 .rev()
                 .map(|back| (a.len() - 1 - back, b.len() - 1 - back)),
         );
-        return pairs;
+        return (pairs, true);
     }
 
     let mut score = vec![vec![0usize; b_rest.len() + 1]; a_rest.len() + 1];
@@ -694,7 +708,7 @@ fn lcs_matching_bounded(a: &[TopBlock], b: &[TopBlock], cell_limit: usize) -> Ve
             j += 1;
         }
     }
-    pairs
+    (pairs, false)
 }
 
 /// Base indices matched in BOTH alignments, with their partners. Both inputs
@@ -871,8 +885,9 @@ mod tests {
         let b = tops(&["same-1", "same-2", "same-3", "new"]);
 
         // Middle after prefix trim is 1x1 = 1 cell, within the limit of 4.
-        let pairs = lcs_matching_bounded(&a, &b, 4);
+        let (pairs, degraded) = lcs_matching_bounded(&a, &b, 4);
         assert_eq!(pairs, [(0, 0), (1, 1), (2, 2)]);
+        assert!(!degraded);
     }
 
     /// Over the bound, the matching degrades to prefix + suffix runs with an
@@ -883,11 +898,13 @@ mod tests {
         let a = tops(&["head", "alpha", "bravo", "charlie", "tail"]);
         let b = tops(&["head", "charlie", "alpha", "bravo", "tail"]);
 
-        let full = lcs_matching_bounded(&a, &b, usize::MAX);
+        let (full, full_degraded) = lcs_matching_bounded(&a, &b, usize::MAX);
         assert_eq!(full, [(0, 0), (1, 2), (2, 3), (4, 4)]);
+        assert!(!full_degraded);
 
-        let degraded = lcs_matching_bounded(&a, &b, 4);
-        assert_eq!(degraded, [(0, 0), (4, 4)]);
+        let (degraded_pairs, degraded) = lcs_matching_bounded(&a, &b, 4);
+        assert_eq!(degraded_pairs, [(0, 0), (4, 4)]);
+        assert!(degraded);
     }
 
     #[test]
