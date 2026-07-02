@@ -12,7 +12,9 @@ describe('TocSidebar', () => {
       />
     );
 
-    await screen.findByLabelText('Plate markdown editor');
+    // The lazy editor chunk takes ~1s to evaluate under full-suite worker
+    // contention; the default 1s findBy timeout is too tight.
+    await screen.findByLabelText('Plate markdown editor', undefined, { timeout: 5000 });
 
     // Headings carry a DOM id so the scroll-spy can read entry.target.id.
     const h1 = container.querySelector('.slate-h1');

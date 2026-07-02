@@ -187,6 +187,13 @@ const REVIEW_RESOLUTION_PUBLISH_INTERVAL_MS = 50;
 // merging a stale doc back in would duplicate content (online-only browsers
 // have no pending local state worth keeping).
 const RECONNECT_RETRY_MS = 2_000;
+// Publishing the App-level markdown mirror serializes the whole document —
+// O(size) work that must never run inside the input event (it was the typing
+// lag on large documents). The mirror only feeds the current-editor diff and
+// the tab title, both fine with a short lag, so every trigger (local edits,
+// remote session updates, review-store changes) coalesces into one trailing
+// serialization per pause.
+const MIRROR_PUBLISH_DEBOUNCE_MS = 300;
 
 // Notion-style markdown shortcuts: typing the markdown prefix at the start of a
 // block (or wrapping marks) auto-converts it. Scoped to the surface Quarry
@@ -445,7 +452,6 @@ export function PlateMarkdownEditor({
   const lastContentRef = useRef(content);
   const lastSerializedRef = useRef(initialSerializedRef.current ?? '');
   const reviewResolutionPublishTimerRef = useRef<number | null>(null);
-  const yjsChangeFallbackTimerRef = useRef<number | null>(null);
   const [collabInitTick, setCollabInitTick] = useState(0);
   const [externalValueRevision, setExternalValueRevision] = useState(0);
   const editorPlugins = useMemo(() => {
@@ -668,6 +674,39 @@ export function PlateMarkdownEditor({
     [publishSerializedMarkdown, serialize]
   );
 
+  const mirrorPublishTimerRef = useRef<number | null>(null);
+  const mirrorPublishGuardRef = useRef(false);
+  const cancelMirrorPublish = useCallback(() => {
+    if (mirrorPublishTimerRef.current !== null) {
+      window.clearTimeout(mirrorPublishTimerRef.current);
+      mirrorPublishTimerRef.current = null;
+    }
+    mirrorPublishGuardRef.current = false;
+  }, []);
+  // The debounced mirror publish (MIRROR_PUBLISH_DEBOUNCE_MS). Serializes
+  // `editor.children` at fire time, so coalesced triggers publish the latest
+  // value. The blank guard is sticky across a batch: any trigger that needs
+  // it keeps the batch guarded.
+  const scheduleMirrorPublish = useCallback(
+    (options: { guardUnhydratedBlank?: boolean } = {}) => {
+      if (options.guardUnhydratedBlank) mirrorPublishGuardRef.current = true;
+      if (mirrorPublishTimerRef.current !== null) {
+        window.clearTimeout(mirrorPublishTimerRef.current);
+      }
+      mirrorPublishTimerRef.current = window.setTimeout(() => {
+        mirrorPublishTimerRef.current = null;
+        const guardUnhydratedBlank = mirrorPublishGuardRef.current;
+        mirrorPublishGuardRef.current = false;
+        publishSerializedValue(editor.children as PlateValue, { guardUnhydratedBlank });
+      }, MIRROR_PUBLISH_DEBOUNCE_MS);
+    },
+    [editor, publishSerializedValue]
+  );
+  // A pending publish belongs to this editor instance: when the editor is
+  // swapped (document change, collab epoch) or unmounted, firing it would
+  // publish the old document into the new mirror.
+  useEffect(() => cancelMirrorPublish, [cancelMirrorPublish, editor]);
+
   const scheduleReviewResolutionPublish = useCallback((attempt = 0) => {
     if (reviewResolutionPublishTimerRef.current !== null) {
       window.clearTimeout(reviewResolutionPublishTimerRef.current);
@@ -719,35 +758,22 @@ export function PlateMarkdownEditor({
     const publishFromSharedDoc = (_update: Uint8Array, origin: unknown) => {
       if (disposed) return;
       if (!shouldMirrorSharedDocUpdate(editor, origin)) return;
-      // Bump the value revision synchronously: the deferred timer below can
-      // be cancelled by an effect re-run racing this update (the remote
-      // change itself re-renders the app), and a missed bump leaves
-      // version-keyed selectors (the review rail) stale.
+      // Bump the value revision synchronously: the debounced publish can be
+      // cancelled by an editor swap racing this update (the remote change
+      // itself re-renders the app), and a missed bump leaves version-keyed
+      // selectors (the review rail) stale.
       setExternalValueRevision((revision) => revision + 1);
-      if (yjsChangeFallbackTimerRef.current !== null) {
-        window.clearTimeout(yjsChangeFallbackTimerRef.current);
-      }
-      // Serialize on a 0ms timer: the doc 'update' event fires before
-      // slate-yjs has applied the change to the editor children.
-      yjsChangeFallbackTimerRef.current = window.setTimeout(() => {
-        yjsChangeFallbackTimerRef.current = null;
-        if (disposed) return;
-        publishSerializedValue(editor.children as PlateValue, {
-          guardUnhydratedBlank: true,
-        });
-      }, 0);
+      // The debounced publish serializes after slate-yjs has applied the
+      // change to the editor children (the doc 'update' event fires first).
+      scheduleMirrorPublish({ guardUnhydratedBlank: true });
     };
 
     doc.on('update', publishFromSharedDoc);
     return () => {
       disposed = true;
       doc.off('update', publishFromSharedDoc);
-      if (yjsChangeFallbackTimerRef.current !== null) {
-        window.clearTimeout(yjsChangeFallbackTimerRef.current);
-        yjsChangeFallbackTimerRef.current = null;
-      }
     };
-  }, [collabDocumentId, collabEnabled, collabInitTick, editor, publishSerializedValue]);
+  }, [collabDocumentId, collabEnabled, collabInitTick, editor, scheduleMirrorPublish]);
 
   // Replies/resolves and synced suggestions live in the store, not the editor
   // value, so an editor-value change won't fire. Mirror store changes too.
@@ -755,11 +781,9 @@ export function PlateMarkdownEditor({
   // exactly one editor at a time (this subscription assumes a single editor).
   useEffect(() => {
     return useReviewStore.subscribe(() => {
-      publishSerializedValue(editor.children as PlateValue, {
-        guardUnhydratedBlank: collabEnabled,
-      });
+      scheduleMirrorPublish({ guardUnhydratedBlank: collabEnabled });
     });
-  }, [collabEnabled, editor, publishSerializedValue]);
+  }, [collabEnabled, scheduleMirrorPublish]);
 
   // Viewing is the user's read-only mode; a collab editor is additionally
   // read-only whenever it is not live (disconnected or reseeding) — no
@@ -786,7 +810,7 @@ export function PlateMarkdownEditor({
               syncSuggestionsFromValue(meta, value as never)
             );
           }
-          publishSerializedMarkdown(serialize(value as PlateValue));
+          scheduleMirrorPublish();
         }}
       >
         <PlateValueRevisionBridge revision={externalValueRevision} />
