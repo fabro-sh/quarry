@@ -16,6 +16,7 @@ mod review;
 mod search_handlers;
 mod session;
 mod sse;
+mod transaction_handlers;
 
 pub use session::{MSG_QUARRY_CHECKPOINT, MSG_QUARRY_CHECKPOINT_FAILED};
 
@@ -68,6 +69,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
+use transaction_handlers::BeginTransactionRequest;
 use utoipa::{OpenApi, ToSchema};
 use uuid::Uuid;
 
@@ -250,22 +252,22 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
         )
         .route(
             "/v1/libraries/{library}/transactions",
-            post(begin_transaction),
+            post(transaction_handlers::begin_transaction),
         )
         .route(
             "/v1/libraries/{library}/transactions/{tx}/documents/{*path}",
-            put(stage_put_document)
-                .post(post_transaction_document_action)
-                .patch(patch_transaction_document_metadata)
-                .delete(stage_delete_document),
+            put(transaction_handlers::stage_put_document)
+                .post(transaction_handlers::post_transaction_document_action)
+                .patch(transaction_handlers::patch_transaction_document_metadata)
+                .delete(transaction_handlers::stage_delete_document),
         )
         .route(
             "/v1/libraries/{library}/transactions/{tx}/commit",
-            post(commit_transaction),
+            post(transaction_handlers::commit_transaction),
         )
         .route(
             "/v1/libraries/{library}/transactions/{tx}/rollback",
-            post(rollback_transaction),
+            post(transaction_handlers::rollback_transaction),
         )
         .route(
             "/v1/libraries/{library}/git/peers",
@@ -576,13 +578,13 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         post_document_action,
         patch_document_metadata,
         delete_document,
-        begin_transaction,
-        stage_put_document,
-        post_transaction_document_action,
-        patch_transaction_document_metadata,
-        stage_delete_document,
-        commit_transaction,
-        rollback_transaction,
+        transaction_handlers::begin_transaction,
+        transaction_handlers::stage_put_document,
+        transaction_handlers::post_transaction_document_action,
+        transaction_handlers::patch_transaction_document_metadata,
+        transaction_handlers::stage_delete_document,
+        transaction_handlers::commit_transaction,
+        transaction_handlers::rollback_transaction,
         git_handlers::create_git_peer,
         git_handlers::list_git_peers,
         git_handlers::git_import,
@@ -2112,168 +2114,6 @@ async fn delete_document(
     ))
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct BeginTransactionRequest {
-    pub actor: Option<String>,
-    pub message: Option<String>,
-    pub provenance: Option<JsonValue>,
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/transactions",
-    params(("library" = String, Path)),
-    request_body = BeginTransactionRequest,
-    responses((status = 201, body = TransactionRecord))
-)]
-async fn begin_transaction(
-    State(state): State<AppState>,
-    Path(library): Path<String>,
-    Json(request): Json<BeginTransactionRequest>,
-) -> Result<(StatusCode, Json<TransactionRecord>), ApiError> {
-    Ok((
-        StatusCode::CREATED,
-        Json(
-            state
-                .store
-                .begin_transaction(
-                    &library,
-                    DocumentSource::Rest,
-                    request.actor,
-                    request.message,
-                    request.provenance.unwrap_or_else(|| serde_json::json!({})),
-                )
-                .await?,
-        ),
-    ))
-}
-
-#[utoipa::path(
-    put,
-    path = "/v1/libraries/{library}/transactions/{tx}/documents/{path}",
-    params(("library" = String, Path), ("tx" = String, Path), ("path" = String, Path)),
-    request_body = String,
-    responses((status = 200, body = JsonValue))
-)]
-async fn stage_put_document(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((library, tx, path)): Path<(String, String, String)>,
-    body: Bytes,
-) -> Result<Response, ApiError> {
-    scoped_transaction(&state.store, &library, &tx).await?;
-    let content_type = content_type(&headers);
-    let metadata = metadata_from_headers(&headers, &content_type)?;
-    let version = state
-        .store
-        .stage_put(&tx, &path, body.to_vec(), metadata, &content_type)
-        .await?;
-    json_with_etag(StatusCode::OK, &version, &version.id)
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/transactions/{tx}/documents/{path}/move",
-    params(("library" = String, Path), ("tx" = String, Path), ("path" = String, Path)),
-    request_body = MoveRequest,
-    responses((status = 200, body = JsonValue))
-)]
-async fn post_transaction_document_action(
-    State(state): State<AppState>,
-    Path((library, tx, path)): Path<(String, String, String)>,
-    Json(request): Json<MoveRequest>,
-) -> Result<Json<JsonValue>, ApiError> {
-    let (from_path, subresource) = parse_document_subresource(&path);
-    if subresource != DocumentSubResource::Move {
-        return Err(QuarryError::NotFound(path).into());
-    }
-    scoped_transaction(&state.store, &library, &tx).await?;
-    state
-        .store
-        .stage_move(&tx, from_path, &request.to_path)
-        .await?;
-    Ok(Json(serde_json::json!({"ok": true})))
-}
-
-#[utoipa::path(
-    patch,
-    path = "/v1/libraries/{library}/transactions/{tx}/documents/{path}/metadata",
-    params(("library" = String, Path), ("tx" = String, Path), ("path" = String, Path)),
-    request_body = JsonValue,
-    responses((status = 200, body = JsonValue))
-)]
-async fn patch_transaction_document_metadata(
-    State(state): State<AppState>,
-    Path((library, tx, path)): Path<(String, String, String)>,
-    Json(patch): Json<JsonValue>,
-) -> Result<Response, ApiError> {
-    let (document_path, subresource) = parse_document_subresource(&path);
-    if subresource != DocumentSubResource::Metadata {
-        return Err(QuarryError::InvalidPath(
-            "metadata patch endpoint must end with /metadata".to_string(),
-        )
-        .into());
-    }
-    scoped_transaction(&state.store, &library, &tx).await?;
-    let version = state
-        .store
-        .stage_metadata(&tx, document_path, patch)
-        .await?;
-    json_with_etag(StatusCode::OK, &version, &version.id)
-}
-
-#[utoipa::path(
-    delete,
-    path = "/v1/libraries/{library}/transactions/{tx}/documents/{path}",
-    params(("library" = String, Path), ("tx" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = JsonValue))
-)]
-async fn stage_delete_document(
-    State(state): State<AppState>,
-    Path((library, tx, path)): Path<(String, String, String)>,
-) -> Result<Json<JsonValue>, ApiError> {
-    scoped_transaction(&state.store, &library, &tx).await?;
-    state.store.stage_delete(&tx, &path).await?;
-    Ok(Json(serde_json::json!({"ok": true})))
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/transactions/{tx}/commit",
-    params(("library" = String, Path), ("tx" = String, Path)),
-    responses((status = 200, body = TransactionRecord))
-)]
-async fn commit_transaction(
-    State(state): State<AppState>,
-    Path((library, tx)): Path<(String, String)>,
-) -> Result<Json<TransactionRecord>, ApiError> {
-    scoped_transaction(&state.store, &library, &tx).await?;
-    Ok(Json(state.store.commit_transaction(&tx).await?))
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/transactions/{tx}/rollback",
-    params(("library" = String, Path), ("tx" = String, Path)),
-    responses((status = 200, body = TransactionRecord))
-)]
-async fn rollback_transaction(
-    State(state): State<AppState>,
-    Path((library, tx)): Path<(String, String)>,
-) -> Result<Json<TransactionRecord>, ApiError> {
-    scoped_transaction(&state.store, &library, &tx).await?;
-    Ok(Json(state.store.rollback_transaction(&tx).await?))
-}
-
-async fn scoped_transaction(store: &QuarryStore, library: &str, tx: &str) -> Result<(), ApiError> {
-    let library = store.get_library(library).await?;
-    let transaction = store.get_transaction(tx).await?;
-    if transaction.library_id != library.id {
-        return Err(QuarryError::NotFound(format!("transaction {tx}")).into());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 #[expect(
     clippy::items_after_test_module,
@@ -2838,7 +2678,7 @@ mod tests {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DocumentSubResource<'path> {
+pub(crate) enum DocumentSubResource<'path> {
     Document,
     Backlinks,
     OutgoingLinks,
@@ -2875,7 +2715,7 @@ enum TmpDocumentSubResource<'path> {
     Promote,
 }
 
-fn parse_document_subresource(path: &str) -> (&str, DocumentSubResource<'_>) {
+pub(crate) fn parse_document_subresource(path: &str) -> (&str, DocumentSubResource<'_>) {
     if let Some((path, token_id)) = document_share_revoke_path(path) {
         return (path, DocumentSubResource::ShareRevoke(token_id));
     }
