@@ -2762,101 +2762,118 @@ async fn get_document(
     Path((library, path)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    if let Some(path) = path.strip_suffix("/backlinks") {
-        return json_response(
-            StatusCode::OK,
-            &state.store.backlinks(&library, path).await?,
-        );
-    }
-    if let Some(path) = path.strip_suffix("/outgoing-links") {
-        return json_response(
-            StatusCode::OK,
-            &state.store.outgoing_links(&library, path).await?,
-        );
-    }
-    if let Some(path) = path.strip_suffix("/blocks") {
-        touch_agent_presence(&state, &headers, Some(&library), path).await?;
-        return gateway::document_blocks(&state, &library, path).await;
-    }
-    if let Some(path) = path.strip_suffix("/snapshot") {
-        touch_agent_presence(&state, &headers, Some(&library), path).await?;
-        return json_response(
-            StatusCode::OK,
-            &agent_document_snapshot(&state.store, &library, path).await?,
-        );
-    }
-    if let Some(path) = path.strip_suffix("/review") {
-        touch_agent_presence(&state, &headers, Some(&library), path).await?;
-        let include_resolved = query.review.include_resolved()?;
-        return json_response(
-            StatusCode::OK,
-            &agent_document_review(&state.store, &library, path, include_resolved).await?,
-        );
-    }
-    if let Some(path) = path.strip_suffix("/presence") {
-        touch_agent_presence(&state, &headers, Some(&library), path).await?;
-        state.store.head_document(&library, path).await?;
-        return json_response(
-            StatusCode::OK,
-            &state.agent_presence.list(Some(&library), path),
-        );
-    }
-    if let Some(path) = path.strip_suffix("/events/stream") {
-        let document = state.store.head_document(&library, path).await?;
-        let presence_guard = optional_header(&headers, "x-agent-id")?.map(|agent_id| {
-            PresenceStreamGuard::open(
-                state.agent_presence.clone(),
-                Some(library.clone()),
-                path.to_string(),
-                document.id,
-                agent_id,
+    let (document_path, subresource) = parse_document_subresource(&path);
+    match subresource {
+        DocumentSubResource::Backlinks => {
+            return json_response(
+                StatusCode::OK,
+                &state.store.backlinks(&library, document_path).await?,
+            );
+        }
+        DocumentSubResource::OutgoingLinks => {
+            return json_response(
+                StatusCode::OK,
+                &state.store.outgoing_links(&library, document_path).await?,
+            );
+        }
+        DocumentSubResource::Blocks => {
+            touch_agent_presence(&state, &headers, Some(&library), document_path).await?;
+            return gateway::document_blocks(&state, &library, document_path).await;
+        }
+        DocumentSubResource::Snapshot => {
+            touch_agent_presence(&state, &headers, Some(&library), document_path).await?;
+            return json_response(
+                StatusCode::OK,
+                &agent_document_snapshot(&state.store, &library, document_path).await?,
+            );
+        }
+        DocumentSubResource::Review => {
+            touch_agent_presence(&state, &headers, Some(&library), document_path).await?;
+            let include_resolved = query.review.include_resolved()?;
+            return json_response(
+                StatusCode::OK,
+                &agent_document_review(&state.store, &library, document_path, include_resolved)
+                    .await?,
+            );
+        }
+        DocumentSubResource::Presence => {
+            touch_agent_presence(&state, &headers, Some(&library), document_path).await?;
+            state.store.head_document(&library, document_path).await?;
+            return json_response(
+                StatusCode::OK,
+                &state.agent_presence.list(Some(&library), document_path),
+            );
+        }
+        DocumentSubResource::EventsStream => {
+            let document = state.store.head_document(&library, document_path).await?;
+            let presence_guard = optional_header(&headers, "x-agent-id")?.map(|agent_id| {
+                PresenceStreamGuard::open(
+                    state.agent_presence.clone(),
+                    Some(library.clone()),
+                    document_path.to_string(),
+                    document.id,
+                    agent_id,
+                )
+            });
+            return Ok(events_for_library(
+                &state.store,
+                &library,
+                Some(document_path.to_string()),
+                presence_guard,
+                state.shutdown_token(),
             )
-        });
-        return Ok(events_for_library(
-            &state.store,
-            &library,
-            Some(path.to_string()),
-            presence_guard,
-            state.shutdown_token(),
-        )
-        .await?
-        .into_response());
-    }
-    if let Some(path) = path.strip_suffix("/share") {
-        return json_response(
-            StatusCode::OK,
-            &state.store.collab_invite_tokens(&library, path).await?,
-        );
-    }
-    if let Some(path) = path.strip_suffix("/versions/raw") {
-        return json_response(
-            StatusCode::OK,
-            &state.store.raw_version_history(&library, path).await?,
-        );
-    }
-    if let Some(path) = path.strip_suffix("/versions") {
-        return json_response(
-            StatusCode::OK,
-            &state.store.version_history(&library, path).await?,
-        );
-    }
-    if let Some((path, version)) = document_version_diff_path(&path) {
-        return json_response(
-            StatusCode::OK,
-            &state
-                .store
-                .version_diff(&library, path, version, query.against.as_deref())
-                .await?,
-        );
-    }
-    if let Some((path, version)) = document_version_path(&path) {
-        return json_response(
-            StatusCode::OK,
-            &state
-                .store
-                .document_version(&library, path, version)
-                .await?,
-        );
+            .await?
+            .into_response());
+        }
+        DocumentSubResource::Share => {
+            return json_response(
+                StatusCode::OK,
+                &state
+                    .store
+                    .collab_invite_tokens(&library, document_path)
+                    .await?,
+            );
+        }
+        DocumentSubResource::RawVersions => {
+            return json_response(
+                StatusCode::OK,
+                &state
+                    .store
+                    .raw_version_history(&library, document_path)
+                    .await?,
+            );
+        }
+        DocumentSubResource::Versions => {
+            return json_response(
+                StatusCode::OK,
+                &state.store.version_history(&library, document_path).await?,
+            );
+        }
+        DocumentSubResource::Version(version) => {
+            return json_response(
+                StatusCode::OK,
+                &state
+                    .store
+                    .document_version(&library, document_path, version)
+                    .await?,
+            );
+        }
+        DocumentSubResource::VersionDiff(version) => {
+            return json_response(
+                StatusCode::OK,
+                &state
+                    .store
+                    .version_diff(&library, document_path, version, query.against.as_deref())
+                    .await?,
+            );
+        }
+        DocumentSubResource::Document
+        | DocumentSubResource::Metadata
+        | DocumentSubResource::Move
+        | DocumentSubResource::ShareRevoke(_)
+        | DocumentSubResource::Transactions
+        | DocumentSubResource::Ttl
+        | DocumentSubResource::VersionRestore(_) => {}
     }
 
     touch_agent_presence(&state, &headers, Some(&library), &path).await?;
@@ -3197,12 +3214,13 @@ async fn patch_document_metadata(
     Path((library, path)): Path<(String, String)>,
     Json(patch): Json<JsonValue>,
 ) -> Result<Response, ApiError> {
-    if let Some(path) = path.strip_suffix("/ttl") {
+    let (document_path, subresource) = parse_document_subresource(&path);
+    if subresource == DocumentSubResource::Ttl {
         let request: TtlRequest = serde_json::from_value(patch)
             .map_err(|error| QuarryError::InvalidPath(format!("invalid ttl request: {error}")))?;
         let entry = state
             .store
-            .set_document_ttl(&library, path, request.expires_at)
+            .set_document_ttl(&library, document_path, request.expires_at)
             .await?;
         return json_response(
             StatusCode::OK,
@@ -3212,26 +3230,26 @@ async fn patch_document_metadata(
         );
     }
 
-    let Some(path) = path.strip_suffix("/metadata") else {
+    if subresource != DocumentSubResource::Metadata {
         return Err(QuarryError::InvalidPath(
             "metadata patch endpoint must end with /metadata".to_string(),
         )
         .into());
-    };
+    }
     // Phase 4: a metadata patch on a BlockDocument must NOT destroy the
     // block projection (the legacy path re-puts the content, which clears
     // rows and review items fail-closed, and bypasses the session mutex).
     // It routes through the gateway as a zero-op transaction with a
     // metadata override instead — see `markdown_write::patch_block_document_metadata`.
-    if let Ok(head) = state.store.head_document(&library, path).await
-        && quarry_storage::document_kind(path, &head.content_type)
+    if let Ok(head) = state.store.head_document(&library, document_path).await
+        && quarry_storage::document_kind(document_path, &head.content_type)
             == quarry_storage::DocumentKind::BlockDocument
     {
         return gateway::gateway_reply(
             markdown_write::patch_block_document_metadata(
                 &state,
                 &library,
-                path,
+                document_path,
                 patch,
                 precondition_from_headers(&headers)?,
             )
@@ -3242,7 +3260,7 @@ async fn patch_document_metadata(
         .store
         .patch_metadata(
             &library,
-            path,
+            document_path,
             patch,
             DocumentSource::Rest,
             precondition_from_headers(&headers)?,
@@ -3284,23 +3302,24 @@ async fn post_document_action(
 ) -> Result<Response, ApiError> {
     let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
     let actor = transaction_metadata_from_headers(&headers)?.actor;
-    if let Some((path, version)) = document_version_restore_path(&path) {
-        touch_agent_presence(&state, &headers, Some(&library), path).await?;
+    let (document_path, subresource) = parse_document_subresource(&path);
+    if let DocumentSubResource::VersionRestore(version) = subresource {
+        touch_agent_presence(&state, &headers, Some(&library), document_path).await?;
         let target = state
             .store
-            .document_version(&library, path, version)
+            .document_version(&library, document_path, version)
             .await?;
         // BlockDocument restores are whole-file writes through the reconciler
         // (gateway-dispatched: projection preserved, session-mode aware);
         // RawDocuments keep the byte path.
-        if quarry_storage::document_kind(path, &target.version.content_type)
+        if quarry_storage::document_kind(document_path, &target.version.content_type)
             == quarry_storage::DocumentKind::BlockDocument
         {
             return gateway::gateway_reply(
                 markdown_write::restore_block_document_version(
                     &state,
                     &library,
-                    path,
+                    document_path,
                     &target,
                     origin_id.clone(),
                     actor.clone(),
@@ -3312,7 +3331,7 @@ async fn post_document_action(
             .store
             .restore_document_version_with_origin(
                 &library,
-                path,
+                document_path,
                 version,
                 origin_id.clone(),
                 actor.clone(),
@@ -3321,7 +3340,7 @@ async fn post_document_action(
         return json_with_etag(StatusCode::OK, &outcome, &outcome.version.id);
     }
 
-    if let Some(from_path) = path.strip_suffix("/move") {
+    if subresource == DocumentSubResource::Move {
         let to_path = request
             .get("to_path")
             .and_then(JsonValue::as_str)
@@ -3330,7 +3349,7 @@ async fn post_document_action(
             .store
             .move_document_with_origin(
                 &library,
-                from_path,
+                document_path,
                 to_path,
                 DocumentSource::Rest,
                 origin_id.clone(),
@@ -3340,17 +3359,17 @@ async fn post_document_action(
         return json_response(StatusCode::OK, &transaction);
     }
 
-    if let Some(path) = path.strip_suffix("/share") {
+    if subresource == DocumentSubResource::Share {
         let request: CreateCollabInviteRequest = serde_json::from_value(request)
             .map_err(|error| QuarryError::InvalidPath(format!("invalid share request: {error}")))?;
         let token = state
             .store
-            .create_collab_invite_token(&library, path, &request.role, request.by_hint)
+            .create_collab_invite_token(&library, document_path, &request.role, request.by_hint)
             .await?;
         return json_response(StatusCode::CREATED, &token);
     }
 
-    if let Some((_, token_id)) = collab_invite_revoke_path(&path) {
+    if let DocumentSubResource::ShareRevoke(token_id) = subresource {
         let token = state.store.revoke_collab_invite_token(token_id).await?;
         return json_response(StatusCode::OK, &token);
     }
@@ -3360,17 +3379,19 @@ async fn post_document_action(
     // route. `POST .../transactions` is the single mutation contract;
     // GET `/review` (the read projection) is unaffected.
 
-    if let Some(path) = path.strip_suffix("/presence") {
+    if subresource == DocumentSubResource::Presence {
         let request: AgentPresenceRequest = serde_json::from_value(request).map_err(|error| {
             QuarryError::InvalidPath(format!("invalid presence request: {error}"))
         })?;
-        let response = agent_presence_document(&state, &headers, &library, path, request).await?;
+        let response =
+            agent_presence_document(&state, &headers, &library, document_path, request).await?;
         return json_response(StatusCode::OK, &response);
     }
 
-    if let Some(path) = path.strip_suffix("/transactions") {
-        touch_agent_presence(&state, &headers, Some(&library), path).await?;
-        return gateway::document_block_transactions(&state, &library, path, request).await;
+    if subresource == DocumentSubResource::Transactions {
+        touch_agent_presence(&state, &headers, Some(&library), document_path).await?;
+        return gateway::document_block_transactions(&state, &library, document_path, request)
+            .await;
     }
 
     Err(QuarryError::NotFound(path).into())
@@ -4565,6 +4586,48 @@ mod tests {
     }
 
     #[test]
+    fn document_subresource_parser_matches_suffix_routes_without_eating_document_paths() {
+        assert_eq!(
+            parse_document_subresource("notes/daily.md"),
+            ("notes/daily.md", DocumentSubResource::Document)
+        );
+        assert_eq!(
+            parse_document_subresource("notes/daily.md/blocks"),
+            ("notes/daily.md", DocumentSubResource::Blocks)
+        );
+        assert_eq!(
+            parse_document_subresource("notes/daily.md/versions/raw"),
+            ("notes/daily.md", DocumentSubResource::RawVersions)
+        );
+        assert_eq!(
+            parse_document_subresource("notes/daily.md/versions/v1/diff"),
+            ("notes/daily.md", DocumentSubResource::VersionDiff("v1"))
+        );
+        assert_eq!(
+            parse_document_subresource("notes/daily.md/versions/v1/restore"),
+            ("notes/daily.md", DocumentSubResource::VersionRestore("v1"))
+        );
+        assert_eq!(
+            parse_document_subresource("notes/daily.md/share/token-1/revoke"),
+            (
+                "notes/daily.md",
+                DocumentSubResource::ShareRevoke("token-1")
+            )
+        );
+        assert_eq!(
+            parse_document_subresource("notes/versions/raw"),
+            ("notes", DocumentSubResource::RawVersions)
+        );
+        assert_eq!(
+            parse_document_subresource("notes/daily.md/versions/v1/extra"),
+            (
+                "notes/daily.md/versions/v1/extra",
+                DocumentSubResource::Document
+            )
+        );
+    }
+
+    #[test]
     fn non_loopback_warning_policy_only_warns_for_external_binds() {
         assert!(!should_warn_non_loopback("127.0.0.1:7831".parse().unwrap()));
         assert!(!should_warn_non_loopback("[::1]:7831".parse().unwrap()));
@@ -5094,6 +5157,71 @@ fn export_options(request: &GitExportRequest) -> GitExportOptions {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DocumentSubResource<'path> {
+    Document,
+    Backlinks,
+    OutgoingLinks,
+    Blocks,
+    Snapshot,
+    Review,
+    Presence,
+    EventsStream,
+    Share,
+    ShareRevoke(&'path str),
+    RawVersions,
+    Versions,
+    Version(&'path str),
+    VersionDiff(&'path str),
+    VersionRestore(&'path str),
+    Metadata,
+    Ttl,
+    Move,
+    Transactions,
+}
+
+fn parse_document_subresource(path: &str) -> (&str, DocumentSubResource<'_>) {
+    if let Some((path, token_id)) = document_share_revoke_path(path) {
+        return (path, DocumentSubResource::ShareRevoke(token_id));
+    }
+    if let Some((path, version)) = document_version_path_with_suffix(path, "/diff") {
+        return (path, DocumentSubResource::VersionDiff(version));
+    }
+    if let Some((path, version)) = document_version_path_with_suffix(path, "/restore") {
+        return (path, DocumentSubResource::VersionRestore(version));
+    }
+    if let Some(path) = path.strip_suffix("/versions/raw") {
+        return (path, DocumentSubResource::RawVersions);
+    }
+    if let Some(path) = path.strip_suffix("/versions") {
+        return (path, DocumentSubResource::Versions);
+    }
+    if let Some((path, version)) = document_version_path(path) {
+        return (path, DocumentSubResource::Version(version));
+    }
+
+    for (suffix, subresource) in [
+        ("/events/stream", DocumentSubResource::EventsStream),
+        ("/outgoing-links", DocumentSubResource::OutgoingLinks),
+        ("/transactions", DocumentSubResource::Transactions),
+        ("/backlinks", DocumentSubResource::Backlinks),
+        ("/metadata", DocumentSubResource::Metadata),
+        ("/presence", DocumentSubResource::Presence),
+        ("/snapshot", DocumentSubResource::Snapshot),
+        ("/blocks", DocumentSubResource::Blocks),
+        ("/review", DocumentSubResource::Review),
+        ("/share", DocumentSubResource::Share),
+        ("/move", DocumentSubResource::Move),
+        ("/ttl", DocumentSubResource::Ttl),
+    ] {
+        if let Some(path) = path.strip_suffix(suffix) {
+            return (path, subresource);
+        }
+    }
+
+    (path, DocumentSubResource::Document)
+}
+
 fn document_version_path(path: &str) -> Option<(&str, &str)> {
     let (path, version) = path.rsplit_once("/versions/")?;
     if path.is_empty() || version.is_empty() || version.contains('/') {
@@ -5102,15 +5230,14 @@ fn document_version_path(path: &str) -> Option<(&str, &str)> {
     Some((path, version))
 }
 
-fn document_version_diff_path(path: &str) -> Option<(&str, &str)> {
-    document_version_path(path.strip_suffix("/diff")?)
+fn document_version_path_with_suffix<'path>(
+    path: &'path str,
+    suffix: &str,
+) -> Option<(&'path str, &'path str)> {
+    document_version_path(path.strip_suffix(suffix)?)
 }
 
-fn document_version_restore_path(path: &str) -> Option<(&str, &str)> {
-    document_version_path(path.strip_suffix("/restore")?)
-}
-
-fn collab_invite_revoke_path(path: &str) -> Option<(&str, &str)> {
+fn document_share_revoke_path(path: &str) -> Option<(&str, &str)> {
     let path = path.strip_suffix("/revoke")?;
     let (document_path, token_id) = path.rsplit_once("/share/")?;
     if document_path.is_empty() || token_id.is_empty() || token_id.contains('/') {
