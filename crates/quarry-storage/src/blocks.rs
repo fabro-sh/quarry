@@ -435,16 +435,15 @@ impl QuarryStore {
     /// Replaces a document's whole block row set in one transaction.
     /// Per-operation mutation arrives with the Phase 2 gateway.
     pub async fn replace_block_tree(&self, document_id: &str, rows: &[BlockRow]) -> Result<()> {
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            require_document_conn(&conn, document_id).await?;
-            replace_block_rows_conn(&conn, document_id, rows).await
-        }
-        .await;
-        finish_tx(&conn, result).await
+        let document_id = document_id.to_string();
+        let rows = rows.to_vec();
+        self.write_transaction(move |_store, conn| {
+            Box::pin(async move {
+                require_document_conn(conn, &document_id).await?;
+                replace_block_rows_conn(conn, &document_id, &rows).await
+            })
+        })
+        .await
     }
 
     /// Imports a Markdown document as canonical block rows.

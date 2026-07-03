@@ -26,6 +26,7 @@ use std::fs::{self, File, OpenOptions};
 use std::future::Future;
 use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::process;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -37,6 +38,8 @@ const TMP_TRANSACTION_LIBRARY_ID: &str = "__tmp__";
 pub const TMP_DOCUMENT_SECRET_LEN: usize = 32;
 pub const TMP_DOCUMENT_MARKDOWN_MAX_BYTES: usize = 1024 * 1024;
 pub const TMP_DOCUMENT_DEFAULT_CONTENT_TYPE: &str = "text/markdown";
+
+type WriteTransactionFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
 /// True when `value` has the exact shape of a tmp document capability secret.
 pub fn is_tmp_document_secret(value: &str) -> bool {
@@ -494,39 +497,49 @@ impl QuarryStore {
         GLOBAL_OPERATION_ACTIVE.scope((), future).await
     }
 
-    pub async fn create_library(&self, slug: &str) -> Result<Library> {
-        validate_slug(slug)?;
+    pub(crate) async fn write_transaction<T, F>(&self, f: F) -> Result<T>
+    where
+        F: for<'a> FnOnce(&'a QuarryStore, &'a Connection) -> WriteTransactionFuture<'a, T>,
+    {
         let _operation_guard = self.normal_write_gate().await;
         let _guard = self.acquire_write_lock().await;
         let conn = self.conn()?;
         begin_immediate(&conn).await?;
-        let result = async {
-            if let Some(existing) = self.library_by_slug_or_id_conn(&conn, slug).await? {
-                return Ok(existing);
-            }
-            let now = now_timestamp();
-            let library = Library {
-                id: Uuid::new_v4().to_string(),
-                slug: slug.to_string(),
-                created_at: now,
-                settings: serde_json::json!({}),
-            };
-            conn.execute(
-                "INSERT INTO libraries (id, slug, created_at, settings_json) VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    library.id.clone(),
-                    library.slug.clone(),
-                    library.created_at.clone(),
-                    library.settings.to_string()
-                ],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            ensure_inode_conn(&conn, &library.id, "").await?;
-            Ok(library)
-        }
-        .await;
+        let result = f(self, &conn).await;
         finish_tx(&conn, result).await
+    }
+
+    pub async fn create_library(&self, slug: &str) -> Result<Library> {
+        validate_slug(slug)?;
+        let slug = slug.to_string();
+        self.write_transaction(move |store, conn| {
+            Box::pin(async move {
+                if let Some(existing) = store.library_by_slug_or_id_conn(conn, &slug).await? {
+                    return Ok(existing);
+                }
+                let now = now_timestamp();
+                let library = Library {
+                    id: Uuid::new_v4().to_string(),
+                    slug,
+                    created_at: now,
+                    settings: serde_json::json!({}),
+                };
+                conn.execute(
+                    "INSERT INTO libraries (id, slug, created_at, settings_json) VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        library.id.clone(),
+                        library.slug.clone(),
+                        library.created_at.clone(),
+                        library.settings.to_string()
+                    ],
+                )
+                .await
+                .map_err(map_turso_error)?;
+                ensure_inode_conn(conn, &library.id, "").await?;
+                Ok(library)
+            })
+        })
+        .await
     }
 
     pub async fn list_libraries(&self) -> Result<Vec<Library>> {
