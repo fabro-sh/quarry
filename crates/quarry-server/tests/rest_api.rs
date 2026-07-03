@@ -46,15 +46,7 @@ fn assert_json_uuid(value: &Value) {
 
 #[tokio::test]
 async fn rest_api_attaches_and_preserves_request_ids() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
-    let app = router(store);
+    let (_root, app, _store) = document_test_app().await;
 
     let first = app
         .clone()
@@ -117,15 +109,7 @@ async fn rest_api_attaches_and_preserves_request_ids() {
 #[tokio::test(flavor = "current_thread")]
 async fn request_tracing_redacts_tmp_capability_paths_without_redacting_library_paths() {
     let (logs, _guard) = capture_debug_logs();
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
-    let app = router(store);
+    let (_root, app, _store) = document_test_app().await;
 
     let response = app
         .clone()
@@ -342,15 +326,7 @@ fn capture_debug_logs() -> (CapturedLogs, tracing::dispatcher::DefaultGuard) {
 
 #[tokio::test]
 async fn rest_api_supports_documents_transactions_etags_and_openapi() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
-    let app = router(store);
+    let (_root, app, _store) = document_test_app().await;
 
     let response = app
         .clone()
@@ -686,15 +662,7 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
 async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
-    let app = router(store);
+    let (_root, app, _store) = document_test_app().await;
 
     let response = app
         .clone()
