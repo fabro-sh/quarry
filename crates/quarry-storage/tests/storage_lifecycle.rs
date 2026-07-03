@@ -11,7 +11,9 @@ use quarry_storage::{
     DocumentScopeRef, NewBlockReviewItem, QuarryStore, StoreConfig, StoreEventKind, TmpTtl,
     TransactionMetadata, group_version_history,
 };
-use std::time::Duration;
+use std::{io, time::Duration};
+
+type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 fn history_version(
     id: &str,
@@ -2504,15 +2506,15 @@ async fn committed_transaction_move_can_reuse_deleted_target_path() {
 }
 
 #[tokio::test]
-async fn opening_old_schema_migrates_documents_to_active_path_uniqueness() {
-    let root = tempfile::tempdir().unwrap();
+async fn opening_old_schema_migrates_documents_to_active_path_uniqueness() -> TestResult {
+    let root = tempfile::tempdir()?;
     let db_path = root.path().join("quarry.db");
     {
-        let db = turso::Builder::new_local(db_path.to_str().unwrap())
-            .build()
-            .await
-            .unwrap();
-        let conn = db.connect().unwrap();
+        let db_path = db_path.to_str().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "database path should be UTF-8")
+        })?;
+        let db = turso::Builder::new_local(db_path).build().await?;
+        let conn = db.connect()?;
         conn.execute_batch(
             r#"
             CREATE TABLE documents(
@@ -2527,8 +2529,7 @@ async fn opening_old_schema_migrates_documents_to_active_path_uniqueness() {
             );
             "#,
         )
-        .await
-        .unwrap();
+        .await?;
     }
 
     let store = QuarryStore::open(StoreConfig {
@@ -2536,9 +2537,8 @@ async fn opening_old_schema_migrates_documents_to_active_path_uniqueness() {
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
-    .await
-    .unwrap();
-    let library = store.create_library("migrated").await.unwrap();
+    .await?;
+    let library = store.create_library("migrated").await?;
     let first = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -2551,12 +2551,10 @@ async fn opening_old_schema_migrates_documents_to_active_path_uniqueness() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
+        .await?;
     store
         .delete_document(&library.slug, "same.md", DocumentSource::Rest)
-        .await
-        .unwrap();
+        .await?;
     let second = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -2569,19 +2567,19 @@ async fn opening_old_schema_migrates_documents_to_active_path_uniqueness() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
+        .await?;
 
     assert_ne!(first.document.id, second.document.id);
     drop(store);
 
-    let db = turso::Builder::new_local(db_path.to_str().unwrap())
-        .build()
-        .await
-        .unwrap();
-    let conn = db.connect().unwrap();
+    let db_path = db_path.to_str().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "database path should be UTF-8")
+    })?;
+    let db = turso::Builder::new_local(db_path).build().await?;
+    let conn = db.connect()?;
     let document_indexes = index_names(&conn, "documents").await;
     assert!(document_indexes.contains("idx_documents_active_library_path"));
+    Ok(())
 }
 
 #[tokio::test]
