@@ -352,27 +352,31 @@ pub(crate) struct LiveSession {
     checkpoint_task: StdMutex<Option<JoinHandle<()>>>,
     /// Bumped on every doc update (browser or server).
     update_seq: Arc<AtomicU64>,
+    committed: StdMutex<CommittedState>,
+    subscribers: AtomicUsize,
+}
+
+struct CommittedState {
     /// The `update_seq` covered by the last checkpoint.
-    checkpointed_seq: AtomicU64,
+    checkpointed_seq: u64,
     /// The head version the next checkpoint expects (last committed by this
     /// session, or the seed head).
-    head_version_id: StdMutex<String>,
-    /// The committed doc state as a v1-encoded snapshot (seed or last
-    /// commit), served to new subscribers and broadcast on every commit.
-    committed_snapshot: StdMutex<Vec<u8>>,
+    head_version_id: String,
+    /// The committed doc state as a v1-encoded snapshot (seed or last commit),
+    /// served to new subscribers and broadcast on every commit.
+    snapshot: Vec<u8>,
     /// The full review item set as of the last seed/checkpoint/transaction.
-    items: StdMutex<HashMap<String, BlockReviewItem>>,
+    items: HashMap<String, BlockReviewItem>,
     /// Last non-empty awareness author label, used by any checkpoint that
     /// observes a name-less awareness: the final one after the socket closed
     /// and awareness emptied, but also e.g. when a named participant leaves
-    /// cleanly while an unnamed one keeps editing — subsequent checkpoints
-    /// keep the last seen name until the session is dropped. Known gap: if a
-    /// client cleanly removes its awareness state and disconnects before any
-    /// checkpoint ever ran, the final checkpoint falls back to "browser" —
-    /// accepted, since the common abrupt close keeps the state and any prior
-    /// checkpoint primes the cache.
-    live_actor: StdMutex<Option<String>>,
-    subscribers: AtomicUsize,
+    /// cleanly while an unnamed one keeps editing — subsequent checkpoints keep
+    /// the last seen name until the session is dropped. Known gap: if a client
+    /// cleanly removes its awareness state and disconnects before any checkpoint
+    /// ever ran, the final checkpoint falls back to "browser" — accepted, since
+    /// the common abrupt close keeps the state and any prior checkpoint primes
+    /// the cache.
+    live_actor: Option<String>,
 }
 
 impl Drop for LiveSession {
@@ -475,11 +479,13 @@ impl LiveSession {
             awareness_task,
             checkpoint_task: StdMutex::new(None),
             update_seq,
-            checkpointed_seq: AtomicU64::new(0),
-            head_version_id: StdMutex::new(seed.head_version_id.clone()),
-            committed_snapshot: StdMutex::new(committed_snapshot),
-            items: StdMutex::new(items),
-            live_actor: StdMutex::new(None),
+            committed: StdMutex::new(CommittedState {
+                checkpointed_seq: 0,
+                head_version_id: seed.head_version_id.clone(),
+                snapshot: committed_snapshot,
+                items,
+                live_actor: None,
+            }),
             subscribers: AtomicUsize::new(0),
         });
 
@@ -557,7 +563,7 @@ impl LiveSession {
     /// The checkpoint-ack frame for the current committed state, sent to
     /// each new subscriber on join.
     pub(crate) fn committed_ack_frame(&self) -> Vec<u8> {
-        checkpoint_ack_frame(&self.committed_snapshot.lock().unwrap())
+        checkpoint_ack_frame(&self.committed.lock().unwrap().snapshot)
     }
 
     /// Captures the committed doc state under the doc write lock, records it,
@@ -566,16 +572,34 @@ impl LiveSession {
     /// proof of exclusivity: the session's awareness only lives inside its
     /// `RwLock`, so a mutable borrow can only come from the held write guard
     /// — the snapshot can never cover state a concurrent writer is mutating.
-    fn record_committed_snapshot(&self, awareness: &mut Awareness) {
+    fn record_committed(
+        &self,
+        awareness: &mut Awareness,
+        checkpointed_seq: u64,
+        head_version_id: String,
+        items: HashMap<String, BlockReviewItem>,
+    ) {
         let snapshot = awareness.doc().transact().snapshot().encode_v1();
         let frame = checkpoint_ack_frame(&snapshot);
-        *self.committed_snapshot.lock().unwrap() = snapshot;
+        {
+            let mut committed = self.committed.lock().unwrap();
+            committed.checkpointed_seq = checkpointed_seq;
+            committed.head_version_id = head_version_id;
+            committed.items = items;
+            committed.snapshot = snapshot;
+        }
         let _ = self.broadcast_tx.send(frame);
     }
 
     pub(crate) fn items_snapshot(&self) -> Vec<BlockReviewItem> {
-        let mut items: Vec<BlockReviewItem> =
-            self.items.lock().unwrap().values().cloned().collect();
+        let mut items: Vec<BlockReviewItem> = self
+            .committed
+            .lock()
+            .unwrap()
+            .items
+            .values()
+            .cloned()
+            .collect();
         items.sort_by(|left, right| left.id.cmp(&right.id));
         items
     }
@@ -603,7 +627,7 @@ impl LiveSession {
     }
 
     pub(crate) fn is_dirty(&self) -> bool {
-        self.update_seq.load(Ordering::SeqCst) != self.checkpointed_seq.load(Ordering::SeqCst)
+        self.update_seq.load(Ordering::SeqCst) != self.committed.lock().unwrap().checkpointed_seq
     }
 
     /// Projects the locked doc and commits it as the new canonical state:
@@ -617,16 +641,19 @@ impl LiveSession {
     ) -> Result<WriteOutcome, QuarryError> {
         let seq = self.update_seq.load(Ordering::SeqCst);
         let (projection, meta) = self.project_locked(awareness)?;
-        let prior_items = self.items.lock().unwrap().clone();
+        let prior_items = self.committed.lock().unwrap().items.clone();
         let now = now_timestamp();
         let items =
             reconcile_review_items(&self.document_id, &prior_items, &projection, &meta, &now);
         let transaction_actor = {
-            let mut live_actor = self.live_actor.lock().unwrap();
+            let mut committed = self.committed.lock().unwrap();
             if let Some(actor) = awareness_actor(awareness) {
-                *live_actor = Some(actor);
+                committed.live_actor = Some(actor);
             }
-            live_actor.clone().unwrap_or_else(|| "browser".to_string())
+            committed
+                .live_actor
+                .clone()
+                .unwrap_or_else(|| "browser".to_string())
         };
 
         for attempt in 0..CHECKPOINT_RETRY_LIMIT {
@@ -636,11 +663,12 @@ impl LiveSession {
                     self.document_id
                 )));
             };
-            if attempt > 0 || head.head_version_id != *self.head_version_id.lock().unwrap() {
+            let expected_head_version_id = self.committed.lock().unwrap().head_version_id.clone();
+            if attempt > 0 || head.head_version_id != expected_head_version_id {
                 tracing::warn!(
                     event = "collab.session.head_moved",
                     document_id = %self.document_id,
-                    expected = %self.head_version_id.lock().unwrap(),
+                    expected = %expected_head_version_id,
                     found = %head.head_version_id,
                     "external write raced a live session; the session state wins (transitional)"
                 );
@@ -685,10 +713,7 @@ impl LiveSession {
                 .await
             {
                 Ok(BlockMutationOutcome::Applied { outcome, .. }) => {
-                    self.checkpointed_seq.store(seq, Ordering::SeqCst);
-                    *self.head_version_id.lock().unwrap() = outcome.version.id.clone();
-                    *self.items.lock().unwrap() = items;
-                    self.record_committed_snapshot(awareness);
+                    self.record_committed(awareness, seq, outcome.version.id.clone(), items);
                     tracing::debug!(
                         event = "collab.session.checkpointed",
                         document_id = %self.document_id,
@@ -775,14 +800,16 @@ impl LiveSession {
         outcome: &WriteOutcome,
         items: &[BlockReviewItem],
     ) {
-        self.checkpointed_seq
-            .store(self.update_seq.load(Ordering::SeqCst), Ordering::SeqCst);
-        *self.head_version_id.lock().unwrap() = outcome.version.id.clone();
-        *self.items.lock().unwrap() = items
+        let items = items
             .iter()
             .map(|item| (item.id.clone(), item.clone()))
             .collect();
-        self.record_committed_snapshot(awareness);
+        self.record_committed(
+            awareness,
+            self.update_seq.load(Ordering::SeqCst),
+            outcome.version.id.clone(),
+            items,
+        );
     }
 }
 
