@@ -1828,24 +1828,23 @@ impl QuarryStore {
     }
 
     pub async fn reindex_library(&self, library: &str) -> Result<ReindexReport> {
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
-            let library_id = library.id.clone();
-            let indexed_documents = self.reindex_links_conn(&conn, &library.id).await?;
-            Ok((
-                library_id,
-                ReindexReport {
-                    ok: true,
-                    indexed_documents,
-                },
-            ))
-        }
-        .await;
-        let (library_id, report) = finish_tx(&conn, result).await?;
+        let library = library.to_string();
+        let (library_id, report) = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    let library = store.require_library_conn(conn, &library).await?;
+                    let library_id = library.id.clone();
+                    let indexed_documents = store.reindex_links_conn(conn, &library.id).await?;
+                    Ok((
+                        library_id,
+                        ReindexReport {
+                            ok: true,
+                            indexed_documents,
+                        },
+                    ))
+                })
+            })
+            .await?;
         self.emit_event(StoreEvent::library_reindexed(library_id));
         Ok(report)
     }
@@ -2242,59 +2241,62 @@ impl QuarryStore {
     ) -> Result<TransactionRecord> {
         let path = normalize_path(path)?;
         let source_for_event = source.clone();
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
-            let (doc_id, head_version_id) = self
-                .document_identity_conn(&conn, &library.id, &path)
-                .await?
-                .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
-            let tx = insert_transaction_conn(
-                &conn,
-                &library.id,
-                source,
-                actor,
-                None,
-                serde_json::json!({ "mode": "auto_commit" }),
-            )
+        let path_for_event = path.clone();
+        let library = library.to_string();
+        let (tx, doc_id) = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    let library = store.require_library_conn(conn, &library).await?;
+                    let (doc_id, head_version_id) = store
+                        .document_identity_conn(conn, &library.id, &path)
+                        .await?
+                        .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+                    let tx = insert_transaction_conn(
+                        conn,
+                        &library.id,
+                        source,
+                        actor,
+                        None,
+                        serde_json::json!({ "mode": "auto_commit" }),
+                    )
+                    .await?;
+                    insert_change_conn(
+                        conn,
+                        &tx.id,
+                        &path,
+                        ChangeType::Delete,
+                        head_version_id.as_deref(),
+                        None,
+                        None,
+                    )
+                    .await?;
+                    conn.execute(
+                        "UPDATE documents SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
+                        params![now_timestamp(), doc_id.clone()],
+                    )
+                    .await
+                    .map_err(map_turso_error)?;
+                    blocks::clear_block_state_conn(conn, &doc_id).await?;
+                    delete_path_inode_conn(conn, &library.id, &path).await?;
+                    store.reindex_links_conn(conn, &library.id).await?;
+                    commit_transaction_record_conn(conn, &tx.id).await?;
+                    let tx = store.transaction_conn(conn, &tx.id).await?;
+                    Ok((tx, doc_id))
+                })
+            })
             .await?;
-            insert_change_conn(
-                &conn,
-                &tx.id,
-                &path,
-                ChangeType::Delete,
-                head_version_id.as_deref(),
-                None,
-                None,
-            )
-            .await?;
-            conn.execute(
-                "UPDATE documents SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
-                params![now_timestamp(), doc_id.clone()],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            blocks::clear_block_state_conn(&conn, &doc_id).await?;
-            delete_path_inode_conn(&conn, &library.id, &path).await?;
-            self.reindex_links_conn(&conn, &library.id).await?;
-            commit_transaction_record_conn(&conn, &tx.id).await?;
-            let tx = self.transaction_conn(&conn, &tx.id).await?;
-            Ok((tx, doc_id))
-        }
-        .await;
-        let (tx, doc_id) = finish_tx(&conn, result).await?;
         self.emit_event(StoreEvent::document_delete(
             tx.library_id.clone(),
-            path.clone(),
+            path_for_event.clone(),
             source_for_event,
             tx.id.clone(),
             Some(doc_id),
             origin_id,
         ));
-        self.emit_event(StoreEvent::links_indexed(tx.library_id.clone(), path));
+        self.emit_event(StoreEvent::links_indexed(
+            tx.library_id.clone(),
+            path_for_event,
+        ));
         Ok(tx)
     }
 
@@ -2321,66 +2323,70 @@ impl QuarryStore {
         let from_path = normalize_path(from_path)?;
         let to_path = normalize_path(to_path)?;
         let source_for_event = source.clone();
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
-            let (doc_id, head_version_id) = self
-                .document_identity_conn(&conn, &library.id, &from_path)
-                .await?
-                .ok_or_else(|| QuarryError::NotFound(from_path.clone()))?;
-            if self
-                .document_identity_conn(&conn, &library.id, &to_path)
-                .await?
-                .is_some()
-            {
-                return Err(QuarryError::Conflict(format!("{to_path} already exists")));
-            }
-            let tx = insert_transaction_conn(
-                &conn,
-                &library.id,
-                source,
-                actor,
-                None,
-                serde_json::json!({ "mode": "auto_commit" }),
-            )
+        let from_path_for_event = from_path.clone();
+        let to_path_for_event = to_path.clone();
+        let library = library.to_string();
+        let (tx, doc_id) = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    let library = store.require_library_conn(conn, &library).await?;
+                    let (doc_id, head_version_id) = store
+                        .document_identity_conn(conn, &library.id, &from_path)
+                        .await?
+                        .ok_or_else(|| QuarryError::NotFound(from_path.clone()))?;
+                    if store
+                        .document_identity_conn(conn, &library.id, &to_path)
+                        .await?
+                        .is_some()
+                    {
+                        return Err(QuarryError::Conflict(format!("{to_path} already exists")));
+                    }
+                    let tx = insert_transaction_conn(
+                        conn,
+                        &library.id,
+                        source,
+                        actor,
+                        None,
+                        serde_json::json!({ "mode": "auto_commit" }),
+                    )
+                    .await?;
+                    insert_change_conn(
+                        conn,
+                        &tx.id,
+                        &from_path,
+                        ChangeType::Move,
+                        head_version_id.as_deref(),
+                        head_version_id.as_deref(),
+                        Some(&to_path),
+                    )
+                    .await?;
+                    conn.execute(
+                        "UPDATE documents SET path = ?1, updated_at = ?2 WHERE id = ?3",
+                        params![to_path.clone(), now_timestamp(), doc_id.clone()],
+                    )
+                    .await
+                    .map_err(map_turso_error)?;
+                    move_path_inode_conn(conn, &library.id, &from_path, &to_path).await?;
+                    store.reindex_links_conn(conn, &library.id).await?;
+                    commit_transaction_record_conn(conn, &tx.id).await?;
+                    let tx = store.transaction_conn(conn, &tx.id).await?;
+                    Ok((tx, doc_id))
+                })
+            })
             .await?;
-            insert_change_conn(
-                &conn,
-                &tx.id,
-                &from_path,
-                ChangeType::Move,
-                head_version_id.as_deref(),
-                head_version_id.as_deref(),
-                Some(&to_path),
-            )
-            .await?;
-            conn.execute(
-                "UPDATE documents SET path = ?1, updated_at = ?2 WHERE id = ?3",
-                params![to_path.clone(), now_timestamp(), doc_id.clone()],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            move_path_inode_conn(&conn, &library.id, &from_path, &to_path).await?;
-            self.reindex_links_conn(&conn, &library.id).await?;
-            commit_transaction_record_conn(&conn, &tx.id).await?;
-            let tx = self.transaction_conn(&conn, &tx.id).await?;
-            Ok((tx, doc_id))
-        }
-        .await;
-        let (tx, doc_id) = finish_tx(&conn, result).await?;
         self.emit_event(StoreEvent::document_move(
             tx.library_id.clone(),
-            from_path.clone(),
-            to_path.clone(),
+            from_path_for_event.clone(),
+            to_path_for_event.clone(),
             source_for_event,
             tx.id.clone(),
             Some(doc_id),
             origin_id,
         ));
-        self.emit_event(StoreEvent::links_indexed(tx.library_id.clone(), to_path));
+        self.emit_event(StoreEvent::links_indexed(
+            tx.library_id.clone(),
+            to_path_for_event,
+        ));
         Ok(tx)
     }
 
@@ -2399,76 +2405,80 @@ impl QuarryStore {
             ));
         }
         let source_for_event = source.clone();
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
-            let from_document = self.document_conn(&conn, &library.id, &from_path).await?;
-            let (to_doc_id, old_to_version_id) = self
-                .document_identity_conn(&conn, &library.id, &to_path)
-                .await?
-                .ok_or_else(|| QuarryError::NotFound(to_path.clone()))?;
-            let tx = insert_transaction_conn(
-                &conn,
-                &library.id,
-                source,
-                None,
-                None,
-                serde_json::json!({ "mode": "auto_commit", "replace": true }),
-            )
+        let from_path_for_event = from_path.clone();
+        let to_path_for_event = to_path.clone();
+        let library = library.to_string();
+        let (tx, doc_id) = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    let library = store.require_library_conn(conn, &library).await?;
+                    let from_document = store.document_conn(conn, &library.id, &from_path).await?;
+                    let (to_doc_id, old_to_version_id) = store
+                        .document_identity_conn(conn, &library.id, &to_path)
+                        .await?
+                        .ok_or_else(|| QuarryError::NotFound(to_path.clone()))?;
+                    let tx = insert_transaction_conn(
+                        conn,
+                        &library.id,
+                        source,
+                        None,
+                        None,
+                        serde_json::json!({ "mode": "auto_commit", "replace": true }),
+                    )
+                    .await?;
+                    insert_change_conn(
+                        conn,
+                        &tx.id,
+                        &to_path,
+                        ChangeType::Delete,
+                        old_to_version_id.as_deref(),
+                        None,
+                        None,
+                    )
+                    .await?;
+                    conn.execute(
+                        "UPDATE documents SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
+                        params![now_timestamp(), to_doc_id],
+                    )
+                    .await
+                    .map_err(map_turso_error)?;
+                    insert_change_conn(
+                        conn,
+                        &tx.id,
+                        &from_path,
+                        ChangeType::Move,
+                        Some(&from_document.version.id),
+                        Some(&from_document.version.id),
+                        Some(&to_path),
+                    )
+                    .await?;
+                    conn.execute(
+                        "UPDATE documents SET path = ?1, updated_at = ?2 WHERE id = ?3",
+                        params![to_path.clone(), now_timestamp(), from_document.id.clone()],
+                    )
+                    .await
+                    .map_err(map_turso_error)?;
+                    move_path_inode_conn(conn, &library.id, &from_path, &to_path).await?;
+                    store.reindex_links_conn(conn, &library.id).await?;
+                    commit_transaction_record_conn(conn, &tx.id).await?;
+                    let tx = store.transaction_conn(conn, &tx.id).await?;
+                    Ok((tx, from_document.id))
+                })
+            })
             .await?;
-            insert_change_conn(
-                &conn,
-                &tx.id,
-                &to_path,
-                ChangeType::Delete,
-                old_to_version_id.as_deref(),
-                None,
-                None,
-            )
-            .await?;
-            conn.execute(
-                "UPDATE documents SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
-                params![now_timestamp(), to_doc_id],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            insert_change_conn(
-                &conn,
-                &tx.id,
-                &from_path,
-                ChangeType::Move,
-                Some(&from_document.version.id),
-                Some(&from_document.version.id),
-                Some(&to_path),
-            )
-            .await?;
-            conn.execute(
-                "UPDATE documents SET path = ?1, updated_at = ?2 WHERE id = ?3",
-                params![to_path.clone(), now_timestamp(), from_document.id.clone()],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            move_path_inode_conn(&conn, &library.id, &from_path, &to_path).await?;
-            self.reindex_links_conn(&conn, &library.id).await?;
-            commit_transaction_record_conn(&conn, &tx.id).await?;
-            let tx = self.transaction_conn(&conn, &tx.id).await?;
-            Ok((tx, from_document.id))
-        }
-        .await;
-        let (tx, doc_id) = finish_tx(&conn, result).await?;
         self.emit_event(StoreEvent::document_move(
             tx.library_id.clone(),
-            from_path.clone(),
-            to_path.clone(),
+            from_path_for_event.clone(),
+            to_path_for_event.clone(),
             source_for_event,
             tx.id.clone(),
             Some(doc_id),
             None,
         ));
-        self.emit_event(StoreEvent::links_indexed(tx.library_id.clone(), to_path));
+        self.emit_event(StoreEvent::links_indexed(
+            tx.library_id.clone(),
+            to_path_for_event,
+        ));
         Ok(tx)
     }
 
