@@ -1,4 +1,8 @@
 //! Production diff3 reconciliation — the Gate C spike scenarios
+#![allow(
+    clippy::unwrap_used,
+    reason = "tests use unwrap for reconciliation fixtures"
+)]
 //! (`phase_zero_gate_c.rs`, kept untouched) promoted against
 //! the `quarry_collab_codec::reconcile` facade export, plus the production additions:
 //! `set_block_type` pairing (approved improvement over the spike, which

@@ -1330,6 +1330,11 @@ pub(crate) fn doc_image(
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        reason = "tests use unwrap for awareness fixtures"
+    )]
+
     use super::*;
     use quarry_collab_codec::SessionProjection;
     use yrs::sync::awareness::{AwarenessUpdate, AwarenessUpdateEntry};

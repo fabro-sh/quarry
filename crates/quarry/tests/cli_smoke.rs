@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "tests use unwrap for CLI smoke fixtures"
+)]
+
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};

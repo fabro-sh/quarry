@@ -1,4 +1,8 @@
 //! Production session projections (Phase 3): rows ↔ session-doc round trips
+#![allow(
+    clippy::unwrap_used,
+    reason = "tests use unwrap to keep session fixtures readable"
+)]
 //! including review anchors as marks, checkpoint degradation, and the
 //! gateway's in-place reconciliation.
 //!
@@ -178,7 +182,7 @@ fn content_root_mut(txn: &mut TransactionMut<'_>) -> XmlTextRef {
 
 /// Simulates a concurrent browser edit: clone the server state into a second
 /// Yjs client, apply the edit there, and merge the update back.
-fn apply_browser_edit(server: &Doc, edit: impl FnOnce(&mut TransactionMut, &XmlTextRef)) {
+fn apply_browser_edit(server: &Doc, edit: impl FnOnce(&mut TransactionMut<'_>, &XmlTextRef)) {
     let browser = new_session_doc();
     let snapshot = server
         .transact()

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, reason = "tests use unwrap for shutdown fixtures")]
+
 use quarry_server::serve_with_shutdown;
 #[cfg(feature = "lib-documents")]
 use quarry_server::{app_state, serve_state_with_shutdown};

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "tests use unwrap for filesystem fixtures"
+)]
+
 use quarry_core::{DocumentSource, QuarryError, WritePrecondition};
 use quarry_fuse::{FuseNodeKind, FuseProjection};
 use quarry_storage::{QuarryStore, StoreConfig};

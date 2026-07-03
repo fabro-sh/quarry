@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "tests use unwrap for HTTP fixture setup"
+)]
+
 use axum::body::{Body, to_bytes};
 #[cfg(feature = "tmp-documents")]
 use axum::http::header;

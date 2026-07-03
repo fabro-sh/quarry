@@ -1,4 +1,8 @@
 //! Phase Zero — Gate C: diff3 identity mapping for whole-file Markdown writes.
+#![allow(
+    clippy::unwrap_used,
+    reason = "tests use unwrap for reconciliation fixtures"
+)]
 //!
 //! Proves the reconciliation model of the session-scoped collab design
 //! (`docs/superpowers/specs/2026-06-09-session-scoped-collab-design.md`): a

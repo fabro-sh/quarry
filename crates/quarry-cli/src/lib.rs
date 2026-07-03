@@ -779,6 +779,11 @@ fn copy_dir(source: &Path, destination: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        reason = "tests use unwrap for CLI fixture parsing"
+    )]
+
     use super::*;
 
     #[test]

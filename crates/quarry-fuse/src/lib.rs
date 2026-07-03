@@ -525,7 +525,10 @@ impl FuseProjection {
             .list_documents(&self.library, Some(&from_prefix), Some(10_000))
             .await?
         {
-            let suffix = document.path.strip_prefix(&from_prefix).unwrap();
+            let suffix = document
+                .path
+                .strip_prefix(&from_prefix)
+                .expect("list_documents was called with the same prefix");
             self.store
                 .move_document(
                     &self.library,
@@ -805,6 +808,13 @@ impl FuseProjection {
     }
 }
 
+#[cfg_attr(
+    not(target_os = "linux"),
+    expect(
+        clippy::unused_async,
+        reason = "Linux implementation awaits the mount future"
+    )
+)]
 pub async fn mount_library_with_shutdown<F>(
     store: QuarryStore,
     library: &str,

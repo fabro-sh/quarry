@@ -946,7 +946,10 @@ struct ApplyContext {
 }
 
 impl ApplyContext {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "block insert ops expose the transaction shape directly"
+    )]
     fn insert_block(
         &mut self,
         block_id: &Option<String>,
@@ -2372,7 +2375,10 @@ async fn apply_rows_transaction(
 /// right after — they land in the NEXT checkpoint. No op needs the
 /// reseed/state-replacement fallback: every gateway op is expressible as an
 /// in-place doc reconciliation.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "row transactions carry loaded state and request metadata"
+)]
 async fn apply_session_transaction(
     state: &AppState,
     session: &crate::session::LiveSession,
@@ -2796,6 +2802,11 @@ pub(crate) fn review_response_from_rows(
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        reason = "tests use unwrap for transaction fixtures"
+    )]
+
     use super::*;
     use quarry_collab_codec::utf16_text_diff;
 

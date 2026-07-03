@@ -455,7 +455,10 @@ impl QuarryStore {
     /// deterministic normalized export is written through the existing
     /// version path in the same transaction, so rows and version content
     /// always agree and legacy readers keep working.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "commit rows mirror storage columns"
+    )]
     pub async fn import_block_document(
         &self,
         library: &str,
@@ -506,7 +509,10 @@ impl QuarryStore {
     /// `origin_id` echoed on the emitted `doc.changed` event (the Phase 4
     /// first-import path) and transaction attribution recorded on the import
     /// transaction. Unset provenance defaults per scope.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "review rows mirror storage columns"
+    )]
     pub async fn import_block_document_for_scope(
         &self,
         scope: &DocumentScopeRef,

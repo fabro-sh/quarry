@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "tests use unwrap for git and filesystem fixtures"
+)]
+
 use quarry_core::{DocumentSource, TransactionState, WritePrecondition};
 use quarry_git::{GitExportOptions, export_worktree, import_worktree, push_peer, sync_peer};
 use quarry_storage::{QuarryStore, StoreConfig};

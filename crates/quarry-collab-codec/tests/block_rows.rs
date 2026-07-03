@@ -4,6 +4,10 @@
 //! containers (`code_block` → `code_line`, tables), and falls back to
 //! `raw_markdown` rows for safe top-level constructs the row model cannot
 //! hold. Export is deterministic and idempotent after one-time normalization.
+#![allow(
+    clippy::unwrap_used,
+    reason = "tests use unwrap to keep fixture assertions focused"
+)]
 
 use quarry_collab_codec::attrs;
 use quarry_collab_codec::{

@@ -4454,8 +4454,16 @@ fn metadata_from_headers(headers: &HeaderMap, content_type: &str) -> Result<Json
 }
 
 #[cfg(test)]
-#[allow(clippy::items_after_test_module)]
+#[expect(
+    clippy::items_after_test_module,
+    reason = "integration-style test helpers live beside server tests"
+)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        reason = "tests use unwrap for server fixture setup"
+    )]
+
     use super::*;
     #[cfg(any(feature = "lib-documents", feature = "tmp-documents"))]
     use axum::body::{Body, to_bytes};

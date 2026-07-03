@@ -377,7 +377,7 @@ impl From<SyncPathAccumulator> for SyncPathOutcome {
     }
 }
 
-impl<'a> SyncPathReconciler<'a> {
+impl SyncPathReconciler<'_> {
     async fn run(self) -> Result<SyncPathOutcome> {
         let mut accumulator = SyncPathAccumulator {
             imported_paths: Vec::new(),

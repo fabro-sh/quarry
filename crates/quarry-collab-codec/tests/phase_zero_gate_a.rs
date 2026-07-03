@@ -1,4 +1,8 @@
 //! Phase Zero — Gate A: rows ↔ session round-trip exactness.
+#![allow(
+    clippy::unwrap_used,
+    reason = "tests use unwrap to keep CRDT fixture setup readable"
+)]
 //!
 //! Proves the two projections of the session-scoped collab design
 //! (`docs/superpowers/specs/2026-06-09-session-scoped-collab-design.md`) are
@@ -695,7 +699,7 @@ fn content_root<T: ReadTxn>(txn: &T) -> XmlTextRef {
     root.clone()
 }
 
-fn content_root_mut(txn: &mut TransactionMut) -> XmlTextRef {
+fn content_root_mut(txn: &mut TransactionMut<'_>) -> XmlTextRef {
     let text = txn.get_or_insert_text(ROOT);
     let root: &XmlTextRef = text.as_ref();
     root.clone()
@@ -703,7 +707,7 @@ fn content_root_mut(txn: &mut TransactionMut) -> XmlTextRef {
 
 /// Simulates a concurrent browser edit: clone the server state into a second
 /// Yjs client, apply the edit there, and merge the resulting update back.
-fn apply_browser_edit(server: &Doc, edit: impl FnOnce(&mut TransactionMut, &XmlTextRef)) {
+fn apply_browser_edit(server: &Doc, edit: impl FnOnce(&mut TransactionMut<'_>, &XmlTextRef)) {
     let browser = new_session_doc(BROWSER_CLIENT_ID);
     let snapshot = server
         .transact()

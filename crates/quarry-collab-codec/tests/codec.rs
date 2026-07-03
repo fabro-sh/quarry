@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "tests use unwrap to inspect known-good fixtures"
+)]
+
 use quarry_collab_codec::{
     Node, ReviewMeta, ReviewMetaEntry, ReviewMetaPatch, apply_built, apply_review_patch_to_map,
     block_markdown_to_slate, build_nodes, encode_update_v1_from_built_with_review,

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "tests use unwrap to inspect fixture manifests"
+)]
+
 use quarry_collab_codec::{
     Node, Unsupported, apply_built, block_markdown_to_slate, build_nodes, review_markdown_to_slate,
     xmltext_to_slate,

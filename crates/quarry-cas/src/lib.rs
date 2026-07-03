@@ -60,21 +60,20 @@ impl DiskCas {
     }
 
     pub fn object_path(&self, hash: &str) -> Result<PathBuf> {
-        self.object_path_for_hash(&hash.parse()?)
+        Ok(self.object_path_for_hash(&hash.parse()?))
     }
 
-    fn object_path_for_hash(&self, hash: &Blake3Hash) -> Result<PathBuf> {
-        Ok(self
-            .root
+    fn object_path_for_hash(&self, hash: &Blake3Hash) -> PathBuf {
+        self.root
             .join("objects")
             .join(&hash.as_str()[0..2])
-            .join(&hash.as_str()[2..]))
+            .join(&hash.as_str()[2..])
     }
 
     pub fn put(&self, bytes: &[u8]) -> Result<BlobInfo> {
         let hash = Self::hash(bytes);
         let hash = hash.parse::<Blake3Hash>()?;
-        let path = self.object_path_for_hash(&hash)?;
+        let path = self.object_path_for_hash(&hash);
         if path.exists() {
             return Ok(BlobInfo {
                 hash: hash.as_str().to_string(),
@@ -111,7 +110,7 @@ impl DiskCas {
 
     pub fn read(&self, hash: &str) -> Result<Vec<u8>> {
         let hash = hash.parse::<Blake3Hash>()?;
-        let path = self.object_path_for_hash(&hash)?;
+        let path = self.object_path_for_hash(&hash);
         if !path.exists() {
             return Err(QuarryError::NotFound(format!("blob {}", hash.as_str())));
         }
@@ -120,7 +119,7 @@ impl DiskCas {
 
     pub fn exists(&self, hash: &str) -> Result<bool> {
         let hash = hash.parse::<Blake3Hash>()?;
-        Ok(self.object_path_for_hash(&hash)?.exists())
+        Ok(self.object_path_for_hash(&hash).exists())
     }
 
     pub fn gc<I>(&self, reachable_hashes: I) -> Result<GcReport>
@@ -165,6 +164,11 @@ fn sync_parent(path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        reason = "tests use unwrap to keep fixture setup focused"
+    )]
+
     use super::*;
 
     #[test]

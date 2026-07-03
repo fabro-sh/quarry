@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "tests use unwrap for storage lifecycle fixtures"
+)]
+
 use quarry_core::{
     DocumentSource, DocumentVersion, INLINE_CONTENT_THRESHOLD, QuarryError, WritePrecondition,
 };

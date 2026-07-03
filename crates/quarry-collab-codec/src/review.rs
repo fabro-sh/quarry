@@ -601,6 +601,11 @@ fn created_at_ms(at: &str) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        reason = "tests use unwrap to inspect known-good fixtures"
+    )]
+
     use super::*;
     use serde_json::json;
 

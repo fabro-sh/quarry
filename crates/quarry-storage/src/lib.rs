@@ -395,7 +395,7 @@ impl Drop for LockGuard {
             let _ = fs::remove_file(path);
         }
         if let Some(file) = &self.file {
-            let _ = file.unlock();
+            let _ = FileExt::unlock(file);
         }
     }
 }
@@ -928,7 +928,10 @@ impl QuarryStore {
         Ok(outcome)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "legacy write API still passes document fields explicitly"
+    )]
     pub async fn commit_document_without_events(
         &self,
         library: &str,
@@ -952,7 +955,10 @@ impl QuarryStore {
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "origin metadata extends the legacy write API"
+    )]
     pub async fn commit_document_without_events_with_transaction(
         &self,
         library: &str,
@@ -1153,7 +1159,10 @@ impl QuarryStore {
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "transaction staging needs document and CAS metadata"
+    )]
     pub async fn put_tmp_document_with_transaction(
         &self,
         path: &str,
@@ -1844,7 +1853,10 @@ impl QuarryStore {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "link graph query exposes independent filters"
+    )]
     pub async fn graph(
         &self,
         library: &str,

@@ -1,4 +1,8 @@
 #![cfg(feature = "lib-documents")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "tests use unwrap for HTTP and CRDT fixtures"
+)]
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
