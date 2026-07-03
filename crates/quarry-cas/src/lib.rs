@@ -4,11 +4,37 @@ use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use tempfile::NamedTempFile;
+
+const BLAKE3_HASH_HEX_LEN: usize = 64;
 
 #[derive(Clone, Debug)]
 pub struct DiskCas {
     root: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Blake3Hash(String);
+
+impl Blake3Hash {
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FromStr for Blake3Hash {
+    type Err = QuarryError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        if value.len() != BLAKE3_HASH_HEX_LEN || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(QuarryError::Invariant(format!(
+                "invalid BLAKE3 hash {value}"
+            )));
+        }
+        Ok(Self(value.to_ascii_lowercase()))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -34,20 +60,24 @@ impl DiskCas {
     }
 
     pub fn object_path(&self, hash: &str) -> Result<PathBuf> {
-        if hash.len() < 4 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(QuarryError::Invariant(format!(
-                "invalid BLAKE3 hash {hash}"
-            )));
-        }
-        Ok(self.root.join("objects").join(&hash[0..2]).join(&hash[2..]))
+        self.object_path_for_hash(&hash.parse()?)
+    }
+
+    fn object_path_for_hash(&self, hash: &Blake3Hash) -> Result<PathBuf> {
+        Ok(self
+            .root
+            .join("objects")
+            .join(&hash.as_str()[0..2])
+            .join(&hash.as_str()[2..]))
     }
 
     pub fn put(&self, bytes: &[u8]) -> Result<BlobInfo> {
         let hash = Self::hash(bytes);
-        let path = self.object_path(&hash)?;
+        let hash = hash.parse::<Blake3Hash>()?;
+        let path = self.object_path_for_hash(&hash)?;
         if path.exists() {
             return Ok(BlobInfo {
-                hash,
+                hash: hash.as_str().to_string(),
                 byte_size: bytes.len() as u64,
                 path,
             });
@@ -73,22 +103,24 @@ impl DiskCas {
         }
 
         Ok(BlobInfo {
-            hash,
+            hash: hash.as_str().to_string(),
             byte_size: bytes.len() as u64,
             path,
         })
     }
 
     pub fn read(&self, hash: &str) -> Result<Vec<u8>> {
-        let path = self.object_path(hash)?;
+        let hash = hash.parse::<Blake3Hash>()?;
+        let path = self.object_path_for_hash(&hash)?;
         if !path.exists() {
-            return Err(QuarryError::NotFound(format!("blob {hash}")));
+            return Err(QuarryError::NotFound(format!("blob {}", hash.as_str())));
         }
         Ok(fs::read(path)?)
     }
 
     pub fn exists(&self, hash: &str) -> Result<bool> {
-        Ok(self.object_path(hash)?.exists())
+        let hash = hash.parse::<Blake3Hash>()?;
+        Ok(self.object_path_for_hash(&hash)?.exists())
     }
 
     pub fn gc<I>(&self, reachable_hashes: I) -> Result<GcReport>
@@ -129,4 +161,19 @@ fn sync_parent(path: &Path) -> Result<()> {
     let dir = OpenOptions::new().read(true).open(path)?;
     File::sync_all(&dir)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn object_path_rejects_short_hex_hashes() {
+        let root = tempfile::tempdir().unwrap();
+        let cas = DiskCas::open(root.path()).unwrap();
+
+        let error = cas.object_path("abcd").unwrap_err();
+
+        assert!(error.to_string().contains("invalid BLAKE3 hash abcd"));
+    }
 }
