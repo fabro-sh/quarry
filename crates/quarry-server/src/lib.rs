@@ -7,6 +7,7 @@ mod gateway;
 mod git_handlers;
 mod headers;
 mod journal;
+mod library_handlers;
 mod log_redaction;
 mod markdown_write;
 mod presence;
@@ -38,6 +39,7 @@ pub(crate) use headers::{
     tmp_metadata_from_headers, transaction_metadata_from_headers,
 };
 use journal::AgentEventJournal;
+use library_handlers::CreateLibraryRequest;
 use presence::{AgentPresenceRegistry, PresenceStreamGuard};
 use quarry_core::{
     CollabInviteToken, ConflictRecord, DocumentHistoryEntry, DocumentLink, DocumentListEntry,
@@ -206,8 +208,14 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
 
     router
         .route("/v1/events", get(events))
-        .route("/v1/libraries", get(list_libraries).post(create_library))
-        .route("/v1/libraries/{library}", get(get_library))
+        .route(
+            "/v1/libraries",
+            get(library_handlers::list_libraries).post(library_handlers::create_library),
+        )
+        .route(
+            "/v1/libraries/{library}",
+            get(library_handlers::get_library),
+        )
         .route("/v1/libraries/{library}/documents", get(list_documents))
         .route(
             "/v1/libraries/{library}/search",
@@ -513,9 +521,9 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         admin_gc,
         collab_websocket_openapi,
         sse::events,
-        create_library,
-        list_libraries,
-        get_library,
+        library_handlers::create_library,
+        library_handlers::list_libraries,
+        library_handlers::get_library,
         list_documents,
         create_tmp_document,
         tmp_collab_websocket_openapi,
@@ -843,45 +851,6 @@ async fn admin_gc(State(state): State<AppState>) -> Result<Json<GcReport>, ApiEr
         "admin GC completed"
     );
     Ok(Json(report))
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct CreateLibraryRequest {
-    pub slug: String,
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries",
-    request_body = CreateLibraryRequest,
-    responses((status = 201, body = Library), (status = 409, body = ErrorResponse))
-)]
-async fn create_library(
-    State(state): State<AppState>,
-    Json(request): Json<CreateLibraryRequest>,
-) -> Result<(StatusCode, Json<Library>), ApiError> {
-    Ok((
-        StatusCode::CREATED,
-        Json(state.store.create_library(&request.slug).await?),
-    ))
-}
-
-#[utoipa::path(get, path = "/v1/libraries", responses((status = 200, body = [Library])))]
-async fn list_libraries(State(state): State<AppState>) -> Result<Json<Vec<Library>>, ApiError> {
-    Ok(Json(state.store.list_libraries().await?))
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}",
-    params(("library" = String, Path)),
-    responses((status = 200, body = Library), (status = 404, body = ErrorResponse))
-)]
-async fn get_library(
-    State(state): State<AppState>,
-    Path(library): Path<String>,
-) -> Result<Json<Library>, ApiError> {
-    Ok(Json(state.store.get_library(&library).await?))
 }
 
 #[derive(Debug, Deserialize)]
