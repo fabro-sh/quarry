@@ -2583,15 +2583,14 @@ async fn opening_old_schema_migrates_documents_to_active_path_uniqueness() -> Te
 }
 
 #[tokio::test]
-async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() {
-    let root = tempfile::tempdir().unwrap();
+async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() -> TestResult {
+    let root = tempfile::tempdir()?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
-    .await
-    .unwrap();
+    .await?;
 
     let tmp = store
         .create_tmp_document(
@@ -2600,8 +2599,7 @@ async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() {
             "text/markdown",
             TmpTtl::Default,
         )
-        .await
-        .unwrap();
+        .await?;
     let secret = tmp.document.path.clone();
     assert_eq!(secret.len(), 32);
     assert!(
@@ -2609,13 +2607,13 @@ async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() {
             .chars()
             .all(|character| character.is_ascii_hexdigit())
     );
-    let expires_at = tmp
-        .document
-        .expires_at
-        .as_deref()
-        .expect("tmp document should record an expiry timestamp");
-    chrono::DateTime::parse_from_rfc3339(expires_at)
-        .expect("tmp document expiry should parse as RFC 3339");
+    let expires_at = tmp.document.expires_at.as_deref().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "tmp document should record an expiry timestamp",
+        )
+    })?;
+    chrono::DateTime::parse_from_rfc3339(expires_at)?;
     assert_eq!(tmp.document.library_id, None);
 
     let updated = store
@@ -2627,21 +2625,19 @@ async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() {
             TmpTtl::Unchanged,
             WritePrecondition::IfMatch(tmp.version.id.clone()),
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(updated.document.id, tmp.document.id);
     assert_ne!(updated.version.id, tmp.version.id);
 
-    let raw_versions = store.raw_tmp_version_history(&secret).await.unwrap();
+    let raw_versions = store.raw_tmp_version_history(&secret).await?;
     assert_eq!(raw_versions.len(), 2);
     let first_version_id = tmp.version.id.clone();
     let first = store
         .tmp_document_version(&secret, &first_version_id)
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(first.content, "draft one");
 
-    let library = store.create_library("promoted").await.unwrap();
+    let library = store.create_library("promoted").await?;
     store
         .promote_tmp_document(
             &secret,
@@ -2649,24 +2645,22 @@ async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() {
             "notes/scratch.md",
             WritePrecondition::IfMatch(updated.version.id.clone()),
         )
-        .await
-        .unwrap();
+        .await?;
 
     assert!(store.get_tmp_document(&secret).await.is_err());
     let promoted = store
         .get_document(&library.slug, "notes/scratch.md")
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(promoted.id, tmp.document.id);
     assert_eq!(promoted.content, b"draft two");
     assert_eq!(
         store
             .raw_version_history(&library.slug, "notes/scratch.md")
-            .await
-            .unwrap()
+            .await?
             .len(),
         2
     );
+    Ok(())
 }
 
 #[tokio::test]
