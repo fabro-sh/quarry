@@ -3,10 +3,11 @@ use crate::review::{DocumentReviewQuery, agent_document_review, agent_document_s
 use crate::sse::events_for_library;
 use crate::{
     ApiError, AppState, DocumentSubResource, ErrorResponse, bytes_response_with_expiry, gateway,
-    json_response, optional_header, parse_document_subresource, touch_agent_presence,
-    transaction_metadata_from_headers,
+    insert_document_headers, json_response, optional_header, parse_document_subresource,
+    touch_agent_presence, transaction_metadata_from_headers,
 };
 use axum::Json;
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -181,6 +182,29 @@ pub(crate) async fn get_document(
         &document.id,
         document.expires_at.as_deref(),
     )
+}
+
+#[utoipa::path(
+    head,
+    path = "/v1/libraries/{library}/documents/{path}",
+    params(("library" = String, Path), ("path" = String, Path)),
+    responses((status = 200), (status = 404, body = ErrorResponse))
+)]
+pub(crate) async fn head_document(
+    State(state): State<AppState>,
+    Path((library, path)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    let document = state.store.head_document(&library, &path).await?;
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::OK;
+    insert_document_headers(
+        response.headers_mut(),
+        &document.content_type,
+        &document.head_version_id,
+        &document.id,
+        document.expires_at.as_deref(),
+    )?;
+    Ok(response)
 }
 
 #[utoipa::path(

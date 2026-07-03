@@ -248,7 +248,7 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
         .route(
             "/v1/libraries/{library}/documents/{*path}",
             get(document_handlers::get_document)
-                .head(head_document)
+                .head(document_handlers::head_document)
                 .put(put_document)
                 .post(post_document_action)
                 .patch(patch_document_metadata)
@@ -577,7 +577,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         document_version_diff_openapi,
         document_version_restore_openapi,
         document_ttl_openapi,
-        head_document,
+        document_handlers::head_document,
         put_document,
         post_document_action,
         patch_document_metadata,
@@ -1545,29 +1545,6 @@ async fn document_version_diff_openapi() {}
     reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
 )]
 async fn document_version_restore_openapi() {}
-
-#[utoipa::path(
-    head,
-    path = "/v1/libraries/{library}/documents/{path}",
-    params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200), (status = 404, body = ErrorResponse))
-)]
-async fn head_document(
-    State(state): State<AppState>,
-    Path((library, path)): Path<(String, String)>,
-) -> Result<Response, ApiError> {
-    let document = state.store.head_document(&library, &path).await?;
-    let mut response = Response::new(axum::body::Body::empty());
-    *response.status_mut() = StatusCode::OK;
-    insert_document_headers(
-        response.headers_mut(),
-        &document.content_type,
-        &document.head_version_id,
-        &document.id,
-        document.expires_at.as_deref(),
-    )?;
-    Ok(response)
-}
 
 #[utoipa::path(
     put,
