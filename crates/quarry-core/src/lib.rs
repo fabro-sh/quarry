@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::str::FromStr;
 use thiserror::Error;
+#[cfg(feature = "openapi")]
 use utoipa::ToSchema;
 
 pub const INLINE_CONTENT_THRESHOLD: usize = 64 * 1024;
@@ -61,7 +62,8 @@ impl ParseEnumError {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct Library {
     pub id: String,
     pub slug: String,
@@ -69,7 +71,8 @@ pub struct Library {
     pub settings: JsonValue,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum DocumentSource {
     Rest,
@@ -106,7 +109,8 @@ impl FromStr for DocumentSource {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum TransactionState {
     Open,
@@ -137,7 +141,8 @@ impl FromStr for TransactionState {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeType {
     Put,
@@ -171,7 +176,8 @@ impl FromStr for ChangeType {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ConflictStatus {
     Open,
@@ -199,7 +205,8 @@ impl FromStr for ConflictStatus {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum WritePrecondition {
     None,
@@ -207,7 +214,8 @@ pub enum WritePrecondition {
     IfNoneMatch,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct DocumentVersion {
     pub id: String,
     pub document_id: String,
@@ -229,7 +237,8 @@ pub struct DocumentVersion {
     pub created_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct DocumentHistoryEntry {
     pub id: String,
     pub document_id: String,
@@ -252,13 +261,14 @@ pub struct DocumentHistoryEntry {
     pub updated_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct Document {
     pub id: String,
     pub library_id: Option<String>,
     pub path: String,
     pub version: DocumentVersion,
-    #[schema(value_type = String, format = Binary)]
+    #[cfg_attr(feature = "openapi", schema(value_type = String, format = Binary))]
     pub content: Vec<u8>,
     pub metadata: JsonValue,
     #[serde(default)]
@@ -267,7 +277,8 @@ pub struct Document {
     pub updated_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct DocumentListEntry {
     pub id: String,
     #[serde(default)]
@@ -283,7 +294,8 @@ pub struct DocumentListEntry {
     pub updated_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct CollabInviteToken {
     pub id: String,
     pub document_id: String,
@@ -293,14 +305,16 @@ pub struct CollabInviteToken {
     pub revoked_at: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct WriteOutcome {
     pub document: DocumentListEntry,
     pub version: DocumentVersion,
     pub transaction: TransactionRecord,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct TransactionRecord {
     pub id: String,
     pub library_id: String,
@@ -313,7 +327,8 @@ pub struct TransactionRecord {
     pub committed_at: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct ConflictRecord {
     pub id: String,
     pub library_id: String,
@@ -327,7 +342,8 @@ pub struct ConflictRecord {
     pub resolved_at: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct GitPeer {
     pub id: String,
     pub library_id: String,
@@ -335,7 +351,8 @@ pub struct GitPeer {
     pub config: JsonValue,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct SyncStateEntry {
     pub peer_id: String,
     pub path: String,
@@ -343,19 +360,22 @@ pub struct SyncStateEntry {
     pub last_synced_git_oid: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct GcReport {
     pub reachable: usize,
     pub removed: usize,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct SearchResponse {
     pub results: Vec<SearchResult>,
     pub cursor: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct SearchResult {
     pub document_id: String,
     pub path: String,
@@ -367,7 +387,8 @@ pub struct SearchResult {
     pub head_version_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct SearchSuggestion {
     pub path: String,
     pub title: String,
@@ -377,13 +398,15 @@ pub struct SearchSuggestion {
     pub target_anchor: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct ReindexReport {
     pub ok: bool,
     pub indexed_documents: usize,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct DocumentLink {
     pub src_doc_id: String,
     pub src_version_id: String,
@@ -400,13 +423,15 @@ pub struct DocumentLink {
     pub resolution_status: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct LinkCollection {
     pub path: String,
     pub links: Vec<DocumentLink>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct GraphNode {
     pub id: String,
     pub path: String,
@@ -414,7 +439,8 @@ pub struct GraphNode {
     pub content_type: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct GraphEdge {
     pub id: String,
     pub source: String,
@@ -427,20 +453,23 @@ pub struct GraphEdge {
     pub resolution_status: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct GraphResponse {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
     pub truncated: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct DocumentVersionContent {
     pub version: DocumentVersion,
     pub content: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct VersionDiff {
     pub base_version_id: String,
     pub against_version_id: String,

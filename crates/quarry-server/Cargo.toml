@@ -19,7 +19,7 @@ http.workspace = true
 mime_guess.workspace = true
 percent-encoding.workspace = true
 pulldown-cmark.workspace = true
-quarry-core.workspace = true
+quarry-core = { workspace = true, features = ["openapi"] }
 quarry-collab-codec.workspace = true
 quarry-git.workspace = true
 quarry-storage.workspace = true
