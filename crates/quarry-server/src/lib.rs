@@ -1,5 +1,6 @@
 mod assets;
 mod collab;
+mod conflicts;
 mod discovery;
 mod error;
 mod gateway;
@@ -266,14 +267,17 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
             "/v1/libraries/{library}/git/peers/{peer}/sync",
             post(git_sync),
         )
-        .route("/v1/libraries/{library}/conflicts", get(list_conflicts))
+        .route(
+            "/v1/libraries/{library}/conflicts",
+            get(conflicts::list_conflicts),
+        )
         .route(
             "/v1/libraries/{library}/conflicts/{conflict}",
-            get(get_conflict),
+            get(conflicts::get_conflict),
         )
         .route(
             "/v1/libraries/{library}/conflicts/{conflict}/resolve",
-            post(resolve_conflict),
+            post(conflicts::resolve_conflict),
         )
 }
 
@@ -562,9 +566,9 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         git_pull,
         git_push,
         git_sync,
-        list_conflicts,
-        get_conflict,
-        resolve_conflict
+        conflicts::list_conflicts,
+        conflicts::get_conflict,
+        conflicts::resolve_conflict
     ),
     components(schemas(
         CreateLibraryRequest,
@@ -2654,61 +2658,6 @@ fn git_sync_applied_count(result: &GitSyncResult) -> usize {
 
 fn git_sync_conflict_count(result: &GitSyncResult) -> usize {
     result.conflict_paths.len().max(result.conflicts.len())
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/conflicts",
-    params(("library" = String, Path)),
-    responses((status = 200, body = [ConflictRecord]))
-)]
-async fn list_conflicts(
-    State(state): State<AppState>,
-    Path(library): Path<String>,
-) -> Result<Json<Vec<ConflictRecord>>, ApiError> {
-    Ok(Json(state.store.list_conflicts(&library).await?))
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/conflicts/{conflict}",
-    params(("library" = String, Path), ("conflict" = String, Path)),
-    responses((status = 200, body = ConflictRecord))
-)]
-async fn get_conflict(
-    State(state): State<AppState>,
-    Path((library, conflict)): Path<(String, String)>,
-) -> Result<Json<ConflictRecord>, ApiError> {
-    Ok(Json(
-        scoped_conflict(&state.store, &library, &conflict).await?,
-    ))
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/conflicts/{conflict}/resolve",
-    params(("library" = String, Path), ("conflict" = String, Path)),
-    responses((status = 200, body = ConflictRecord))
-)]
-async fn resolve_conflict(
-    State(state): State<AppState>,
-    Path((library, conflict)): Path<(String, String)>,
-) -> Result<Json<ConflictRecord>, ApiError> {
-    scoped_conflict(&state.store, &library, &conflict).await?;
-    Ok(Json(state.store.resolve_conflict(&conflict).await?))
-}
-
-async fn scoped_conflict(
-    store: &QuarryStore,
-    library: &str,
-    conflict: &str,
-) -> Result<ConflictRecord, ApiError> {
-    let library = store.get_library(library).await?;
-    let conflict_record = store.get_conflict(conflict).await?;
-    if conflict_record.library_id != library.id {
-        return Err(QuarryError::NotFound(format!("conflict {conflict}")).into());
-    }
-    Ok(conflict_record)
 }
 
 async fn scoped_transaction(store: &QuarryStore, library: &str, tx: &str) -> Result<(), ApiError> {
