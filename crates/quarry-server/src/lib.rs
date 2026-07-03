@@ -593,7 +593,18 @@ where
             "browser UI bundle not embedded; serving API-only (run `bun run build` in ui/)"
         );
     }
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let (shutdown_requested_tx, shutdown_requested_rx) = tokio::sync::oneshot::channel::<()>();
+    let shutdown_task = tokio::spawn(async move {
+        shutdown.await;
+        let _ = shutdown_requested_tx.send(());
+    });
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            shutdown_task.abort();
+            return Err(error);
+        }
+    };
     tracing::info!(
         event = "server.listening",
         %addr,
@@ -605,7 +616,7 @@ where
     let (shutdown_started_tx, shutdown_started_rx) = tokio::sync::oneshot::channel::<()>();
     let server = axum::serve(listener, router_with_state(state))
         .with_graceful_shutdown(async move {
-            shutdown.await;
+            let _ = shutdown_requested_rx.await;
             shutdown_token_for_signal.cancel();
             let _ = shutdown_started_tx.send(());
         })
@@ -630,6 +641,8 @@ where
         }
     };
     shutdown_token.cancel();
+    shutdown_task.abort();
+    let _ = shutdown_task.await;
     agent_events.join_ingest().await;
     result
 }
