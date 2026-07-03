@@ -2331,16 +2331,12 @@ async fn apply_rows_transaction(
             .commit_block_mutation_for_scope(scope, commit)
             .await
         {
-            Ok(BlockMutationOutcome::Applied { outcome, record }) => {
-                return Ok(TransactionReply::Committed(CommittedTransaction {
-                    status,
+            Ok(outcome) => {
+                return Ok(block_mutation_reply(
                     outcome,
-                    transaction_id: record.id,
-                    changed_block_ids: applied.changed_block_ids,
-                }));
-            }
-            Ok(BlockMutationOutcome::Replayed(record)) => {
-                return Ok(TransactionReply::Replayed(record))
+                    status,
+                    applied.changed_block_ids,
+                ))
             }
             // Another write moved the head between load and commit: reload
             // the state and recompute against the new rows.
@@ -2447,16 +2443,13 @@ async fn apply_session_transaction(
         .commit_block_mutation_for_scope(scope, commit)
         .await
     {
-        Ok(BlockMutationOutcome::Applied { outcome, record }) => {
-            session.mark_committed(&mut awareness, &outcome, &applied.review_items);
-            Ok(TransactionReply::Committed(CommittedTransaction {
-                status,
-                outcome,
-                transaction_id: record.id,
-                changed_block_ids: applied.changed_block_ids,
-            }))
+        Ok(outcome) => {
+            let reply = block_mutation_reply(outcome, status, applied.changed_block_ids);
+            if let TransactionReply::Committed(committed) = &reply {
+                session.mark_committed(&mut awareness, &committed.outcome, &applied.review_items);
+            }
+            Ok(reply)
         }
-        Ok(BlockMutationOutcome::Replayed(record)) => Ok(TransactionReply::Replayed(record)),
         // An external legacy write raced the session between the step-1
         // flush and this commit. The live doc already carries this
         // transaction's edits but nothing was committed (so there is no
@@ -2494,6 +2487,24 @@ async fn apply_session_transaction(
             Err(GatewayFailure::Api(QuarryError::Busy(detail).into()))
         }
         Err(error) => Err(error.into()),
+    }
+}
+
+fn block_mutation_reply(
+    outcome: BlockMutationOutcome,
+    status: &'static str,
+    changed_block_ids: Vec<String>,
+) -> TransactionReply {
+    match outcome {
+        BlockMutationOutcome::Applied { outcome, record } => {
+            TransactionReply::Committed(CommittedTransaction {
+                status,
+                outcome,
+                transaction_id: record.id,
+                changed_block_ids,
+            })
+        }
+        BlockMutationOutcome::Replayed(record) => TransactionReply::Replayed(record),
     }
 }
 
