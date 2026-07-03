@@ -2706,155 +2706,174 @@ impl QuarryStore {
             tx_id,
             "storage transaction commit started"
         );
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let tx = self.transaction_conn(&conn, tx_id).await?;
-            ensure_open(&tx)?;
-            let mut events = Vec::new();
-            let mut changes = Vec::new();
-            let mut rows = conn
-                .query(
-                    "SELECT path, change_type, old_version_id, new_version_id, new_path
-                     FROM transaction_changes
-                     WHERE tx_id = ?1 ORDER BY rowid",
-                    params![tx_id.to_string()],
-                )
-                .await
-                .map_err(map_turso_error)?;
-            while let Some(row) = rows.next().await.map_err(map_turso_error)? {
-                changes.push(StagedChange {
-                    path: text(&row, 0)?,
-                    change_type: parse_storage_enum(&text(&row, 1)?)?,
-                    old_version_id: opt_text(&row, 2)?,
-                    new_version_id: opt_text(&row, 3)?,
-                    new_path: opt_text(&row, 4)?,
-                });
-            }
-            for change in &changes {
-                match &change.change_type {
-                    ChangeType::Put | ChangeType::Metadata => {
-                        self.ensure_staged_head_unchanged_conn(
-                            &conn,
-                            &tx.library_id,
-                            &change.path,
-                            change.old_version_id.as_deref(),
-                        )
-                        .await?;
-                    }
-                    ChangeType::Delete => {
-                        self.ensure_staged_head_unchanged_conn(
-                            &conn,
-                            &tx.library_id,
-                            &change.path,
-                            change.old_version_id.as_deref(),
-                        )
-                        .await?;
-                    }
-                    ChangeType::Move => {
-                        let new_path = change.new_path.as_deref().ok_or_else(|| {
-                            QuarryError::Storage("move change missing new path".to_string())
-                        })?;
-                        self.ensure_staged_head_unchanged_conn(
-                            &conn,
-                            &tx.library_id,
-                            &change.path,
-                            change.old_version_id.as_deref(),
-                        )
-                        .await?;
-                        self.ensure_move_target_available_conn(&conn, &tx.library_id, new_path)
-                            .await?;
-                    }
-                }
-            }
-            for change in changes {
-                match change.change_type {
-                    ChangeType::Put | ChangeType::Metadata => {
-                        let version_id = change.new_version_id.ok_or_else(|| {
-                            QuarryError::Storage("put change missing new version".to_string())
-                        })?;
-                        let doc_id = self.document_id_for_version_conn(&conn, &version_id).await?;
-                        publish_put_conn(&conn, &doc_id, &version_id).await?;
-                        blocks::clear_block_state_conn(&conn, &doc_id).await?;
-                        ensure_path_inodes_conn(&conn, &tx.library_id, &change.path).await?;
-                        events.push(StoreEvent::document_put(
-                            tx.library_id.clone(),
-                            change.path.clone(),
-                            tx.source.clone(),
-                            tx.id.clone(),
-                            doc_id,
-                            version_id,
-                            None,
-                        ));
-                        events.push(StoreEvent::links_indexed(
-                            tx.library_id.clone(),
-                            change.path.clone(),
-                        ));
-                    }
-                    ChangeType::Delete => {
-                        if let Some((doc_id, _)) =
-                            self.document_identity_conn(&conn, &tx.library_id, &change.path).await?
-                        {
-                            conn.execute(
-                                "UPDATE documents SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
-                                params![now_timestamp(), doc_id.clone()],
-                            )
-                            .await
-                            .map_err(map_turso_error)?;
-                            blocks::clear_block_state_conn(&conn, &doc_id).await?;
-                            delete_path_inode_conn(&conn, &tx.library_id, &change.path).await?;
-                        }
-                        events.push(StoreEvent::document_delete(
-                            tx.library_id.clone(),
-                            change.path.clone(),
-                            tx.source.clone(),
-                            tx.id.clone(),
-                            None,
-                            None,
-                        ));
-                        events.push(StoreEvent::links_indexed(
-                            tx.library_id.clone(),
-                            change.path.clone(),
-                        ));
-                    }
-                    ChangeType::Move => {
-                        let new_path = change.new_path.ok_or_else(|| {
-                            QuarryError::Storage("move change missing new path".to_string())
-                        })?;
-                        let (doc_id, _) = self
-                            .document_identity_conn(&conn, &tx.library_id, &change.path)
-                            .await?
-                            .ok_or_else(|| QuarryError::NotFound(change.path.clone()))?;
-                        conn.execute(
-                            "UPDATE documents SET path = ?1, updated_at = ?2 WHERE id = ?3",
-                            params![new_path.clone(), now_timestamp(), doc_id],
+        let tx_id = tx_id.to_string();
+        let (tx, events) = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    let tx = store.transaction_conn(conn, &tx_id).await?;
+                    ensure_open(&tx)?;
+                    let mut events = Vec::new();
+                    let mut changes = Vec::new();
+                    let mut rows = conn
+                        .query(
+                            "SELECT path, change_type, old_version_id, new_version_id, new_path
+                             FROM transaction_changes
+                             WHERE tx_id = ?1 ORDER BY rowid",
+                            params![tx_id.clone()],
                         )
                         .await
                         .map_err(map_turso_error)?;
-                        move_path_inode_conn(&conn, &tx.library_id, &change.path, &new_path)
-                            .await?;
-                        events.push(StoreEvent::document_move(
-                            tx.library_id.clone(),
-                            change.path.clone(),
-                            new_path.clone(),
-                            tx.source.clone(),
-                            tx.id.clone(),
-                            None,
-                            None,
-                        ));
-                        events.push(StoreEvent::links_indexed(tx.library_id.clone(), new_path));
+                    while let Some(row) = rows.next().await.map_err(map_turso_error)? {
+                        changes.push(StagedChange {
+                            path: text(&row, 0)?,
+                            change_type: parse_storage_enum(&text(&row, 1)?)?,
+                            old_version_id: opt_text(&row, 2)?,
+                            new_version_id: opt_text(&row, 3)?,
+                            new_path: opt_text(&row, 4)?,
+                        });
                     }
-                }
-            }
-            self.reindex_links_conn(&conn, &tx.library_id).await?;
-            commit_transaction_record_conn(&conn, tx_id).await?;
-            let tx = self.transaction_conn(&conn, tx_id).await?;
-            Ok((tx, events))
-        }
-        .await;
-        let (tx, events) = finish_tx(&conn, result).await?;
+                    for change in &changes {
+                        match &change.change_type {
+                            ChangeType::Put | ChangeType::Metadata => {
+                                store
+                                    .ensure_staged_head_unchanged_conn(
+                                        conn,
+                                        &tx.library_id,
+                                        &change.path,
+                                        change.old_version_id.as_deref(),
+                                    )
+                                    .await?;
+                            }
+                            ChangeType::Delete => {
+                                store
+                                    .ensure_staged_head_unchanged_conn(
+                                        conn,
+                                        &tx.library_id,
+                                        &change.path,
+                                        change.old_version_id.as_deref(),
+                                    )
+                                    .await?;
+                            }
+                            ChangeType::Move => {
+                                let new_path = change.new_path.as_deref().ok_or_else(|| {
+                                    QuarryError::Storage("move change missing new path".to_string())
+                                })?;
+                                store
+                                    .ensure_staged_head_unchanged_conn(
+                                        conn,
+                                        &tx.library_id,
+                                        &change.path,
+                                        change.old_version_id.as_deref(),
+                                    )
+                                    .await?;
+                                store
+                                    .ensure_move_target_available_conn(
+                                        conn,
+                                        &tx.library_id,
+                                        new_path,
+                                    )
+                                    .await?;
+                            }
+                        }
+                    }
+                    for change in changes {
+                        match change.change_type {
+                            ChangeType::Put | ChangeType::Metadata => {
+                                let version_id = change.new_version_id.ok_or_else(|| {
+                                    QuarryError::Storage(
+                                        "put change missing new version".to_string(),
+                                    )
+                                })?;
+                                let doc_id =
+                                    store.document_id_for_version_conn(conn, &version_id).await?;
+                                publish_put_conn(conn, &doc_id, &version_id).await?;
+                                blocks::clear_block_state_conn(conn, &doc_id).await?;
+                                ensure_path_inodes_conn(conn, &tx.library_id, &change.path)
+                                    .await?;
+                                events.push(StoreEvent::document_put(
+                                    tx.library_id.clone(),
+                                    change.path.clone(),
+                                    tx.source.clone(),
+                                    tx.id.clone(),
+                                    doc_id,
+                                    version_id,
+                                    None,
+                                ));
+                                events.push(StoreEvent::links_indexed(
+                                    tx.library_id.clone(),
+                                    change.path.clone(),
+                                ));
+                            }
+                            ChangeType::Delete => {
+                                if let Some((doc_id, _)) = store
+                                    .document_identity_conn(conn, &tx.library_id, &change.path)
+                                    .await?
+                                {
+                                    conn.execute(
+                                        "UPDATE documents SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
+                                        params![now_timestamp(), doc_id.clone()],
+                                    )
+                                    .await
+                                    .map_err(map_turso_error)?;
+                                    blocks::clear_block_state_conn(conn, &doc_id).await?;
+                                    delete_path_inode_conn(conn, &tx.library_id, &change.path)
+                                        .await?;
+                                }
+                                events.push(StoreEvent::document_delete(
+                                    tx.library_id.clone(),
+                                    change.path.clone(),
+                                    tx.source.clone(),
+                                    tx.id.clone(),
+                                    None,
+                                    None,
+                                ));
+                                events.push(StoreEvent::links_indexed(
+                                    tx.library_id.clone(),
+                                    change.path.clone(),
+                                ));
+                            }
+                            ChangeType::Move => {
+                                let new_path = change.new_path.ok_or_else(|| {
+                                    QuarryError::Storage("move change missing new path".to_string())
+                                })?;
+                                let (doc_id, _) = store
+                                    .document_identity_conn(conn, &tx.library_id, &change.path)
+                                    .await?
+                                    .ok_or_else(|| QuarryError::NotFound(change.path.clone()))?;
+                                conn.execute(
+                                    "UPDATE documents SET path = ?1, updated_at = ?2 WHERE id = ?3",
+                                    params![new_path.clone(), now_timestamp(), doc_id],
+                                )
+                                .await
+                                .map_err(map_turso_error)?;
+                                move_path_inode_conn(
+                                    conn,
+                                    &tx.library_id,
+                                    &change.path,
+                                    &new_path,
+                                )
+                                .await?;
+                                events.push(StoreEvent::document_move(
+                                    tx.library_id.clone(),
+                                    change.path.clone(),
+                                    new_path.clone(),
+                                    tx.source.clone(),
+                                    tx.id.clone(),
+                                    None,
+                                    None,
+                                ));
+                                events
+                                    .push(StoreEvent::links_indexed(tx.library_id.clone(), new_path));
+                            }
+                        }
+                    }
+                    store.reindex_links_conn(conn, &tx.library_id).await?;
+                    commit_transaction_record_conn(conn, &tx_id).await?;
+                    let tx = store.transaction_conn(conn, &tx_id).await?;
+                    Ok((tx, events))
+                })
+            })
+            .await?;
         for event in events {
             self.emit_event(event);
         }
