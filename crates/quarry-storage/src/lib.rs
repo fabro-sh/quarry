@@ -3636,26 +3636,8 @@ impl QuarryStore {
         path: &str,
         now: &str,
     ) -> Result<()> {
-        let mut rows = conn
-            .query(
-                "SELECT expires_at FROM documents
-                 WHERE document_scope = 'library'
-                   AND library_id = ?1
-                   AND path = ?2
-                   AND deleted_at IS NULL
-                   AND head_version_id IS NOT NULL
-                   AND expires_at IS NOT NULL
-                   AND expires_at <= ?3
-                 LIMIT 1",
-                params![library_id.to_string(), path.to_string(), now.to_string()],
-            )
+        error_if_document_expired_conn(conn, DocumentLookupScope::Library { library_id }, path, now)
             .await
-            .map_err(map_turso_error)?;
-        if rows.next().await.map_err(map_turso_error)?.is_some() {
-            Err(QuarryError::Gone(path.to_string()))
-        } else {
-            Ok(())
-        }
     }
 
     async fn error_if_tmp_document_expired_conn(
@@ -3664,25 +3646,7 @@ impl QuarryStore {
         path: &str,
         now: &str,
     ) -> Result<()> {
-        let mut rows = conn
-            .query(
-                "SELECT expires_at FROM documents
-                 WHERE document_scope = 'tmp'
-                   AND library_id IS NULL
-                   AND path = ?1
-                   AND deleted_at IS NULL
-                   AND head_version_id IS NOT NULL
-                   AND expires_at <= ?2
-                 LIMIT 1",
-                params![path.to_string(), now.to_string()],
-            )
-            .await
-            .map_err(map_turso_error)?;
-        if rows.next().await.map_err(map_turso_error)?.is_some() {
-            Err(QuarryError::Gone(path.to_string()))
-        } else {
-            Ok(())
-        }
+        error_if_document_expired_conn(conn, DocumentLookupScope::Tmp, path, now).await
     }
 
     async fn collab_document_seed_conn(
@@ -5215,43 +5179,49 @@ async fn error_if_library_document_expired(
     path: &str,
     now: &str,
 ) -> Result<()> {
-    let mut rows = conn
-        .query(
-            "SELECT 1 FROM documents
-             WHERE document_scope = 'library'
-               AND library_id = ?1
-               AND path = ?2
-               AND deleted_at IS NULL
-               AND head_version_id IS NOT NULL
-               AND expires_at IS NOT NULL
-               AND expires_at <= ?3
-             LIMIT 1",
-            params![library_id.to_string(), path.to_string(), now.to_string()],
-        )
+    error_if_document_expired_conn(conn, DocumentLookupScope::Library { library_id }, path, now)
         .await
-        .map_err(map_turso_error)?;
-    if rows.next().await.map_err(map_turso_error)?.is_some() {
-        Err(QuarryError::Gone(path.to_string()))
-    } else {
-        Ok(())
-    }
 }
 
 async fn error_if_tmp_document_expired(conn: &Connection, path: &str, now: &str) -> Result<()> {
-    let mut rows = conn
-        .query(
-            "SELECT 1 FROM documents
-             WHERE document_scope = 'tmp'
+    error_if_document_expired_conn(conn, DocumentLookupScope::Tmp, path, now).await
+}
+
+async fn error_if_document_expired_conn(
+    conn: &Connection,
+    scope: DocumentLookupScope<'_>,
+    path: &str,
+    now: &str,
+) -> Result<()> {
+    let (scope_filter, binds) = match scope {
+        DocumentLookupScope::Library { library_id } => (
+            "document_scope = 'library'
+               AND library_id = ?1
+               AND path = ?2
+               AND expires_at IS NOT NULL
+               AND expires_at <= ?3",
+            vec![
+                Value::Text(library_id.to_string()),
+                Value::Text(path.to_string()),
+                Value::Text(now.to_string()),
+            ],
+        ),
+        DocumentLookupScope::Tmp => (
+            "document_scope = 'tmp'
                AND library_id IS NULL
                AND path = ?1
-               AND deleted_at IS NULL
-               AND head_version_id IS NOT NULL
-               AND expires_at <= ?2
-             LIMIT 1",
-            params![path.to_string(), now.to_string()],
-        )
-        .await
-        .map_err(map_turso_error)?;
+               AND expires_at <= ?2",
+            vec![Value::Text(path.to_string()), Value::Text(now.to_string())],
+        ),
+    };
+    let sql = format!(
+        "SELECT 1 FROM documents
+         WHERE {scope_filter}
+           AND deleted_at IS NULL
+           AND head_version_id IS NOT NULL
+         LIMIT 1"
+    );
+    let mut rows = conn.query(&sql, binds).await.map_err(map_turso_error)?;
     if rows.next().await.map_err(map_turso_error)?.is_some() {
         Err(QuarryError::Gone(path.to_string()))
     } else {
