@@ -1,7 +1,8 @@
-use crate::{ApiError, AppState};
+use crate::{ApiError, AppState, optional_header, transaction_metadata_from_headers};
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use quarry_core::DocumentListEntry;
+use axum::http::HeaderMap;
+use quarry_core::{DocumentListEntry, DocumentSource, TransactionRecord};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -25,6 +26,27 @@ pub(crate) async fn list_documents(
         state
             .store
             .list_documents(&library, query.prefix.as_deref(), query.limit)
+            .await?,
+    ))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/libraries/{library}/documents/{path}",
+    params(("library" = String, Path), ("path" = String, Path)),
+    responses((status = 200, body = TransactionRecord))
+)]
+pub(crate) async fn delete_document(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((library, path)): Path<(String, String)>,
+) -> Result<Json<TransactionRecord>, ApiError> {
+    let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
+    let actor = transaction_metadata_from_headers(&headers)?.actor;
+    Ok(Json(
+        state
+            .store
+            .delete_document_with_origin(&library, &path, DocumentSource::Rest, origin_id, actor)
             .await?,
     ))
 }

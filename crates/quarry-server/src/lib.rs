@@ -252,7 +252,7 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
                 .put(put_document)
                 .post(post_document_action)
                 .patch(patch_document_metadata)
-                .delete(delete_document),
+                .delete(document_handlers::delete_document),
         )
         .route(
             "/v1/libraries/{library}/transactions",
@@ -581,7 +581,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         put_document,
         post_document_action,
         patch_document_metadata,
-        delete_document,
+        document_handlers::delete_document,
         transaction_handlers::begin_transaction,
         transaction_handlers::stage_put_document,
         transaction_handlers::post_transaction_document_action,
@@ -2070,27 +2070,6 @@ async fn agent_presence_tmp_document(
         status,
         request.by.filter(|by| !by.trim().is_empty()),
     )))
-}
-
-#[utoipa::path(
-    delete,
-    path = "/v1/libraries/{library}/documents/{path}",
-    params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = TransactionRecord))
-)]
-async fn delete_document(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((library, path)): Path<(String, String)>,
-) -> Result<Json<TransactionRecord>, ApiError> {
-    let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
-    let actor = transaction_metadata_from_headers(&headers)?.actor;
-    Ok(Json(
-        state
-            .store
-            .delete_document_with_origin(&library, &path, DocumentSource::Rest, origin_id, actor)
-            .await?,
-    ))
 }
 
 #[cfg(test)]
