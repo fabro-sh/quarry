@@ -60,11 +60,11 @@ use review::{
     AgentBlockRef, AgentDocumentSnapshot, AgentReviewComment, AgentReviewConflict,
     AgentReviewReply, AgentReviewResponse, AgentReviewSuggestion, AgentSnapshotBlock,
     AgentSuggestionKind, AgentSuggestionPreview, DocumentReviewQuery, DryRunValue,
-    agent_document_review, agent_document_snapshot, agent_tmp_document_review,
+    agent_tmp_document_review,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use sse::{events, events_for_library, events_for_tmp_document};
+use sse::{events, events_for_tmp_document};
 use std::future::{Future, IntoFuture};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -247,7 +247,7 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
         )
         .route(
             "/v1/libraries/{library}/documents/{*path}",
-            get(get_document)
+            get(document_handlers::get_document)
                 .head(head_document)
                 .put(put_document)
                 .post(post_document_action)
@@ -556,7 +556,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         search_handlers::suggest_documents,
         search_handlers::reindex_library,
         search_handlers::graph,
-        get_document,
+        document_handlers::get_document,
         document_backlinks_openapi,
         document_outgoing_links_openapi,
         document_snapshot_openapi,
@@ -899,13 +899,6 @@ pub struct CreateCollabInviteRequest {
     pub role: String,
     #[serde(default, rename = "byHint")]
     pub by_hint: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DocumentGetQuery {
-    against: Option<String>,
-    #[serde(default, flatten)]
-    review: DocumentReviewQuery,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -1372,144 +1365,6 @@ async fn tmp_agent_presence_list_openapi() {}
     reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
 )]
 async fn tmp_agent_presence_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/documents/{path}",
-    params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = String), (status = 404, body = ErrorResponse))
-)]
-async fn get_document(
-    State(state): State<AppState>,
-    Query(query): Query<DocumentGetQuery>,
-    Path((library, path)): Path<(String, String)>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    let (document_path, subresource) = parse_document_subresource(&path);
-    match subresource {
-        DocumentSubResource::Backlinks => {
-            return json_response(
-                StatusCode::OK,
-                &state.store.backlinks(&library, document_path).await?,
-            );
-        }
-        DocumentSubResource::OutgoingLinks => {
-            return json_response(
-                StatusCode::OK,
-                &state.store.outgoing_links(&library, document_path).await?,
-            );
-        }
-        DocumentSubResource::Blocks => {
-            touch_agent_presence(&state, &headers, Some(&library), document_path).await?;
-            return gateway::document_blocks(&state, &library, document_path).await;
-        }
-        DocumentSubResource::Snapshot => {
-            touch_agent_presence(&state, &headers, Some(&library), document_path).await?;
-            return json_response(
-                StatusCode::OK,
-                &agent_document_snapshot(&state.store, &library, document_path).await?,
-            );
-        }
-        DocumentSubResource::Review => {
-            touch_agent_presence(&state, &headers, Some(&library), document_path).await?;
-            let include_resolved = query.review.include_resolved()?;
-            return json_response(
-                StatusCode::OK,
-                &agent_document_review(&state.store, &library, document_path, include_resolved)
-                    .await?,
-            );
-        }
-        DocumentSubResource::Presence => {
-            touch_agent_presence(&state, &headers, Some(&library), document_path).await?;
-            state.store.head_document(&library, document_path).await?;
-            return json_response(
-                StatusCode::OK,
-                &state.agent_presence.list(Some(&library), document_path),
-            );
-        }
-        DocumentSubResource::EventsStream => {
-            let document = state.store.head_document(&library, document_path).await?;
-            let presence_guard = optional_header(&headers, "x-agent-id")?.map(|agent_id| {
-                PresenceStreamGuard::open(
-                    state.agent_presence.clone(),
-                    Some(library.clone()),
-                    document_path.to_string(),
-                    document.id,
-                    agent_id,
-                )
-            });
-            return Ok(events_for_library(
-                &state.store,
-                &library,
-                Some(document_path.to_string()),
-                presence_guard,
-                state.shutdown_token(),
-            )
-            .await?
-            .into_response());
-        }
-        DocumentSubResource::Share => {
-            return json_response(
-                StatusCode::OK,
-                &state
-                    .store
-                    .collab_invite_tokens(&library, document_path)
-                    .await?,
-            );
-        }
-        DocumentSubResource::RawVersions => {
-            return json_response(
-                StatusCode::OK,
-                &state
-                    .store
-                    .raw_version_history(&library, document_path)
-                    .await?,
-            );
-        }
-        DocumentSubResource::Versions => {
-            return json_response(
-                StatusCode::OK,
-                &state.store.version_history(&library, document_path).await?,
-            );
-        }
-        DocumentSubResource::Version(version) => {
-            return json_response(
-                StatusCode::OK,
-                &state
-                    .store
-                    .document_version(&library, document_path, version)
-                    .await?,
-            );
-        }
-        DocumentSubResource::VersionDiff(version) => {
-            return json_response(
-                StatusCode::OK,
-                &state
-                    .store
-                    .version_diff(&library, document_path, version, query.against.as_deref())
-                    .await?,
-            );
-        }
-        DocumentSubResource::Document
-        | DocumentSubResource::Metadata
-        | DocumentSubResource::Move
-        | DocumentSubResource::ShareRevoke(_)
-        | DocumentSubResource::Transactions
-        | DocumentSubResource::Ttl
-        | DocumentSubResource::VersionRestore(_) => {}
-    }
-
-    touch_agent_presence(&state, &headers, Some(&library), &path).await?;
-    let document = state.store.get_document(&library, &path).await?;
-    bytes_response_with_expiry(
-        StatusCode::OK,
-        document.content,
-        &document.version.content_type,
-        &document.version.id,
-        &document.id,
-        document.expires_at.as_deref(),
-    )
-}
 
 #[utoipa::path(
     get,
