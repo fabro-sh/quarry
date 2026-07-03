@@ -2506,16 +2506,16 @@ impl QuarryStore {
         message: Option<String>,
         provenance: JsonValue,
     ) -> Result<TransactionRecord> {
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
-            insert_transaction_conn(&conn, &library.id, source, actor, message, provenance).await
-        }
-        .await;
-        let tx = finish_tx(&conn, result).await?;
+        let library = library.to_string();
+        let tx = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    let library = store.require_library_conn(conn, &library).await?;
+                    insert_transaction_conn(conn, &library.id, source, actor, message, provenance)
+                        .await
+                })
+            })
+            .await?;
         tracing::debug!(
             event = "storage.transaction.begin",
             library_id = %tx.library_id,
@@ -2558,62 +2558,59 @@ impl QuarryStore {
         content_type: &str,
     ) -> Result<DocumentVersion> {
         let path = normalize_path(path)?;
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let tx = self.transaction_conn(&conn, tx_id).await?;
-            ensure_open(&tx)?;
-            let (doc_id, old_version_id) =
-                ensure_document_conn(&conn, &tx.library_id, &path, &now_timestamp()).await?;
-            delete_staged_change_conn(&conn, tx_id, &path).await?;
-            let version = self
-                .insert_version_conn(&conn, &doc_id, tx_id, content, metadata, content_type)
+        let tx_id = tx_id.to_string();
+        let content_type = content_type.to_string();
+        self.write_transaction(move |store, conn| {
+            Box::pin(async move {
+                let tx = store.transaction_conn(conn, &tx_id).await?;
+                ensure_open(&tx)?;
+                let (doc_id, old_version_id) =
+                    ensure_document_conn(conn, &tx.library_id, &path, &now_timestamp()).await?;
+                delete_staged_change_conn(conn, &tx_id, &path).await?;
+                let version = store
+                    .insert_version_conn(conn, &doc_id, &tx_id, content, metadata, &content_type)
+                    .await?;
+                insert_change_conn(
+                    conn,
+                    &tx_id,
+                    &path,
+                    ChangeType::Put,
+                    old_version_id.as_deref(),
+                    Some(&version.id),
+                    None,
+                )
                 .await?;
-            insert_change_conn(
-                &conn,
-                tx_id,
-                &path,
-                ChangeType::Put,
-                old_version_id.as_deref(),
-                Some(&version.id),
-                None,
-            )
-            .await?;
-            Ok(version)
-        }
-        .await;
-        finish_tx(&conn, result).await
+                Ok(version)
+            })
+        })
+        .await
     }
 
     pub async fn stage_delete(&self, tx_id: &str, path: &str) -> Result<()> {
         let path = normalize_path(path)?;
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let tx = self.transaction_conn(&conn, tx_id).await?;
-            ensure_open(&tx)?;
-            let (_, old_version_id) = self
-                .document_identity_conn(&conn, &tx.library_id, &path)
-                .await?
-                .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
-            delete_staged_change_conn(&conn, tx_id, &path).await?;
-            insert_change_conn(
-                &conn,
-                tx_id,
-                &path,
-                ChangeType::Delete,
-                old_version_id.as_deref(),
-                None,
-                None,
-            )
-            .await
-        }
-        .await;
-        finish_tx(&conn, result).await
+        let tx_id = tx_id.to_string();
+        self.write_transaction(move |store, conn| {
+            Box::pin(async move {
+                let tx = store.transaction_conn(conn, &tx_id).await?;
+                ensure_open(&tx)?;
+                let (_, old_version_id) = store
+                    .document_identity_conn(conn, &tx.library_id, &path)
+                    .await?
+                    .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+                delete_staged_change_conn(conn, &tx_id, &path).await?;
+                insert_change_conn(
+                    conn,
+                    &tx_id,
+                    &path,
+                    ChangeType::Delete,
+                    old_version_id.as_deref(),
+                    None,
+                    None,
+                )
+                .await
+            })
+        })
+        .await
     }
 
     pub async fn stage_metadata(
@@ -2623,77 +2620,73 @@ impl QuarryStore {
         patch: JsonValue,
     ) -> Result<DocumentVersion> {
         let path = normalize_path(path)?;
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let tx = self.transaction_conn(&conn, tx_id).await?;
-            ensure_open(&tx)?;
-            let current = self.document_conn(&conn, &tx.library_id, &path).await?;
-            let mut metadata = current.metadata;
-            merge_json(&mut metadata, patch);
-            delete_staged_change_conn(&conn, tx_id, &path).await?;
-            let version = self
-                .insert_version_conn(
-                    &conn,
-                    &current.id,
-                    tx_id,
-                    current.content,
-                    metadata,
-                    &current.version.content_type,
+        let tx_id = tx_id.to_string();
+        self.write_transaction(move |store, conn| {
+            Box::pin(async move {
+                let tx = store.transaction_conn(conn, &tx_id).await?;
+                ensure_open(&tx)?;
+                let current = store.document_conn(conn, &tx.library_id, &path).await?;
+                let mut metadata = current.metadata;
+                merge_json(&mut metadata, patch);
+                delete_staged_change_conn(conn, &tx_id, &path).await?;
+                let version = store
+                    .insert_version_conn(
+                        conn,
+                        &current.id,
+                        &tx_id,
+                        current.content,
+                        metadata,
+                        &current.version.content_type,
+                    )
+                    .await?;
+                insert_change_conn(
+                    conn,
+                    &tx_id,
+                    &path,
+                    ChangeType::Metadata,
+                    Some(&current.version.id),
+                    Some(&version.id),
+                    None,
                 )
                 .await?;
-            insert_change_conn(
-                &conn,
-                tx_id,
-                &path,
-                ChangeType::Metadata,
-                Some(&current.version.id),
-                Some(&version.id),
-                None,
-            )
-            .await?;
-            Ok(version)
-        }
-        .await;
-        finish_tx(&conn, result).await
+                Ok(version)
+            })
+        })
+        .await
     }
 
     pub async fn stage_move(&self, tx_id: &str, from_path: &str, to_path: &str) -> Result<()> {
         let from_path = normalize_path(from_path)?;
         let to_path = normalize_path(to_path)?;
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let tx = self.transaction_conn(&conn, tx_id).await?;
-            ensure_open(&tx)?;
-            let (_, old_version_id) = self
-                .document_identity_conn(&conn, &tx.library_id, &from_path)
-                .await?
-                .ok_or_else(|| QuarryError::NotFound(from_path.clone()))?;
-            if self
-                .document_identity_conn(&conn, &tx.library_id, &to_path)
-                .await?
-                .is_some()
-            {
-                return Err(QuarryError::Conflict(format!("{to_path} already exists")));
-            }
-            insert_change_conn(
-                &conn,
-                tx_id,
-                &from_path,
-                ChangeType::Move,
-                old_version_id.as_deref(),
-                old_version_id.as_deref(),
-                Some(&to_path),
-            )
-            .await
-        }
-        .await;
-        finish_tx(&conn, result).await
+        let tx_id = tx_id.to_string();
+        self.write_transaction(move |store, conn| {
+            Box::pin(async move {
+                let tx = store.transaction_conn(conn, &tx_id).await?;
+                ensure_open(&tx)?;
+                let (_, old_version_id) = store
+                    .document_identity_conn(conn, &tx.library_id, &from_path)
+                    .await?
+                    .ok_or_else(|| QuarryError::NotFound(from_path.clone()))?;
+                if store
+                    .document_identity_conn(conn, &tx.library_id, &to_path)
+                    .await?
+                    .is_some()
+                {
+                    return Err(QuarryError::Conflict(format!("{to_path} already exists")));
+                }
+                insert_change_conn(
+                    conn,
+                    &tx_id,
+                    &from_path,
+                    ChangeType::Move,
+                    old_version_id.as_deref(),
+                    old_version_id.as_deref(),
+                    Some(&to_path),
+                )
+                .await
+            })
+        })
+        .await
     }
 
     pub async fn commit_transaction(&self, tx_id: &str) -> Result<TransactionRecord> {
@@ -2868,23 +2861,22 @@ impl QuarryStore {
 
     pub async fn rollback_transaction(&self, tx_id: &str) -> Result<TransactionRecord> {
         let started = Instant::now();
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let tx = self.transaction_conn(&conn, tx_id).await?;
-            ensure_open(&tx)?;
-            conn.execute(
-                "UPDATE transactions SET state = ?1 WHERE id = ?2",
-                params![TransactionState::RolledBack.as_str(), tx_id.to_string()],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            self.transaction_conn(&conn, tx_id).await
-        }
-        .await;
-        let tx = finish_tx(&conn, result).await?;
+        let tx_id = tx_id.to_string();
+        let tx = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    let tx = store.transaction_conn(conn, &tx_id).await?;
+                    ensure_open(&tx)?;
+                    conn.execute(
+                        "UPDATE transactions SET state = ?1 WHERE id = ?2",
+                        params![TransactionState::RolledBack.as_str(), tx_id.clone()],
+                    )
+                    .await
+                    .map_err(map_turso_error)?;
+                    store.transaction_conn(conn, &tx_id).await
+                })
+            })
+            .await?;
         tracing::debug!(
             event = "storage.transaction.rollback",
             library_id = %tx.library_id,
@@ -2897,33 +2889,31 @@ impl QuarryStore {
     }
 
     pub async fn create_git_peer(&self, library: &str, config: JsonValue) -> Result<GitPeer> {
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
-            let peer = GitPeer {
-                id: Uuid::new_v4().to_string(),
-                library_id: library.id,
-                kind: "git".to_string(),
-                config,
-            };
-            conn.execute(
-                "INSERT INTO sync_peers (id, library_id, kind, config_json) VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    peer.id.clone(),
-                    peer.library_id.clone(),
-                    peer.kind.clone(),
-                    peer.config.to_string()
-                ],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            Ok(peer)
-        }
-        .await;
-        finish_tx(&conn, result).await
+        let library = library.to_string();
+        self.write_transaction(move |store, conn| {
+            Box::pin(async move {
+                let library = store.require_library_conn(conn, &library).await?;
+                let peer = GitPeer {
+                    id: Uuid::new_v4().to_string(),
+                    library_id: library.id,
+                    kind: "git".to_string(),
+                    config,
+                };
+                conn.execute(
+                    "INSERT INTO sync_peers (id, library_id, kind, config_json) VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        peer.id.clone(),
+                        peer.library_id.clone(),
+                        peer.kind.clone(),
+                        peer.config.to_string()
+                    ],
+                )
+                .await
+                .map_err(map_turso_error)?;
+                Ok(peer)
+            })
+        })
+        .await
     }
 
     pub async fn list_git_peers(&self, library: &str) -> Result<Vec<GitPeer>> {
@@ -2992,37 +2982,35 @@ impl QuarryStore {
         last_synced_git_oid: Option<String>,
     ) -> Result<SyncStateEntry> {
         let path = normalize_path(path)?;
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            conn.execute(
-                "INSERT INTO sync_state
-                 (peer_id, path, last_synced_doc_version_id, last_synced_git_oid)
-                 VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(peer_id, path)
-                 DO UPDATE SET
-                    last_synced_doc_version_id = excluded.last_synced_doc_version_id,
-                    last_synced_git_oid = excluded.last_synced_git_oid",
-                vec![
-                    Value::Text(peer_id.to_string()),
-                    Value::Text(path.clone()),
-                    opt_value(last_synced_doc_version_id.clone()),
-                    opt_value(last_synced_git_oid.clone()),
-                ],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            Ok(SyncStateEntry {
-                peer_id: peer_id.to_string(),
-                path,
-                last_synced_doc_version_id,
-                last_synced_git_oid,
+        let peer_id = peer_id.to_string();
+        self.write_transaction(move |_store, conn| {
+            Box::pin(async move {
+                conn.execute(
+                    "INSERT INTO sync_state
+                     (peer_id, path, last_synced_doc_version_id, last_synced_git_oid)
+                     VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(peer_id, path)
+                     DO UPDATE SET
+                        last_synced_doc_version_id = excluded.last_synced_doc_version_id,
+                        last_synced_git_oid = excluded.last_synced_git_oid",
+                    vec![
+                        Value::Text(peer_id.clone()),
+                        Value::Text(path.clone()),
+                        opt_value(last_synced_doc_version_id.clone()),
+                        opt_value(last_synced_git_oid.clone()),
+                    ],
+                )
+                .await
+                .map_err(map_turso_error)?;
+                Ok(SyncStateEntry {
+                    peer_id,
+                    path,
+                    last_synced_doc_version_id,
+                    last_synced_git_oid,
+                })
             })
-        }
-        .await;
-        finish_tx(&conn, result).await
+        })
+        .await
     }
 
     pub async fn list_conflicts(&self, library: &str) -> Result<Vec<ConflictRecord>> {
@@ -3062,43 +3050,42 @@ impl QuarryStore {
         theirs_version_id: Option<String>,
     ) -> Result<ConflictRecord> {
         let path = normalize_path(path)?;
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
-            let conflict = ConflictRecord {
-                id: Uuid::new_v4().to_string(),
-                library_id: library.id,
-                path,
-                conflict_path: None,
-                ours_version_id,
-                theirs_version_id,
-                status: ConflictStatus::Open,
-                discovered_at: now_timestamp(),
-                resolved_at: None,
-            };
-            conn.execute(
-                "INSERT INTO conflicts
-                 (id, library_id, path, ours_version_id, theirs_version_id, status, discovered_at, resolved_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
-                vec![
-                    Value::Text(conflict.id.clone()),
-                    Value::Text(conflict.library_id.clone()),
-                    Value::Text(conflict.path.clone()),
-                    opt_value(conflict.ours_version_id.clone()),
-                    opt_value(conflict.theirs_version_id.clone()),
-                    Value::Text(conflict.status.as_str().to_string()),
-                    Value::Text(conflict.discovered_at.clone()),
-                ],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            self.conflict_conn(&conn, &conflict.id).await
-        }
-        .await;
-        let conflict = finish_tx(&conn, result).await?;
+        let library = library.to_string();
+        let conflict = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    let library = store.require_library_conn(conn, &library).await?;
+                    let conflict = ConflictRecord {
+                        id: Uuid::new_v4().to_string(),
+                        library_id: library.id,
+                        path,
+                        conflict_path: None,
+                        ours_version_id,
+                        theirs_version_id,
+                        status: ConflictStatus::Open,
+                        discovered_at: now_timestamp(),
+                        resolved_at: None,
+                    };
+                    conn.execute(
+                        "INSERT INTO conflicts
+                         (id, library_id, path, ours_version_id, theirs_version_id, status, discovered_at, resolved_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
+                        vec![
+                            Value::Text(conflict.id.clone()),
+                            Value::Text(conflict.library_id.clone()),
+                            Value::Text(conflict.path.clone()),
+                            opt_value(conflict.ours_version_id.clone()),
+                            opt_value(conflict.theirs_version_id.clone()),
+                            Value::Text(conflict.status.as_str().to_string()),
+                            Value::Text(conflict.discovered_at.clone()),
+                        ],
+                    )
+                    .await
+                    .map_err(map_turso_error)?;
+                    store.conflict_conn(conn, &conflict.id).await
+                })
+            })
+            .await?;
         self.emit_event(StoreEvent::conflict_created(
             conflict.library_id.clone(),
             conflict.path.clone(),
@@ -3108,25 +3095,24 @@ impl QuarryStore {
     }
 
     pub async fn resolve_conflict(&self, conflict_id: &str) -> Result<ConflictRecord> {
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            conn.execute(
-                "UPDATE conflicts SET status = ?1, resolved_at = ?2 WHERE id = ?3",
-                params![
-                    ConflictStatus::Resolved.as_str(),
-                    now_timestamp(),
-                    conflict_id.to_string()
-                ],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            self.conflict_conn(&conn, conflict_id).await
-        }
-        .await;
-        let conflict = finish_tx(&conn, result).await?;
+        let conflict_id = conflict_id.to_string();
+        let conflict = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    conn.execute(
+                        "UPDATE conflicts SET status = ?1, resolved_at = ?2 WHERE id = ?3",
+                        params![
+                            ConflictStatus::Resolved.as_str(),
+                            now_timestamp(),
+                            conflict_id.clone()
+                        ],
+                    )
+                    .await
+                    .map_err(map_turso_error)?;
+                    store.conflict_conn(conn, &conflict_id).await
+                })
+            })
+            .await?;
         self.emit_event(StoreEvent::conflict_resolved(
             conflict.library_id.clone(),
             conflict.path.clone(),
