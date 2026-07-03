@@ -1026,58 +1026,66 @@ impl QuarryStore {
             content_bytes,
             "document put started"
         );
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
-            self.check_precondition_conn(&conn, &library.id, &path, &precondition)
-                .await?;
-            let tx = insert_transaction_conn(
-                &conn,
-                &library.id,
-                source,
-                transaction.actor,
-                transaction.message,
-                transaction
-                    .provenance
-                    .unwrap_or_else(|| serde_json::json!({ "mode": "auto_commit" })),
-            )
-            .await?;
-            let (doc_id, old_version_id) =
-                ensure_document_conn(&conn, &library.id, &path, &now_timestamp()).await?;
-            let version = self
-                .insert_version_conn(&conn, &doc_id, &tx.id, content, metadata, content_type)
-                .await?;
-            insert_change_conn(
-                &conn,
-                &tx.id,
-                &path,
-                ChangeType::Put,
-                old_version_id.as_deref(),
-                Some(&version.id),
-                None,
-            )
-            .await?;
-            publish_put_conn(&conn, &doc_id, &version.id).await?;
-            // A legacy put bypasses the block import path, so any block
-            // projection for this document is now stale: drop it fail-closed
-            // (see the `blocks` module docs).
-            blocks::clear_block_state_conn(&conn, &doc_id).await?;
-            ensure_path_inodes_conn(&conn, &library.id, &path).await?;
-            self.reindex_links_conn(&conn, &library.id).await?;
-            commit_transaction_record_conn(&conn, &tx.id).await?;
-            let document = self.document_entry_conn(&conn, &library.id, &path).await?;
-            let tx = self.transaction_conn(&conn, &tx.id).await?;
-            Ok(WriteOutcome {
-                document,
-                version,
-                transaction: tx,
+        let library = library.to_string();
+        let content_type = content_type.to_string();
+        let outcome = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    let library = store.require_library_conn(conn, &library).await?;
+                    store
+                        .check_precondition_conn(conn, &library.id, &path, &precondition)
+                        .await?;
+                    let tx = insert_transaction_conn(
+                        conn,
+                        &library.id,
+                        source,
+                        transaction.actor,
+                        transaction.message,
+                        transaction
+                            .provenance
+                            .unwrap_or_else(|| serde_json::json!({ "mode": "auto_commit" })),
+                    )
+                    .await?;
+                    let (doc_id, old_version_id) =
+                        ensure_document_conn(conn, &library.id, &path, &now_timestamp()).await?;
+                    let version = store
+                        .insert_version_conn(
+                            conn,
+                            &doc_id,
+                            &tx.id,
+                            content,
+                            metadata,
+                            &content_type,
+                        )
+                        .await?;
+                    insert_change_conn(
+                        conn,
+                        &tx.id,
+                        &path,
+                        ChangeType::Put,
+                        old_version_id.as_deref(),
+                        Some(&version.id),
+                        None,
+                    )
+                    .await?;
+                    publish_put_conn(conn, &doc_id, &version.id).await?;
+                    // A legacy put bypasses the block import path, so any block
+                    // projection for this document is now stale: drop it fail-closed
+                    // (see the `blocks` module docs).
+                    blocks::clear_block_state_conn(conn, &doc_id).await?;
+                    ensure_path_inodes_conn(conn, &library.id, &path).await?;
+                    store.reindex_links_conn(conn, &library.id).await?;
+                    commit_transaction_record_conn(conn, &tx.id).await?;
+                    let document = store.document_entry_conn(conn, &library.id, &path).await?;
+                    let tx = store.transaction_conn(conn, &tx.id).await?;
+                    Ok(WriteOutcome {
+                        document,
+                        version,
+                        transaction: tx,
+                    })
+                })
             })
-        }
-        .await;
-        let outcome = finish_tx(&conn, result).await?;
+            .await?;
         tracing::debug!(
             event = "document.put.committed",
             library_id = %outcome.transaction.library_id,
@@ -1210,66 +1218,73 @@ impl QuarryStore {
         let path = secret.as_str().to_string();
         let (content, metadata, content_type) =
             validate_tmp_markdown_write(content, metadata, content_type)?;
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let provenance = transaction
-                .provenance
-                .unwrap_or_else(|| serde_json::json!({ "mode": "tmp_document" }));
-            self.check_tmp_precondition_conn(&conn, &path, &precondition)
-                .await?;
-            let expires_at = match ttl {
-                TmpTtl::Default => default_tmp_expires_at(),
-                TmpTtl::Unchanged => self
-                    .tmp_document_expires_at_conn(&conn, &path)
-                    .await?
-                    .unwrap_or_else(default_tmp_expires_at),
-                TmpTtl::ExpiresAt(expires_at) => expires_at,
-            };
-            let tx = insert_transaction_conn(
-                &conn,
-                TMP_TRANSACTION_LIBRARY_ID,
-                DocumentSource::Rest,
-                transaction.actor,
-                transaction.message,
-                provenance,
-            )
-            .await?;
-            let (doc_id, old_version_id) =
-                ensure_tmp_document_conn(&conn, &path, &expires_at, &now_timestamp()).await?;
-            let version = self
-                .insert_version_conn(&conn, &doc_id, &tx.id, content, metadata, &content_type)
-                .await?;
-            insert_change_conn(
-                &conn,
-                &tx.id,
-                &path,
-                ChangeType::Put,
-                old_version_id.as_deref(),
-                Some(&version.id),
-                None,
-            )
-            .await?;
-            publish_put_conn(&conn, &doc_id, &version.id).await?;
-            conn.execute(
-                "UPDATE documents SET expires_at = ?1 WHERE id = ?2",
-                params![expires_at, doc_id.clone()],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            commit_transaction_record_conn(&conn, &tx.id).await?;
-            let document = self.tmp_document_entry_conn(&conn, &path).await?;
-            let tx = self.transaction_conn(&conn, &tx.id).await?;
-            Ok(WriteOutcome {
-                document,
-                version,
-                transaction: tx,
+        let outcome = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    let provenance = transaction
+                        .provenance
+                        .unwrap_or_else(|| serde_json::json!({ "mode": "tmp_document" }));
+                    store
+                        .check_tmp_precondition_conn(conn, &path, &precondition)
+                        .await?;
+                    let expires_at = match ttl {
+                        TmpTtl::Default => default_tmp_expires_at(),
+                        TmpTtl::Unchanged => store
+                            .tmp_document_expires_at_conn(conn, &path)
+                            .await?
+                            .unwrap_or_else(default_tmp_expires_at),
+                        TmpTtl::ExpiresAt(expires_at) => expires_at,
+                    };
+                    let tx = insert_transaction_conn(
+                        conn,
+                        TMP_TRANSACTION_LIBRARY_ID,
+                        DocumentSource::Rest,
+                        transaction.actor,
+                        transaction.message,
+                        provenance,
+                    )
+                    .await?;
+                    let (doc_id, old_version_id) =
+                        ensure_tmp_document_conn(conn, &path, &expires_at, &now_timestamp())
+                            .await?;
+                    let version = store
+                        .insert_version_conn(
+                            conn,
+                            &doc_id,
+                            &tx.id,
+                            content,
+                            metadata,
+                            &content_type,
+                        )
+                        .await?;
+                    insert_change_conn(
+                        conn,
+                        &tx.id,
+                        &path,
+                        ChangeType::Put,
+                        old_version_id.as_deref(),
+                        Some(&version.id),
+                        None,
+                    )
+                    .await?;
+                    publish_put_conn(conn, &doc_id, &version.id).await?;
+                    conn.execute(
+                        "UPDATE documents SET expires_at = ?1 WHERE id = ?2",
+                        params![expires_at, doc_id.clone()],
+                    )
+                    .await
+                    .map_err(map_turso_error)?;
+                    commit_transaction_record_conn(conn, &tx.id).await?;
+                    let document = store.tmp_document_entry_conn(conn, &path).await?;
+                    let tx = store.transaction_conn(conn, &tx.id).await?;
+                    Ok(WriteOutcome {
+                        document,
+                        version,
+                        transaction: tx,
+                    })
+                })
             })
-        }
-        .await;
-        let outcome = finish_tx(&conn, result).await?;
+            .await?;
         self.emit_document_put_events(&outcome, origin_id);
         Ok(outcome)
     }
