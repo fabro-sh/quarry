@@ -2374,25 +2374,13 @@ async fn head_tmp_document(
     let document = state.store.head_tmp_document(&path).await?;
     let mut response = Response::new(axum::body::Body::empty());
     *response.status_mut() = StatusCode::OK;
-    response.headers_mut().insert(
-        header::ETAG,
-        checked_header_value(header::ETAG.as_str(), &etag(&document.head_version_id))?,
-    );
-    response.headers_mut().insert(
-        "x-quarry-document-id",
-        checked_header_value("x-quarry-document-id", &document.id)?,
-    );
-    if let Some(expires_at) = document.expires_at.as_deref() {
-        response.headers_mut().insert(
-            "x-quarry-expires-at",
-            checked_header_value("x-quarry-expires-at", expires_at)?,
-        );
-    }
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(&document.content_type)
-            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
-    );
+    insert_document_headers(
+        response.headers_mut(),
+        &document.content_type,
+        &document.head_version_id,
+        &document.id,
+        document.expires_at.as_deref(),
+    )?;
     Ok(response)
 }
 
@@ -3089,25 +3077,13 @@ async fn head_document(
     let document = state.store.head_document(&library, &path).await?;
     let mut response = Response::new(axum::body::Body::empty());
     *response.status_mut() = StatusCode::OK;
-    response.headers_mut().insert(
-        header::ETAG,
-        checked_header_value(header::ETAG.as_str(), &etag(&document.head_version_id))?,
-    );
-    response.headers_mut().insert(
-        "x-quarry-document-id",
-        checked_header_value("x-quarry-document-id", &document.id)?,
-    );
-    if let Some(expires_at) = document.expires_at.as_deref() {
-        response.headers_mut().insert(
-            "x-quarry-expires-at",
-            checked_header_value("x-quarry-expires-at", expires_at)?,
-        );
-    }
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(&document.content_type)
-            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
-    );
+    insert_document_headers(
+        response.headers_mut(),
+        &document.content_type,
+        &document.head_version_id,
+        &document.id,
+        document.expires_at.as_deref(),
+    )?;
     Ok(response)
 }
 
@@ -5336,29 +5312,33 @@ fn checked_header_value(name: &str, value: &str) -> Result<HeaderValue, ApiError
     })
 }
 
-fn bytes_response(
-    status: StatusCode,
-    content: Vec<u8>,
+fn insert_document_headers(
+    headers: &mut HeaderMap,
     content_type: &str,
     version_id: &str,
     document_id: &str,
-) -> Result<Response, ApiError> {
-    let mut response = Response::new(axum::body::Body::from(content));
-    *response.status_mut() = status;
-    response.headers_mut().insert(
+    expires_at: Option<&str>,
+) -> Result<(), ApiError> {
+    headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_str(content_type)
             .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
     );
-    response.headers_mut().insert(
+    headers.insert(
         header::ETAG,
         checked_header_value(header::ETAG.as_str(), &etag(version_id))?,
     );
-    response.headers_mut().insert(
+    headers.insert(
         "x-quarry-document-id",
         checked_header_value("x-quarry-document-id", document_id)?,
     );
-    Ok(response)
+    if let Some(expires_at) = expires_at {
+        headers.insert(
+            "x-quarry-expires-at",
+            checked_header_value("x-quarry-expires-at", expires_at)?,
+        );
+    }
+    Ok(())
 }
 
 fn bytes_response_with_expiry(
@@ -5369,13 +5349,15 @@ fn bytes_response_with_expiry(
     document_id: &str,
     expires_at: Option<&str>,
 ) -> Result<Response, ApiError> {
-    let mut response = bytes_response(status, content, content_type, version_id, document_id)?;
-    if let Some(expires_at) = expires_at {
-        response.headers_mut().insert(
-            "x-quarry-expires-at",
-            checked_header_value("x-quarry-expires-at", expires_at)?,
-        );
-    }
+    let mut response = Response::new(axum::body::Body::from(content));
+    *response.status_mut() = status;
+    insert_document_headers(
+        response.headers_mut(),
+        content_type,
+        version_id,
+        document_id,
+        expires_at,
+    )?;
     Ok(response)
 }
 
