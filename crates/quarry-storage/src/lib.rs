@@ -5198,39 +5198,20 @@ async fn ensure_document_conn(
     path: &str,
     now: &str,
 ) -> Result<(String, Option<String>)> {
-    let mut rows = conn
-        .query(
-            "SELECT id, head_version_id FROM documents
-             WHERE document_scope = 'library'
-               AND library_id = ?1
-               AND path = ?2
-               AND deleted_at IS NULL
-               AND head_version_id IS NOT NULL
-               AND (expires_at IS NULL OR expires_at > ?3)
-             LIMIT 1",
-            params![library_id.to_string(), path.to_string(), now.to_string()],
-        )
-        .await
-        .map_err(map_turso_error)?;
-    if let Some(row) = rows.next().await.map_err(map_turso_error)? {
-        return Ok((text(&row, 0)?, opt_text(&row, 1)?));
+    if let Some(identity) =
+        document_identity_conn(conn, DocumentLookupScope::Library { library_id }, path, now).await?
+    {
+        return Ok(identity);
     }
     error_if_library_document_expired(conn, library_id, path, now).await?;
-    let id = Uuid::new_v4().to_string();
-    conn.execute(
-        "INSERT INTO documents
-         (id, library_id, path, head_version_id, deleted_at, created_at, updated_at, document_scope, expires_at)
-         VALUES (?1, ?2, ?3, NULL, NULL, ?4, ?4, 'library', NULL)",
-        params![
-            id.clone(),
-            library_id.to_string(),
-            path.to_string(),
-            now.to_string()
-        ],
+    insert_document_conn(
+        conn,
+        DocumentLookupScope::Library { library_id },
+        path,
+        None,
+        now,
     )
     .await
-    .map_err(map_turso_error)?;
-    Ok((id, None))
 }
 
 async fn ensure_tmp_document_conn(
@@ -5239,38 +5220,99 @@ async fn ensure_tmp_document_conn(
     expires_at: &str,
     now: &str,
 ) -> Result<(String, Option<String>)> {
-    let mut rows = conn
-        .query(
-            "SELECT id, head_version_id FROM documents
-             WHERE document_scope = 'tmp'
-               AND library_id IS NULL
-               AND path = ?1
-               AND deleted_at IS NULL
-               AND head_version_id IS NOT NULL
-               AND expires_at > ?2
-             LIMIT 1",
-            params![path.to_string(), now.to_string()],
-        )
-        .await
-        .map_err(map_turso_error)?;
-    if let Some(row) = rows.next().await.map_err(map_turso_error)? {
-        return Ok((text(&row, 0)?, opt_text(&row, 1)?));
+    if let Some(identity) =
+        document_identity_conn(conn, DocumentLookupScope::Tmp, path, now).await?
+    {
+        return Ok(identity);
     }
     error_if_tmp_document_expired(conn, path, now).await?;
+    insert_document_conn(conn, DocumentLookupScope::Tmp, path, Some(expires_at), now).await
+}
+
+async fn document_identity_conn(
+    conn: &Connection,
+    scope: DocumentLookupScope<'_>,
+    path: &str,
+    now: &str,
+) -> Result<Option<(String, Option<String>)>> {
+    let (scope_filter, binds) = match scope {
+        DocumentLookupScope::Library { library_id } => (
+            "document_scope = 'library'
+               AND library_id = ?1
+               AND path = ?2
+               AND (expires_at IS NULL OR expires_at > ?3)",
+            vec![
+                Value::Text(library_id.to_string()),
+                Value::Text(path.to_string()),
+                Value::Text(now.to_string()),
+            ],
+        ),
+        DocumentLookupScope::Tmp => (
+            "document_scope = 'tmp'
+               AND library_id IS NULL
+               AND path = ?1
+               AND expires_at > ?2",
+            vec![Value::Text(path.to_string()), Value::Text(now.to_string())],
+        ),
+    };
+    let sql = format!(
+        "SELECT id, head_version_id FROM documents
+         WHERE {scope_filter}
+           AND deleted_at IS NULL
+           AND head_version_id IS NOT NULL
+         LIMIT 1"
+    );
+    let mut rows = conn.query(&sql, binds).await.map_err(map_turso_error)?;
+    if let Some(row) = rows.next().await.map_err(map_turso_error)? {
+        Ok(Some((text(&row, 0)?, opt_text(&row, 1)?)))
+    } else {
+        Ok(None)
+    }
+}
+
+async fn insert_document_conn(
+    conn: &Connection,
+    scope: DocumentLookupScope<'_>,
+    path: &str,
+    expires_at: Option<&str>,
+    now: &str,
+) -> Result<(String, Option<String>)> {
     let id = Uuid::new_v4().to_string();
-    conn.execute(
-        "INSERT INTO documents
-         (id, library_id, path, head_version_id, deleted_at, created_at, updated_at, document_scope, expires_at)
-         VALUES (?1, NULL, ?2, NULL, NULL, ?3, ?3, 'tmp', ?4)",
-        params![
-            id.clone(),
-            path.to_string(),
-            now.to_string(),
-            expires_at.to_string()
-        ],
-    )
-    .await
-    .map_err(map_turso_error)?;
+    match scope {
+        DocumentLookupScope::Library { library_id } => {
+            conn.execute(
+                "INSERT INTO documents
+                 (id, library_id, path, head_version_id, deleted_at, created_at, updated_at, document_scope, expires_at)
+                 VALUES (?1, ?2, ?3, NULL, NULL, ?4, ?4, 'library', NULL)",
+                params![
+                    id.clone(),
+                    library_id.to_string(),
+                    path.to_string(),
+                    now.to_string()
+                ],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        }
+        DocumentLookupScope::Tmp => {
+            let expires_at = expires_at.ok_or_else(|| {
+                QuarryError::Invariant("tmp document inserts require expires_at".to_string())
+            })?;
+            conn.execute(
+                "INSERT INTO documents
+                 (id, library_id, path, head_version_id, deleted_at, created_at, updated_at, document_scope, expires_at)
+                 VALUES (?1, NULL, ?2, NULL, NULL, ?3, ?3, 'tmp', ?4)",
+                params![
+                    id.clone(),
+                    path.to_string(),
+                    now.to_string(),
+                    expires_at.to_string()
+                ],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        }
+    }
     Ok((id, None))
 }
 
