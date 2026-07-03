@@ -31,6 +31,8 @@ pub enum QuarryError {
     IsADirectory(String),
     #[error("read-only: {0}")]
     ReadOnly(String),
+    #[error("invariant violation: {0}")]
+    Invariant(String),
     #[error("storage busy: {0}")]
     Busy(String),
     #[error("unsupported media type: {0}")]

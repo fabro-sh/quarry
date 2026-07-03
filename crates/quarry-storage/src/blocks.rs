@@ -107,7 +107,7 @@ impl BlockReviewKind {
             "comment" => Ok(Self::Comment),
             "suggestion" => Ok(Self::Suggestion),
             "conflict" => Ok(Self::Conflict),
-            other => Err(QuarryError::Storage(format!(
+            other => Err(QuarryError::Invariant(format!(
                 "unknown block review kind {other}"
             ))),
         }
@@ -138,7 +138,7 @@ impl BlockReviewState {
             "resolved" => Ok(Self::Resolved),
             "orphaned" => Ok(Self::Orphaned),
             "invalidated" => Ok(Self::Invalidated),
-            other => Err(QuarryError::Storage(format!(
+            other => Err(QuarryError::Invariant(format!(
                 "unknown block review state {other}"
             ))),
         }
@@ -1008,14 +1008,14 @@ impl QuarryStore {
             let scope = match text(&row, 2)?.as_str() {
                 "library" => DocumentScopeRef::Library {
                     slug: opt_text(&row, 3)?.ok_or_else(|| {
-                        QuarryError::Storage(format!(
+                        QuarryError::Invariant(format!(
                             "library document {document_id} is missing a library slug"
                         ))
                     })?,
                 },
                 "tmp" => DocumentScopeRef::Tmp,
                 other => {
-                    return Err(QuarryError::Storage(format!(
+                    return Err(QuarryError::Invariant(format!(
                         "document {document_id} has unsupported scope {other}"
                     )));
                 }
@@ -1032,7 +1032,7 @@ impl QuarryStore {
                     (Some(bytes), None) => bytes,
                     (None, Some(hash)) => self.cas.read(&hash)?,
                     _ => {
-                        return Err(QuarryError::Storage(format!(
+                        return Err(QuarryError::Invariant(format!(
                             "head version for document {document_id} violates inline/CAS invariant"
                         )))
                     }
@@ -1414,7 +1414,7 @@ fn order_depth_first(document_id: &str, rows: Vec<BlockRow>) -> Result<Vec<Block
         ordered.push(row);
     }
     if ordered.len() != total {
-        return Err(QuarryError::Storage(format!(
+        return Err(QuarryError::Invariant(format!(
             "document {document_id} has orphaned block rows"
         )));
     }
@@ -1424,7 +1424,7 @@ fn order_depth_first(document_id: &str, rows: Vec<BlockRow>) -> Result<Vec<Block
 fn block_row_from_row(row: &Row) -> Result<BlockRow> {
     let position = row.get::<i64>(2).map_err(map_turso_error)?;
     let position = u32::try_from(position)
-        .map_err(|_| QuarryError::Storage(format!("block position {position} out of range")))?;
+        .map_err(|_| QuarryError::Invariant(format!("block position {position} out of range")))?;
     let ranges: InlineRanges = serde_json::from_str(&text(row, 6)?)?;
     Ok(BlockRow {
         block_id: text(row, 0)?,
@@ -1447,9 +1447,9 @@ fn block_review_item_from_row(row: &Row) -> Result<BlockReviewItem> {
         block_id: text(row, 2)?,
         kind: BlockReviewKind::parse(&text(row, 3)?)?,
         start_offset: u32::try_from(start_offset)
-            .map_err(|_| QuarryError::Storage(format!("anchor start {start_offset} invalid")))?,
+            .map_err(|_| QuarryError::Invariant(format!("anchor start {start_offset} invalid")))?,
         end_offset: u32::try_from(end_offset)
-            .map_err(|_| QuarryError::Storage(format!("anchor end {end_offset} invalid")))?,
+            .map_err(|_| QuarryError::Invariant(format!("anchor end {end_offset} invalid")))?,
         body: opt_text(row, 6)?,
         replacement: opt_text(row, 7)?,
         author: opt_text(row, 8)?,

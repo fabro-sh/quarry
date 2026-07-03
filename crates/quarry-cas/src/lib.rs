@@ -35,7 +35,9 @@ impl DiskCas {
 
     pub fn object_path(&self, hash: &str) -> Result<PathBuf> {
         if hash.len() < 4 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(QuarryError::Storage(format!("invalid BLAKE3 hash {hash}")));
+            return Err(QuarryError::Invariant(format!(
+                "invalid BLAKE3 hash {hash}"
+            )));
         }
         Ok(self.root.join("objects").join(&hash[0..2]).join(&hash[2..]))
     }
@@ -53,7 +55,7 @@ impl DiskCas {
 
         let parent = path
             .parent()
-            .ok_or_else(|| QuarryError::Storage("CAS object path has no parent".to_string()))?;
+            .ok_or_else(|| QuarryError::Invariant("CAS object path has no parent".to_string()))?;
         fs::create_dir_all(parent)?;
 
         let mut tmp = NamedTempFile::new_in(parent)?;

@@ -2756,7 +2756,7 @@ impl QuarryStore {
                             }
                             ChangeType::Move => {
                                 let new_path = change.new_path.as_deref().ok_or_else(|| {
-                                    QuarryError::Storage("move change missing new path".to_string())
+                                    QuarryError::Invariant("move change missing new path".to_string())
                                 })?;
                                 store
                                     .ensure_staged_head_unchanged_conn(
@@ -2780,7 +2780,7 @@ impl QuarryStore {
                         match change.change_type {
                             ChangeType::Put | ChangeType::Metadata => {
                                 let version_id = change.new_version_id.ok_or_else(|| {
-                                    QuarryError::Storage(
+                                    QuarryError::Invariant(
                                         "put change missing new version".to_string(),
                                     )
                                 })?;
@@ -2834,7 +2834,7 @@ impl QuarryStore {
                             }
                             ChangeType::Move => {
                                 let new_path = change.new_path.ok_or_else(|| {
-                                    QuarryError::Storage("move change missing new path".to_string())
+                                    QuarryError::Invariant("move change missing new path".to_string())
                                 })?;
                                 let (doc_id, _) = store
                                     .document_identity_conn(conn, &tx.library_id, &change.path)
@@ -3695,7 +3695,7 @@ impl QuarryStore {
             (Some(bytes), None) => bytes,
             (None, Some(hash)) => self.cas.read(&hash)?,
             _ => {
-                return Err(QuarryError::Storage(format!(
+                return Err(QuarryError::Invariant(format!(
                     "head version for document {document_id} violates inline/CAS invariant"
                 )))
             }
@@ -4173,7 +4173,7 @@ impl QuarryStore {
             (Some(bytes), None) => bytes.clone(),
             (None, Some(hash)) => self.cas.read(hash)?,
             _ => {
-                return Err(QuarryError::Storage(format!(
+                return Err(QuarryError::Invariant(format!(
                     "version {} violates inline/CAS invariant",
                     version.id
                 )))
@@ -4236,7 +4236,7 @@ impl QuarryStore {
             (Some(bytes), None) => bytes.clone(),
             (None, Some(hash)) => self.cas.read(hash)?,
             _ => {
-                return Err(QuarryError::Storage(format!(
+                return Err(QuarryError::Invariant(format!(
                     "version {} violates inline/CAS invariant",
                     version.id
                 )))
@@ -4282,7 +4282,7 @@ impl QuarryStore {
             (Some(bytes), None) => bytes.clone(),
             (None, Some(hash)) => self.cas.read(hash)?,
             _ => {
-                return Err(QuarryError::Storage(format!(
+                return Err(QuarryError::Invariant(format!(
                     "version {} violates inline/CAS invariant",
                     version.id
                 )))
@@ -5412,7 +5412,7 @@ async fn allocate_inode_conn(conn: &Connection, library_id: &str) -> Result<i64>
         .map(|row| int(&row, 0))
         .transpose()?
         .ok_or_else(|| {
-            QuarryError::Storage(format!("inode counter missing for library {library_id}"))
+            QuarryError::Invariant(format!("inode counter missing for library {library_id}"))
         })?;
     conn.execute(
         "UPDATE inode_counters SET next_inode = next_inode + 1 WHERE library_id = ?1",
@@ -5766,7 +5766,7 @@ where
 {
     value
         .parse::<T>()
-        .map_err(|err| QuarryError::Storage(err.to_string()))
+        .map_err(|err| QuarryError::Invariant(err.to_string()))
 }
 
 fn version_from_row(row: &Row) -> Result<DocumentVersion> {
@@ -6234,7 +6234,7 @@ fn opt_text(row: &Row, index: usize) -> Result<Option<String>> {
     match row.get_value(index).map_err(map_turso_error)? {
         Value::Null => Ok(None),
         Value::Text(value) => Ok(Some(value)),
-        other => Err(QuarryError::Storage(format!(
+        other => Err(QuarryError::Invariant(format!(
             "expected text/null at column {index}, got {other:?}"
         ))),
     }
@@ -6244,7 +6244,7 @@ fn opt_blob(row: &Row, index: usize) -> Result<Option<Vec<u8>>> {
     match row.get_value(index).map_err(map_turso_error)? {
         Value::Null => Ok(None),
         Value::Blob(value) => Ok(Some(value)),
-        other => Err(QuarryError::Storage(format!(
+        other => Err(QuarryError::Invariant(format!(
             "expected blob/null at column {index}, got {other:?}"
         ))),
     }
@@ -6254,7 +6254,7 @@ fn opt_int(row: &Row, index: usize) -> Result<Option<i64>> {
     match row.get_value(index).map_err(map_turso_error)? {
         Value::Null => Ok(None),
         Value::Integer(value) => Ok(Some(value)),
-        other => Err(QuarryError::Storage(format!(
+        other => Err(QuarryError::Invariant(format!(
             "expected integer/null at column {index}, got {other:?}"
         ))),
     }
