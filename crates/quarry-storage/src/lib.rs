@@ -3768,30 +3768,8 @@ impl QuarryStore {
         library_id: &str,
         path: &str,
     ) -> Result<DocumentListEntry> {
-        let now = now_timestamp();
-        let mut rows = conn
-            .query(
-                "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
-                 FROM documents d
-                 JOIN document_versions v ON v.id = d.head_version_id
-                 WHERE d.document_scope = 'library'
-                   AND d.library_id = ?1
-                   AND d.path = ?2
-                   AND d.deleted_at IS NULL
-                   AND d.head_version_id IS NOT NULL
-                   AND (d.expires_at IS NULL OR d.expires_at > ?3)
-                 LIMIT 1",
-                params![library_id.to_string(), path.to_string(), now.clone()],
-            )
+        self.scoped_document_entry_conn(conn, DocumentLookupScope::Library { library_id }, path)
             .await
-            .map_err(map_turso_error)?;
-        if let Some(row) = rows.next().await.map_err(map_turso_error)? {
-            document_entry_from_row(&row)
-        } else {
-            self.error_if_library_document_expired_conn(conn, library_id, path, &now)
-                .await?;
-            Err(QuarryError::NotFound(path.to_string()))
-        }
     }
 
     async fn document_entry_any_conn(
@@ -3828,28 +3806,60 @@ impl QuarryStore {
         conn: &Connection,
         path: &str,
     ) -> Result<DocumentListEntry> {
+        self.scoped_document_entry_conn(conn, DocumentLookupScope::Tmp, path)
+            .await
+    }
+
+    async fn scoped_document_entry_conn(
+        &self,
+        conn: &Connection,
+        scope: DocumentLookupScope<'_>,
+        path: &str,
+    ) -> Result<DocumentListEntry> {
         let now = now_timestamp();
-        let mut rows = conn
-            .query(
-                "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
-                 FROM documents d
-                 JOIN document_versions v ON v.id = d.head_version_id
-                 WHERE d.document_scope = 'tmp'
+        let (scope_filter, binds) = match scope {
+            DocumentLookupScope::Library { library_id } => (
+                "d.document_scope = 'library'
+                   AND d.library_id = ?1
+                   AND d.path = ?2
+                   AND (d.expires_at IS NULL OR d.expires_at > ?3)",
+                vec![
+                    Value::Text(library_id.to_string()),
+                    Value::Text(path.to_string()),
+                    Value::Text(now.clone()),
+                ],
+            ),
+            DocumentLookupScope::Tmp => (
+                "d.document_scope = 'tmp'
                    AND d.library_id IS NULL
                    AND d.path = ?1
-                   AND d.deleted_at IS NULL
-                   AND d.head_version_id IS NOT NULL
-                   AND d.expires_at > ?2
-                 LIMIT 1",
-                params![path.to_string(), now.clone()],
-            )
-            .await
-            .map_err(map_turso_error)?;
+                   AND d.expires_at > ?2",
+                vec![Value::Text(path.to_string()), Value::Text(now.clone())],
+            ),
+        };
+        let sql = format!(
+            "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
+             FROM documents d
+             JOIN document_versions v ON v.id = d.head_version_id
+             WHERE {scope_filter}
+               AND d.deleted_at IS NULL
+               AND d.head_version_id IS NOT NULL
+             LIMIT 1"
+        );
+        let mut rows = conn.query(&sql, binds).await.map_err(map_turso_error)?;
         if let Some(row) = rows.next().await.map_err(map_turso_error)? {
             document_entry_from_row(&row)
         } else {
-            self.error_if_tmp_document_expired_conn(conn, path, &now)
-                .await?;
+            match scope {
+                DocumentLookupScope::Library { library_id } => {
+                    self.error_if_library_document_expired_conn(conn, library_id, path, &now)
+                        .await?;
+                }
+                DocumentLookupScope::Tmp => {
+                    self.error_if_tmp_document_expired_conn(conn, path, &now)
+                        .await?;
+                }
+            }
             Err(QuarryError::NotFound(path.to_string()))
         }
     }
