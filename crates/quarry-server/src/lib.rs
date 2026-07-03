@@ -2288,65 +2288,75 @@ async fn get_tmp_document(
     Path(path): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    if let Some(path) = path.strip_suffix("/blocks") {
-        touch_agent_presence(&state, &headers, None, path).await?;
-        return gateway::tmp_document_blocks(&state, path).await;
-    }
-    if let Some(path) = path.strip_suffix("/review") {
-        touch_agent_presence(&state, &headers, None, path).await?;
-        let include_resolved = query.include_resolved()?;
-        return json_response(
-            StatusCode::OK,
-            &agent_tmp_document_review(&state.store, path, include_resolved).await?,
-        );
-    }
-    if let Some(path) = path.strip_suffix("/presence") {
-        touch_agent_presence(&state, &headers, None, path).await?;
-        state.store.head_tmp_document(path).await?;
-        return json_response(
-            StatusCode::OK,
-            &TmpAgentPresenceListResponse::from(state.agent_presence.list(None, path)),
-        );
-    }
-    if let Some(path) = path.strip_suffix("/events/stream") {
-        let document = state.store.head_tmp_document(path).await?;
-        let document_id = document.id.clone();
-        let presence_guard = optional_header(&headers, "x-agent-id")?.map(|agent_id| {
-            PresenceStreamGuard::open(
-                state.agent_presence.clone(),
-                None,
-                path.to_string(),
-                document_id.clone(),
-                agent_id,
+    let (document_path, subresource) = parse_tmp_document_subresource(&path);
+    match subresource {
+        TmpDocumentSubResource::Blocks => {
+            touch_agent_presence(&state, &headers, None, document_path).await?;
+            return gateway::tmp_document_blocks(&state, document_path).await;
+        }
+        TmpDocumentSubResource::Review => {
+            touch_agent_presence(&state, &headers, None, document_path).await?;
+            let include_resolved = query.include_resolved()?;
+            return json_response(
+                StatusCode::OK,
+                &agent_tmp_document_review(&state.store, document_path, include_resolved).await?,
+            );
+        }
+        TmpDocumentSubResource::Presence => {
+            touch_agent_presence(&state, &headers, None, document_path).await?;
+            state.store.head_tmp_document(document_path).await?;
+            return json_response(
+                StatusCode::OK,
+                &TmpAgentPresenceListResponse::from(state.agent_presence.list(None, document_path)),
+            );
+        }
+        TmpDocumentSubResource::EventsStream => {
+            let document = state.store.head_tmp_document(document_path).await?;
+            let document_id = document.id.clone();
+            let presence_guard = optional_header(&headers, "x-agent-id")?.map(|agent_id| {
+                PresenceStreamGuard::open(
+                    state.agent_presence.clone(),
+                    None,
+                    document_path.to_string(),
+                    document_id.clone(),
+                    agent_id,
+                )
+            });
+            return Ok(events_for_tmp_document(
+                &state.store,
+                document_path.to_string(),
+                document_id,
+                presence_guard,
+                state.shutdown_token(),
             )
-        });
-        return Ok(events_for_tmp_document(
-            &state.store,
-            path.to_string(),
-            document_id,
-            presence_guard,
-            state.shutdown_token(),
-        )
-        .await?
-        .into_response());
-    }
-    if let Some(path) = path.strip_suffix("/versions/raw") {
-        return json_response(
-            StatusCode::OK,
-            &state.store.raw_tmp_version_history(path).await?,
-        );
-    }
-    if let Some(path) = path.strip_suffix("/versions") {
-        return json_response(
-            StatusCode::OK,
-            &state.store.tmp_version_history(path).await?,
-        );
-    }
-    if let Some((path, version)) = document_version_path(&path) {
-        return json_response(
-            StatusCode::OK,
-            &state.store.tmp_document_version(path, version).await?,
-        );
+            .await?
+            .into_response());
+        }
+        TmpDocumentSubResource::RawVersions => {
+            return json_response(
+                StatusCode::OK,
+                &state.store.raw_tmp_version_history(document_path).await?,
+            );
+        }
+        TmpDocumentSubResource::Versions => {
+            return json_response(
+                StatusCode::OK,
+                &state.store.tmp_version_history(document_path).await?,
+            );
+        }
+        TmpDocumentSubResource::Version(version) => {
+            return json_response(
+                StatusCode::OK,
+                &state
+                    .store
+                    .tmp_document_version(document_path, version)
+                    .await?,
+            );
+        }
+        TmpDocumentSubResource::Document
+        | TmpDocumentSubResource::Ttl
+        | TmpDocumentSubResource::Transactions
+        | TmpDocumentSubResource::Promote => {}
     }
     touch_agent_presence(&state, &headers, None, &path).await?;
     let document = state.store.get_tmp_document(&path).await?;
@@ -2459,12 +2469,13 @@ async fn patch_tmp_document_action(
     Path(path): Path<String>,
     Json(request): Json<TtlRequest>,
 ) -> Result<Response, ApiError> {
-    let Some(path) = path.strip_suffix("/ttl") else {
+    let (document_path, subresource) = parse_tmp_document_subresource(&path);
+    if subresource != TmpDocumentSubResource::Ttl {
         return Err(QuarryError::NotFound(path).into());
-    };
+    }
     let entry = state
         .store
-        .set_tmp_document_ttl(path, request.expires_at)
+        .set_tmp_document_ttl(document_path, request.expires_at)
         .await?;
     json_response(
         StatusCode::OK,
@@ -2480,39 +2491,48 @@ async fn post_tmp_document_action(
     Path(path): Path<String>,
     Json(request): Json<JsonValue>,
 ) -> Result<Response, ApiError> {
-    if let Some(path) = path.strip_suffix("/transactions") {
-        touch_agent_presence(&state, &headers, None, path).await?;
-        return gateway::tmp_document_block_transactions(&state, path, request).await;
-    }
-
-    if let Some(path) = path.strip_suffix("/presence") {
-        let request: AgentPresenceRequest = serde_json::from_value(request).map_err(|error| {
-            QuarryError::InvalidPath(format!("invalid presence request: {error}"))
-        })?;
-        let response = agent_presence_tmp_document(&state, &headers, path, request).await?;
-        return json_response(StatusCode::OK, &response);
-    }
-
-    if let Some(path) = path.strip_suffix("/promote") {
-        if !cfg!(feature = "lib-documents") {
-            return Err(QuarryError::NotFound(path.to_string()).into());
+    let (document_path, subresource) = parse_tmp_document_subresource(&path);
+    match subresource {
+        TmpDocumentSubResource::Transactions => {
+            touch_agent_presence(&state, &headers, None, document_path).await?;
+            gateway::tmp_document_block_transactions(&state, document_path, request).await
         }
-        let request: PromoteTmpDocumentRequest =
-            serde_json::from_value(request).map_err(|error| {
-                QuarryError::InvalidPath(format!("invalid promote request: {error}"))
-            })?;
-        let precondition = request
-            .if_match
-            .map(WritePrecondition::IfMatch)
-            .unwrap_or(WritePrecondition::None);
-        let entry = state
-            .store
-            .promote_tmp_document(path, &request.library, &request.path, precondition)
-            .await?;
-        return json_response(StatusCode::OK, &entry);
+        TmpDocumentSubResource::Presence => {
+            let request: AgentPresenceRequest =
+                serde_json::from_value(request).map_err(|error| {
+                    QuarryError::InvalidPath(format!("invalid presence request: {error}"))
+                })?;
+            let response =
+                agent_presence_tmp_document(&state, &headers, document_path, request).await?;
+            json_response(StatusCode::OK, &response)
+        }
+        TmpDocumentSubResource::Promote => {
+            if !cfg!(feature = "lib-documents") {
+                return Err(QuarryError::NotFound(document_path.to_string()).into());
+            }
+            let request: PromoteTmpDocumentRequest =
+                serde_json::from_value(request).map_err(|error| {
+                    QuarryError::InvalidPath(format!("invalid promote request: {error}"))
+                })?;
+            let precondition = request
+                .if_match
+                .map(WritePrecondition::IfMatch)
+                .unwrap_or(WritePrecondition::None);
+            let entry = state
+                .store
+                .promote_tmp_document(document_path, &request.library, &request.path, precondition)
+                .await?;
+            json_response(StatusCode::OK, &entry)
+        }
+        TmpDocumentSubResource::Document
+        | TmpDocumentSubResource::Blocks
+        | TmpDocumentSubResource::Review
+        | TmpDocumentSubResource::EventsStream
+        | TmpDocumentSubResource::RawVersions
+        | TmpDocumentSubResource::Versions
+        | TmpDocumentSubResource::Version(_)
+        | TmpDocumentSubResource::Ttl => Err(QuarryError::NotFound(path).into()),
     }
-
-    Err(QuarryError::NotFound(path).into())
 }
 
 #[utoipa::path(
@@ -4628,6 +4648,61 @@ mod tests {
     }
 
     #[test]
+    fn tmp_document_subresource_parser_matches_suffix_routes_without_eating_secrets() {
+        assert_eq!(
+            parse_tmp_document_subresource("tmp-secret"),
+            ("tmp-secret", TmpDocumentSubResource::Document)
+        );
+        assert_eq!(
+            parse_tmp_document_subresource("tmp-secret/blocks"),
+            ("tmp-secret", TmpDocumentSubResource::Blocks)
+        );
+        assert_eq!(
+            parse_tmp_document_subresource("tmp-secret/review"),
+            ("tmp-secret", TmpDocumentSubResource::Review)
+        );
+        assert_eq!(
+            parse_tmp_document_subresource("tmp-secret/presence"),
+            ("tmp-secret", TmpDocumentSubResource::Presence)
+        );
+        assert_eq!(
+            parse_tmp_document_subresource("tmp-secret/events/stream"),
+            ("tmp-secret", TmpDocumentSubResource::EventsStream)
+        );
+        assert_eq!(
+            parse_tmp_document_subresource("tmp-secret/transactions"),
+            ("tmp-secret", TmpDocumentSubResource::Transactions)
+        );
+        assert_eq!(
+            parse_tmp_document_subresource("tmp-secret/promote"),
+            ("tmp-secret", TmpDocumentSubResource::Promote)
+        );
+        assert_eq!(
+            parse_tmp_document_subresource("tmp-secret/ttl"),
+            ("tmp-secret", TmpDocumentSubResource::Ttl)
+        );
+        assert_eq!(
+            parse_tmp_document_subresource("tmp-secret/versions/raw"),
+            ("tmp-secret", TmpDocumentSubResource::RawVersions)
+        );
+        assert_eq!(
+            parse_tmp_document_subresource("tmp-secret/versions"),
+            ("tmp-secret", TmpDocumentSubResource::Versions)
+        );
+        assert_eq!(
+            parse_tmp_document_subresource("tmp-secret/versions/v1"),
+            ("tmp-secret", TmpDocumentSubResource::Version("v1"))
+        );
+        assert_eq!(
+            parse_tmp_document_subresource("tmp-secret/versions/v1/extra"),
+            (
+                "tmp-secret/versions/v1/extra",
+                TmpDocumentSubResource::Document
+            )
+        );
+    }
+
+    #[test]
     fn non_loopback_warning_policy_only_warns_for_external_binds() {
         assert!(!should_warn_non_loopback("127.0.0.1:7831".parse().unwrap()));
         assert!(!should_warn_non_loopback("[::1]:7831".parse().unwrap()));
@@ -5180,6 +5255,21 @@ enum DocumentSubResource<'path> {
     Transactions,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TmpDocumentSubResource<'path> {
+    Document,
+    Blocks,
+    Review,
+    Presence,
+    EventsStream,
+    RawVersions,
+    Versions,
+    Version(&'path str),
+    Ttl,
+    Transactions,
+    Promote,
+}
+
 fn parse_document_subresource(path: &str) -> (&str, DocumentSubResource<'_>) {
     if let Some((path, token_id)) = document_share_revoke_path(path) {
         return (path, DocumentSubResource::ShareRevoke(token_id));
@@ -5220,6 +5310,34 @@ fn parse_document_subresource(path: &str) -> (&str, DocumentSubResource<'_>) {
     }
 
     (path, DocumentSubResource::Document)
+}
+
+fn parse_tmp_document_subresource(path: &str) -> (&str, TmpDocumentSubResource<'_>) {
+    if let Some(path) = path.strip_suffix("/versions/raw") {
+        return (path, TmpDocumentSubResource::RawVersions);
+    }
+    if let Some(path) = path.strip_suffix("/versions") {
+        return (path, TmpDocumentSubResource::Versions);
+    }
+    if let Some((path, version)) = document_version_path(path) {
+        return (path, TmpDocumentSubResource::Version(version));
+    }
+
+    for (suffix, subresource) in [
+        ("/events/stream", TmpDocumentSubResource::EventsStream),
+        ("/transactions", TmpDocumentSubResource::Transactions),
+        ("/presence", TmpDocumentSubResource::Presence),
+        ("/promote", TmpDocumentSubResource::Promote),
+        ("/blocks", TmpDocumentSubResource::Blocks),
+        ("/review", TmpDocumentSubResource::Review),
+        ("/ttl", TmpDocumentSubResource::Ttl),
+    ] {
+        if let Some(path) = path.strip_suffix(suffix) {
+            return (path, subresource);
+        }
+    }
+
+    (path, TmpDocumentSubResource::Document)
 }
 
 fn document_version_path(path: &str) -> Option<(&str, &str)> {
