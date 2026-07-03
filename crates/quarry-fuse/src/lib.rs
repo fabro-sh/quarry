@@ -1481,6 +1481,8 @@ mod linux_mount {
             QuarryError::Unsupported(message) if message.contains("read-only") => {
                 Errno::from(libc::EROFS)
             }
+            QuarryError::UnsupportedMediaType(_) => Errno::from(libc::ENOTSUP),
+            QuarryError::PayloadTooLarge(_) => Errno::from(libc::EFBIG),
             QuarryError::Unsupported(_) => Errno::from(libc::ENOTSUP),
             // Content errors from the Phase 4 reconciled markdown write
             // (CriticMarkup, invalid frontmatter): the CONTENT is wrong, the

@@ -1,0 +1,13 @@
+.DS_Store
+.git
+.quarry
+.ai/research
+logs
+target
+*.lockfile
+*.tsbuildinfo
+
+ui/dist
+ui/node_modules
+ui/test-results
+ui/playwright-report
