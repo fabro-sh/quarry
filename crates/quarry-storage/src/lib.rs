@@ -2804,7 +2804,7 @@ impl QuarryStore {
                                     )
                                 })?;
                                 let doc_id =
-                                    store.document_id_for_version_conn(conn, &version_id).await?;
+                                    Self::document_id_for_version_conn(conn, &version_id).await?;
                                 publish_put_conn(conn, &doc_id, &version_id).await?;
                                 blocks::clear_block_state_conn(conn, &doc_id).await?;
                                 ensure_path_inodes_conn(conn, &tx.library_id, &change.path)
@@ -4228,11 +4228,7 @@ impl QuarryStore {
         Ok((version, content))
     }
 
-    async fn document_id_for_version_conn(
-        &self,
-        conn: &Connection,
-        version_id: &str,
-    ) -> Result<String> {
+    async fn document_id_for_version_conn(conn: &Connection, version_id: &str) -> Result<String> {
         let mut rows = conn
             .query(
                 "SELECT document_id FROM document_versions WHERE id = ?1 LIMIT 1",
