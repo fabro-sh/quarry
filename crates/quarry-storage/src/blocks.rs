@@ -647,7 +647,7 @@ impl QuarryStore {
                             store.tmp_document_entry_conn(conn, &path).await?
                         }
                     };
-                    let tx = store.transaction_conn(conn, &tx.id).await?;
+                    let tx = QuarryStore::transaction_conn(conn, &tx.id).await?;
                     Ok(WriteOutcome {
                         document,
                         version,
@@ -1197,7 +1197,7 @@ impl QuarryStore {
                             store.tmp_document_entry_conn(conn, &head.path).await?
                         }
                     };
-                    let tx = store.transaction_conn(conn, &tx.id).await?;
+                    let tx = QuarryStore::transaction_conn(conn, &tx.id).await?;
                     Ok(BlockMutationOutcome::Applied {
                         outcome: Box::new(WriteOutcome {
                             document,

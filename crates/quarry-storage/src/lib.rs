@@ -1092,7 +1092,7 @@ impl QuarryStore {
                     store.reindex_links_conn(conn, &library.id).await?;
                     commit_transaction_record_conn(conn, &tx.id).await?;
                     let document = store.document_entry_conn(conn, &library.id, &path).await?;
-                    let tx = store.transaction_conn(conn, &tx.id).await?;
+                    let tx = Self::transaction_conn(conn, &tx.id).await?;
                     Ok(WriteOutcome {
                         document,
                         version,
@@ -1294,7 +1294,7 @@ impl QuarryStore {
                     .map_err(map_turso_error)?;
                     commit_transaction_record_conn(conn, &tx.id).await?;
                     let document = store.tmp_document_entry_conn(conn, &path).await?;
-                    let tx = store.transaction_conn(conn, &tx.id).await?;
+                    let tx = Self::transaction_conn(conn, &tx.id).await?;
                     Ok(WriteOutcome {
                         document,
                         version,
@@ -1392,7 +1392,7 @@ impl QuarryStore {
                 .await
                 .map_err(map_turso_error)?;
                 commit_transaction_record_conn(conn, &tx.id).await?;
-                store.transaction_conn(conn, &tx.id).await
+                Self::transaction_conn(conn, &tx.id).await
             })
         })
         .await
@@ -2297,7 +2297,7 @@ impl QuarryStore {
                     delete_path_inode_conn(conn, &library.id, &path).await?;
                     store.reindex_links_conn(conn, &library.id).await?;
                     commit_transaction_record_conn(conn, &tx.id).await?;
-                    let tx = store.transaction_conn(conn, &tx.id).await?;
+                    let tx = Self::transaction_conn(conn, &tx.id).await?;
                     Ok((tx, doc_id))
                 })
             })
@@ -2386,7 +2386,7 @@ impl QuarryStore {
                     move_path_inode_conn(conn, &library.id, &from_path, &to_path).await?;
                     store.reindex_links_conn(conn, &library.id).await?;
                     commit_transaction_record_conn(conn, &tx.id).await?;
-                    let tx = store.transaction_conn(conn, &tx.id).await?;
+                    let tx = Self::transaction_conn(conn, &tx.id).await?;
                     Ok((tx, doc_id))
                 })
             })
@@ -2478,7 +2478,7 @@ impl QuarryStore {
                     move_path_inode_conn(conn, &library.id, &from_path, &to_path).await?;
                     store.reindex_links_conn(conn, &library.id).await?;
                     commit_transaction_record_conn(conn, &tx.id).await?;
-                    let tx = store.transaction_conn(conn, &tx.id).await?;
+                    let tx = Self::transaction_conn(conn, &tx.id).await?;
                     Ok((tx, from_document.id))
                 })
             })
@@ -2575,7 +2575,7 @@ impl QuarryStore {
 
     pub async fn get_transaction(&self, tx_id: &str) -> Result<TransactionRecord> {
         let conn = self.conn()?;
-        self.transaction_conn(&conn, tx_id).await
+        Self::transaction_conn(&conn, tx_id).await
     }
 
     pub async fn stage_put(
@@ -2591,7 +2591,7 @@ impl QuarryStore {
         let content_type = content_type.to_string();
         self.write_transaction(move |store, conn| {
             Box::pin(async move {
-                let tx = store.transaction_conn(conn, &tx_id).await?;
+                let tx = Self::transaction_conn(conn, &tx_id).await?;
                 ensure_open(&tx)?;
                 let (doc_id, old_version_id) =
                     ensure_document_conn(conn, &tx.library_id, &path, &now_timestamp()).await?;
@@ -2620,7 +2620,7 @@ impl QuarryStore {
         let tx_id = tx_id.to_string();
         self.write_transaction(move |store, conn| {
             Box::pin(async move {
-                let tx = store.transaction_conn(conn, &tx_id).await?;
+                let tx = Self::transaction_conn(conn, &tx_id).await?;
                 ensure_open(&tx)?;
                 let (_, old_version_id) = store
                     .document_identity_conn(conn, &tx.library_id, &path)
@@ -2652,7 +2652,7 @@ impl QuarryStore {
         let tx_id = tx_id.to_string();
         self.write_transaction(move |store, conn| {
             Box::pin(async move {
-                let tx = store.transaction_conn(conn, &tx_id).await?;
+                let tx = Self::transaction_conn(conn, &tx_id).await?;
                 ensure_open(&tx)?;
                 let current = store.document_conn(conn, &tx.library_id, &path).await?;
                 let mut metadata = current.metadata;
@@ -2690,7 +2690,7 @@ impl QuarryStore {
         let tx_id = tx_id.to_string();
         self.write_transaction(move |store, conn| {
             Box::pin(async move {
-                let tx = store.transaction_conn(conn, &tx_id).await?;
+                let tx = Self::transaction_conn(conn, &tx_id).await?;
                 ensure_open(&tx)?;
                 let (_, old_version_id) = store
                     .document_identity_conn(conn, &tx.library_id, &from_path)
@@ -2729,7 +2729,7 @@ impl QuarryStore {
         let (tx, events) = self
             .write_transaction(move |store, conn| {
                 Box::pin(async move {
-                    let tx = store.transaction_conn(conn, &tx_id).await?;
+                    let tx = Self::transaction_conn(conn, &tx_id).await?;
                     ensure_open(&tx)?;
                     let mut events = Vec::new();
                     let mut changes = Vec::new();
@@ -2888,7 +2888,7 @@ impl QuarryStore {
                     }
                     store.reindex_links_conn(conn, &tx.library_id).await?;
                     commit_transaction_record_conn(conn, &tx_id).await?;
-                    let tx = store.transaction_conn(conn, &tx_id).await?;
+                    let tx = Self::transaction_conn(conn, &tx_id).await?;
                     Ok((tx, events))
                 })
             })
@@ -2911,9 +2911,9 @@ impl QuarryStore {
         let started = Instant::now();
         let tx_id = tx_id.to_string();
         let tx = self
-            .write_transaction(move |store, conn| {
+            .write_transaction(move |_store, conn| {
                 Box::pin(async move {
-                    let tx = store.transaction_conn(conn, &tx_id).await?;
+                    let tx = Self::transaction_conn(conn, &tx_id).await?;
                     ensure_open(&tx)?;
                     conn.execute(
                         "UPDATE transactions SET state = ?1 WHERE id = ?2",
@@ -2921,7 +2921,7 @@ impl QuarryStore {
                     )
                     .await
                     .map_err(map_turso_error)?;
-                    store.transaction_conn(conn, &tx_id).await
+                    Self::transaction_conn(conn, &tx_id).await
                 })
             })
             .await?;
@@ -4244,7 +4244,7 @@ impl QuarryStore {
             .ok_or_else(|| QuarryError::NotFound(format!("version {version_id}")))
     }
 
-    async fn transaction_conn(&self, conn: &Connection, tx_id: &str) -> Result<TransactionRecord> {
+    async fn transaction_conn(conn: &Connection, tx_id: &str) -> Result<TransactionRecord> {
         let mut rows = conn
             .query(
                 "SELECT id, library_id, state, actor, source, message, provenance_json, created_at, committed_at
