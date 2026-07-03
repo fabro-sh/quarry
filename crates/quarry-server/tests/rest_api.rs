@@ -2273,14 +2273,14 @@ async fn document_put_events_echo_origin_id() {
     let event = timeout(Duration::from_secs(2), async {
         loop {
             let event = events.recv().await.unwrap();
-            if event.kind == StoreEventKind::DocumentPut {
+            if event.kind() == StoreEventKind::DocumentPut {
                 break event;
             }
         }
     })
     .await
     .unwrap();
-    assert_eq!(event.origin_id.as_deref(), Some("browser:session-1"));
+    assert_eq!(event.origin_id(), Some("browser:session-1"));
 }
 
 #[tokio::test]
@@ -2327,15 +2327,15 @@ async fn document_delete_events_echo_origin_id_and_doc_id() {
     let event = timeout(Duration::from_secs(2), async {
         loop {
             let event = events.recv().await.unwrap();
-            if event.kind == StoreEventKind::DocumentDelete {
+            if event.kind() == StoreEventKind::DocumentDelete {
                 break event;
             }
         }
     })
     .await
     .unwrap();
-    assert_eq!(event.doc_id.as_deref(), Some(written.document.id.as_str()));
-    assert_eq!(event.origin_id.as_deref(), Some("browser:session-1"));
+    assert_eq!(event.doc_id(), Some(written.document.id.as_str()));
+    assert_eq!(event.origin_id(), Some("browser:session-1"));
 }
 
 #[tokio::test]
@@ -4064,7 +4064,7 @@ async fn next_document_put_event(
     timeout(Duration::from_secs(2), async {
         loop {
             let event = events.recv().await.unwrap();
-            if event.kind == StoreEventKind::DocumentPut {
+            if event.kind() == StoreEventKind::DocumentPut {
                 break event;
             }
         }
@@ -4591,8 +4591,8 @@ async fn block_transaction_insert_block_commits_one_version_and_emits_events() {
     assert_eq!(raw_version_count(&app, "doc.md").await, versions_before + 1);
 
     let event = next_document_put_event(&mut events).await;
-    assert_eq!(event.version_id.as_deref(), Some(clock));
-    assert_eq!(event.path.as_deref(), Some("doc.md"));
+    assert_eq!(event.version_id(), Some(clock));
+    assert_eq!(event.path(), Some("doc.md"));
 }
 
 #[tokio::test]

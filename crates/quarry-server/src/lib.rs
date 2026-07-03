@@ -163,7 +163,7 @@ impl AgentEventJournal {
         inner
             .events
             .iter()
-            .filter(|event| event.id > after && event.event.library_id == library_id)
+            .filter(|event| event.id > after && event.event.library_id() == library_id)
             .take(limit)
             .cloned()
             .collect()
@@ -1516,7 +1516,7 @@ async fn events_for_library(
                     received = receiver.recv() => {
                         match received {
                             Ok(store_event)
-                                if store_event.library_id == library_id
+                                if store_event.library_id() == library_id
                                     && event_matches_document_filter(
                                         &store_event,
                                         document_path.as_deref(),
@@ -1534,13 +1534,13 @@ async fn events_for_library(
                                     library = %library_slug,
                                     library_id = %library_id,
                                     sse_event = %event_type,
-                                    path = store_event.path.as_deref().unwrap_or(""),
-                                    new_path = store_event.new_path.as_deref().unwrap_or(""),
-                                    tx_id = store_event.tx_id.as_deref().unwrap_or(""),
-                                    doc_id = store_event.doc_id.as_deref().unwrap_or(""),
-                                    version_id = store_event.version_id.as_deref().unwrap_or(""),
-                                    conflict_id = store_event.conflict_id.as_deref().unwrap_or(""),
-                                    origin_id = store_event.origin_id.as_deref().unwrap_or(""),
+                                    path = store_event.path().unwrap_or(""),
+                                    new_path = store_event.new_path().unwrap_or(""),
+                                    tx_id = store_event.tx_id().unwrap_or(""),
+                                    doc_id = store_event.doc_id().unwrap_or(""),
+                                    version_id = store_event.version_id().unwrap_or(""),
+                                    conflict_id = store_event.conflict_id().unwrap_or(""),
+                                    origin_id = store_event.origin_id().unwrap_or(""),
                                     "SSE event sent"
                                 );
                                 let event = Event::default().event(event_type).data(payload.to_string());
@@ -1645,7 +1645,7 @@ async fn events_for_tmp_document(
                     received = store_receiver.recv() => {
                         match received {
                             Ok(store_event)
-                                if store_event.library_id == DocumentScopeRef::Tmp.event_library_id()
+                                if store_event.library_id() == DocumentScopeRef::Tmp.event_library_id()
                                     && event_matches_document_filter(&store_event, Some(&document_path)) =>
                             {
                                 let event_type = store_event_type(&store_event);
@@ -1711,7 +1711,7 @@ fn event_matches_document_filter(event: &StoreEvent, document_path: Option<&str>
     let Some(document_path) = document_path else {
         return true;
     };
-    event.path.as_deref() == Some(document_path) || event.new_path.as_deref() == Some(document_path)
+    event.path() == Some(document_path) || event.new_path() == Some(document_path)
 }
 
 #[utoipa::path(
@@ -4838,21 +4838,15 @@ mod tests {
 
     #[test]
     fn document_put_store_events_map_to_sse_payloads_with_document_metadata() {
-        let event = StoreEvent {
-            kind: StoreEventKind::DocumentPut,
-            library_id: "library-id".to_string(),
-            path: Some("notes/daily.md".to_string()),
-            new_path: None,
-            source: Some(DocumentSource::Rest),
-            tx_id: Some("tx-1".to_string()),
-            doc_id: Some("doc-1".to_string()),
-            version_id: Some("version-1".to_string()),
-            conflict_id: None,
-            peer_id: None,
-            applied: None,
-            conflicts: None,
-            origin_id: Some("browser:session-1".to_string()),
-        };
+        let event = StoreEvent::document_put(
+            "library-id".to_string(),
+            "notes/daily.md".to_string(),
+            DocumentSource::Rest,
+            "tx-1".to_string(),
+            "doc-1".to_string(),
+            "version-1".to_string(),
+            Some("browser:session-1".to_string()),
+        );
 
         let event_type = store_event_type(&event);
         let payload = store_event_payload(
@@ -4882,21 +4876,14 @@ mod tests {
 
     #[test]
     fn document_delete_and_move_store_events_map_to_sse_payloads_with_origin() {
-        let delete = StoreEvent {
-            kind: StoreEventKind::DocumentDelete,
-            library_id: "library-id".to_string(),
-            path: Some("notes/daily.md".to_string()),
-            new_path: None,
-            source: Some(DocumentSource::Rest),
-            tx_id: Some("tx-1".to_string()),
-            doc_id: Some("doc-1".to_string()),
-            version_id: None,
-            conflict_id: None,
-            peer_id: None,
-            applied: None,
-            conflicts: None,
-            origin_id: Some("browser:session-1".to_string()),
-        };
+        let delete = StoreEvent::document_delete(
+            "library-id".to_string(),
+            "notes/daily.md".to_string(),
+            DocumentSource::Rest,
+            "tx-1".to_string(),
+            Some("doc-1".to_string()),
+            Some("browser:session-1".to_string()),
+        );
         let event_type = store_event_type(&delete);
         let payload = store_event_payload(
             "notes",
@@ -4908,21 +4895,15 @@ mod tests {
         assert_eq!(payload["doc_id"], "doc-1");
         assert_eq!(payload["origin_id"], "browser:session-1");
 
-        let move_event = StoreEvent {
-            kind: StoreEventKind::DocumentMove,
-            library_id: "library-id".to_string(),
-            path: Some("notes/daily.md".to_string()),
-            new_path: Some("notes/archive.md".to_string()),
-            source: Some(DocumentSource::Rest),
-            tx_id: Some("tx-2".to_string()),
-            doc_id: Some("doc-1".to_string()),
-            version_id: None,
-            conflict_id: None,
-            peer_id: None,
-            applied: None,
-            conflicts: None,
-            origin_id: Some("browser:session-1".to_string()),
-        };
+        let move_event = StoreEvent::document_move(
+            "library-id".to_string(),
+            "notes/daily.md".to_string(),
+            "notes/archive.md".to_string(),
+            DocumentSource::Rest,
+            "tx-2".to_string(),
+            Some("doc-1".to_string()),
+            Some("browser:session-1".to_string()),
+        );
         let event_type = store_event_type(&move_event);
         let payload = store_event_payload(
             "notes",
@@ -4949,21 +4930,11 @@ mod tests {
 
     #[test]
     fn conflict_store_events_map_to_sse_payloads() {
-        let event = StoreEvent {
-            kind: StoreEventKind::ConflictCreated,
-            library_id: "library-id".to_string(),
-            path: Some("notes/conflicted.md".to_string()),
-            new_path: None,
-            source: None,
-            tx_id: None,
-            doc_id: None,
-            version_id: None,
-            conflict_id: Some("conflict-1".to_string()),
-            peer_id: None,
-            applied: None,
-            conflicts: None,
-            origin_id: None,
-        };
+        let event = StoreEvent::conflict_created(
+            "library-id".to_string(),
+            "notes/conflicted.md".to_string(),
+            "conflict-1".to_string(),
+        );
 
         let event_type = store_event_type(&event);
         let payload = store_event_payload(
@@ -4982,21 +4953,7 @@ mod tests {
 
     #[test]
     fn reindex_store_events_map_to_sse_payloads() {
-        let event = StoreEvent {
-            kind: StoreEventKind::LibraryReindexed,
-            library_id: "library-id".to_string(),
-            path: None,
-            new_path: None,
-            source: None,
-            tx_id: None,
-            doc_id: None,
-            version_id: None,
-            conflict_id: None,
-            peer_id: None,
-            applied: None,
-            conflicts: None,
-            origin_id: None,
-        };
+        let event = StoreEvent::library_reindexed("library-id".to_string());
 
         let event_type = store_event_type(&event);
         let payload = store_event_payload(
@@ -5013,21 +4970,8 @@ mod tests {
 
     #[test]
     fn links_indexed_store_events_map_to_sse_payloads() {
-        let event = StoreEvent {
-            kind: StoreEventKind::LinksIndexed,
-            library_id: "library-id".to_string(),
-            path: Some("notes/daily.md".to_string()),
-            new_path: None,
-            source: None,
-            tx_id: None,
-            doc_id: None,
-            version_id: None,
-            conflict_id: None,
-            peer_id: None,
-            applied: None,
-            conflicts: None,
-            origin_id: None,
-        };
+        let event =
+            StoreEvent::links_indexed("library-id".to_string(), "notes/daily.md".to_string());
 
         let event_type = store_event_type(&event);
         let payload = store_event_payload(
@@ -5045,21 +4989,8 @@ mod tests {
 
     #[test]
     fn git_sync_store_events_map_to_sse_payloads() {
-        let event = StoreEvent {
-            kind: StoreEventKind::GitSyncCompleted,
-            library_id: "library-id".to_string(),
-            path: None,
-            new_path: None,
-            source: None,
-            tx_id: None,
-            doc_id: None,
-            version_id: None,
-            conflict_id: None,
-            peer_id: Some("peer-1".to_string()),
-            applied: Some(2),
-            conflicts: Some(1),
-            origin_id: None,
-        };
+        let event =
+            StoreEvent::git_sync_completed("library-id".to_string(), "peer-1".to_string(), 2, 1);
 
         let event_type = store_event_type(&event);
         let payload = store_event_payload(
@@ -5189,7 +5120,7 @@ fn collab_invite_revoke_path(path: &str) -> Option<(&str, &str)> {
 }
 
 fn store_event_type(event: &StoreEvent) -> String {
-    match &event.kind {
+    match event.kind() {
         StoreEventKind::DocumentPut => "doc.changed",
         StoreEventKind::DocumentDelete => "doc.deleted",
         StoreEventKind::DocumentMove => "doc.moved",
@@ -5220,70 +5151,73 @@ fn store_event_payload(
     let mut payload = serde_json::json!({
         "type": event_type,
         "library": library,
-        "source": event.source.clone(),
-        "tx_id": event.tx_id.clone()
+        "source": event.source(),
+        "tx_id": event.tx_id()
     });
     if let Some(object) = payload.as_object_mut() {
         if mode == StoreEventPayloadMode::IncludePaths {
             object.insert(
                 "path".to_string(),
                 event
-                    .path
-                    .clone()
+                    .path()
+                    .map(str::to_string)
                     .map(JsonValue::String)
                     .unwrap_or(JsonValue::Null),
             );
             if matches!(
-                &event.kind,
+                event.kind(),
                 StoreEventKind::DocumentMove | StoreEventKind::DirectoryMove
             ) {
                 object.insert(
                     "from".to_string(),
                     event
-                        .path
-                        .clone()
+                        .path()
+                        .map(str::to_string)
                         .map(JsonValue::String)
                         .unwrap_or(JsonValue::Null),
                 );
                 object.insert(
                     "to".to_string(),
                     event
-                        .new_path
-                        .clone()
+                        .new_path()
+                        .map(str::to_string)
                         .map(JsonValue::String)
                         .unwrap_or(JsonValue::Null),
                 );
             }
         }
-        if let Some(conflict_id) = &event.conflict_id {
+        if let Some(conflict_id) = event.conflict_id() {
             object.insert(
                 "conflict_id".to_string(),
-                JsonValue::String(conflict_id.clone()),
+                JsonValue::String(conflict_id.to_string()),
             );
         }
-        if let Some(doc_id) = &event.doc_id {
-            object.insert("doc_id".to_string(), JsonValue::String(doc_id.clone()));
+        if let Some(doc_id) = event.doc_id() {
+            object.insert("doc_id".to_string(), JsonValue::String(doc_id.to_string()));
         }
-        if let Some(version_id) = &event.version_id {
+        if let Some(version_id) = event.version_id() {
             object.insert(
                 "version_id".to_string(),
-                JsonValue::String(version_id.clone()),
+                JsonValue::String(version_id.to_string()),
             );
             object.insert("etag".to_string(), JsonValue::String(etag(version_id)));
         }
-        if let Some(peer_id) = &event.peer_id {
-            object.insert("peer_id".to_string(), JsonValue::String(peer_id.clone()));
+        if let Some(peer_id) = event.peer_id() {
+            object.insert(
+                "peer_id".to_string(),
+                JsonValue::String(peer_id.to_string()),
+            );
         }
-        if let Some(applied) = event.applied {
+        if let Some(applied) = event.applied() {
             object.insert("applied".to_string(), JsonValue::from(applied));
         }
-        if let Some(conflicts) = event.conflicts {
+        if let Some(conflicts) = event.conflicts() {
             object.insert("conflicts".to_string(), JsonValue::from(conflicts));
         }
-        if let Some(origin_id) = &event.origin_id {
+        if let Some(origin_id) = event.origin_id() {
             object.insert(
                 "origin_id".to_string(),
-                JsonValue::String(origin_id.clone()),
+                JsonValue::String(origin_id.to_string()),
             );
         }
     }

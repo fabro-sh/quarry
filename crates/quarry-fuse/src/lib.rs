@@ -848,17 +848,17 @@ fn watch_store_events(
     tokio::spawn(async move {
         loop {
             match events.recv().await {
-                Ok(event) if event.library_id == library_id => {
+                Ok(event) if event.library_id() == library_id => {
                     let generation = invalidation_generation.fetch_add(1, Ordering::SeqCst) + 1;
                     invalidation_notify.notify_waiters();
                     tracing::debug!(
                         event = "fuse.invalidate.received",
                         library_id = %library_id,
-                        path = event.path.as_deref().unwrap_or(""),
-                        new_path = event.new_path.as_deref().unwrap_or(""),
-                        tx_id = event.tx_id.as_deref().unwrap_or(""),
-                        doc_id = event.doc_id.as_deref().unwrap_or(""),
-                        version_id = event.version_id.as_deref().unwrap_or(""),
+                        path = event.path().unwrap_or(""),
+                        new_path = event.new_path().unwrap_or(""),
+                        tx_id = event.tx_id().unwrap_or(""),
+                        doc_id = event.doc_id().unwrap_or(""),
+                        version_id = event.version_id().unwrap_or(""),
                         generation,
                         "FUSE invalidation received"
                     );

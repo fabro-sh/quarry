@@ -138,7 +138,7 @@ pub struct GlobalOperationGuard {
     _guard: OwnedMutexGuard<()>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoreEventKind {
     DocumentPut,
     DocumentDelete,
@@ -155,19 +155,19 @@ pub enum StoreEventKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoreEvent {
-    pub kind: StoreEventKind,
-    pub library_id: String,
-    pub path: Option<String>,
-    pub new_path: Option<String>,
-    pub source: Option<DocumentSource>,
-    pub tx_id: Option<String>,
-    pub doc_id: Option<String>,
-    pub version_id: Option<String>,
-    pub conflict_id: Option<String>,
-    pub peer_id: Option<String>,
-    pub applied: Option<usize>,
-    pub conflicts: Option<usize>,
-    pub origin_id: Option<String>,
+    kind: StoreEventKind,
+    library_id: String,
+    path: Option<String>,
+    new_path: Option<String>,
+    source: Option<DocumentSource>,
+    tx_id: Option<String>,
+    doc_id: Option<String>,
+    version_id: Option<String>,
+    conflict_id: Option<String>,
+    peer_id: Option<String>,
+    applied: Option<usize>,
+    conflicts: Option<usize>,
+    origin_id: Option<String>,
 }
 
 impl StoreEvent {
@@ -308,6 +308,58 @@ impl StoreEvent {
         event.conflicts = Some(conflicts);
         event
     }
+
+    pub fn kind(&self) -> StoreEventKind {
+        self.kind
+    }
+
+    pub fn library_id(&self) -> &str {
+        &self.library_id
+    }
+
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    pub fn new_path(&self) -> Option<&str> {
+        self.new_path.as_deref()
+    }
+
+    pub fn source(&self) -> Option<&DocumentSource> {
+        self.source.as_ref()
+    }
+
+    pub fn tx_id(&self) -> Option<&str> {
+        self.tx_id.as_deref()
+    }
+
+    pub fn doc_id(&self) -> Option<&str> {
+        self.doc_id.as_deref()
+    }
+
+    pub fn version_id(&self) -> Option<&str> {
+        self.version_id.as_deref()
+    }
+
+    pub fn conflict_id(&self) -> Option<&str> {
+        self.conflict_id.as_deref()
+    }
+
+    pub fn peer_id(&self) -> Option<&str> {
+        self.peer_id.as_deref()
+    }
+
+    pub fn applied(&self) -> Option<usize> {
+        self.applied
+    }
+
+    pub fn conflicts(&self) -> Option<usize> {
+        self.conflicts
+    }
+
+    pub fn origin_id(&self) -> Option<&str> {
+        self.origin_id.as_deref()
+    }
 }
 
 #[derive(Clone)]
@@ -348,24 +400,24 @@ struct StagedChange {
 fn log_store_event(event: &StoreEvent) {
     tracing::debug!(
         event = "storage.event.emitted",
-        store_event = %store_event_name(&event.kind),
-        library_id = %event.library_id,
-        path = event.path.as_deref().unwrap_or(""),
-        new_path = event.new_path.as_deref().unwrap_or(""),
-        tx_id = event.tx_id.as_deref().unwrap_or(""),
-        doc_id = event.doc_id.as_deref().unwrap_or(""),
-        version_id = event.version_id.as_deref().unwrap_or(""),
-        source = event.source.as_ref().map(DocumentSource::as_str).unwrap_or(""),
-        conflict_id = event.conflict_id.as_deref().unwrap_or(""),
-        peer_id = event.peer_id.as_deref().unwrap_or(""),
-        applied = event.applied.unwrap_or(0),
-        conflicts = event.conflicts.unwrap_or(0),
-        origin_id = event.origin_id.as_deref().unwrap_or(""),
+        store_event = %store_event_name(event.kind()),
+        library_id = %event.library_id(),
+        path = event.path().unwrap_or(""),
+        new_path = event.new_path().unwrap_or(""),
+        tx_id = event.tx_id().unwrap_or(""),
+        doc_id = event.doc_id().unwrap_or(""),
+        version_id = event.version_id().unwrap_or(""),
+        source = event.source().map(DocumentSource::as_str).unwrap_or(""),
+        conflict_id = event.conflict_id().unwrap_or(""),
+        peer_id = event.peer_id().unwrap_or(""),
+        applied = event.applied().unwrap_or(0),
+        conflicts = event.conflicts().unwrap_or(0),
+        origin_id = event.origin_id().unwrap_or(""),
         "store event emitted"
     );
 }
 
-fn store_event_name(kind: &StoreEventKind) -> &'static str {
+fn store_event_name(kind: StoreEventKind) -> &'static str {
     match kind {
         StoreEventKind::DocumentPut => "document.put.committed",
         StoreEventKind::DocumentDelete => "document.delete.committed",
@@ -6246,51 +6298,129 @@ mod tmp_secret_tests {
 
     #[test]
     fn store_event_constructors_populate_only_relevant_fields() {
-        assert_eq!(
-            StoreEvent::document_put(
-                "lib".to_string(),
-                "docs/readme.md".to_string(),
-                DocumentSource::Rest,
-                "tx1".to_string(),
-                "doc1".to_string(),
-                "v1".to_string(),
-                Some("origin-1".to_string()),
-            ),
-            StoreEvent {
-                kind: StoreEventKind::DocumentPut,
-                library_id: "lib".to_string(),
-                path: Some("docs/readme.md".to_string()),
-                new_path: None,
-                source: Some(DocumentSource::Rest),
-                tx_id: Some("tx1".to_string()),
-                doc_id: Some("doc1".to_string()),
-                version_id: Some("v1".to_string()),
-                conflict_id: None,
-                peer_id: None,
-                applied: None,
-                conflicts: None,
-                origin_id: Some("origin-1".to_string()),
-            }
+        let event = StoreEvent::document_put(
+            "lib".to_string(),
+            "docs/readme.md".to_string(),
+            DocumentSource::Rest,
+            "tx1".to_string(),
+            "doc1".to_string(),
+            "v1".to_string(),
+            Some("origin-1".to_string()),
         );
+        assert_eq!(event.kind(), StoreEventKind::DocumentPut);
+        assert_eq!(event.library_id(), "lib");
+        assert_eq!(event.path(), Some("docs/readme.md"));
+        assert_eq!(event.new_path(), None);
+        assert_eq!(event.source(), Some(&DocumentSource::Rest));
+        assert_eq!(event.tx_id(), Some("tx1"));
+        assert_eq!(event.doc_id(), Some("doc1"));
+        assert_eq!(event.version_id(), Some("v1"));
+        assert_eq!(event.conflict_id(), None);
+        assert_eq!(event.peer_id(), None);
+        assert_eq!(event.applied(), None);
+        assert_eq!(event.conflicts(), None);
+        assert_eq!(event.origin_id(), Some("origin-1"));
 
-        assert_eq!(
-            StoreEvent::git_sync_completed("lib".to_string(), "peer".to_string(), 3, 1),
-            StoreEvent {
-                kind: StoreEventKind::GitSyncCompleted,
-                library_id: "lib".to_string(),
-                path: None,
-                new_path: None,
-                source: Some(DocumentSource::Git),
-                tx_id: None,
-                doc_id: None,
-                version_id: None,
-                conflict_id: None,
-                peer_id: Some("peer".to_string()),
-                applied: Some(3),
-                conflicts: Some(1),
-                origin_id: None,
-            }
+        let event = StoreEvent::document_delete(
+            "lib".to_string(),
+            "docs/readme.md".to_string(),
+            DocumentSource::Rest,
+            "tx2".to_string(),
+            Some("doc1".to_string()),
+            Some("origin-2".to_string()),
         );
+        assert_eq!(event.kind(), StoreEventKind::DocumentDelete);
+        assert_eq!(event.path(), Some("docs/readme.md"));
+        assert_eq!(event.new_path(), None);
+        assert_eq!(event.source(), Some(&DocumentSource::Rest));
+        assert_eq!(event.tx_id(), Some("tx2"));
+        assert_eq!(event.doc_id(), Some("doc1"));
+        assert_eq!(event.version_id(), None);
+        assert_eq!(event.origin_id(), Some("origin-2"));
+
+        let event = StoreEvent::document_move(
+            "lib".to_string(),
+            "docs/readme.md".to_string(),
+            "docs/archive.md".to_string(),
+            DocumentSource::Rest,
+            "tx3".to_string(),
+            Some("doc1".to_string()),
+            Some("origin-3".to_string()),
+        );
+        assert_eq!(event.kind(), StoreEventKind::DocumentMove);
+        assert_eq!(event.path(), Some("docs/readme.md"));
+        assert_eq!(event.new_path(), Some("docs/archive.md"));
+        assert_eq!(event.source(), Some(&DocumentSource::Rest));
+        assert_eq!(event.tx_id(), Some("tx3"));
+        assert_eq!(event.doc_id(), Some("doc1"));
+        assert_eq!(event.origin_id(), Some("origin-3"));
+
+        let event = StoreEvent::links_indexed("lib".to_string(), "docs/readme.md".to_string());
+        assert_eq!(event.kind(), StoreEventKind::LinksIndexed);
+        assert_eq!(event.path(), Some("docs/readme.md"));
+        assert_eq!(event.source(), None);
+
+        let event =
+            StoreEvent::directory_put("lib".to_string(), "docs".to_string(), DocumentSource::Rest);
+        assert_eq!(event.kind(), StoreEventKind::DirectoryPut);
+        assert_eq!(event.path(), Some("docs"));
+        assert_eq!(event.source(), Some(&DocumentSource::Rest));
+
+        let event = StoreEvent::directory_delete(
+            "lib".to_string(),
+            "docs".to_string(),
+            DocumentSource::Rest,
+        );
+        assert_eq!(event.kind(), StoreEventKind::DirectoryDelete);
+        assert_eq!(event.path(), Some("docs"));
+        assert_eq!(event.source(), Some(&DocumentSource::Rest));
+
+        let event = StoreEvent::directory_move(
+            "lib".to_string(),
+            "docs".to_string(),
+            "archive".to_string(),
+            DocumentSource::Rest,
+        );
+        assert_eq!(event.kind(), StoreEventKind::DirectoryMove);
+        assert_eq!(event.path(), Some("docs"));
+        assert_eq!(event.new_path(), Some("archive"));
+        assert_eq!(event.source(), Some(&DocumentSource::Rest));
+
+        let event = StoreEvent::conflict_created(
+            "lib".to_string(),
+            "docs/readme.md".to_string(),
+            "conflict-1".to_string(),
+        );
+        assert_eq!(event.kind(), StoreEventKind::ConflictCreated);
+        assert_eq!(event.path(), Some("docs/readme.md"));
+        assert_eq!(event.conflict_id(), Some("conflict-1"));
+        assert_eq!(event.source(), None);
+
+        let event = StoreEvent::conflict_resolved(
+            "lib".to_string(),
+            "docs/readme.md".to_string(),
+            "conflict-1".to_string(),
+        );
+        assert_eq!(event.kind(), StoreEventKind::ConflictResolved);
+        assert_eq!(event.path(), Some("docs/readme.md"));
+        assert_eq!(event.conflict_id(), Some("conflict-1"));
+        assert_eq!(event.source(), None);
+
+        let event = StoreEvent::library_reindexed("lib".to_string());
+        assert_eq!(event.kind(), StoreEventKind::LibraryReindexed);
+        assert_eq!(event.library_id(), "lib");
+        assert_eq!(event.path(), None);
+        assert_eq!(event.source(), None);
+        assert_eq!(event.conflict_id(), None);
+
+        let event = StoreEvent::git_sync_completed("lib".to_string(), "peer".to_string(), 3, 1);
+        assert_eq!(event.kind(), StoreEventKind::GitSyncCompleted);
+        assert_eq!(event.library_id(), "lib");
+        assert_eq!(event.path(), None);
+        assert_eq!(event.source(), Some(&DocumentSource::Git));
+        assert_eq!(event.peer_id(), Some("peer"));
+        assert_eq!(event.applied(), Some(3));
+        assert_eq!(event.conflicts(), Some(1));
     }
 
     #[test]

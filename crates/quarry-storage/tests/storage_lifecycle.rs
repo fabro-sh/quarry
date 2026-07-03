@@ -1960,15 +1960,15 @@ async fn visible_writes_emit_in_process_store_events() {
         .await
         .unwrap();
     let event = events.recv().await.unwrap();
-    assert_eq!(event.kind, StoreEventKind::DocumentPut);
-    assert_eq!(event.library_id, library.id);
-    assert_eq!(event.path.as_deref(), Some("notes/a.md"));
-    assert_eq!(event.doc_id.as_deref(), Some(write.document.id.as_str()));
-    assert_eq!(event.version_id.as_deref(), Some(write.version.id.as_str()));
+    assert_eq!(event.kind(), StoreEventKind::DocumentPut);
+    assert_eq!(event.library_id(), library.id.as_str());
+    assert_eq!(event.path(), Some("notes/a.md"));
+    assert_eq!(event.doc_id(), Some(write.document.id.as_str()));
+    assert_eq!(event.version_id(), Some(write.version.id.as_str()));
     let event = events.recv().await.unwrap();
-    assert_eq!(event.kind, StoreEventKind::LinksIndexed);
-    assert_eq!(event.library_id, library.id);
-    assert_eq!(event.path.as_deref(), Some("notes/a.md"));
+    assert_eq!(event.kind(), StoreEventKind::LinksIndexed);
+    assert_eq!(event.library_id(), library.id.as_str());
+    assert_eq!(event.path(), Some("notes/a.md"));
 
     store
         .move_document(
@@ -1980,27 +1980,27 @@ async fn visible_writes_emit_in_process_store_events() {
         .await
         .unwrap();
     let event = events.recv().await.unwrap();
-    assert_eq!(event.kind, StoreEventKind::DocumentMove);
-    assert_eq!(event.path.as_deref(), Some("notes/a.md"));
-    assert_eq!(event.new_path.as_deref(), Some("notes/b.md"));
-    assert_eq!(event.doc_id.as_deref(), Some(write.document.id.as_str()));
+    assert_eq!(event.kind(), StoreEventKind::DocumentMove);
+    assert_eq!(event.path(), Some("notes/a.md"));
+    assert_eq!(event.new_path(), Some("notes/b.md"));
+    assert_eq!(event.doc_id(), Some(write.document.id.as_str()));
     let event = events.recv().await.unwrap();
-    assert_eq!(event.kind, StoreEventKind::LinksIndexed);
-    assert_eq!(event.library_id, library.id);
-    assert_eq!(event.path.as_deref(), Some("notes/b.md"));
+    assert_eq!(event.kind(), StoreEventKind::LinksIndexed);
+    assert_eq!(event.library_id(), library.id.as_str());
+    assert_eq!(event.path(), Some("notes/b.md"));
 
     store
         .delete_document(&library.slug, "notes/b.md", DocumentSource::Rest)
         .await
         .unwrap();
     let event = events.recv().await.unwrap();
-    assert_eq!(event.kind, StoreEventKind::DocumentDelete);
-    assert_eq!(event.path.as_deref(), Some("notes/b.md"));
-    assert_eq!(event.doc_id.as_deref(), Some(write.document.id.as_str()));
+    assert_eq!(event.kind(), StoreEventKind::DocumentDelete);
+    assert_eq!(event.path(), Some("notes/b.md"));
+    assert_eq!(event.doc_id(), Some(write.document.id.as_str()));
     let event = events.recv().await.unwrap();
-    assert_eq!(event.kind, StoreEventKind::LinksIndexed);
-    assert_eq!(event.library_id, library.id);
-    assert_eq!(event.path.as_deref(), Some("notes/b.md"));
+    assert_eq!(event.kind(), StoreEventKind::LinksIndexed);
+    assert_eq!(event.library_id(), library.id.as_str());
+    assert_eq!(event.path(), Some("notes/b.md"));
 
     let conflict = store
         .record_conflict(
@@ -2012,36 +2012,36 @@ async fn visible_writes_emit_in_process_store_events() {
         .await
         .unwrap();
     let event = events.recv().await.unwrap();
-    assert_eq!(event.kind, StoreEventKind::ConflictCreated);
-    assert_eq!(event.library_id, library.id);
-    assert_eq!(event.path.as_deref(), Some("notes/conflicted.md"));
-    assert_eq!(event.conflict_id.as_deref(), Some(conflict.id.as_str()));
+    assert_eq!(event.kind(), StoreEventKind::ConflictCreated);
+    assert_eq!(event.library_id(), library.id.as_str());
+    assert_eq!(event.path(), Some("notes/conflicted.md"));
+    assert_eq!(event.conflict_id(), Some(conflict.id.as_str()));
 
     store.resolve_conflict(&conflict.id).await.unwrap();
     let event = events.recv().await.unwrap();
-    assert_eq!(event.kind, StoreEventKind::ConflictResolved);
-    assert_eq!(event.library_id, library.id);
-    assert_eq!(event.path.as_deref(), Some("notes/conflicted.md"));
-    assert_eq!(event.conflict_id.as_deref(), Some(conflict.id.as_str()));
+    assert_eq!(event.kind(), StoreEventKind::ConflictResolved);
+    assert_eq!(event.library_id(), library.id.as_str());
+    assert_eq!(event.path(), Some("notes/conflicted.md"));
+    assert_eq!(event.conflict_id(), Some(conflict.id.as_str()));
 
     let report = store.reindex_library(&library.slug).await.unwrap();
     assert!(report.ok);
     let event = events.recv().await.unwrap();
-    assert_eq!(event.kind, StoreEventKind::LibraryReindexed);
-    assert_eq!(event.library_id, library.id);
-    assert_eq!(event.path, None);
-    assert_eq!(event.conflict_id, None);
+    assert_eq!(event.kind(), StoreEventKind::LibraryReindexed);
+    assert_eq!(event.library_id(), library.id.as_str());
+    assert_eq!(event.path(), None);
+    assert_eq!(event.conflict_id(), None);
 
     store
         .emit_git_sync_completed(&library.slug, "peer-1", 2, 1)
         .await
         .unwrap();
     let event = events.recv().await.unwrap();
-    assert_eq!(event.kind, StoreEventKind::GitSyncCompleted);
-    assert_eq!(event.library_id, library.id);
-    assert_eq!(event.peer_id.as_deref(), Some("peer-1"));
-    assert_eq!(event.applied, Some(2));
-    assert_eq!(event.conflicts, Some(1));
+    assert_eq!(event.kind(), StoreEventKind::GitSyncCompleted);
+    assert_eq!(event.library_id(), library.id.as_str());
+    assert_eq!(event.peer_id(), Some("peer-1"));
+    assert_eq!(event.applied(), Some(2));
+    assert_eq!(event.conflicts(), Some(1));
 }
 
 #[tokio::test]
@@ -2072,9 +2072,9 @@ async fn document_mutation_events_include_origin_and_document_identity() {
         .await
         .unwrap();
     let event = events.recv().await.unwrap();
-    assert_eq!(event.kind, StoreEventKind::DocumentPut);
-    assert_eq!(event.doc_id.as_deref(), Some(write.document.id.as_str()));
-    assert_eq!(event.origin_id.as_deref(), Some("browser:origin-1"));
+    assert_eq!(event.kind(), StoreEventKind::DocumentPut);
+    assert_eq!(event.doc_id(), Some(write.document.id.as_str()));
+    assert_eq!(event.origin_id(), Some("browser:origin-1"));
     let _links = events.recv().await.unwrap();
 
     store
@@ -2089,9 +2089,9 @@ async fn document_mutation_events_include_origin_and_document_identity() {
         .await
         .unwrap();
     let event = events.recv().await.unwrap();
-    assert_eq!(event.kind, StoreEventKind::DocumentMove);
-    assert_eq!(event.doc_id.as_deref(), Some(write.document.id.as_str()));
-    assert_eq!(event.origin_id.as_deref(), Some("browser:origin-1"));
+    assert_eq!(event.kind(), StoreEventKind::DocumentMove);
+    assert_eq!(event.doc_id(), Some(write.document.id.as_str()));
+    assert_eq!(event.origin_id(), Some("browser:origin-1"));
     let _links = events.recv().await.unwrap();
 
     store
@@ -2105,9 +2105,9 @@ async fn document_mutation_events_include_origin_and_document_identity() {
         .await
         .unwrap();
     let event = events.recv().await.unwrap();
-    assert_eq!(event.kind, StoreEventKind::DocumentDelete);
-    assert_eq!(event.doc_id.as_deref(), Some(write.document.id.as_str()));
-    assert_eq!(event.origin_id.as_deref(), Some("browser:origin-1"));
+    assert_eq!(event.kind(), StoreEventKind::DocumentDelete);
+    assert_eq!(event.doc_id(), Some(write.document.id.as_str()));
+    assert_eq!(event.origin_id(), Some("browser:origin-1"));
 }
 
 #[tokio::test]
