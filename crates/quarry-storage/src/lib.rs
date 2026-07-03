@@ -1327,45 +1327,42 @@ impl QuarryStore {
     pub async fn delete_tmp_document(&self, path: &str) -> Result<TransactionRecord> {
         let secret = TmpDocumentSecret::parse(path)?;
         let path = secret.as_str().to_string();
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let (doc_id, head_version_id) = self
-                .tmp_document_identity_conn(&conn, &path)
-                .await?
-                .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
-            let tx = insert_transaction_conn(
-                &conn,
-                TMP_TRANSACTION_LIBRARY_ID,
-                DocumentSource::Rest,
-                None,
-                None,
-                serde_json::json!({ "mode": "tmp_document" }),
-            )
-            .await?;
-            insert_change_conn(
-                &conn,
-                &tx.id,
-                &path,
-                ChangeType::Delete,
-                head_version_id.as_deref(),
-                None,
-                None,
-            )
-            .await?;
-            conn.execute(
-                "UPDATE documents SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
-                params![now_timestamp(), doc_id],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            commit_transaction_record_conn(&conn, &tx.id).await?;
-            self.transaction_conn(&conn, &tx.id).await
-        }
-        .await;
-        finish_tx(&conn, result).await
+        self.write_transaction(move |store, conn| {
+            Box::pin(async move {
+                let (doc_id, head_version_id) = store
+                    .tmp_document_identity_conn(conn, &path)
+                    .await?
+                    .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+                let tx = insert_transaction_conn(
+                    conn,
+                    TMP_TRANSACTION_LIBRARY_ID,
+                    DocumentSource::Rest,
+                    None,
+                    None,
+                    serde_json::json!({ "mode": "tmp_document" }),
+                )
+                .await?;
+                insert_change_conn(
+                    conn,
+                    &tx.id,
+                    &path,
+                    ChangeType::Delete,
+                    head_version_id.as_deref(),
+                    None,
+                    None,
+                )
+                .await?;
+                conn.execute(
+                    "UPDATE documents SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
+                    params![now_timestamp(), doc_id],
+                )
+                .await
+                .map_err(map_turso_error)?;
+                commit_transaction_record_conn(conn, &tx.id).await?;
+                store.transaction_conn(conn, &tx.id).await
+            })
+        })
+        .await
     }
 
     pub async fn set_tmp_document_ttl(
@@ -1380,25 +1377,22 @@ impl QuarryStore {
         };
         let secret = TmpDocumentSecret::parse(path)?;
         let path = secret.as_str().to_string();
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let (doc_id, _) = self
-                .tmp_document_identity_conn(&conn, &path)
-                .await?
-                .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
-            conn.execute(
-                "UPDATE documents SET expires_at = ?1, updated_at = ?2 WHERE id = ?3",
-                params![expires_at, now_timestamp(), doc_id],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            self.tmp_document_entry_any_conn(&conn, &path).await
-        }
-        .await;
-        finish_tx(&conn, result).await
+        self.write_transaction(move |store, conn| {
+            Box::pin(async move {
+                let (doc_id, _) = store
+                    .tmp_document_identity_conn(conn, &path)
+                    .await?
+                    .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+                conn.execute(
+                    "UPDATE documents SET expires_at = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![expires_at, now_timestamp(), doc_id],
+                )
+                .await
+                .map_err(map_turso_error)?;
+                store.tmp_document_entry_any_conn(conn, &path).await
+            })
+        })
+        .await
     }
 
     pub async fn set_document_ttl(
@@ -1408,31 +1402,30 @@ impl QuarryStore {
         expires_at: Option<String>,
     ) -> Result<DocumentListEntry> {
         let path = normalize_path(path)?;
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
-            let doc_id = self
-                .library_document_id_any_conn(&conn, &library.id, &path)
-                .await?
-                .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
-            conn.execute(
-                "UPDATE documents SET expires_at = ?1, updated_at = ?2 WHERE id = ?3",
-                vec![
-                    opt_value(expires_at),
-                    Value::Text(now_timestamp()),
-                    Value::Text(doc_id),
-                ],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            self.document_entry_any_conn(&conn, &library.id, &path)
+        let library = library.to_string();
+        self.write_transaction(move |store, conn| {
+            Box::pin(async move {
+                let library = store.require_library_conn(conn, &library).await?;
+                let doc_id = store
+                    .library_document_id_any_conn(conn, &library.id, &path)
+                    .await?
+                    .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+                conn.execute(
+                    "UPDATE documents SET expires_at = ?1, updated_at = ?2 WHERE id = ?3",
+                    vec![
+                        opt_value(expires_at),
+                        Value::Text(now_timestamp()),
+                        Value::Text(doc_id),
+                    ],
+                )
                 .await
-        }
-        .await;
-        finish_tx(&conn, result).await
+                .map_err(map_turso_error)?;
+                store
+                    .document_entry_any_conn(conn, &library.id, &path)
+                    .await
+            })
+        })
+        .await
     }
 
     pub async fn promote_tmp_document(
@@ -1445,51 +1438,51 @@ impl QuarryStore {
         let tmp_secret = TmpDocumentSecret::parse(tmp_path)?;
         let tmp_path = tmp_secret.as_str().to_string();
         let target_path = normalize_path(target_path)?;
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
-            self.check_tmp_precondition_conn(&conn, &tmp_path, &precondition)
-                .await?;
-            if self
-                .document_identity_conn(&conn, &library.id, &target_path)
-                .await?
-                .is_some()
-            {
-                return Err(QuarryError::Conflict(format!(
-                    "{target_path} already exists"
-                )));
-            }
-            let (doc_id, _) = self
-                .tmp_document_identity_conn(&conn, &tmp_path)
-                .await?
-                .ok_or_else(|| QuarryError::NotFound(tmp_path.clone()))?;
-            conn.execute(
-                "UPDATE documents
+        let library = library.to_string();
+        self.write_transaction(move |store, conn| {
+            Box::pin(async move {
+                let library = store.require_library_conn(conn, &library).await?;
+                store
+                    .check_tmp_precondition_conn(conn, &tmp_path, &precondition)
+                    .await?;
+                if store
+                    .document_identity_conn(conn, &library.id, &target_path)
+                    .await?
+                    .is_some()
+                {
+                    return Err(QuarryError::Conflict(format!(
+                        "{target_path} already exists"
+                    )));
+                }
+                let (doc_id, _) = store
+                    .tmp_document_identity_conn(conn, &tmp_path)
+                    .await?
+                    .ok_or_else(|| QuarryError::NotFound(tmp_path.clone()))?;
+                conn.execute(
+                    "UPDATE documents
                  SET library_id = ?1,
                      document_scope = 'library',
                      path = ?2,
                      expires_at = NULL,
                      updated_at = ?3
                  WHERE id = ?4",
-                params![
-                    library.id.clone(),
-                    target_path.clone(),
-                    now_timestamp(),
-                    doc_id
-                ],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            ensure_path_inodes_conn(&conn, &library.id, &target_path).await?;
-            self.reindex_links_conn(&conn, &library.id).await?;
-            self.document_entry_conn(&conn, &library.id, &target_path)
+                    params![
+                        library.id.clone(),
+                        target_path.clone(),
+                        now_timestamp(),
+                        doc_id
+                    ],
+                )
                 .await
-        }
-        .await;
-        finish_tx(&conn, result).await
+                .map_err(map_turso_error)?;
+                ensure_path_inodes_conn(conn, &library.id, &target_path).await?;
+                store.reindex_links_conn(conn, &library.id).await?;
+                store
+                    .document_entry_conn(conn, &library.id, &target_path)
+                    .await
+            })
+        })
+        .await
     }
 
     pub async fn collab_document_seed(
