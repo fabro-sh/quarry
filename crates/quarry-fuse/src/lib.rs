@@ -933,6 +933,8 @@ mod linux_mount {
     use std::time::{Duration, SystemTime};
 
     const TTL: Duration = Duration::from_secs(0);
+    const MAX_WRITE_BYTES: NonZeroU32 =
+        NonZeroU32::new(1_024 * 1_024).expect("FUSE max_write constant is non-zero");
 
     pub async fn mount_library_with_shutdown<F>(
         store: QuarryStore,
@@ -995,7 +997,7 @@ mod linux_mount {
     impl Filesystem for FuseProjection {
         async fn init(&self, _req: Request) -> fuse3::Result<ReplyInit> {
             Ok(ReplyInit {
-                max_write: NonZeroU32::new(1024 * 1024).unwrap(),
+                max_write: MAX_WRITE_BYTES,
             })
         }
 
