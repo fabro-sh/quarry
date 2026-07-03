@@ -25,6 +25,10 @@ use yrs::{
     Doc, Map, OffsetKind, Options, Out, ReadTxn, Text, Transact, Update, WriteTxn, XmlTextRef,
 };
 
+mod common;
+
+use common::{document_test_app, json_request, response_json};
+
 const COLLAB_ROOT: &str = "content";
 const REVIEW_ROOT: &str = "review";
 
@@ -4044,20 +4048,6 @@ async fn rest_api_scopes_transaction_routes_to_the_url_library() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-fn json_request(method: Method, uri: &str, body: Value) -> Request<Body> {
-    Request::builder()
-        .method(method)
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(body.to_string()))
-        .unwrap()
-}
-
-async fn response_json(response: axum::response::Response) -> Value {
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&body).unwrap()
-}
-
 async fn next_document_put_event(
     events: &mut tokio::sync::broadcast::Receiver<StoreEvent>,
 ) -> StoreEvent {
@@ -4269,15 +4259,7 @@ fn yjs_plain_text(doc: &Doc) -> String {
 // ---------------------------------------------------------------------------
 
 async fn block_test_app() -> (tempfile::TempDir, axum::Router, QuarryStore) {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
-    let app = router(store.clone());
+    let (root, app, store) = document_test_app().await;
     let response = app
         .clone()
         .oneshot(json_request(

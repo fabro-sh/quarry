@@ -11,10 +11,8 @@ use axum::http::{Method, Request, StatusCode};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 #[cfg(feature = "tmp-documents")]
 use quarry_collab_codec::{Node, xmltext_to_slate};
-use quarry_server::router;
 #[cfg(feature = "tmp-documents")]
 use quarry_server::{app_state, router_with_state, serve_state_with_shutdown};
-use quarry_storage::{QuarryStore, StoreConfig};
 use serde_json::Value;
 #[cfg(feature = "tmp-documents")]
 use tokio::time::{Duration, timeout};
@@ -30,6 +28,10 @@ use yrs::updates::encoder::Encode;
 #[cfg(feature = "tmp-documents")]
 use yrs::{Doc, OffsetKind, Options, Out, ReadTxn, Text, Transact, Update, WriteTxn, XmlTextRef};
 
+mod common;
+
+use common::{document_test_app, json_request, open_test_store, response_json};
+
 #[cfg(feature = "tmp-documents")]
 const COLLAB_ROOT: &str = "content";
 
@@ -41,15 +43,7 @@ fn assert_json_timestamp(value: &Value) {
 
 #[tokio::test]
 async fn document_feature_surface_matches_compiled_features() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
-    let app = router(store);
+    let (_root, app, _store) = document_test_app().await;
     let tmp_documents = cfg!(feature = "tmp-documents");
     let lib_documents = cfg!(feature = "lib-documents");
 
@@ -242,15 +236,7 @@ async fn document_feature_surface_matches_compiled_features() {
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
 async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_events_routes() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
-    let app = router(store);
+    let (_root, app, _store) = document_test_app().await;
 
     let response = app
         .clone()
@@ -421,14 +407,7 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
 async fn tmp_collab_websocket_final_checkpoint_persists_typing() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     let state = app_state(store.clone());
     let app = router_with_state(state.clone());
 
@@ -475,15 +454,7 @@ async fn tmp_collab_websocket_final_checkpoint_persists_typing() {
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
 async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
-    let app = router(store);
+    let (_root, app, _store) = document_test_app().await;
 
     let response = app
         .clone()
@@ -810,19 +781,4 @@ async fn first_sse_chunk_containing(body: axum::body::Body, needle: &str) -> Str
     })
     .await
     .unwrap_or_else(|_| panic!("SSE stream never emitted {needle:?}"))
-}
-
-#[cfg(feature = "tmp-documents")]
-fn json_request(method: Method, uri: &str, value: Value) -> Request<Body> {
-    Request::builder()
-        .method(method)
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(value.to_string()))
-        .unwrap()
-}
-
-async fn response_json(response: axum::response::Response) -> Value {
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&bytes).unwrap()
 }
