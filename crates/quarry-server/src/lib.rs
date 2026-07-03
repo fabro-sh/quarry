@@ -11,6 +11,7 @@ mod log_redaction;
 mod markdown_write;
 mod presence;
 mod review;
+mod search_handlers;
 mod session;
 mod sse;
 
@@ -208,13 +209,19 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
         .route("/v1/libraries", get(list_libraries).post(create_library))
         .route("/v1/libraries/{library}", get(get_library))
         .route("/v1/libraries/{library}/documents", get(list_documents))
-        .route("/v1/libraries/{library}/search", get(search_documents))
+        .route(
+            "/v1/libraries/{library}/search",
+            get(search_handlers::search_documents),
+        )
         .route(
             "/v1/libraries/{library}/search/suggest",
-            get(suggest_documents),
+            get(search_handlers::suggest_documents),
         )
-        .route("/v1/libraries/{library}/reindex", post(reindex_library))
-        .route("/v1/libraries/{library}/graph", get(graph))
+        .route(
+            "/v1/libraries/{library}/reindex",
+            post(search_handlers::reindex_library),
+        )
+        .route("/v1/libraries/{library}/graph", get(search_handlers::graph))
         .route(
             "/v1/libraries/{library}/events/pending",
             get(agent_events_pending),
@@ -527,10 +534,10 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         tmp_document_events_stream_openapi,
         tmp_agent_presence_list_openapi,
         tmp_agent_presence_openapi,
-        search_documents,
-        suggest_documents,
-        reindex_library,
-        graph,
+        search_handlers::search_documents,
+        search_handlers::suggest_documents,
+        search_handlers::reindex_library,
+        search_handlers::graph,
         get_document,
         document_backlinks_openapi,
         document_outgoing_links_openapi,
@@ -881,24 +888,6 @@ async fn get_library(
 struct ListQuery {
     prefix: Option<String>,
     limit: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SearchQuery {
-    q: Option<String>,
-    limit: Option<u64>,
-    cursor: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GraphQuery {
-    root: Option<String>,
-    depth: Option<u64>,
-    limit: Option<u64>,
-    folder: Option<String>,
-    tag: Option<String>,
-    link_kind: Option<String>,
-    resolved: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1535,94 +1524,6 @@ async fn tmp_agent_presence_list_openapi() {}
     reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
 )]
 async fn tmp_agent_presence_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/search",
-    params(("library" = String, Path), ("q" = Option<String>, Query), ("limit" = Option<u64>, Query), ("cursor" = Option<String>, Query)),
-    responses((status = 200, body = SearchResponse))
-)]
-async fn search_documents(
-    State(state): State<AppState>,
-    Path(library): Path<String>,
-    Query(query): Query<SearchQuery>,
-) -> Result<Json<SearchResponse>, ApiError> {
-    let _cursor = query.cursor.as_deref();
-    Ok(Json(
-        state
-            .store
-            .search_documents(
-                &library,
-                query.q.as_deref().unwrap_or_default(),
-                query.limit,
-            )
-            .await?,
-    ))
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/search/suggest",
-    params(("library" = String, Path), ("q" = Option<String>, Query), ("limit" = Option<u64>, Query)),
-    responses((status = 200, body = [SearchSuggestion]))
-)]
-async fn suggest_documents(
-    State(state): State<AppState>,
-    Path(library): Path<String>,
-    Query(query): Query<SearchQuery>,
-) -> Result<Json<Vec<SearchSuggestion>>, ApiError> {
-    Ok(Json(
-        state
-            .store
-            .suggest_documents(
-                &library,
-                query.q.as_deref().unwrap_or_default(),
-                query.limit,
-            )
-            .await?,
-    ))
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/reindex",
-    params(("library" = String, Path)),
-    responses((status = 200, body = ReindexReport))
-)]
-async fn reindex_library(
-    State(state): State<AppState>,
-    Path(library): Path<String>,
-) -> Result<Json<ReindexReport>, ApiError> {
-    Ok(Json(state.store.reindex_library(&library).await?))
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/graph",
-    params(("library" = String, Path), ("root" = Option<String>, Query), ("depth" = Option<u64>, Query), ("limit" = Option<u64>, Query), ("folder" = Option<String>, Query), ("tag" = Option<String>, Query), ("link_kind" = Option<String>, Query), ("resolved" = Option<bool>, Query)),
-    responses((status = 200, body = GraphResponse))
-)]
-async fn graph(
-    State(state): State<AppState>,
-    Path(library): Path<String>,
-    Query(query): Query<GraphQuery>,
-) -> Result<Json<GraphResponse>, ApiError> {
-    Ok(Json(
-        state
-            .store
-            .graph(
-                &library,
-                query.root.as_deref(),
-                query.depth,
-                query.limit,
-                query.folder.as_deref(),
-                query.tag.as_deref(),
-                query.link_kind.as_deref(),
-                query.resolved,
-            )
-            .await?,
-    ))
-}
 
 #[utoipa::path(
     get,
