@@ -514,7 +514,7 @@ async fn request_tracing_middleware(request: Request, next: Next) -> Response {
         .get(REQUEST_ID_HEADER)
         .and_then(|value| value.to_str().ok().filter(|value| !value.trim().is_empty()))
         .and_then(|value| HeaderValue::from_str(value).ok())
-        .unwrap_or_else(|| HeaderValue::from_str(&Uuid::new_v4().to_string()).unwrap());
+        .unwrap_or_else(generated_request_id_header);
     let request_id = request_id_header.to_str().unwrap_or_default().to_string();
     let method = request.method().clone();
     let path = log_redaction::redact_path(request.uri().path()).into_owned();
@@ -548,6 +548,11 @@ async fn request_tracing_middleware(request: Request, next: Next) -> Response {
         "http request completed"
     );
     response
+}
+
+fn generated_request_id_header() -> HeaderValue {
+    HeaderValue::from_str(&Uuid::new_v4().to_string())
+        .unwrap_or_else(|_| HeaderValue::from_static("00000000-0000-0000-0000-000000000000"))
 }
 
 pub async fn serve(store: QuarryStore, addr: SocketAddr) -> std::io::Result<()> {
@@ -795,7 +800,7 @@ fn embedded_asset_response(asset_path: &str, asset: rust_embed::EmbeddedFile) ->
                 .first_or_octet_stream()
                 .essence_str(),
         )
-        .unwrap(),
+        .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
     );
     response.headers_mut().insert(
         header::CACHE_CONTROL,
@@ -2357,16 +2362,16 @@ async fn head_tmp_document(
     *response.status_mut() = StatusCode::OK;
     response.headers_mut().insert(
         header::ETAG,
-        HeaderValue::from_str(&etag(&document.head_version_id)).unwrap(),
+        checked_header_value(header::ETAG.as_str(), &etag(&document.head_version_id))?,
     );
     response.headers_mut().insert(
         "x-quarry-document-id",
-        HeaderValue::from_str(&document.id).unwrap(),
+        checked_header_value("x-quarry-document-id", &document.id)?,
     );
     if let Some(expires_at) = document.expires_at.as_deref() {
         response.headers_mut().insert(
             "x-quarry-expires-at",
-            HeaderValue::from_str(expires_at).unwrap(),
+            checked_header_value("x-quarry-expires-at", expires_at)?,
         );
     }
     response.headers_mut().insert(
@@ -3070,16 +3075,16 @@ async fn head_document(
     *response.status_mut() = StatusCode::OK;
     response.headers_mut().insert(
         header::ETAG,
-        HeaderValue::from_str(&etag(&document.head_version_id)).unwrap(),
+        checked_header_value(header::ETAG.as_str(), &etag(&document.head_version_id))?,
     );
     response.headers_mut().insert(
         "x-quarry-document-id",
-        HeaderValue::from_str(&document.id).unwrap(),
+        checked_header_value("x-quarry-document-id", &document.id)?,
     );
     if let Some(expires_at) = document.expires_at.as_deref() {
         response.headers_mut().insert(
             "x-quarry-expires-at",
-            HeaderValue::from_str(expires_at).unwrap(),
+            checked_header_value("x-quarry-expires-at", expires_at)?,
         );
     }
     response.headers_mut().insert(
@@ -5305,6 +5310,12 @@ fn etag(version_id: &str) -> String {
     format!("\"{version_id}\"")
 }
 
+fn checked_header_value(name: &str, value: &str) -> Result<HeaderValue, ApiError> {
+    HeaderValue::from_str(value).map_err(|error| {
+        QuarryError::Storage(format!("invalid {name} response header value: {error}")).into()
+    })
+}
+
 fn bytes_response(
     status: StatusCode,
     content: Vec<u8>,
@@ -5321,11 +5332,11 @@ fn bytes_response(
     );
     response.headers_mut().insert(
         header::ETAG,
-        HeaderValue::from_str(&etag(version_id)).unwrap(),
+        checked_header_value(header::ETAG.as_str(), &etag(version_id))?,
     );
     response.headers_mut().insert(
         "x-quarry-document-id",
-        HeaderValue::from_str(document_id).unwrap(),
+        checked_header_value("x-quarry-document-id", document_id)?,
     );
     Ok(response)
 }
@@ -5342,7 +5353,7 @@ fn bytes_response_with_expiry(
     if let Some(expires_at) = expires_at {
         response.headers_mut().insert(
             "x-quarry-expires-at",
-            HeaderValue::from_str(expires_at).unwrap(),
+            checked_header_value("x-quarry-expires-at", expires_at)?,
         );
     }
     Ok(response)
@@ -5362,7 +5373,7 @@ fn json_with_etag<T: Serialize>(
     );
     response.headers_mut().insert(
         header::ETAG,
-        HeaderValue::from_str(&etag(version_id)).unwrap(),
+        checked_header_value(header::ETAG.as_str(), &etag(version_id))?,
     );
     Ok(response)
 }
