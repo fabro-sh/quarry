@@ -1107,7 +1107,9 @@ fn ensure_remote<'repo>(repo: &'repo Repository, remote_url: &str) -> Result<git
 }
 
 fn map_git(err: git2::Error) -> QuarryError {
-    QuarryError::Git(err.to_string())
+    QuarryError::GitSource {
+        source: Box::new(err),
+    }
 }
 
 async fn peer_config(store: &QuarryStore, library: &str, peer_id: &str) -> Result<PeerConfig> {

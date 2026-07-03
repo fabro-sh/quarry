@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::error::Error as StdError;
 use std::str::FromStr;
 use thiserror::Error;
 #[cfg(feature = "openapi")]
@@ -48,8 +49,18 @@ pub enum QuarryError {
     Yaml(#[from] serde_yaml::Error),
     #[error("storage error: {0}")]
     Storage(String),
+    #[error("storage error: {source}")]
+    StorageSource {
+        #[source]
+        source: Box<dyn StdError + Send + Sync + 'static>,
+    },
     #[error("git error: {0}")]
     Git(String),
+    #[error("git error: {source}")]
+    GitSource {
+        #[source]
+        source: Box<dyn StdError + Send + Sync + 'static>,
+    },
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]

@@ -1488,7 +1488,9 @@ mod linux_mount {
             QuarryError::Json(_)
             | QuarryError::Yaml(_)
             | QuarryError::Storage(_)
-            | QuarryError::Git(_) => Errno::from(libc::EIO),
+            | QuarryError::StorageSource { .. }
+            | QuarryError::Git(_)
+            | QuarryError::GitSource { .. } => Errno::from(libc::EIO),
         }
     }
 }

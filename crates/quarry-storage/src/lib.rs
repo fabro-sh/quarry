@@ -6272,7 +6272,9 @@ fn map_turso_error(err: turso::Error) -> QuarryError {
     if is_busy(&err) {
         QuarryError::Busy(err.to_string())
     } else {
-        QuarryError::Storage(err.to_string())
+        QuarryError::StorageSource {
+            source: Box::new(err),
+        }
     }
 }
 
