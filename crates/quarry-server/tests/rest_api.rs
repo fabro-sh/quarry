@@ -2212,14 +2212,7 @@ async fn document_delete_events_echo_origin_id_and_doc_id() {
 
 #[tokio::test]
 async fn rest_api_supports_browser_search_links_versions_and_events() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     let library = store.create_library("browser").await.unwrap();
     let first_intro = store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -2991,14 +2984,7 @@ async fn version_history_includes_transaction_metadata() {
 
 #[tokio::test]
 async fn put_document_rejects_invalid_transaction_provenance_header() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     store.create_library("badprovenance").await.unwrap();
     let app = router(store);
 
@@ -3020,14 +3006,7 @@ async fn put_document_rejects_invalid_transaction_provenance_header() {
 
 #[tokio::test]
 async fn put_document_decodes_percent_encoded_transaction_actor_header() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     store.create_library("actorheader").await.unwrap();
     let app = router(store);
 
@@ -3069,14 +3048,7 @@ async fn put_document_decodes_percent_encoded_transaction_actor_header() {
 
 #[tokio::test]
 async fn first_import_records_transaction_actor_header() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     store.create_library("actorcreate").await.unwrap();
     let app = router(store);
 
@@ -3090,14 +3062,7 @@ async fn first_import_records_transaction_actor_header() {
 
 #[tokio::test]
 async fn delete_move_and_restore_record_transaction_actor_header() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     store.create_library("actorops").await.unwrap();
     let app = router(store);
 
