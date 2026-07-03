@@ -4,6 +4,7 @@ mod conflicts;
 mod discovery;
 mod error;
 mod gateway;
+mod git_handlers;
 mod headers;
 mod journal;
 mod log_redaction;
@@ -27,6 +28,7 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use discovery::{agent_discovery, agent_docs, quarry_skill};
 pub use error::{ApiError, ErrorResponse};
+use git_handlers::{GitExportRequest, GitImportRequest, GitPeerRequest};
 pub(crate) use headers::{
     agent_id_from_headers_or_body, bytes_response_with_expiry, content_type,
     insert_document_headers, json_response, json_with_etag, metadata_from_headers,
@@ -43,10 +45,7 @@ use quarry_core::{
     SearchResult, SearchSuggestion, TransactionRecord, VersionDiff, WriteOutcome,
     WritePrecondition,
 };
-use quarry_git::{
-    GitExportOptions, GitExportResult, GitImportResult, GitSyncResult, export_worktree,
-    import_worktree, pull_peer, push_peer, sync_peer,
-};
+use quarry_git::{GitExportResult, GitImportResult, GitSyncResult};
 use quarry_storage::{DocumentScopeRef, PutDocumentRequest, QuarryStore};
 use review::{
     AgentBlockRef, AgentDocumentSnapshot, AgentReviewComment, AgentReviewConflict,
@@ -251,21 +250,27 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
         )
         .route(
             "/v1/libraries/{library}/git/peers",
-            get(list_git_peers).post(create_git_peer),
+            get(git_handlers::list_git_peers).post(git_handlers::create_git_peer),
         )
-        .route("/v1/libraries/{library}/git/import", post(git_import))
-        .route("/v1/libraries/{library}/git/export", post(git_export))
+        .route(
+            "/v1/libraries/{library}/git/import",
+            post(git_handlers::git_import),
+        )
+        .route(
+            "/v1/libraries/{library}/git/export",
+            post(git_handlers::git_export),
+        )
         .route(
             "/v1/libraries/{library}/git/peers/{peer}/pull",
-            post(git_pull),
+            post(git_handlers::git_pull),
         )
         .route(
             "/v1/libraries/{library}/git/peers/{peer}/push",
-            post(git_push),
+            post(git_handlers::git_push),
         )
         .route(
             "/v1/libraries/{library}/git/peers/{peer}/sync",
-            post(git_sync),
+            post(git_handlers::git_sync),
         )
         .route(
             "/v1/libraries/{library}/conflicts",
@@ -559,13 +564,13 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         stage_delete_document,
         commit_transaction,
         rollback_transaction,
-        create_git_peer,
-        list_git_peers,
-        git_import,
-        git_export,
-        git_pull,
-        git_push,
-        git_sync,
+        git_handlers::create_git_peer,
+        git_handlers::list_git_peers,
+        git_handlers::git_import,
+        git_handlers::git_export,
+        git_handlers::git_pull,
+        git_handlers::git_push,
+        git_handlers::git_sync,
         conflicts::list_conflicts,
         conflicts::get_conflict,
         conflicts::resolve_conflict
@@ -2492,174 +2497,6 @@ async fn rollback_transaction(
     Ok(Json(state.store.rollback_transaction(&tx).await?))
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct GitPeerRequest {
-    pub repo: String,
-    pub remote: Option<String>,
-    pub branch: Option<String>,
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/git/peers",
-    params(("library" = String, Path)),
-    request_body = GitPeerRequest,
-    responses((status = 201, body = GitPeer))
-)]
-async fn create_git_peer(
-    State(state): State<AppState>,
-    Path(library): Path<String>,
-    Json(request): Json<GitPeerRequest>,
-) -> Result<(StatusCode, Json<GitPeer>), ApiError> {
-    let mut config = serde_json::json!({
-        "repo": request.repo,
-        "branch": request.branch.unwrap_or_else(|| "main".to_string())
-    });
-    if let (Some(remote), Some(object)) = (request.remote, config.as_object_mut()) {
-        object.insert("remote".to_string(), JsonValue::String(remote));
-    }
-    Ok((
-        StatusCode::CREATED,
-        Json(state.store.create_git_peer(&library, config).await?),
-    ))
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/git/peers",
-    params(("library" = String, Path)),
-    responses((status = 200, body = [GitPeer]))
-)]
-async fn list_git_peers(
-    State(state): State<AppState>,
-    Path(library): Path<String>,
-) -> Result<Json<Vec<GitPeer>>, ApiError> {
-    Ok(Json(state.store.list_git_peers(&library).await?))
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct GitImportRequest {
-    pub repo: String,
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/git/import",
-    params(("library" = String, Path)),
-    request_body = GitImportRequest,
-    responses((status = 200, body = GitImportResult))
-)]
-async fn git_import(
-    State(state): State<AppState>,
-    Path(library): Path<String>,
-    Json(request): Json<GitImportRequest>,
-) -> Result<Json<GitImportResult>, ApiError> {
-    Ok(Json(
-        import_worktree(&state.store, &library, std::path::Path::new(&request.repo)).await?,
-    ))
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct GitExportRequest {
-    pub repo: String,
-    pub branch: Option<String>,
-    pub force_large: Option<bool>,
-    pub frontmatter_markdown: Option<bool>,
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/git/export",
-    params(("library" = String, Path)),
-    request_body = GitExportRequest,
-    responses((status = 200, body = GitExportResult))
-)]
-async fn git_export(
-    State(state): State<AppState>,
-    Path(library): Path<String>,
-    Json(request): Json<GitExportRequest>,
-) -> Result<Json<GitExportResult>, ApiError> {
-    Ok(Json(
-        export_worktree(
-            &state.store,
-            &library,
-            std::path::Path::new(&request.repo),
-            export_options(&request),
-        )
-        .await?,
-    ))
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/git/peers/{peer}/pull",
-    params(("library" = String, Path), ("peer" = String, Path)),
-    responses((status = 200, body = GitSyncResult))
-)]
-async fn git_pull(
-    State(state): State<AppState>,
-    Path((library, peer)): Path<(String, String)>,
-) -> Result<Json<GitSyncResult>, ApiError> {
-    let result = pull_peer(&state.store, &library, &peer).await?;
-    emit_git_sync_completed(&state.store, &library, &peer, &result).await?;
-    Ok(Json(result))
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/git/peers/{peer}/push",
-    params(("library" = String, Path), ("peer" = String, Path)),
-    responses((status = 200, body = GitSyncResult))
-)]
-async fn git_push(
-    State(state): State<AppState>,
-    Path((library, peer)): Path<(String, String)>,
-) -> Result<Json<GitSyncResult>, ApiError> {
-    let result = push_peer(&state.store, &library, &peer).await?;
-    emit_git_sync_completed(&state.store, &library, &peer, &result).await?;
-    Ok(Json(result))
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/git/peers/{peer}/sync",
-    params(("library" = String, Path), ("peer" = String, Path)),
-    responses((status = 200, body = GitSyncResult))
-)]
-async fn git_sync(
-    State(state): State<AppState>,
-    Path((library, peer)): Path<(String, String)>,
-) -> Result<Json<GitSyncResult>, ApiError> {
-    let result = sync_peer(&state.store, &library, &peer).await?;
-    emit_git_sync_completed(&state.store, &library, &peer, &result).await?;
-    Ok(Json(result))
-}
-
-async fn emit_git_sync_completed(
-    store: &QuarryStore,
-    library: &str,
-    peer: &str,
-    result: &GitSyncResult,
-) -> Result<(), ApiError> {
-    store
-        .emit_git_sync_completed(
-            library,
-            peer,
-            git_sync_applied_count(result),
-            git_sync_conflict_count(result),
-        )
-        .await?;
-    Ok(())
-}
-
-fn git_sync_applied_count(result: &GitSyncResult) -> usize {
-    result.imported_paths.len() + result.exported_paths.len()
-}
-
-fn git_sync_conflict_count(result: &GitSyncResult) -> usize {
-    result.conflict_paths.len().max(result.conflicts.len())
-}
-
 async fn scoped_transaction(store: &QuarryStore, library: &str, tx: &str) -> Result<(), ApiError> {
     let library = store.get_library(library).await?;
     let transaction = store.get_transaction(tx).await?;
@@ -3228,14 +3065,6 @@ mod tests {
         assert_eq!(payload["peer_id"], "peer-1");
         assert_eq!(payload["applied"], 2);
         assert_eq!(payload["conflicts"], 1);
-    }
-}
-
-fn export_options(request: &GitExportRequest) -> GitExportOptions {
-    GitExportOptions {
-        branch: request.branch.clone().unwrap_or_else(|| "main".to_string()),
-        force_large: request.force_large.unwrap_or(false),
-        frontmatter_markdown: request.frontmatter_markdown.unwrap_or(true),
     }
 }
 
