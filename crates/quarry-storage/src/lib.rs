@@ -1529,41 +1529,40 @@ impl QuarryStore {
     ) -> Result<CollabInviteToken> {
         let role = normalize_collab_invite_role(role)?;
         let path = normalize_path(path)?;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
-            let (document_id, _) = self
-                .document_identity_conn(&conn, &library.id, &path)
-                .await?
-                .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
-            let token = CollabInviteToken {
-                id: Uuid::new_v4().to_string(),
-                document_id,
-                role,
-                by_hint: by_hint.filter(|value| !value.trim().is_empty()),
-                created_at: now_timestamp(),
-                revoked_at: None,
-            };
-            conn.execute(
-                "INSERT INTO collab_invite_tokens
+        let library = library.to_string();
+        self.write_transaction(move |store, conn| {
+            Box::pin(async move {
+                let library = store.require_library_conn(conn, &library).await?;
+                let (document_id, _) = store
+                    .document_identity_conn(conn, &library.id, &path)
+                    .await?
+                    .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+                let token = CollabInviteToken {
+                    id: Uuid::new_v4().to_string(),
+                    document_id,
+                    role,
+                    by_hint: by_hint.filter(|value| !value.trim().is_empty()),
+                    created_at: now_timestamp(),
+                    revoked_at: None,
+                };
+                conn.execute(
+                    "INSERT INTO collab_invite_tokens
                  (id, document_id, role, by_hint, created_at, revoked_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
-                vec![
-                    Value::Text(token.id.clone()),
-                    Value::Text(token.document_id.clone()),
-                    Value::Text(token.role.clone()),
-                    opt_value(token.by_hint.clone()),
-                    Value::Text(token.created_at.clone()),
-                ],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            Ok(token)
-        }
-        .await;
-        finish_tx(&conn, result).await
+                    vec![
+                        Value::Text(token.id.clone()),
+                        Value::Text(token.document_id.clone()),
+                        Value::Text(token.role.clone()),
+                        opt_value(token.by_hint.clone()),
+                        Value::Text(token.created_at.clone()),
+                    ],
+                )
+                .await
+                .map_err(map_turso_error)?;
+                Ok(token)
+            })
+        })
+        .await
     }
 
     pub async fn collab_invite_tokens(
@@ -1583,29 +1582,29 @@ impl QuarryStore {
     }
 
     pub async fn revoke_collab_invite_token(&self, token_id: &str) -> Result<CollabInviteToken> {
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let revoked_at = now_timestamp();
-            let changed = conn
-                .execute(
-                    "UPDATE collab_invite_tokens
+        let token_id = token_id.to_string();
+        self.write_transaction(move |store, conn| {
+            Box::pin(async move {
+                let revoked_at = now_timestamp();
+                let changed = conn
+                    .execute(
+                        "UPDATE collab_invite_tokens
                      SET revoked_at = COALESCE(revoked_at, ?2)
                      WHERE id = ?1",
-                    params![token_id.to_string(), revoked_at],
-                )
-                .await
-                .map_err(map_turso_error)?;
-            if changed == 0 {
-                return Err(QuarryError::NotFound(format!("invite token {token_id}")));
-            }
-            self.collab_invite_token_conn(&conn, token_id)
-                .await?
-                .ok_or_else(|| QuarryError::NotFound(format!("invite token {token_id}")))
-        }
-        .await;
-        finish_tx(&conn, result).await
+                        params![token_id.clone(), revoked_at],
+                    )
+                    .await
+                    .map_err(map_turso_error)?;
+                if changed == 0 {
+                    return Err(QuarryError::NotFound(format!("invite token {token_id}")));
+                }
+                store
+                    .collab_invite_token_conn(conn, &token_id)
+                    .await?
+                    .ok_or_else(|| QuarryError::NotFound(format!("invite token {token_id}")))
+            })
+        })
+        .await
     }
 
     pub async fn head_document(&self, library: &str, path: &str) -> Result<DocumentListEntry> {

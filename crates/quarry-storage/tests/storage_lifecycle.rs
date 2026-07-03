@@ -1699,6 +1699,20 @@ async fn global_operation_lock_blocks_normal_writes_until_released() {
     .await
     .unwrap();
     let library = store.create_library("locked").await.unwrap();
+    store
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/share.md").to_string(),
+            content: b"share".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
+        .await
+        .unwrap();
 
     let guard = store.acquire_global_operation_lock().await;
     let writer_store = store.clone();
@@ -1733,6 +1747,30 @@ async fn global_operation_lock_blocks_normal_writes_until_released() {
         .unwrap()
         .unwrap();
     assert_eq!(outcome.document.path, "notes/blocked.md");
+
+    let guard = store.acquire_global_operation_lock().await;
+    let invite_store = store.clone();
+    let invite_library = library.slug.clone();
+    let mut invite = tokio::spawn(async move {
+        invite_store
+            .create_collab_invite_token(&invite_library, "notes/share.md", "editor", None)
+            .await
+    });
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut invite)
+            .await
+            .is_err(),
+        "invite write should wait while a global operation lock is held"
+    );
+
+    drop(guard);
+    let token = tokio::time::timeout(Duration::from_secs(1), invite)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(token.role, "editor");
 }
 
 #[tokio::test]
