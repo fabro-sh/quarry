@@ -217,17 +217,7 @@ pub fn reconcile(
 ) -> Result<ReconcileOutcome, Unsupported> {
     let incoming = parse_top_blocks(incoming_markdown)?;
     let mut canonical = group_top_blocks(canonical_rows)?;
-
-    // Trailing empty paragraphs are invisible to Markdown (module docs).
-    let mut trailing_empty: Vec<String> = Vec::new();
-    while canonical
-        .last()
-        .is_some_and(|top| is_empty_paragraph_block(&top.shape))
-    {
-        let top = canonical.pop().expect("checked non-empty");
-        trailing_empty.push(top.rows[0].block_id.clone());
-    }
-    trailing_empty.reverse();
+    let trailing_empty = trim_trailing_empty_paragraphs(&mut canonical);
 
     let base: Vec<TopBlock> = match base {
         ReconcileBase::Markdown(markdown) => parse_top_blocks(markdown)?,
@@ -239,6 +229,81 @@ pub fn reconcile(
     let anchors = stable_anchors(&base_to_incoming, &base_to_canonical);
     let segments = build_segments(base.len(), incoming.len(), canonical.len(), &anchors);
 
+    let ClassifiedSegments {
+        plans,
+        conflicts,
+        canonical_id_by_base,
+    } = classify_segments(segments, &base, &incoming, &canonical, &base_to_incoming)?;
+
+    let consumed = consume_positionally_equal_pairs(&plans, &base, &incoming);
+
+    let MovePairs {
+        moved_by_insert,
+        moved_bases,
+        degraded: move_pairing_degraded,
+    } = pair_unique_moves(&plans, &base, &incoming, &consumed);
+
+    let ContentOps {
+        replace_ops,
+        delete_ops,
+        replaced_by_insert,
+    } = build_content_ops(
+        &plans,
+        &base,
+        &incoming,
+        &canonical_id_by_base,
+        &consumed,
+        &moved_by_insert,
+        &moved_bases,
+    );
+
+    let placement_ops = build_placement_ops(
+        &plans,
+        &incoming,
+        &canonical_id_by_base,
+        &moved_by_insert,
+        &replaced_by_insert,
+        &mut mint_block_id,
+    );
+
+    let mut ops = replace_ops;
+    ops.extend(delete_ops);
+    ops.extend(placement_ops);
+    prepend_trailing_empty_deletes(&mut ops, trailing_empty);
+    Ok(ReconcileOutcome {
+        ops,
+        conflicts,
+        degraded: incoming_degraded || canonical_degraded || move_pairing_degraded,
+    })
+}
+
+fn trim_trailing_empty_paragraphs(canonical: &mut Vec<TopBlock>) -> Vec<String> {
+    // Trailing empty paragraphs are invisible to Markdown (module docs).
+    let mut trailing_empty: Vec<String> = Vec::new();
+    while canonical
+        .last()
+        .is_some_and(|top| is_empty_paragraph_block(&top.shape))
+    {
+        let top = canonical.pop().expect("checked non-empty");
+        trailing_empty.push(top.rows[0].block_id.clone());
+    }
+    trailing_empty.reverse();
+    trailing_empty
+}
+
+struct ClassifiedSegments {
+    plans: Vec<SegmentPlan>,
+    conflicts: Vec<ReconcileConflict>,
+    canonical_id_by_base: HashMap<usize, String>,
+}
+
+fn classify_segments(
+    segments: Vec<Segment>,
+    base: &[TopBlock],
+    incoming: &[TopBlock],
+    canonical: &[TopBlock],
+    base_to_incoming: &[(usize, usize)],
+) -> Result<ClassifiedSegments, Unsupported> {
     // Pass 1: classify every segment; collect conflict artifacts and, for
     // incoming-only regions, the positional base → canonical ID mapping.
     let mut plans = Vec::new();
@@ -268,7 +333,7 @@ pub fn reconcile(
                     }
                     plans.push(SegmentPlan::ApplyIncoming(incoming_region(
                         &region,
-                        &base_to_incoming,
+                        base_to_incoming,
                     )));
                 } else {
                     conflicts.push(ReconcileConflict {
@@ -289,54 +354,92 @@ pub fn reconcile(
             }
         }
     }
+    Ok(ClassifiedSegments {
+        plans,
+        conflicts,
+        canonical_id_by_base,
+    })
+}
 
+struct ConsumedPairs {
+    deletes: HashSet<usize>,
+    inserts: HashSet<usize>,
+}
+
+fn consume_positionally_equal_pairs(
+    plans: &[SegmentPlan],
+    base: &[TopBlock],
+    incoming: &[TopBlock],
+) -> ConsumedPairs {
     // Pass 2a: consume positionally aligned exactly-equal pairs within each
     // gap as unchanged (id preserved, no op). A strict no-guess refinement of
     // the spike rules — positional identity at its purest — and what keeps
     // the bounded degraded mode (whose unmatched middle is an artifact of
     // skipping the DP) from re-describing identical blocks as moves.
-    let mut consumed_deletes: HashSet<usize> = HashSet::new();
-    let mut consumed_inserts: HashSet<usize> = HashSet::new();
-    for plan in &plans {
+    let mut deletes: HashSet<usize> = HashSet::new();
+    let mut inserts: HashSet<usize> = HashSet::new();
+    for plan in plans {
         if let SegmentPlan::ApplyIncoming(region_plan) = plan {
             for gap in &region_plan.gaps {
                 for (b, i) in gap.deletes.iter().zip(&gap.inserts) {
                     if base[*b].shape == incoming[*i].shape {
-                        consumed_deletes.insert(*b);
-                        consumed_inserts.insert(*i);
+                        deletes.insert(*b);
+                        inserts.insert(*i);
                     }
                 }
             }
         }
     }
+    ConsumedPairs { deletes, inserts }
+}
 
+struct MovePairs {
+    moved_by_insert: HashMap<usize, usize>,
+    moved_bases: HashSet<usize>,
+    degraded: bool,
+}
+
+fn pair_unique_moves(
+    plans: &[SegmentPlan],
+    base: &[TopBlock],
+    incoming: &[TopBlock],
+    consumed: &ConsumedPairs,
+) -> MovePairs {
     // Pass 2b: global move pairing over the unmatched candidates — exact
     // equality, and only when the content is unique on both sides.
     let mut delete_candidates: Vec<usize> = Vec::new();
     let mut insert_candidates: Vec<usize> = Vec::new();
-    for plan in &plans {
+    for plan in plans {
         if let SegmentPlan::ApplyIncoming(region_plan) = plan {
             for gap in &region_plan.gaps {
-                delete_candidates
-                    .extend(gap.deletes.iter().filter(|b| !consumed_deletes.contains(b)));
-                insert_candidates
-                    .extend(gap.inserts.iter().filter(|i| !consumed_inserts.contains(i)));
+                delete_candidates.extend(
+                    gap.deletes
+                        .iter()
+                        .copied()
+                        .filter(|b| !consumed.deletes.contains(b)),
+                );
+                insert_candidates.extend(
+                    gap.inserts
+                        .iter()
+                        .copied()
+                        .filter(|i| !consumed.inserts.contains(i)),
+                );
             }
         }
     }
     // Move pairing scans every (delete, insert) combination; over the same
     // cell limit as the LCS it is skipped entirely (degraded mode loses move
     // detection — module docs).
-    let mut moved_by_insert: HashMap<usize, usize> = HashMap::new();
-    let move_pairing_degraded = delete_candidates
+    let degraded = delete_candidates
         .len()
         .saturating_mul(insert_candidates.len())
         > LCS_CELL_LIMIT;
-    let move_candidates = if move_pairing_degraded {
+    let move_candidates = if degraded {
         &[][..]
     } else {
         &insert_candidates[..]
     };
+    let mut moved_by_insert: HashMap<usize, usize> = HashMap::new();
     for &insert_idx in move_candidates {
         let shape = &incoming[insert_idx].shape;
         let equal_deletes: Vec<usize> = delete_candidates
@@ -353,15 +456,36 @@ pub fn reconcile(
         }
     }
     let moved_bases: HashSet<usize> = moved_by_insert.values().copied().collect();
+    MovePairs {
+        moved_by_insert,
+        moved_bases,
+        degraded,
+    }
+}
 
+struct ContentOps {
+    replace_ops: Vec<ReconcileOp>,
+    delete_ops: Vec<ReconcileOp>,
+    replaced_by_insert: HashSet<usize>,
+}
+
+fn build_content_ops(
+    plans: &[SegmentPlan],
+    base: &[TopBlock],
+    incoming: &[TopBlock],
+    canonical_id_by_base: &HashMap<usize, String>,
+    consumed: &ConsumedPairs,
+    moved_by_insert: &HashMap<usize, usize>,
+    moved_bases: &HashSet<usize>,
+) -> ContentOps {
     // Pass 3: per-gap positional replace pairing on whatever move pairing left
     // behind; leftovers become deletes and fresh inserts. Plans, gaps within a
     // plan, and pairs within a gap are all walked in ascending base order, so
     // both op vectors come out sorted by base index with no explicit sort.
     let mut replace_ops: Vec<ReconcileOp> = Vec::new();
     let mut delete_ops: Vec<ReconcileOp> = Vec::new();
-    let mut replaced_by_insert: HashSet<usize> = consumed_inserts.clone();
-    for plan in &plans {
+    let mut replaced_by_insert: HashSet<usize> = consumed.inserts.clone();
+    for plan in plans {
         let SegmentPlan::ApplyIncoming(region_plan) = plan else {
             continue;
         };
@@ -370,13 +494,13 @@ pub fn reconcile(
                 .deletes
                 .iter()
                 .copied()
-                .filter(|b| !moved_bases.contains(b) && !consumed_deletes.contains(b))
+                .filter(|b| !moved_bases.contains(b) && !consumed.deletes.contains(b))
                 .collect();
             let inserts: Vec<usize> = gap
                 .inserts
                 .iter()
                 .copied()
-                .filter(|i| !moved_by_insert.contains_key(i) && !consumed_inserts.contains(i))
+                .filter(|i| !moved_by_insert.contains_key(i) && !consumed.inserts.contains(i))
                 .collect();
             for k in 0..deletes.len().max(inserts.len()) {
                 match (deletes.get(k), inserts.get(k)) {
@@ -402,12 +526,26 @@ pub fn reconcile(
             }
         }
     }
+    ContentOps {
+        replace_ops,
+        delete_ops,
+        replaced_by_insert,
+    }
+}
 
+fn build_placement_ops(
+    plans: &[SegmentPlan],
+    incoming: &[TopBlock],
+    canonical_id_by_base: &HashMap<usize, String>,
+    moved_by_insert: &HashMap<usize, usize>,
+    replaced_by_insert: &HashSet<usize>,
+    mint_block_id: &mut impl FnMut() -> String,
+) -> Vec<ReconcileOp> {
     // Pass 4: walk the merged sequence to assign final positions to moves and
     // fresh inserts (fresh IDs are minted in document order).
     let mut merged_len = 0usize;
     let mut placement_ops: Vec<ReconcileOp> = Vec::new();
-    for plan in &plans {
+    for plan in plans {
         match plan {
             SegmentPlan::Stable => merged_len += 1,
             SegmentPlan::KeepCanonical { canonical } => merged_len += canonical.len(),
@@ -424,7 +562,7 @@ pub fn reconcile(
                     } else {
                         placement_ops.push(ReconcileOp::InsertBlock {
                             position: merged_len,
-                            rows: reminted_subtree(&incoming[i], &mut mint_block_id),
+                            rows: reminted_subtree(&incoming[i], mint_block_id),
                         });
                         merged_len += 1;
                     }
@@ -432,10 +570,10 @@ pub fn reconcile(
             }
         }
     }
+    placement_ops
+}
 
-    let mut ops = replace_ops;
-    ops.extend(delete_ops);
-    ops.extend(placement_ops);
+fn prepend_trailing_empty_deletes(ops: &mut Vec<ReconcileOp>, trailing_empty: Vec<String>) {
     // The merged content replaces the trailing empty-paragraph placeholders
     // whenever anything changed at all (module docs).
     if !ops.is_empty() {
@@ -443,14 +581,9 @@ pub fn reconcile(
             .into_iter()
             .map(|block_id| ReconcileOp::DeleteBlock { block_id })
             .collect();
-        with_trailing.extend(ops);
-        ops = with_trailing;
+        with_trailing.append(ops);
+        *ops = with_trailing;
     }
-    Ok(ReconcileOutcome {
-        ops,
-        conflicts,
-        degraded: incoming_degraded || canonical_degraded || move_pairing_degraded,
-    })
 }
 
 // ---------------------------------------------------------------------------
