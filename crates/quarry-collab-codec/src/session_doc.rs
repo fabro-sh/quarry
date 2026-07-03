@@ -671,12 +671,25 @@ struct InlineExtraction {
 
 #[derive(Default)]
 struct AnchorAccumulator {
-    /// id → (kind, range over the flat text, by, at_ms)
-    ranges: BTreeMap<String, (SessionAnchorKind, u32, u32, Option<String>, i64)>,
-    /// suggestion id → (replacement text, first insert position, by, at_ms)
-    inserts: BTreeMap<String, (String, u32, Option<String>, i64)>,
+    ranges: BTreeMap<String, AnchorRange>,
+    inserts: BTreeMap<String, InsertedSuggestion>,
     /// Unknown mark keys dropped from this block's leaves.
     dropped: BTreeSet<String>,
+}
+
+struct AnchorRange {
+    kind: SessionAnchorKind,
+    start: u32,
+    end: u32,
+    by: Option<String>,
+    at_ms: i64,
+}
+
+struct InsertedSuggestion {
+    replacement: String,
+    position: u32,
+    by: Option<String>,
+    at_ms: i64,
 }
 
 struct ClassifiedMarks {
@@ -806,8 +819,13 @@ fn append_leaf(
             let entry = accumulator
                 .inserts
                 .entry(id)
-                .or_insert_with(|| (String::new(), position, by.clone(), at_ms));
-            entry.0.push_str(chunk);
+                .or_insert_with(|| InsertedSuggestion {
+                    replacement: String::new(),
+                    position,
+                    by: by.clone(),
+                    at_ms,
+                });
+            entry.replacement.push_str(chunk);
         }
         return;
     }
@@ -866,48 +884,54 @@ fn extend_range(
     accumulator
         .ranges
         .entry(id)
-        .and_modify(|(_, range_start, range_end, _, _)| {
-            *range_start = (*range_start).min(start);
-            *range_end = (*range_end).max(end);
+        .and_modify(|range| {
+            range.start = range.start.min(start);
+            range.end = range.end.max(end);
         })
-        .or_insert((kind, start, end, by, at_ms));
+        .or_insert(AnchorRange {
+            kind,
+            start,
+            end,
+            by,
+            at_ms,
+        });
 }
 
 impl AnchorAccumulator {
     fn into_anchors(mut self, block_id: &str) -> Vec<SessionAnchor> {
         let mut anchors = Vec::new();
-        for (id, (kind, start, end, by, at_ms)) in std::mem::take(&mut self.ranges) {
-            let replacement = match kind {
+        for (id, range) in std::mem::take(&mut self.ranges) {
+            let replacement = match range.kind {
                 SessionAnchorKind::Comment => None,
                 SessionAnchorKind::Suggestion => Some(
                     self.inserts
                         .remove(&id)
-                        .map(|(replacement, _, _, _)| replacement)
+                        .map(|insert| insert.replacement)
                         .unwrap_or_default(),
                 ),
             };
             anchors.push(SessionAnchor {
                 id,
-                kind,
+                kind: range.kind,
                 block_id: block_id.to_string(),
-                start,
-                end,
+                start: range.start,
+                end: range.end,
                 replacement,
-                by,
-                at_ms,
+                by: range.by,
+                at_ms: range.at_ms,
             });
         }
         // Insert-only suggestions: a collapsed anchor at the insert position.
-        for (id, (replacement, position, by, at_ms)) in self.inserts {
+        for (id, insert) in self.inserts {
             anchors.push(SessionAnchor {
                 id,
                 kind: SessionAnchorKind::Suggestion,
                 block_id: block_id.to_string(),
-                start: position,
-                end: position,
-                replacement: Some(replacement),
-                by,
-                at_ms,
+                start: insert.position,
+                end: insert.position,
+                replacement: Some(insert.replacement),
+                by: insert.by,
+                at_ms: insert.at_ms,
             });
         }
         anchors
@@ -1003,14 +1027,13 @@ fn reconcile_children_inner(
 
     // In-place updates first (no index shifts), then structural edits.
     let mut current = current_children(txn, parent)?;
-    let current_id_at =
-        |entries: &[(Option<String>, Node, XmlTextRef)], index: usize| entries[index].0.clone();
+    let current_id_at = |entries: &[CurrentChild], index: usize| entries[index].id.clone();
 
     // Remove current elements whose id the desired tree dropped (and which
     // the pre-state rows knew about — everything else is foreign and stays).
     let mut removals: Vec<u32> = Vec::new();
-    for (index, (id, _, _)) in current.iter().enumerate() {
-        if let Some(id) = id {
+    for (index, child) in current.iter().enumerate() {
+        if let Some(id) = &child.id {
             if known_ids.contains(id) && !desired_id_set.contains(id.as_str()) {
                 removals.push(index as u32);
             }
@@ -1048,8 +1071,8 @@ fn reconcile_children_inner(
             }
             reconcile_element(
                 txn,
-                &current[cursor].1,
-                &current[cursor].2,
+                &current[cursor].node,
+                &current[cursor].text_ref,
                 pre_by_id.get(desired_id).copied(),
                 desired_node,
             )?;
@@ -1062,7 +1085,7 @@ fn reconcile_children_inner(
         // review anchors.
         if let Some(old_index) = current
             .iter()
-            .position(|(id, _, _)| id.as_deref() == Some(desired_id))
+            .position(|child| child.id.as_deref() == Some(desired_id))
         {
             parent.remove_range(txn, old_index as u32, 1);
             current.remove(old_index);
@@ -1365,11 +1388,16 @@ fn node_id(node: &Node) -> Option<String> {
     }
 }
 
-#[allow(clippy::type_complexity)]
+struct CurrentChild {
+    id: Option<String>,
+    node: Node,
+    text_ref: XmlTextRef,
+}
+
 fn current_children<T: ReadTxn>(
     txn: &T,
     parent: &XmlTextRef,
-) -> Result<Vec<(Option<String>, Node, XmlTextRef)>, Unsupported> {
+) -> Result<Vec<CurrentChild>, Unsupported> {
     use yrs::types::text::YChange;
     let fragment = xmltext_to_slate(txn, parent)?;
     let Node::Element { children, .. } = fragment else {
@@ -1394,6 +1422,10 @@ fn current_children<T: ReadTxn>(
     Ok(children
         .into_iter()
         .zip(refs)
-        .map(|(node, text_ref)| (node_id(&node), node, text_ref))
+        .map(|(node, text_ref)| CurrentChild {
+            id: node_id(&node),
+            node,
+            text_ref,
+        })
         .collect())
 }
