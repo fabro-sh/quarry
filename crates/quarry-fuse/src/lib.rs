@@ -459,7 +459,7 @@ impl FuseProjection {
             .is_ok()
         {
             if self.directory_exists(&to_path).await? {
-                return Err(QuarryError::Conflict(format!("{to_path} is a directory")));
+                return Err(QuarryError::IsADirectory(to_path));
             }
             let target_exists = self
                 .store
@@ -562,7 +562,7 @@ impl FuseProjection {
         self.ensure_writable()?;
         let path = normalize_mount_path(path)?;
         if self.directory_exists(&path).await? {
-            return Err(QuarryError::Conflict(format!("{path} is a directory")));
+            return Err(QuarryError::IsADirectory(path));
         }
         self.store
             .delete_document(&self.library, &path, DocumentSource::Fuse)
@@ -582,7 +582,7 @@ impl FuseProjection {
             return Err(QuarryError::NotFound(path));
         }
         if !self.list_dir(&path).await?.is_empty() {
-            return Err(QuarryError::Conflict(format!("{path} is not empty")));
+            return Err(QuarryError::DirectoryNotEmpty(path));
         }
         self.store.remove_directory(&self.library, &path).await?;
         self.explicit_dirs.write().await.remove(&path);
@@ -737,9 +737,7 @@ impl FuseProjection {
 
     fn ensure_writable(&self) -> Result<()> {
         if self.read_only {
-            return Err(QuarryError::Unsupported(
-                "FUSE mount is read-only".to_string(),
-            ));
+            return Err(QuarryError::ReadOnly("FUSE mount".to_string()));
         }
         Ok(())
     }
@@ -1472,17 +1470,11 @@ mod linux_mount {
             QuarryError::Gone(_) => Errno::from(libc::ENOENT),
             QuarryError::InvalidPath(_) => Errno::from(libc::EINVAL),
             QuarryError::PreconditionFailed(_) => Errno::from(libc::EIO),
-            QuarryError::Conflict(message) if message.contains("not empty") => {
-                Errno::from(libc::ENOTEMPTY)
-            }
-            QuarryError::Conflict(message) if message.contains("is a directory") => {
-                Errno::from(libc::EISDIR)
-            }
+            QuarryError::DirectoryNotEmpty(_) => Errno::from(libc::ENOTEMPTY),
+            QuarryError::IsADirectory(_) => Errno::from(libc::EISDIR),
             QuarryError::Conflict(_) => Errno::from(libc::EEXIST),
             QuarryError::Busy(_) => Errno::from(libc::EAGAIN),
-            QuarryError::Unsupported(message) if message.contains("read-only") => {
-                Errno::from(libc::EROFS)
-            }
+            QuarryError::ReadOnly(_) => Errno::from(libc::EROFS),
             QuarryError::UnsupportedMediaType(_) => Errno::from(libc::ENOTSUP),
             QuarryError::PayloadTooLarge(_) => Errno::from(libc::EFBIG),
             QuarryError::Unsupported(_) => Errno::from(libc::ENOTSUP),

@@ -24,6 +24,12 @@ pub enum QuarryError {
     PreconditionFailed(String),
     #[error("conflict: {0}")]
     Conflict(String),
+    #[error("directory not empty: {0}")]
+    DirectoryNotEmpty(String),
+    #[error("is a directory: {0}")]
+    IsADirectory(String),
+    #[error("read-only: {0}")]
+    ReadOnly(String),
     #[error("storage busy: {0}")]
     Busy(String),
     #[error("unsupported media type: {0}")]
