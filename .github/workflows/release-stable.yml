@@ -114,3 +114,17 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git add Formula/quarry.rb
           git diff --cached --quiet || (git commit -m "chore: update Homebrew formula to ${TAG}" && git push origin HEAD:main)
+
+  docker:
+    name: Publish Docker image
+    needs: [plan, publish]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release-docker.yml
+    with:
+      tag: ${{ needs.plan.outputs.tag }}
+      prerelease: false
+    secrets: inherit

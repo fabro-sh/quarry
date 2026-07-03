@@ -89,3 +89,18 @@ jobs:
           gh release create "$TAG" --target "$GITHUB_SHA" \
             --prerelease --generate-notes --title "$TAG" \
             dist/*
+
+  docker:
+    name: Publish Docker image
+    needs: [plan, publish]
+    if: needs.plan.outputs.skip != 'true'
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release-docker.yml
+    with:
+      tag: ${{ needs.plan.outputs.tag }}
+      prerelease: true
+    secrets: inherit

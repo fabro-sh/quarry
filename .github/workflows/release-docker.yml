@@ -1,0 +1,117 @@
+name: Release Docker Image
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to build into the Docker image.
+        required: true
+        type: string
+      prerelease:
+        description: Whether this release should avoid the latest tag.
+        required: true
+        type: boolean
+
+permissions: {}
+
+jobs:
+  docker:
+    name: Build and publish linux/amd64 image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      IMAGE_NAME: ghcr.io/fabro-sh/quarry
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image metadata
+        id: image
+        env:
+          TAG: ${{ inputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          version="${TAG#v}"
+          revision="$(git rev-parse HEAD)"
+
+          {
+            echo "tags<<EOF"
+            echo "${IMAGE_NAME}:${version}"
+            if [[ "$PRERELEASE" != "true" ]]; then
+              echo "${IMAGE_NAME}:latest"
+            fi
+            if [[ "$TAG" == *-nightly.* ]]; then
+              echo "${IMAGE_NAME}:nightly"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "labels<<EOF"
+            echo "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}"
+            echo "org.opencontainers.image.version=${version}"
+            echo "org.opencontainers.image.revision=${revision}"
+            echo "org.opencontainers.image.title=Quarry"
+            echo "org.opencontainers.image.description=Quarry server"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build amd64 image for smoke test
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: quarry-smoke:amd64
+
+      - name: Smoke-test amd64 image
+        run: |
+          cid="$(docker run --rm -d --platform linux/amd64 -p 127.0.0.1::7831 quarry-smoke:amd64)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          port="$(docker port "$cid" 7831/tcp | awk -F: '{print $2}')"
+
+          for _ in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:${port}/v1/health"; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          docker logs "$cid"
+          exit 1
+
+      - name: Build and push amd64 image
+        id: build
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.tags }}
+          labels: ${{ steps.image.outputs.labels }}
+
+      - name: Attest image provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
