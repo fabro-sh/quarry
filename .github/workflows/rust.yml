@@ -72,8 +72,9 @@ jobs:
           bun run build
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       # The library-document surface (REST library routes, Git sync, CLI
-      # puts) is feature-gated; the workspace default leaves it off.
-      - run: cargo clippy --locked -p quarry-server -p quarry-cli -p quarry --features lib-documents --all-targets -- -D warnings
+      # puts) is feature-gated; run all package features so it cannot compile
+      # to a silent zero-test path.
+      - run: cargo clippy --locked -p quarry-server -p quarry-cli -p quarry --all-features --all-targets -- -D warnings
 
   test:
     name: Test (Linux)
@@ -106,7 +107,7 @@ jobs:
       # The lib-documents suites (rest_api.rs, the CLI library commands)
       # compile to ZERO tests without the feature — the workspace run above
       # never executes them.
-      - run: cargo test --locked -p quarry-server -p quarry-cli -p quarry --features lib-documents
+      - run: cargo test --locked -p quarry-server -p quarry-cli -p quarry --all-features
 
   test-macos:
     name: Test (macOS)
@@ -133,4 +134,4 @@ jobs:
           bun install --frozen-lockfile
           bun run build
       - run: cargo test --locked --workspace
-      - run: cargo test --locked -p quarry-server -p quarry-cli -p quarry --features lib-documents
+      - run: cargo test --locked -p quarry-server -p quarry-cli -p quarry --all-features
