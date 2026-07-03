@@ -2,6 +2,7 @@ mod assets;
 mod collab;
 mod discovery;
 mod gateway;
+mod journal;
 mod log_redaction;
 mod markdown_write;
 mod session;
@@ -21,6 +22,7 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use discovery::{agent_discovery, agent_docs, quarry_skill};
 use futures_util::{Stream, stream};
+use journal::AgentEventJournal;
 use percent_encoding::percent_decode_str;
 use quarry_collab_codec::{
     ReviewMeta, ReviewMetaEntry, ReviewSuggestionKind as CodecReviewSuggestionKind, review_markers,
@@ -43,14 +45,12 @@ use quarry_storage::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::future::{Future, IntoFuture};
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use utoipa::{OpenApi, ToSchema};
 use uuid::Uuid;
@@ -64,119 +64,11 @@ pub struct AppState {
     shutdown: CancellationToken,
 }
 
-const AGENT_EVENT_JOURNAL_CAPACITY: usize = 4096;
 const REQUEST_ID_HEADER: &str = "x-quarry-request-id";
 const ALLOW_DOCUMENT_KIND_CHANGE_HEADER: &str = "x-quarry-allow-document-kind-change";
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
 const TMP_DOCUMENT_HTTP_BODY_LIMIT: usize =
     quarry_storage::TMP_DOCUMENT_MARKDOWN_MAX_BYTES + 16 * 1024;
-
-#[derive(Clone, Default)]
-struct AgentEventJournal {
-    inner: Arc<Mutex<AgentEventJournalInner>>,
-    acks: Arc<Mutex<HashMap<String, u64>>>,
-    ingest_task: Arc<StdMutex<Option<JoinHandle<()>>>>,
-}
-
-#[derive(Default)]
-struct AgentEventJournalInner {
-    next_id: u64,
-    events: VecDeque<LoggedStoreEvent>,
-}
-
-#[derive(Clone)]
-struct LoggedStoreEvent {
-    id: u64,
-    event: StoreEvent,
-}
-
-impl AgentEventJournal {
-    fn spawn_ingest(&self, store: QuarryStore, shutdown: CancellationToken) {
-        let journal = self.clone();
-        let mut receiver = store.subscribe_events();
-        let task = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = shutdown.cancelled() => return,
-                    received = receiver.recv() => {
-                        match received {
-                            Ok(event) => journal.push(event).await,
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                                tracing::warn!(
-                                    event = "sse.stream.lagged",
-                                    stream = "agent_event_journal",
-                                    skipped,
-                                    "agent event journal lagged"
-                                );
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
-                        }
-                    }
-                }
-            }
-        });
-        if let Some(previous) = self
-            .ingest_task
-            .lock()
-            .expect("agent event ingest task lock poisoned")
-            .replace(task)
-        {
-            previous.abort();
-        }
-    }
-
-    async fn join_ingest(&self) {
-        let task = self
-            .ingest_task
-            .lock()
-            .expect("agent event ingest task lock poisoned")
-            .take();
-        if let Some(task) = task {
-            match task.await {
-                Ok(()) => {}
-                Err(error) if error.is_cancelled() => {}
-                Err(error) => tracing::debug!(
-                    event = "agent_event_journal.ingest_join_failed",
-                    ?error,
-                    "agent event journal ingest task ended with an unexpected join error"
-                ),
-            }
-        }
-    }
-
-    async fn push(&self, event: StoreEvent) {
-        let mut inner = self.inner.lock().await;
-        inner.next_id = inner.next_id.saturating_add(1);
-        let id = inner.next_id;
-        inner.events.push_back(LoggedStoreEvent { id, event });
-        while inner.events.len() > AGENT_EVENT_JOURNAL_CAPACITY {
-            inner.events.pop_front();
-        }
-    }
-
-    async fn pending_since(
-        &self,
-        library_id: &str,
-        after: u64,
-        limit: usize,
-    ) -> Vec<LoggedStoreEvent> {
-        let inner = self.inner.lock().await;
-        inner
-            .events
-            .iter()
-            .filter(|event| event.id > after && event.event.library_id() == library_id)
-            .take(limit)
-            .cloned()
-            .collect()
-    }
-
-    async fn ack(&self, agent_id: String, event_id: u64) {
-        let mut acks = self.acks.lock().await;
-        let ack = acks.entry(agent_id).or_insert(0);
-        *ack = (*ack).max(event_id);
-    }
-}
 
 /// Expiry is the only way presence entries go away. Anything that signals the
 /// agent is still around refreshes the clock: a document call carrying
