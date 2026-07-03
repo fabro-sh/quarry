@@ -944,6 +944,462 @@ struct ApplyContext {
     minted: DeterministicIds,
 }
 
+impl ApplyContext {
+    #[allow(clippy::too_many_arguments)]
+    fn insert_block(
+        &mut self,
+        block_id: &Option<String>,
+        parent_block_id: &Option<String>,
+        position: u32,
+        block_type: &str,
+        attrs: &Attrs,
+        text: &str,
+        marks: &[MarkRun],
+        links: &[LinkRange],
+    ) -> Result<(), GatewayError> {
+        let block_id = match block_id {
+            Some(id) if id.trim().is_empty() => {
+                return Err(GatewayError::invalid("block_id must not be empty"));
+            }
+            Some(id) => id.clone(),
+            None => self.minted.mint(),
+        };
+        // Caller-supplied AND minted ids collide here: minted ids are
+        // deterministic per (client_tx_id, op), so a retried transaction
+        // whose first application already reached the doc fails typed
+        // instead of silently duplicating the inserted block.
+        if self.model.blocks.contains_key(&block_id) {
+            return Err(GatewayError::invalid(format!(
+                "block {block_id} already exists in this document"
+            )));
+        }
+        if let Some(parent) = parent_block_id {
+            if !self.model.blocks.contains_key(parent) {
+                return Err(GatewayError::block_deleted(parent));
+            }
+        }
+        validate_block_type(block_type)?;
+        validate_attrs(attrs)?;
+        let attrs = normalize_list_attrs(attrs)?;
+        if block_type == "raw_markdown" {
+            if !text.is_empty() || !marks.is_empty() || !links.is_empty() {
+                return Err(GatewayError::invalid(
+                    "raw_markdown blocks carry no flat text, marks, or links",
+                ));
+            }
+            validate_raw_markdown_attrs(&attrs)?;
+        }
+        validate_inline_ranges(text, marks, links)?;
+        self.model.blocks.insert(
+            block_id.clone(),
+            ModelBlock {
+                parent: parent_block_id.clone(),
+                block_type: block_type.to_string(),
+                attrs,
+                text: text.to_string(),
+                marks: marks.to_vec(),
+                links: links.to_vec(),
+            },
+        );
+        self.model
+            .attach(&block_id, parent_block_id.clone(), position);
+        self.changed.insert(block_id);
+        Ok(())
+    }
+
+    fn delete_block(&mut self, block_id: &str) -> Result<(), GatewayError> {
+        if !self.model.blocks.contains_key(block_id) {
+            return Err(GatewayError::block_deleted(block_id));
+        }
+        let removed = self.model.remove_subtree(block_id);
+        for item in &mut self.items {
+            if removed.contains(&item.block_id) && item.state == BlockReviewState::Open {
+                item.state = match item.kind {
+                    BlockReviewKind::Suggestion => BlockReviewState::Invalidated,
+                    _ => BlockReviewState::Orphaned,
+                };
+                item.updated_at = self.now.clone();
+            }
+        }
+        self.changed.extend(removed);
+        Ok(())
+    }
+
+    fn move_block(
+        &mut self,
+        block_id: &str,
+        parent_block_id: &Option<String>,
+        position: u32,
+    ) -> Result<(), GatewayError> {
+        if !self.model.blocks.contains_key(block_id) {
+            return Err(GatewayError::block_deleted(block_id));
+        }
+        if let Some(parent) = parent_block_id {
+            if !self.model.blocks.contains_key(parent) {
+                return Err(GatewayError::new(
+                    GatewayErrorCode::BlockMoveConflict,
+                    format!("move target parent {parent} does not exist"),
+                ));
+            }
+            if self.model.is_or_descends_from(block_id, parent) {
+                return Err(GatewayError::new(
+                    GatewayErrorCode::BlockMoveConflict,
+                    format!("moving {block_id} under {parent} would create a cycle"),
+                ));
+            }
+        }
+        self.model.detach(block_id);
+        self.model
+            .attach(block_id, parent_block_id.clone(), position);
+        self.changed.insert(block_id.to_string());
+        Ok(())
+    }
+
+    fn replace_block_content(
+        &mut self,
+        block_id: &str,
+        text: &str,
+        marks: &Option<Vec<MarkRun>>,
+        links: &Option<Vec<LinkRange>>,
+    ) -> Result<(), GatewayError> {
+        replace_block_text(self, block_id, text.to_string(), None)?;
+        let block = self
+            .model
+            .blocks
+            .get_mut(block_id)
+            .expect("replace_block_text verified existence");
+        if let Some(marks) = marks {
+            validate_inline_ranges(text, marks, &[])?;
+            block.marks = marks.clone();
+        }
+        if let Some(links) = links {
+            validate_inline_ranges(text, &[], links)?;
+            block.links = links.clone();
+        }
+        Ok(())
+    }
+
+    fn set_block_attrs(&mut self, block_id: &str, attrs: &Attrs) -> Result<(), GatewayError> {
+        validate_attrs(attrs)?;
+        let attrs = normalize_list_attrs(attrs)?;
+        let block = require_block_mut(&mut self.model, block_id)?;
+        if block.block_type == "raw_markdown" {
+            // Attrs replace wholesale: dropping or blanking the markdown
+            // attribute would silently erase the block's content.
+            validate_raw_markdown_attrs(&attrs)?;
+        }
+        block.attrs = attrs;
+        self.changed.insert(block_id.to_string());
+        Ok(())
+    }
+
+    fn set_block_type(
+        &mut self,
+        block_id: &str,
+        block_type: &str,
+        attrs: &Option<Attrs>,
+    ) -> Result<(), GatewayError> {
+        validate_block_type(block_type)?;
+        let attrs = attrs
+            .as_ref()
+            .map(|attrs| {
+                validate_attrs(attrs)?;
+                normalize_list_attrs(attrs)
+            })
+            .transpose()?;
+        let block = require_block_mut(&mut self.model, block_id)?;
+        if block.block_type == "raw_markdown" || block_type == "raw_markdown" {
+            return Err(GatewayError::invalid(
+                "set_block_type cannot convert to or from raw_markdown; \
+                 replace the block instead",
+            ));
+        }
+        block.block_type = block_type.to_string();
+        if let Some(attrs) = attrs {
+            block.attrs = attrs;
+        }
+        self.changed.insert(block_id.to_string());
+        Ok(())
+    }
+
+    fn add_mark(
+        &mut self,
+        block_id: &str,
+        start: u32,
+        end: u32,
+        marks: &Attrs,
+    ) -> Result<(), GatewayError> {
+        if marks.is_empty() {
+            return Err(GatewayError::invalid("add_mark requires at least one mark"));
+        }
+        validate_attrs(marks)?;
+        let block = require_inline_block_mut(self, block_id)?;
+        validate_span(&block.text, start, end)?;
+        block.marks = rewrite_marks(&block.marks, &block.text, start, end, |attrs| {
+            for (key, value) in marks {
+                attrs.insert(key.clone(), value.clone());
+            }
+        });
+        self.changed.insert(block_id.to_string());
+        Ok(())
+    }
+
+    fn remove_mark(
+        &mut self,
+        block_id: &str,
+        start: u32,
+        end: u32,
+        marks: &[String],
+    ) -> Result<(), GatewayError> {
+        if marks.is_empty() {
+            return Err(GatewayError::invalid(
+                "remove_mark requires at least one mark key",
+            ));
+        }
+        let block = require_inline_block_mut(self, block_id)?;
+        validate_span(&block.text, start, end)?;
+        block.marks = rewrite_marks(&block.marks, &block.text, start, end, |attrs| {
+            for key in marks {
+                attrs.shift_remove(key);
+            }
+        });
+        self.changed.insert(block_id.to_string());
+        Ok(())
+    }
+
+    fn set_link(
+        &mut self,
+        block_id: &str,
+        start: u32,
+        end: u32,
+        url: &Option<String>,
+    ) -> Result<(), GatewayError> {
+        let block = require_inline_block_mut(self, block_id)?;
+        validate_span(&block.text, start, end)?;
+        block
+            .links
+            .retain(|link| link.end <= start || link.start >= end);
+        if let Some(url) = url {
+            block.links.push(LinkRange {
+                start,
+                end,
+                url: url.clone(),
+            });
+            block.links.sort_by_key(|link| link.start);
+        }
+        self.changed.insert(block_id.to_string());
+        Ok(())
+    }
+
+    fn add_comment(
+        &mut self,
+        block_id: &str,
+        start: u32,
+        end: u32,
+        body: &str,
+        quote: &Option<String>,
+    ) -> Result<(), GatewayError> {
+        add_review_item(
+            self,
+            block_id,
+            start,
+            end,
+            BlockReviewKind::Comment,
+            Some(body.to_string()),
+            None,
+            quote.clone(),
+            None,
+        )?;
+        Ok(())
+    }
+
+    fn reply_to_comment(&mut self, item_id: &str, body: &str) -> Result<(), GatewayError> {
+        let target = require_reply_target(self, item_id)?;
+        let root_id = target.parent_item_id.clone().unwrap_or(target.id.clone());
+        let root = self
+            .items
+            .iter()
+            .find(|item| item.id == root_id)
+            .ok_or_else(|| anchor_not_found(&root_id))?
+            .clone();
+        require_open_reply_root(&root, &root_id)?;
+        let reply_id = self.minted.mint();
+        require_unused_item_id(self, &reply_id)?;
+        self.items.push(BlockReviewItem {
+            id: reply_id,
+            document_id: self.document_id.clone(),
+            block_id: root.block_id,
+            kind: BlockReviewKind::Comment,
+            start_offset: root.start_offset,
+            end_offset: root.end_offset,
+            body: Some(body.to_string()),
+            replacement: None,
+            author: Some(self.author.clone()),
+            state: root.state,
+            quote: root.quote,
+            context_before: None,
+            context_after: None,
+            parent_item_id: Some(root_id),
+            created_at: self.now.clone(),
+            updated_at: self.now.clone(),
+        });
+        Ok(())
+    }
+
+    fn edit_comment(&mut self, item_id: &str, body: &str) -> Result<(), GatewayError> {
+        let target = require_open_comment_for_edit(self, item_id)?;
+        let target_id = target.id.clone();
+        for item in &mut self.items {
+            if item.id == target_id {
+                item.body = Some(body.to_string());
+                item.updated_at = self.now.clone();
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_comment(&mut self, item_id: &str) -> Result<(), GatewayError> {
+        let _ = require_resolvable(self, item_id)?;
+        let now = self.now.clone();
+        for item in &mut self.items {
+            if item.id == item_id {
+                item.state = BlockReviewState::Resolved;
+                item.updated_at = now.clone();
+            }
+        }
+        Ok(())
+    }
+
+    fn delete_comment(&mut self, item_id: &str) -> Result<(), GatewayError> {
+        let _ = require_resolvable(self, item_id)?;
+        self.items
+            .retain(|item| item.id != item_id && item.parent_item_id.as_deref() != Some(item_id));
+        Ok(())
+    }
+
+    fn add_suggestion(
+        &mut self,
+        block_id: &str,
+        start: u32,
+        end: u32,
+        replacement: &str,
+        body: &Option<String>,
+        quote: &Option<String>,
+    ) -> Result<(), GatewayError> {
+        add_review_item(
+            self,
+            block_id,
+            start,
+            end,
+            BlockReviewKind::Suggestion,
+            body.clone(),
+            Some(replacement.to_string()),
+            quote.clone(),
+            None,
+        )?;
+        Ok(())
+    }
+
+    fn accept_suggestion(&mut self, item_id: &str) -> Result<(), GatewayError> {
+        let suggestion = require_suggestion(self, item_id)?;
+        match suggestion.state {
+            BlockReviewState::Open => {}
+            BlockReviewState::Resolved => {
+                return Err(GatewayError::new(
+                    GatewayErrorCode::SuggestionAlreadyResolved,
+                    format!("suggestion {item_id} is already resolved"),
+                ));
+            }
+            BlockReviewState::Invalidated | BlockReviewState::Orphaned => {
+                return Err(suggestion_invalidated(item_id));
+            }
+        }
+        let block_id = suggestion.block_id.clone();
+        let replacement = suggestion.replacement.clone().unwrap_or_default();
+        let (start, end) = (suggestion.start_offset, suggestion.end_offset);
+        let Some(block) = self.model.blocks.get(&block_id) else {
+            return Err(suggestion_invalidated(item_id));
+        };
+        let new_text = format!(
+            "{}{}{}",
+            utf16_slice(&block.text, 0, start),
+            replacement,
+            utf16_slice(&block.text, end, utf16_len(&block.text)),
+        );
+        replace_block_text(self, &block_id, new_text, Some(item_id))?;
+        let replacement_len = utf16_len(&replacement);
+        let now = self.now.clone();
+        for item in &mut self.items {
+            if item.id == item_id {
+                item.state = BlockReviewState::Resolved;
+                item.start_offset = start;
+                item.end_offset = start + replacement_len;
+                item.updated_at = now.clone();
+            }
+        }
+        self.items
+            .retain(|item| item.parent_item_id.as_deref() != Some(item_id));
+        Ok(())
+    }
+
+    fn reject_suggestion(&mut self, item_id: &str) -> Result<(), GatewayError> {
+        let suggestion = require_suggestion(self, item_id)?;
+        if suggestion.state == BlockReviewState::Resolved {
+            return Err(GatewayError::new(
+                GatewayErrorCode::SuggestionAlreadyResolved,
+                format!("suggestion {item_id} is already resolved"),
+            ));
+        }
+        let now = self.now.clone();
+        for item in &mut self.items {
+            if item.id == item_id {
+                item.state = BlockReviewState::Resolved;
+                item.updated_at = now.clone();
+            }
+        }
+        self.items
+            .retain(|item| item.parent_item_id.as_deref() != Some(item_id));
+        Ok(())
+    }
+
+    fn add_conflict(
+        &mut self,
+        after_block_id: &Option<String>,
+        base_markdown: &str,
+        incoming_markdown: &str,
+        canonical_markdown: &str,
+    ) -> Result<(), GatewayError> {
+        if let Some(after) = after_block_id {
+            if !self.model.blocks.contains_key(after) {
+                return Err(GatewayError::block_deleted(after));
+            }
+        }
+        let id = self.minted.mint();
+        require_unused_item_id(self, &id)?;
+        self.items.push(BlockReviewItem {
+            id,
+            document_id: self.document_id.clone(),
+            // `block_id` holds the attachment point; "" = document start.
+            block_id: after_block_id.clone().unwrap_or_default(),
+            kind: BlockReviewKind::Conflict,
+            start_offset: 0,
+            end_offset: 0,
+            body: Some(incoming_markdown.to_string()),
+            replacement: None,
+            author: Some(self.author.clone()),
+            state: BlockReviewState::Open,
+            quote: Some(canonical_markdown.to_string()),
+            context_before: Some(base_markdown.to_string()),
+            context_after: None,
+            parent_item_id: None,
+            created_at: self.now.clone(),
+            updated_at: self.now.clone(),
+        });
+        Ok(())
+    }
+}
+
 /// Ids the apply engine mints (inserted blocks without a caller id, review
 /// items, the re-minted empty paragraph) derive deterministically from the
 /// transaction's `client_tx_id` plus a counter: re-running the SAME
@@ -1033,308 +1489,63 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
             text,
             marks,
             links,
-        } => {
-            let block_id = match block_id {
-                Some(id) if id.trim().is_empty() => {
-                    return Err(GatewayError::invalid("block_id must not be empty"));
-                }
-                Some(id) => id.clone(),
-                None => ctx.minted.mint(),
-            };
-            // Caller-supplied AND minted ids collide here: minted ids are
-            // deterministic per (client_tx_id, op), so a retried transaction
-            // whose first application already reached the doc fails typed
-            // instead of silently duplicating the inserted block.
-            if ctx.model.blocks.contains_key(&block_id) {
-                return Err(GatewayError::invalid(format!(
-                    "block {block_id} already exists in this document"
-                )));
-            }
-            if let Some(parent) = parent_block_id {
-                if !ctx.model.blocks.contains_key(parent) {
-                    return Err(GatewayError::block_deleted(parent));
-                }
-            }
-            validate_block_type(block_type)?;
-            validate_attrs(attrs)?;
-            let attrs = normalize_list_attrs(attrs)?;
-            if block_type == "raw_markdown" {
-                if !text.is_empty() || !marks.is_empty() || !links.is_empty() {
-                    return Err(GatewayError::invalid(
-                        "raw_markdown blocks carry no flat text, marks, or links",
-                    ));
-                }
-                validate_raw_markdown_attrs(&attrs)?;
-            }
-            validate_inline_ranges(text, marks, links)?;
-            ctx.model.blocks.insert(
-                block_id.clone(),
-                ModelBlock {
-                    parent: parent_block_id.clone(),
-                    block_type: block_type.clone(),
-                    attrs,
-                    text: text.clone(),
-                    marks: marks.clone(),
-                    links: links.clone(),
-                },
-            );
-            ctx.model
-                .attach(&block_id, parent_block_id.clone(), *position);
-            ctx.changed.insert(block_id);
-            Ok(())
-        }
-        BlockOp::DeleteBlock { block_id } => {
-            if !ctx.model.blocks.contains_key(block_id) {
-                return Err(GatewayError::block_deleted(block_id));
-            }
-            let removed = ctx.model.remove_subtree(block_id);
-            for item in &mut ctx.items {
-                if removed.contains(&item.block_id) && item.state == BlockReviewState::Open {
-                    item.state = match item.kind {
-                        BlockReviewKind::Suggestion => BlockReviewState::Invalidated,
-                        _ => BlockReviewState::Orphaned,
-                    };
-                    item.updated_at = ctx.now.clone();
-                }
-            }
-            ctx.changed.extend(removed);
-            Ok(())
-        }
+        } => ctx.insert_block(
+            block_id,
+            parent_block_id,
+            *position,
+            block_type,
+            attrs,
+            text,
+            marks,
+            links,
+        ),
+        BlockOp::DeleteBlock { block_id } => ctx.delete_block(block_id),
         BlockOp::MoveBlock {
             block_id,
             parent_block_id,
             position,
-        } => {
-            if !ctx.model.blocks.contains_key(block_id) {
-                return Err(GatewayError::block_deleted(block_id));
-            }
-            if let Some(parent) = parent_block_id {
-                if !ctx.model.blocks.contains_key(parent) {
-                    return Err(GatewayError::new(
-                        GatewayErrorCode::BlockMoveConflict,
-                        format!("move target parent {parent} does not exist"),
-                    ));
-                }
-                if ctx.model.is_or_descends_from(block_id, parent) {
-                    return Err(GatewayError::new(
-                        GatewayErrorCode::BlockMoveConflict,
-                        format!("moving {block_id} under {parent} would create a cycle"),
-                    ));
-                }
-            }
-            ctx.model.detach(block_id);
-            ctx.model
-                .attach(block_id, parent_block_id.clone(), *position);
-            ctx.changed.insert(block_id.clone());
-            Ok(())
-        }
+        } => ctx.move_block(block_id, parent_block_id, *position),
         BlockOp::ReplaceBlockContent {
             block_id,
             text,
             marks,
             links,
-        } => {
-            replace_block_text(ctx, block_id, text.clone(), None)?;
-            let block = ctx
-                .model
-                .blocks
-                .get_mut(block_id)
-                .expect("replace_block_text verified existence");
-            if let Some(marks) = marks {
-                validate_inline_ranges(text, marks, &[])?;
-                block.marks = marks.clone();
-            }
-            if let Some(links) = links {
-                validate_inline_ranges(text, &[], links)?;
-                block.links = links.clone();
-            }
-            Ok(())
-        }
-        BlockOp::SetBlockAttrs { block_id, attrs } => {
-            validate_attrs(attrs)?;
-            let attrs = normalize_list_attrs(attrs)?;
-            let block = require_block_mut(&mut ctx.model, block_id)?;
-            if block.block_type == "raw_markdown" {
-                // Attrs replace wholesale: dropping or blanking the markdown
-                // attribute would silently erase the block's content.
-                validate_raw_markdown_attrs(&attrs)?;
-            }
-            block.attrs = attrs;
-            ctx.changed.insert(block_id.clone());
-            Ok(())
-        }
+        } => ctx.replace_block_content(block_id, text, marks, links),
+        BlockOp::SetBlockAttrs { block_id, attrs } => ctx.set_block_attrs(block_id, attrs),
         BlockOp::SetBlockType {
             block_id,
             block_type,
             attrs,
-        } => {
-            validate_block_type(block_type)?;
-            let attrs = attrs
-                .as_ref()
-                .map(|attrs| {
-                    validate_attrs(attrs)?;
-                    normalize_list_attrs(attrs)
-                })
-                .transpose()?;
-            let block = require_block_mut(&mut ctx.model, block_id)?;
-            if block.block_type == "raw_markdown" || block_type == "raw_markdown" {
-                return Err(GatewayError::invalid(
-                    "set_block_type cannot convert to or from raw_markdown; \
-                     replace the block instead",
-                ));
-            }
-            block.block_type = block_type.clone();
-            if let Some(attrs) = attrs {
-                block.attrs = attrs;
-            }
-            ctx.changed.insert(block_id.clone());
-            Ok(())
-        }
+        } => ctx.set_block_type(block_id, block_type, attrs),
         BlockOp::AddMark {
             block_id,
             start,
             end,
             marks,
-        } => {
-            if marks.is_empty() {
-                return Err(GatewayError::invalid("add_mark requires at least one mark"));
-            }
-            validate_attrs(marks)?;
-            let block = require_inline_block_mut(ctx, block_id)?;
-            validate_span(&block.text, *start, *end)?;
-            block.marks = rewrite_marks(&block.marks, &block.text, *start, *end, |attrs| {
-                for (key, value) in marks {
-                    attrs.insert(key.clone(), value.clone());
-                }
-            });
-            ctx.changed.insert(block_id.clone());
-            Ok(())
-        }
+        } => ctx.add_mark(block_id, *start, *end, marks),
         BlockOp::RemoveMark {
             block_id,
             start,
             end,
             marks,
-        } => {
-            if marks.is_empty() {
-                return Err(GatewayError::invalid(
-                    "remove_mark requires at least one mark key",
-                ));
-            }
-            let block = require_inline_block_mut(ctx, block_id)?;
-            validate_span(&block.text, *start, *end)?;
-            block.marks = rewrite_marks(&block.marks, &block.text, *start, *end, |attrs| {
-                for key in marks {
-                    attrs.shift_remove(key);
-                }
-            });
-            ctx.changed.insert(block_id.clone());
-            Ok(())
-        }
+        } => ctx.remove_mark(block_id, *start, *end, marks),
         BlockOp::SetLink {
             block_id,
             start,
             end,
             url,
-        } => {
-            let block = require_inline_block_mut(ctx, block_id)?;
-            validate_span(&block.text, *start, *end)?;
-            block
-                .links
-                .retain(|link| link.end <= *start || link.start >= *end);
-            if let Some(url) = url {
-                block.links.push(LinkRange {
-                    start: *start,
-                    end: *end,
-                    url: url.clone(),
-                });
-                block.links.sort_by_key(|link| link.start);
-            }
-            ctx.changed.insert(block_id.clone());
-            Ok(())
-        }
+        } => ctx.set_link(block_id, *start, *end, url),
         BlockOp::CommentAdd {
             block_id,
             start,
             end,
             body,
             quote,
-        } => {
-            add_review_item(
-                ctx,
-                block_id,
-                *start,
-                *end,
-                BlockReviewKind::Comment,
-                Some(body.clone()),
-                None,
-                quote.clone(),
-                None,
-            )?;
-            Ok(())
-        }
-        BlockOp::CommentReply { item_id, body } => {
-            let target = require_reply_target(ctx, item_id)?;
-            let root_id = target.parent_item_id.clone().unwrap_or(target.id.clone());
-            let root = ctx
-                .items
-                .iter()
-                .find(|item| item.id == root_id)
-                .ok_or_else(|| anchor_not_found(&root_id))?
-                .clone();
-            require_open_reply_root(&root, &root_id)?;
-            let reply_id = ctx.minted.mint();
-            require_unused_item_id(ctx, &reply_id)?;
-            ctx.items.push(BlockReviewItem {
-                id: reply_id,
-                document_id: ctx.document_id.clone(),
-                block_id: root.block_id,
-                kind: BlockReviewKind::Comment,
-                start_offset: root.start_offset,
-                end_offset: root.end_offset,
-                body: Some(body.clone()),
-                replacement: None,
-                author: Some(ctx.author.clone()),
-                state: root.state,
-                quote: root.quote,
-                context_before: None,
-                context_after: None,
-                parent_item_id: Some(root_id),
-                created_at: ctx.now.clone(),
-                updated_at: ctx.now.clone(),
-            });
-            Ok(())
-        }
-        BlockOp::CommentEdit { item_id, body } => {
-            let target = require_open_comment_for_edit(ctx, item_id)?;
-            let target_id = target.id.clone();
-            for item in &mut ctx.items {
-                if item.id == target_id {
-                    item.body = Some(body.clone());
-                    item.updated_at = ctx.now.clone();
-                    break;
-                }
-            }
-            Ok(())
-        }
-        BlockOp::CommentResolve { item_id } => {
-            let _ = require_resolvable(ctx, item_id)?;
-            let now = ctx.now.clone();
-            for item in &mut ctx.items {
-                if item.id == *item_id {
-                    item.state = BlockReviewState::Resolved;
-                    item.updated_at = now.clone();
-                }
-            }
-            Ok(())
-        }
-        BlockOp::CommentDelete { item_id } => {
-            let _ = require_resolvable(ctx, item_id)?;
-            ctx.items.retain(|item| {
-                item.id != *item_id && item.parent_item_id.as_deref() != Some(item_id)
-            });
-            Ok(())
-        }
+        } => ctx.add_comment(block_id, *start, *end, body, quote),
+        BlockOp::CommentReply { item_id, body } => ctx.reply_to_comment(item_id, body),
+        BlockOp::CommentEdit { item_id, body } => ctx.edit_comment(item_id, body),
+        BlockOp::CommentResolve { item_id } => ctx.resolve_comment(item_id),
+        BlockOp::CommentDelete { item_id } => ctx.delete_comment(item_id),
         BlockOp::SuggestionAdd {
             block_id,
             start,
@@ -1342,114 +1553,20 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
             replacement,
             body,
             quote,
-        } => {
-            add_review_item(
-                ctx,
-                block_id,
-                *start,
-                *end,
-                BlockReviewKind::Suggestion,
-                body.clone(),
-                Some(replacement.clone()),
-                quote.clone(),
-                None,
-            )?;
-            Ok(())
-        }
-        BlockOp::SuggestionAccept { item_id } => {
-            let suggestion = require_suggestion(ctx, item_id)?;
-            match suggestion.state {
-                BlockReviewState::Open => {}
-                BlockReviewState::Resolved => {
-                    return Err(GatewayError::new(
-                        GatewayErrorCode::SuggestionAlreadyResolved,
-                        format!("suggestion {item_id} is already resolved"),
-                    ));
-                }
-                BlockReviewState::Invalidated | BlockReviewState::Orphaned => {
-                    return Err(suggestion_invalidated(item_id));
-                }
-            }
-            let block_id = suggestion.block_id.clone();
-            let replacement = suggestion.replacement.clone().unwrap_or_default();
-            let (start, end) = (suggestion.start_offset, suggestion.end_offset);
-            let Some(block) = ctx.model.blocks.get(&block_id) else {
-                return Err(suggestion_invalidated(item_id));
-            };
-            let new_text = format!(
-                "{}{}{}",
-                utf16_slice(&block.text, 0, start),
-                replacement,
-                utf16_slice(&block.text, end, utf16_len(&block.text)),
-            );
-            replace_block_text(ctx, &block_id, new_text, Some(item_id))?;
-            let replacement_len = utf16_len(&replacement);
-            let now = ctx.now.clone();
-            for item in &mut ctx.items {
-                if item.id == *item_id {
-                    item.state = BlockReviewState::Resolved;
-                    item.start_offset = start;
-                    item.end_offset = start + replacement_len;
-                    item.updated_at = now.clone();
-                }
-            }
-            ctx.items
-                .retain(|item| item.parent_item_id.as_deref() != Some(item_id));
-            Ok(())
-        }
-        BlockOp::SuggestionReject { item_id } => {
-            let suggestion = require_suggestion(ctx, item_id)?;
-            if suggestion.state == BlockReviewState::Resolved {
-                return Err(GatewayError::new(
-                    GatewayErrorCode::SuggestionAlreadyResolved,
-                    format!("suggestion {item_id} is already resolved"),
-                ));
-            }
-            let now = ctx.now.clone();
-            for item in &mut ctx.items {
-                if item.id == *item_id {
-                    item.state = BlockReviewState::Resolved;
-                    item.updated_at = now.clone();
-                }
-            }
-            ctx.items
-                .retain(|item| item.parent_item_id.as_deref() != Some(item_id));
-            Ok(())
-        }
+        } => ctx.add_suggestion(block_id, *start, *end, replacement, body, quote),
+        BlockOp::SuggestionAccept { item_id } => ctx.accept_suggestion(item_id),
+        BlockOp::SuggestionReject { item_id } => ctx.reject_suggestion(item_id),
         BlockOp::ConflictAdd {
             after_block_id,
             base_markdown,
             incoming_markdown,
             canonical_markdown,
-        } => {
-            if let Some(after) = after_block_id {
-                if !ctx.model.blocks.contains_key(after) {
-                    return Err(GatewayError::block_deleted(after));
-                }
-            }
-            let id = ctx.minted.mint();
-            require_unused_item_id(ctx, &id)?;
-            ctx.items.push(BlockReviewItem {
-                id,
-                document_id: ctx.document_id.clone(),
-                // `block_id` holds the attachment point; "" = document start.
-                block_id: after_block_id.clone().unwrap_or_default(),
-                kind: BlockReviewKind::Conflict,
-                start_offset: 0,
-                end_offset: 0,
-                body: Some(incoming_markdown.clone()),
-                replacement: None,
-                author: Some(ctx.author.clone()),
-                state: BlockReviewState::Open,
-                quote: Some(canonical_markdown.clone()),
-                context_before: Some(base_markdown.clone()),
-                context_after: None,
-                parent_item_id: None,
-                created_at: ctx.now.clone(),
-                updated_at: ctx.now.clone(),
-            });
-            Ok(())
-        }
+        } => ctx.add_conflict(
+            after_block_id,
+            base_markdown,
+            incoming_markdown,
+            canonical_markdown,
+        ),
     }
 }
 
