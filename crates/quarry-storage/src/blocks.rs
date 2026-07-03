@@ -548,101 +548,108 @@ impl QuarryStore {
         if matches!(scope, DocumentScopeRef::Tmp) {
             validate_tmp_markdown_text(&normalized)?;
         }
+        let scope = scope.clone();
 
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let resolved_scope = self.resolve_document_scope_conn(&conn, scope).await?;
-            match &resolved_scope {
-                ResolvedDocumentScope::Library { id } => {
-                    self.check_precondition_conn(&conn, id, &path, &precondition)
-                        .await?;
-                }
-                ResolvedDocumentScope::Tmp => {
-                    self.check_tmp_precondition_conn(&conn, &path, &precondition)
-                        .await?;
-                }
-            }
-            let provenance = transaction
-                .provenance
-                .unwrap_or_else(|| match &resolved_scope {
-                    ResolvedDocumentScope::Library { .. } => {
-                        serde_json::json!({ "mode": "block_import" })
+        let outcome = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    let resolved_scope = store.resolve_document_scope_conn(conn, &scope).await?;
+                    match &resolved_scope {
+                        ResolvedDocumentScope::Library { id } => {
+                            store
+                                .check_precondition_conn(conn, id, &path, &precondition)
+                                .await?;
+                        }
+                        ResolvedDocumentScope::Tmp => {
+                            store
+                                .check_tmp_precondition_conn(conn, &path, &precondition)
+                                .await?;
+                        }
                     }
-                    ResolvedDocumentScope::Tmp => serde_json::json!({ "mode": "tmp_block_import" }),
-                });
-            let tx = insert_transaction_conn(
-                &conn,
-                resolved_scope.transaction_library_id(),
-                source,
-                transaction.actor,
-                transaction.message,
-                provenance,
-            )
-            .await?;
-            let (doc_id, old_version_id) = match &resolved_scope {
-                ResolvedDocumentScope::Library { id } => {
-                    ensure_document_conn(&conn, id, &path, &now_timestamp()).await?
-                }
-                ResolvedDocumentScope::Tmp => {
-                    // Keep the existing expiry (or the default for a fresh
-                    // document); an import never extends a tmp TTL.
-                    let expires_at = self
-                        .tmp_document_expires_at_conn(&conn, &path)
-                        .await?
-                        .unwrap_or_else(default_tmp_expires_at);
-                    ensure_tmp_document_conn(&conn, &path, &expires_at, &now_timestamp()).await?
-                }
-            };
-            // insert_version_conn re-parses the frontmatter rendered into
-            // `normalized` and re-merges the caller metadata over it; both
-            // were derived from `merged_metadata`, so the stored metadata
-            // round-trips to exactly `merged_metadata` (modulo content_type,
-            // which the renderer excludes).
-            let version = self
-                .insert_version_conn(
-                    &conn,
-                    &doc_id,
-                    &tx.id,
-                    normalized.into_bytes(),
-                    metadata,
-                    &content_type,
-                )
-                .await?;
-            insert_change_conn(
-                &conn,
-                &tx.id,
-                &path,
-                ChangeType::Put,
-                old_version_id.as_deref(),
-                Some(&version.id),
-                None,
-            )
-            .await?;
-            publish_put_conn(&conn, &doc_id, &version.id).await?;
-            replace_block_rows_conn(&conn, &doc_id, &rows).await?;
-            if let ResolvedDocumentScope::Library { id } = &resolved_scope {
-                ensure_path_inodes_conn(&conn, id, &path).await?;
-                self.reindex_links_conn(&conn, id).await?;
-            }
-            commit_transaction_record_conn(&conn, &tx.id).await?;
-            let document = match &resolved_scope {
-                ResolvedDocumentScope::Library { id } => {
-                    self.document_entry_conn(&conn, id, &path).await?
-                }
-                ResolvedDocumentScope::Tmp => self.tmp_document_entry_conn(&conn, &path).await?,
-            };
-            let tx = self.transaction_conn(&conn, &tx.id).await?;
-            Ok(WriteOutcome {
-                document,
-                version,
-                transaction: tx,
+                    let provenance =
+                        transaction
+                            .provenance
+                            .unwrap_or_else(|| match &resolved_scope {
+                                ResolvedDocumentScope::Library { .. } => {
+                                    serde_json::json!({ "mode": "block_import" })
+                                }
+                                ResolvedDocumentScope::Tmp => {
+                                    serde_json::json!({ "mode": "tmp_block_import" })
+                                }
+                            });
+                    let tx = insert_transaction_conn(
+                        conn,
+                        resolved_scope.transaction_library_id(),
+                        source,
+                        transaction.actor,
+                        transaction.message,
+                        provenance,
+                    )
+                    .await?;
+                    let (doc_id, old_version_id) = match &resolved_scope {
+                        ResolvedDocumentScope::Library { id } => {
+                            ensure_document_conn(conn, id, &path, &now_timestamp()).await?
+                        }
+                        ResolvedDocumentScope::Tmp => {
+                            // Keep the existing expiry (or the default for a fresh
+                            // document); an import never extends a tmp TTL.
+                            let expires_at = store
+                                .tmp_document_expires_at_conn(conn, &path)
+                                .await?
+                                .unwrap_or_else(default_tmp_expires_at);
+                            ensure_tmp_document_conn(conn, &path, &expires_at, &now_timestamp())
+                                .await?
+                        }
+                    };
+                    // insert_version_conn re-parses the frontmatter rendered into
+                    // `normalized` and re-merges the caller metadata over it; both
+                    // were derived from `merged_metadata`, so the stored metadata
+                    // round-trips to exactly `merged_metadata` (modulo content_type,
+                    // which the renderer excludes).
+                    let version = store
+                        .insert_version_conn(
+                            conn,
+                            &doc_id,
+                            &tx.id,
+                            normalized.into_bytes(),
+                            metadata,
+                            &content_type,
+                        )
+                        .await?;
+                    insert_change_conn(
+                        conn,
+                        &tx.id,
+                        &path,
+                        ChangeType::Put,
+                        old_version_id.as_deref(),
+                        Some(&version.id),
+                        None,
+                    )
+                    .await?;
+                    publish_put_conn(conn, &doc_id, &version.id).await?;
+                    replace_block_rows_conn(conn, &doc_id, &rows).await?;
+                    if let ResolvedDocumentScope::Library { id } = &resolved_scope {
+                        ensure_path_inodes_conn(conn, id, &path).await?;
+                        store.reindex_links_conn(conn, id).await?;
+                    }
+                    commit_transaction_record_conn(conn, &tx.id).await?;
+                    let document = match &resolved_scope {
+                        ResolvedDocumentScope::Library { id } => {
+                            store.document_entry_conn(conn, id, &path).await?
+                        }
+                        ResolvedDocumentScope::Tmp => {
+                            store.tmp_document_entry_conn(conn, &path).await?
+                        }
+                    };
+                    let tx = store.transaction_conn(conn, &tx.id).await?;
+                    Ok(WriteOutcome {
+                        document,
+                        version,
+                        transaction: tx,
+                    })
+                })
             })
-        }
-        .await;
-        let outcome = finish_tx(&conn, result).await?;
+            .await?;
         self.emit_document_put_events(&outcome, origin_id);
         Ok(outcome)
     }
@@ -1089,99 +1096,106 @@ impl QuarryStore {
             commit.content_type = content_type;
         }
         validate_review_items_against_rows(&commit.rows, &commit.review_items)?;
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let resolved_scope = self.resolve_document_scope_conn(&conn, scope).await?;
-            if let Some(replayed) =
-                block_transaction_conn(&conn, &commit.document_id, &commit.client_tx_id).await?
-            {
-                return Ok(BlockMutationOutcome::Replayed(replayed));
-            }
-            let head =
-                document_head_for_scope_conn(&conn, &resolved_scope, &commit.document_id).await?;
-            if head.head_version_id != commit.expected_head_version_id {
-                return Err(QuarryError::PreconditionFailed(format!(
-                    "document {} head moved from {} to {}",
-                    commit.document_id, commit.expected_head_version_id, head.head_version_id
-                )));
-            }
-            let provenance = commit.transaction_provenance.clone().unwrap_or_else(|| {
-                serde_json::json!({
-                    "mode": "block_transaction",
-                    "client_tx_id": commit.client_tx_id,
-                })
-            });
-            let tx = insert_transaction_conn(
-                &conn,
-                resolved_scope.transaction_library_id(),
-                commit.source,
-                commit.transaction_actor.clone(),
-                commit.transaction_message.clone(),
-                provenance,
-            )
-            .await?;
-            let version = self
-                .insert_version_conn(
-                    &conn,
-                    &commit.document_id,
-                    &tx.id,
-                    commit.normalized_markdown.clone().into_bytes(),
-                    commit.metadata.clone(),
-                    &commit.content_type,
-                )
-                .await?;
-            insert_change_conn(
-                &conn,
-                &tx.id,
-                &head.path,
-                ChangeType::Put,
-                Some(&head.head_version_id),
-                Some(&version.id),
-                None,
-            )
-            .await?;
-            publish_put_conn(&conn, &commit.document_id, &version.id).await?;
-            replace_block_rows_conn(&conn, &commit.document_id, &commit.rows).await?;
-            replace_block_review_items_conn(&conn, &commit.document_id, &commit.review_items)
-                .await?;
-            let record = insert_block_transaction_conn(
-                &conn,
-                &commit.document_id,
-                &commit.client_tx_id,
-                &commit.actor_kind,
-                commit.actor_id.clone(),
-                commit.recorded_ops.clone(),
-                Some(version.id.clone()),
-            )
-            .await?;
-            if let ResolvedDocumentScope::Library { id, .. } = &resolved_scope {
-                self.reindex_links_conn(&conn, id).await?;
-            }
-            commit_transaction_record_conn(&conn, &tx.id).await?;
-            let document = match &resolved_scope {
-                ResolvedDocumentScope::Library { id, .. } => {
-                    self.document_entry_conn(&conn, id, &head.path).await?
-                }
-                ResolvedDocumentScope::Tmp => {
-                    self.tmp_document_entry_conn(&conn, &head.path).await?
-                }
-            };
-            let tx = self.transaction_conn(&conn, &tx.id).await?;
-            Ok(BlockMutationOutcome::Applied {
-                outcome: Box::new(WriteOutcome {
-                    document,
-                    version,
-                    transaction: tx,
-                }),
-                record,
-            })
-        }
-        .await;
         let origin_id = commit.origin_id;
-        let outcome = finish_tx(&conn, result).await?;
+        let scope = scope.clone();
+        let outcome = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    let resolved_scope = store.resolve_document_scope_conn(conn, &scope).await?;
+                    if let Some(replayed) =
+                        block_transaction_conn(conn, &commit.document_id, &commit.client_tx_id)
+                            .await?
+                    {
+                        return Ok(BlockMutationOutcome::Replayed(replayed));
+                    }
+                    let head =
+                        document_head_for_scope_conn(conn, &resolved_scope, &commit.document_id)
+                            .await?;
+                    if head.head_version_id != commit.expected_head_version_id {
+                        return Err(QuarryError::PreconditionFailed(format!(
+                            "document {} head moved from {} to {}",
+                            commit.document_id,
+                            commit.expected_head_version_id,
+                            head.head_version_id
+                        )));
+                    }
+                    let provenance = commit.transaction_provenance.clone().unwrap_or_else(|| {
+                        serde_json::json!({
+                            "mode": "block_transaction",
+                            "client_tx_id": commit.client_tx_id,
+                        })
+                    });
+                    let tx = insert_transaction_conn(
+                        conn,
+                        resolved_scope.transaction_library_id(),
+                        commit.source,
+                        commit.transaction_actor.clone(),
+                        commit.transaction_message.clone(),
+                        provenance,
+                    )
+                    .await?;
+                    let version = store
+                        .insert_version_conn(
+                            conn,
+                            &commit.document_id,
+                            &tx.id,
+                            commit.normalized_markdown.clone().into_bytes(),
+                            commit.metadata.clone(),
+                            &commit.content_type,
+                        )
+                        .await?;
+                    insert_change_conn(
+                        conn,
+                        &tx.id,
+                        &head.path,
+                        ChangeType::Put,
+                        Some(&head.head_version_id),
+                        Some(&version.id),
+                        None,
+                    )
+                    .await?;
+                    publish_put_conn(conn, &commit.document_id, &version.id).await?;
+                    replace_block_rows_conn(conn, &commit.document_id, &commit.rows).await?;
+                    replace_block_review_items_conn(
+                        conn,
+                        &commit.document_id,
+                        &commit.review_items,
+                    )
+                    .await?;
+                    let record = insert_block_transaction_conn(
+                        conn,
+                        &commit.document_id,
+                        &commit.client_tx_id,
+                        &commit.actor_kind,
+                        commit.actor_id.clone(),
+                        commit.recorded_ops.clone(),
+                        Some(version.id.clone()),
+                    )
+                    .await?;
+                    if let ResolvedDocumentScope::Library { id, .. } = &resolved_scope {
+                        store.reindex_links_conn(conn, id).await?;
+                    }
+                    commit_transaction_record_conn(conn, &tx.id).await?;
+                    let document = match &resolved_scope {
+                        ResolvedDocumentScope::Library { id, .. } => {
+                            store.document_entry_conn(conn, id, &head.path).await?
+                        }
+                        ResolvedDocumentScope::Tmp => {
+                            store.tmp_document_entry_conn(conn, &head.path).await?
+                        }
+                    };
+                    let tx = store.transaction_conn(conn, &tx.id).await?;
+                    Ok(BlockMutationOutcome::Applied {
+                        outcome: Box::new(WriteOutcome {
+                            document,
+                            version,
+                            transaction: tx,
+                        }),
+                        record,
+                    })
+                })
+            })
+            .await?;
         if let BlockMutationOutcome::Applied { outcome, .. } = &outcome {
             self.emit_document_put_events(outcome, origin_id);
         }
