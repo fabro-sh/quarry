@@ -1,3 +1,4 @@
+mod agent_events;
 mod assets;
 mod collab;
 mod conflicts;
@@ -18,6 +19,9 @@ mod sse;
 
 pub use session::{MSG_QUARRY_CHECKPOINT, MSG_QUARRY_CHECKPOINT_FAILED};
 
+use agent_events::{
+    AgentEventRecord, AgentEventsAckRequest, AgentEventsAckResponse, AgentPendingEventsResponse,
+};
 use assets::{browser_asset, browser_ui_bundle_embedded};
 use axum::body::Bytes;
 use axum::extract::DefaultBodyLimit;
@@ -58,10 +62,7 @@ use review::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use sse::{
-    StoreEventPayloadMode, events, events_for_library, events_for_tmp_document,
-    store_event_payload, store_event_type,
-};
+use sse::{events, events_for_library, events_for_tmp_document};
 use std::future::{Future, IntoFuture};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -232,9 +233,12 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
         .route("/v1/libraries/{library}/graph", get(search_handlers::graph))
         .route(
             "/v1/libraries/{library}/events/pending",
-            get(agent_events_pending),
+            get(agent_events::agent_events_pending),
         )
-        .route("/v1/libraries/{library}/events/ack", post(agent_events_ack))
+        .route(
+            "/v1/libraries/{library}/events/ack",
+            post(agent_events::agent_events_ack),
+        )
         .route(
             "/v1/libraries/{library}/documents/{*path}",
             get(get_document)
@@ -559,8 +563,8 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         document_share_revoke_openapi,
         agent_presence_list_openapi,
         agent_presence_openapi,
-        agent_events_pending,
-        agent_events_ack,
+        agent_events::agent_events_pending,
+        agent_events::agent_events_ack,
         document_versions_openapi,
         document_versions_raw_openapi,
         document_version_openapi,
@@ -771,75 +775,6 @@ async fn tmp_collab_websocket(
         .into_response())
 }
 
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/events/pending",
-    params(("library" = String, Path), ("after" = Option<u64>, Query), ("limit" = Option<usize>, Query)),
-    responses((status = 200, body = AgentPendingEventsResponse), (status = 404, body = ErrorResponse))
-)]
-async fn agent_events_pending(
-    State(state): State<AppState>,
-    Path(library): Path<String>,
-    Query(query): Query<AgentPendingEventsQuery>,
-) -> Result<Json<AgentPendingEventsResponse>, ApiError> {
-    let library = state.store.get_library(&library).await?;
-    let after = query.after.unwrap_or(0);
-    let limit = query.limit.unwrap_or(100).clamp(1, 500);
-    let pending = state
-        .agent_events
-        .pending_since(&library.id, after, limit)
-        .await;
-    let next_after = pending.last().map(|event| event.id).unwrap_or(after);
-    let events = pending
-        .into_iter()
-        .map(|logged| {
-            let event_type = store_event_type(&logged.event);
-            let mut data = store_event_payload(
-                &library.slug,
-                &event_type,
-                &logged.event,
-                StoreEventPayloadMode::IncludePaths,
-            );
-            if let Some(object) = data.as_object_mut() {
-                object.insert("event_id".to_string(), JsonValue::from(logged.id));
-            }
-            AgentEventRecord {
-                id: logged.id,
-                event: event_type,
-                data,
-            }
-        })
-        .collect();
-
-    Ok(Json(AgentPendingEventsResponse { events, next_after }))
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/events/ack",
-    params(("library" = String, Path)),
-    request_body = AgentEventsAckRequest,
-    responses((status = 200, body = AgentEventsAckResponse), (status = 404, body = ErrorResponse))
-)]
-async fn agent_events_ack(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(library): Path<String>,
-    Json(request): Json<AgentEventsAckRequest>,
-) -> Result<Json<AgentEventsAckResponse>, ApiError> {
-    state.store.get_library(&library).await?;
-    let agent_id = agent_id_from_headers_or_body(&headers, request.agent_id.as_deref())?;
-    state
-        .agent_events
-        .ack(agent_id.clone(), request.event_id)
-        .await;
-    Ok(Json(AgentEventsAckResponse {
-        ok: true,
-        agent_id,
-        acked_through: request.event_id,
-    }))
-}
-
 #[utoipa::path(post, path = "/v1/admin/gc", responses((status = 200, body = GcReport)))]
 async fn admin_gc(State(state): State<AppState>) -> Result<Json<GcReport>, ApiError> {
     let report = state.store.gc().await?;
@@ -857,43 +792,6 @@ async fn admin_gc(State(state): State<AppState>) -> Result<Json<GcReport>, ApiEr
 struct ListQuery {
     prefix: Option<String>,
     limit: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AgentPendingEventsQuery {
-    after: Option<u64>,
-    limit: Option<usize>,
-}
-
-#[derive(Clone, Debug, Serialize, ToSchema)]
-pub struct AgentEventRecord {
-    pub id: u64,
-    pub event: String,
-    pub data: JsonValue,
-}
-
-#[derive(Clone, Debug, Serialize, ToSchema)]
-pub struct AgentPendingEventsResponse {
-    pub events: Vec<AgentEventRecord>,
-    #[serde(rename = "nextAfter")]
-    pub next_after: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, ToSchema)]
-pub struct AgentEventsAckRequest {
-    #[serde(default, rename = "agentId")]
-    pub agent_id: Option<String>,
-    #[serde(rename = "eventId")]
-    pub event_id: u64,
-}
-
-#[derive(Clone, Debug, Serialize, ToSchema)]
-pub struct AgentEventsAckResponse {
-    pub ok: bool,
-    #[serde(rename = "agentId")]
-    pub agent_id: String,
-    #[serde(rename = "ackedThrough")]
-    pub acked_through: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
@@ -2388,6 +2286,7 @@ mod tests {
     )]
 
     use super::*;
+    use crate::sse::{StoreEventPayloadMode, store_event_payload, store_event_type};
     #[cfg(any(feature = "lib-documents", feature = "tmp-documents"))]
     use axum::body::{Body, to_bytes};
     #[cfg(any(feature = "lib-documents", feature = "tmp-documents"))]
