@@ -1,18 +1,18 @@
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 #[cfg(feature = "tmp-documents")]
 use axum::http::header;
 use axum::http::{Method, Request, StatusCode};
 #[cfg(feature = "tmp-documents")]
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 #[cfg(feature = "tmp-documents")]
-use quarry_collab_codec::{xmltext_to_slate, Node};
+use quarry_collab_codec::{Node, xmltext_to_slate};
 use quarry_server::router;
 #[cfg(feature = "tmp-documents")]
 use quarry_server::{app_state, router_with_state, serve_state_with_shutdown};
 use quarry_storage::{QuarryStore, StoreConfig};
 use serde_json::Value;
 #[cfg(feature = "tmp-documents")]
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 #[cfg(feature = "tmp-documents")]
 use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
 use tower::ServiceExt;
@@ -162,11 +162,13 @@ async fn document_feature_surface_matches_compiled_features() {
         lib_documents
     );
     if tmp_documents {
-        assert!(discovery["capabilities"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|capability| capability == "tmp_documents"));
+        assert!(
+            discovery["capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|capability| capability == "tmp_documents")
+        );
         let removed_tmp_signal_key = ["tmp_han", "doff"].join("");
         assert!(discovery["endpoints"][&removed_tmp_signal_key].is_null());
         assert!(discovery["route_hints"][removed_tmp_signal_key].is_null());
@@ -499,9 +501,11 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
     let created: Value = response_json(response).await;
     let secret = created["document"]["path"].as_str().unwrap().to_string();
     assert_eq!(secret.len(), 32);
-    assert!(secret
-        .chars()
-        .all(|character| character.is_ascii_hexdigit()));
+    assert!(
+        secret
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    );
     assert_eq!(created["document"]["library_id"], Value::Null);
     assert_json_timestamp(&created["document"]["expires_at"]);
 

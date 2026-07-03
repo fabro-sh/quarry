@@ -1,4 +1,4 @@
-use quarry_storage::{is_tmp_document_secret, TMP_DOCUMENT_SECRET_LEN};
+use quarry_storage::{TMP_DOCUMENT_SECRET_LEN, is_tmp_document_secret};
 use std::borrow::Cow;
 
 pub(crate) const TMP_SECRET_PLACEHOLDER: &str = "<tmp-secret>";

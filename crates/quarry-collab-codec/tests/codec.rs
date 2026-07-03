@@ -1,14 +1,14 @@
 use quarry_collab_codec::{
-    apply_built, apply_review_patch_to_map, block_markdown_to_slate, build_nodes,
-    encode_update_v1_from_built_with_review, strip_trailing_empty_paragraphs, xmltext_to_slate,
-    Node, ReviewMeta, ReviewMetaEntry, ReviewMetaPatch,
+    Node, ReviewMeta, ReviewMetaEntry, ReviewMetaPatch, apply_built, apply_review_patch_to_map,
+    block_markdown_to_slate, build_nodes, encode_update_v1_from_built_with_review,
+    strip_trailing_empty_paragraphs, xmltext_to_slate,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
 use yrs::types::text::YChange;
 use yrs::{
-    updates::decoder::Decode, Any, Doc, Map, OffsetKind, Options, Out, ReadTxn, Text, Transact,
-    Update, WriteTxn, Xml, XmlTextRef,
+    Any, Doc, Map, OffsetKind, Options, Out, ReadTxn, Text, Transact, Update, WriteTxn, Xml,
+    XmlTextRef, updates::decoder::Decode,
 };
 
 #[test]

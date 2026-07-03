@@ -1,10 +1,10 @@
 mod blocks;
 
 pub use blocks::{
-    document_kind, BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockMarkdownWriter,
-    BlockMutationCommit, BlockMutationOutcome, BlockMutationState, BlockReviewItem,
-    BlockReviewKind, BlockReviewState, BlockShadowBase, BlockTransactionRecord, BlockWriteBase,
-    DocumentKind, DocumentScopeRef, NewBlockReviewItem, SessionSeedState,
+    BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockMarkdownWriter, BlockMutationCommit,
+    BlockMutationOutcome, BlockMutationState, BlockReviewItem, BlockReviewKind, BlockReviewState,
+    BlockShadowBase, BlockTransactionRecord, BlockWriteBase, DocumentKind, DocumentScopeRef,
+    NewBlockReviewItem, SessionSeedState, document_kind,
 };
 /// Re-exported because the store's block APIs speak it.
 pub use quarry_collab_codec::BlockRow;
@@ -13,12 +13,12 @@ use chrono::{DateTime, Utc};
 use fs2::FileExt;
 use quarry_cas::DiskCas;
 use quarry_core::{
-    normalize_path, now_timestamp, parent_dirs, ChangeType, CollabInviteToken, ConflictRecord,
-    ConflictStatus, Document, DocumentHistoryEntry, DocumentLink, DocumentListEntry,
-    DocumentSource, DocumentVersion, DocumentVersionContent, GcReport, GitPeer, GraphEdge,
-    GraphNode, GraphResponse, Library, LinkCollection, QuarryError, ReindexReport, Result,
-    SearchResponse, SearchResult, SearchSuggestion, SyncStateEntry, TransactionRecord,
-    TransactionState, VersionDiff, WriteOutcome, WritePrecondition, INLINE_CONTENT_THRESHOLD,
+    ChangeType, CollabInviteToken, ConflictRecord, ConflictStatus, Document, DocumentHistoryEntry,
+    DocumentLink, DocumentListEntry, DocumentSource, DocumentVersion, DocumentVersionContent,
+    GcReport, GitPeer, GraphEdge, GraphNode, GraphResponse, INLINE_CONTENT_THRESHOLD, Library,
+    LinkCollection, QuarryError, ReindexReport, Result, SearchResponse, SearchResult,
+    SearchSuggestion, SyncStateEntry, TransactionRecord, TransactionState, VersionDiff,
+    WriteOutcome, WritePrecondition, normalize_path, now_timestamp, parent_dirs,
 };
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -30,8 +30,8 @@ use std::pin::Pin;
 use std::process;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, Mutex, MutexGuard, OwnedMutexGuard};
-use turso::{params, Builder, Connection, Database, Row, Rows, Value};
+use tokio::sync::{Mutex, MutexGuard, OwnedMutexGuard, broadcast};
+use turso::{Builder, Connection, Database, Row, Rows, Value, params};
 use uuid::Uuid;
 
 const TMP_TRANSACTION_LIBRARY_ID: &str = "__tmp__";
@@ -1923,20 +1923,18 @@ impl QuarryStore {
         if root.is_none() {
             if has_edge_filter {
                 for link in &links {
-                    if let Some(source) = document_by_id.get(&link.src_doc_id) {
-                        if document_matches_folder(source) && included_ids.insert(source.id.clone())
-                        {
-                            add_node(source);
-                        }
+                    if let Some(source) = document_by_id.get(&link.src_doc_id)
+                        && document_matches_folder(source)
+                        && included_ids.insert(source.id.clone())
+                    {
+                        add_node(source);
                     }
-                    if let Some(target_id) = link.target_doc_id.as_deref() {
-                        if let Some(target) = document_by_id.get(target_id) {
-                            if document_matches_folder(target)
-                                && included_ids.insert(target.id.clone())
-                            {
-                                add_node(target);
-                            }
-                        }
+                    if let Some(target_id) = link.target_doc_id.as_deref()
+                        && let Some(target) = document_by_id.get(target_id)
+                        && document_matches_folder(target)
+                        && included_ids.insert(target.id.clone())
+                    {
+                        add_node(target);
                     }
                 }
             } else {
@@ -1947,34 +1945,33 @@ impl QuarryStore {
                     }
                 }
             }
-        } else if let Some(root_path) = root.as_deref() {
-            if let Some(root_entry) = documents.iter().find(|entry| entry.path == root_path) {
-                if document_matches_folder(root_entry) {
-                    included_ids.insert(root_entry.id.clone());
-                    add_node(root_entry);
-                    let mut queue = VecDeque::from([(root_entry.id.clone(), 0u64)]);
-                    while let Some((document_id, distance)) = queue.pop_front() {
-                        if distance >= depth {
-                            continue;
-                        }
-                        for link in &links {
-                            let neighbor_id = if link.src_doc_id == document_id {
-                                link.target_doc_id.as_deref()
-                            } else if link.target_doc_id.as_deref() == Some(document_id.as_str()) {
-                                Some(link.src_doc_id.as_str())
-                            } else {
-                                None
-                            };
-                            let Some(neighbor_id) = neighbor_id else {
-                                continue;
-                            };
-                            if included_ids.insert(neighbor_id.to_string()) {
-                                if let Some(neighbor) = document_by_id.get(neighbor_id) {
-                                    add_node(neighbor);
-                                    queue.push_back((neighbor_id.to_string(), distance + 1));
-                                }
-                            }
-                        }
+        } else if let Some(root_path) = root.as_deref()
+            && let Some(root_entry) = documents.iter().find(|entry| entry.path == root_path)
+            && document_matches_folder(root_entry)
+        {
+            included_ids.insert(root_entry.id.clone());
+            add_node(root_entry);
+            let mut queue = VecDeque::from([(root_entry.id.clone(), 0u64)]);
+            while let Some((document_id, distance)) = queue.pop_front() {
+                if distance >= depth {
+                    continue;
+                }
+                for link in &links {
+                    let neighbor_id = if link.src_doc_id == document_id {
+                        link.target_doc_id.as_deref()
+                    } else if link.target_doc_id.as_deref() == Some(document_id.as_str()) {
+                        Some(link.src_doc_id.as_str())
+                    } else {
+                        None
+                    };
+                    let Some(neighbor_id) = neighbor_id else {
+                        continue;
+                    };
+                    if included_ids.insert(neighbor_id.to_string())
+                        && let Some(neighbor) = document_by_id.get(neighbor_id)
+                    {
+                        add_node(neighbor);
+                        queue.push_back((neighbor_id.to_string(), distance + 1));
                     }
                 }
             }
@@ -3650,7 +3647,7 @@ impl QuarryStore {
             _ => {
                 return Err(QuarryError::Invariant(format!(
                     "head version for document {document_id} violates inline/CAS invariant"
-                )))
+                )));
             }
         };
         Ok(Some(CollabDocumentSeed {
@@ -4129,7 +4126,7 @@ impl QuarryStore {
                 return Err(QuarryError::Invariant(format!(
                     "version {} violates inline/CAS invariant",
                     version.id
-                )))
+                )));
             }
         };
         Ok(Document {
@@ -4192,7 +4189,7 @@ impl QuarryStore {
                 return Err(QuarryError::Invariant(format!(
                     "version {} violates inline/CAS invariant",
                     version.id
-                )))
+                )));
             }
         };
         Ok(Document {
@@ -4238,7 +4235,7 @@ impl QuarryStore {
                 return Err(QuarryError::Invariant(format!(
                     "version {} violates inline/CAS invariant",
                     version.id
-                )))
+                )));
             }
         };
         Ok((version, content))
@@ -5608,11 +5605,11 @@ pub fn group_version_history(mut versions: Vec<DocumentVersion>) -> Vec<Document
 
     let mut groups: Vec<Vec<DocumentVersion>> = Vec::new();
     for version in versions {
-        if let Some(current) = groups.last_mut() {
-            if can_group_autosave(current, &version) {
-                current.push(version);
-                continue;
-            }
+        if let Some(current) = groups.last_mut()
+            && can_group_autosave(current, &version)
+        {
+            current.push(version);
+            continue;
         }
         groups.push(vec![version]);
     }
@@ -6289,10 +6286,12 @@ mod tmp_secret_tests {
         let secret = TmpDocumentSecret::generate();
 
         assert_eq!(secret.as_str().len(), TMP_DOCUMENT_SECRET_LEN);
-        assert!(secret
-            .as_str()
-            .chars()
-            .all(|character| character.is_ascii_hexdigit()));
+        assert!(
+            secret
+                .as_str()
+                .chars()
+                .all(|character| character.is_ascii_hexdigit())
+        );
         assert!(!secret.as_str().contains('/'));
     }
 

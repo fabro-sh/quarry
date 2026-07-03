@@ -1,6 +1,6 @@
 use anyhow::Result;
 #[cfg(feature = "lib-documents")]
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use clap::{Args, Parser, Subcommand};
 #[cfg(feature = "lib-documents")]
 use quarry_core::{DocumentSource, WritePrecondition};
@@ -8,7 +8,7 @@ use quarry_core::{DocumentSource, WritePrecondition};
 use quarry_fuse::mount_library_with_shutdown;
 #[cfg(feature = "lib-documents")]
 use quarry_git::{
-    export_worktree, import_worktree, pull_peer, push_peer, sync_peer, GitExportOptions,
+    GitExportOptions, export_worktree, import_worktree, pull_peer, push_peer, sync_peer,
 };
 use quarry_server::serve;
 #[cfg(feature = "lib-documents")]
@@ -786,10 +786,12 @@ mod tests {
         let config = logging::LogConfig::from_env_values(None, None);
 
         assert_eq!(config.format, logging::LogFormat::Pretty);
-        assert!(config
-            .filter
-            .split(',')
-            .any(|directive| directive == "warn"));
+        assert!(
+            config
+                .filter
+                .split(',')
+                .any(|directive| directive == "warn")
+        );
         for crate_name in [
             "quarry",
             "quarry_cli",

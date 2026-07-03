@@ -101,7 +101,7 @@
 //!   until then.
 
 use quarry_collab_codec::attrs;
-use quarry_collab_codec::{block_markdown_to_slate, Attrs as SlateAttrs, Node};
+use quarry_collab_codec::{Attrs as SlateAttrs, Node, block_markdown_to_slate};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -884,8 +884,7 @@ fn block_inserted_in_the_middle_gets_a_fresh_id_and_neighbors_keep_ids() {
 #[test]
 fn block_appended_at_the_end_gets_a_fresh_id() {
     let canonical = base_canonical();
-    let incoming =
-        "# Title\n\nAlpha paragraph.\n\nBravo paragraph.\n\nCharlie paragraph.\n\nDelta paragraph.\n";
+    let incoming = "# Title\n\nAlpha paragraph.\n\nBravo paragraph.\n\nCharlie paragraph.\n\nDelta paragraph.\n";
 
     let result = reconcile(Some(BASE), incoming, &canonical);
 
@@ -1105,8 +1104,7 @@ fn true_conflict_keeps_canonical_emits_artifact_and_still_applies_sibling_ops() 
         "# Title\n\nAlpha paragraph.\n\nBravo paragraph, canonical edit.\n\nCharlie paragraph.\n",
         &BASE_IDS,
     );
-    let incoming =
-        "# Title, expanded\n\nAlpha paragraph.\n\nBravo paragraph, incoming edit.\n\nCharlie paragraph.\n";
+    let incoming = "# Title, expanded\n\nAlpha paragraph.\n\nBravo paragraph, incoming edit.\n\nCharlie paragraph.\n";
 
     let result = reconcile(Some(BASE), incoming, &canonical);
 
@@ -1228,8 +1226,7 @@ fn incoming_edit_adjacent_to_a_conflict_is_absorbed_into_the_conflict_region() {
         "# Title\n\nAlpha paragraph.\n\nBravo paragraph, canonical edit.\n\nCharlie paragraph.\n",
         &BASE_IDS,
     );
-    let incoming =
-        "# Title\n\nAlpha paragraph.\n\nBravo paragraph, incoming edit.\n\nCharlie paragraph, incoming edit.\n";
+    let incoming = "# Title\n\nAlpha paragraph.\n\nBravo paragraph, incoming edit.\n\nCharlie paragraph, incoming edit.\n";
 
     let result = reconcile(Some(BASE), incoming, &canonical);
 
@@ -1367,8 +1364,7 @@ fn base_equal_to_canonical_imports_two_way_with_preserved_ids_and_no_conflicts()
     // base == canonical: nothing changed canonically since the export, so the
     // merge degenerates to a clean two-way import that can never conflict.
     let canonical = base_canonical();
-    let incoming =
-        "# Title\n\nAlpha paragraph, revised.\n\nBravo paragraph.\n\nCharlie paragraph.\n\nDelta paragraph.\n";
+    let incoming = "# Title\n\nAlpha paragraph, revised.\n\nBravo paragraph.\n\nCharlie paragraph.\n\nDelta paragraph.\n";
 
     let result = reconcile(Some(BASE), incoming, &canonical);
 

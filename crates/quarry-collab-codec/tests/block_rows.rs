@@ -7,8 +7,8 @@
 
 use quarry_collab_codec::attrs;
 use quarry_collab_codec::{
-    block_rows_to_markdown, block_rows_to_nodes, is_utf16_boundary, markdown_to_block_rows,
-    utf16_len, BlockRow, LinkRange, MarkRun, Node,
+    BlockRow, LinkRange, MarkRun, Node, block_rows_to_markdown, block_rows_to_nodes,
+    is_utf16_boundary, markdown_to_block_rows, utf16_len,
 };
 use serde_json::json;
 

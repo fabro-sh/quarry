@@ -8,8 +8,8 @@
 //! normalize, and punctuation that could re-parse as syntax is
 //! backslash-escaped.
 
-use crate::slate::{Attrs, Node};
 use crate::Unsupported;
+use crate::slate::{Attrs, Node};
 use serde_json::Value;
 
 /// Inline mark nesting order, outermost first. `code` is innermost because

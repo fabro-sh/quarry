@@ -16,9 +16,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::Unsupported;
 use crate::markdown::block_markdown_to_slate_raw;
 use crate::slate::{Attrs, Node};
-use crate::Unsupported;
 
 /// Slate element types whose text is literal code; CriticMarkup inside them is
 /// left untouched. Mirrors `CODE_BLOCK_TYPES` in `apply-critic-markup.ts`.

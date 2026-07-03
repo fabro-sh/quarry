@@ -81,13 +81,13 @@
 //! preserves the block's Markdown source and its id; review marks inside
 //! such a block are dropped (their anchors orphan at the row layer).
 
-use crate::markdown_writer::{is_known_inline_mark, slate_to_markdown};
-use crate::rows::{is_utf16_boundary, utf16_len, BlockRow, LinkRange, MarkRun};
-use crate::slate::{Attrs, Node};
-use crate::text_diff::{utf16_text_diff_hunks, TextDiff};
-use crate::yjs_builder::{apply_built, xmltext_to_slate};
 use crate::Unsupported;
-use serde_json::{json, Value};
+use crate::markdown_writer::{is_known_inline_mark, slate_to_markdown};
+use crate::rows::{BlockRow, LinkRange, MarkRun, is_utf16_boundary, utf16_len};
+use crate::slate::{Attrs, Node};
+use crate::text_diff::{TextDiff, utf16_text_diff_hunks};
+use crate::yjs_builder::{apply_built, xmltext_to_slate};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 use yrs::types::Attrs as YrsAttrs;
@@ -713,11 +713,11 @@ fn classify_marks(marks: &Attrs) -> ClassifiedMarks {
         if TRANSIENT_MARKS.contains(&key.as_str()) || key == "comment" || key == "suggestion" {
             continue;
         }
-        if let Some(id) = key.strip_prefix("comment_") {
-            if value == &json!(true) {
-                comment_ids.push(id.to_string());
-                continue;
-            }
+        if let Some(id) = key.strip_prefix("comment_")
+            && value == &json!(true)
+        {
+            comment_ids.push(id.to_string());
+            continue;
         }
         if let Some(id) = key.strip_prefix("suggestion_") {
             let ty = value
@@ -790,7 +790,7 @@ fn extract_inline(block_id: &str, children: &[Node]) -> Result<InlineExtraction,
             Node::Element { ty, .. } => {
                 return Err(Unsupported::new(format!(
                     "inline <{ty}> has no block row representation"
-                )))
+                )));
             }
         }
     }
@@ -854,11 +854,12 @@ fn append_leaf(
     if chunk.is_empty() || classified.formatting.is_empty() {
         return;
     }
-    if let Some(last) = runs.last_mut() {
-        if last.end == start && last.marks == classified.formatting {
-            last.end = end;
-            return;
-        }
+    if let Some(last) = runs.last_mut()
+        && last.end == start
+        && last.marks == classified.formatting
+    {
+        last.end = end;
+        return;
     }
     runs.push(MarkRun {
         start,
@@ -1024,10 +1025,11 @@ fn reconcile_children_inner(
     // the pre-state rows knew about — everything else is foreign and stays).
     let mut removals: Vec<u32> = Vec::new();
     for (index, child) in current.iter().enumerate() {
-        if let Some(id) = &child.id {
-            if known_ids.contains(id) && !desired_id_set.contains(id.as_str()) {
-                removals.push(index as u32);
-            }
+        if let Some(id) = &child.id
+            && known_ids.contains(id)
+            && !desired_id_set.contains(id.as_str())
+        {
+            removals.push(index as u32);
         }
     }
     for index in removals.into_iter().rev() {
@@ -1045,7 +1047,7 @@ fn reconcile_children_inner(
         while cursor < current.len() {
             match current_id_at(&current, cursor) {
                 Some(id) if desired_id_set.contains(id.as_str()) || known_ids.contains(&id) => {
-                    break
+                    break;
                 }
                 Some(_) | None => cursor += 1,
             }

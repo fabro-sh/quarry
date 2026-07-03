@@ -35,8 +35,8 @@
 
 use super::*;
 use quarry_collab_codec::{
-    block_rows_to_markdown, is_utf16_boundary, markdown_to_block_rows, utf16_len, BlockRow,
-    LinkRange, MarkRun,
+    BlockRow, LinkRange, MarkRun, block_rows_to_markdown, is_utf16_boundary,
+    markdown_to_block_rows, utf16_len,
 };
 use quarry_core::render_markdown_frontmatter;
 

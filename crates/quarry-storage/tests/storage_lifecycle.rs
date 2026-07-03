@@ -1,10 +1,10 @@
 use quarry_core::{
-    DocumentSource, DocumentVersion, QuarryError, WritePrecondition, INLINE_CONTENT_THRESHOLD,
+    DocumentSource, DocumentVersion, INLINE_CONTENT_THRESHOLD, QuarryError, WritePrecondition,
 };
 use quarry_storage::{
-    group_version_history, BlockMutationCommit, BlockMutationOutcome, BlockReviewItem,
-    BlockReviewKind, BlockReviewState, DocumentScopeRef, NewBlockReviewItem, QuarryStore,
-    StoreConfig, StoreEventKind, TmpTtl, TransactionMetadata,
+    BlockMutationCommit, BlockMutationOutcome, BlockReviewItem, BlockReviewKind, BlockReviewState,
+    DocumentScopeRef, NewBlockReviewItem, QuarryStore, StoreConfig, StoreEventKind, TmpTtl,
+    TransactionMetadata, group_version_history,
 };
 use std::time::Duration;
 
@@ -296,10 +296,12 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
         )
         .await
         .unwrap();
-    assert!(store
-        .get_document(&alpha.slug, "notes/plan.md")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&alpha.slug, "notes/plan.md")
+            .await
+            .is_err()
+    );
     assert_eq!(
         store
             .get_document(&alpha.slug, "notes/renamed.md")
@@ -313,10 +315,12 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
         .delete_document(&alpha.slug, "notes/renamed.md", DocumentSource::Rest)
         .await
         .unwrap();
-    assert!(store
-        .get_document(&alpha.slug, "notes/renamed.md")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&alpha.slug, "notes/renamed.md")
+            .await
+            .is_err()
+    );
 
     drop(store);
 
@@ -579,10 +583,12 @@ async fn put_after_delete_same_path_creates_new_document_identity_and_history() 
         .unwrap();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].latest_version_id, second.version.id);
-    assert!(store
-        .document_version(&library.slug, "notes/daily.md", &first.version.id)
-        .await
-        .is_err());
+    assert!(
+        store
+            .document_version(&library.slug, "notes/daily.md", &first.version.id)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -847,16 +853,20 @@ transaction: quarry_storage::TransactionMetadata::default(),
     assert!(outgoing.links.iter().any(
         |link| link.target_kind == "embed" && link.target_path.as_deref() == Some("target.md")
     ));
-    assert!(outgoing
-        .links
-        .iter()
-        .any(|link| link.target_kind == "tag" && link.target_text == "tag"));
-    assert!(outgoing
-        .links
-        .iter()
-        .any(|link| link.target_kind == "wiki_link"
-            && link.target_text == "Missing"
-            && !link.resolved));
+    assert!(
+        outgoing
+            .links
+            .iter()
+            .any(|link| link.target_kind == "tag" && link.target_text == "tag")
+    );
+    assert!(
+        outgoing
+            .links
+            .iter()
+            .any(|link| link.target_kind == "wiki_link"
+                && link.target_text == "Missing"
+                && !link.resolved)
+    );
 
     let target_links = store
         .outgoing_links(&library.slug, "target.md")
@@ -884,12 +894,14 @@ transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
         .unwrap();
-    assert!(store
-        .outgoing_links(&library.slug, "raw.bin")
-        .await
-        .unwrap()
-        .links
-        .is_empty());
+    assert!(
+        store
+            .outgoing_links(&library.slug, "raw.bin")
+            .await
+            .unwrap()
+            .links
+            .is_empty()
+    );
     let focused_graph = store
         .graph(
             &library.slug,
@@ -903,18 +915,24 @@ transaction: quarry_storage::TransactionMetadata::default(),
         )
         .await
         .unwrap();
-    assert!(focused_graph
-        .nodes
-        .iter()
-        .any(|node| node.path == "target.md"));
-    assert!(focused_graph
-        .nodes
-        .iter()
-        .any(|node| node.path == "source.md"));
-    assert!(!focused_graph
-        .nodes
-        .iter()
-        .any(|node| node.path == "raw.bin"));
+    assert!(
+        focused_graph
+            .nodes
+            .iter()
+            .any(|node| node.path == "target.md")
+    );
+    assert!(
+        focused_graph
+            .nodes
+            .iter()
+            .any(|node| node.path == "source.md")
+    );
+    assert!(
+        !focused_graph
+            .nodes
+            .iter()
+            .any(|node| node.path == "raw.bin")
+    );
 
     store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -930,18 +948,22 @@ transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
         .unwrap();
-    assert!(store
-        .outgoing_links(&library.slug, "source.md")
-        .await
-        .unwrap()
-        .links
-        .is_empty());
-    assert!(store
-        .backlinks(&library.slug, "target.md")
-        .await
-        .unwrap()
-        .links
-        .is_empty());
+    assert!(
+        store
+            .outgoing_links(&library.slug, "source.md")
+            .await
+            .unwrap()
+            .links
+            .is_empty()
+    );
+    assert!(
+        store
+            .backlinks(&library.slug, "target.md")
+            .await
+            .unwrap()
+            .links
+            .is_empty()
+    );
 
     let tx = store
         .begin_transaction(
@@ -965,13 +987,15 @@ transaction: quarry_storage::TransactionMetadata::default(),
         .unwrap();
     store.commit_transaction(&tx.id).await.unwrap();
 
-    assert!(store
-        .backlinks(&library.slug, "target.md")
-        .await
-        .unwrap()
-        .links
-        .iter()
-        .any(|link| link.src_path == "source.md"));
+    assert!(
+        store
+            .backlinks(&library.slug, "target.md")
+            .await
+            .unwrap()
+            .links
+            .iter()
+            .any(|link| link.src_path == "source.md")
+    );
 }
 
 #[tokio::test]
@@ -1012,15 +1036,17 @@ async fn suggestions_include_aliases_and_headings_for_wikilink_completion() {
             .unwrap(),
     )
     .unwrap();
-    assert!(alias_suggestions
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|suggestion| {
-            suggestion["path"] == "guide.md"
-                && suggestion["match_type"] == "alias"
-                && suggestion["matched_text"] == "Shortcut"
-        }));
+    assert!(
+        alias_suggestions
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|suggestion| {
+                suggestion["path"] == "guide.md"
+                    && suggestion["match_type"] == "alias"
+                    && suggestion["matched_text"] == "Shortcut"
+            })
+    );
 
     let heading_suggestions = serde_json::to_value(
         store
@@ -1029,16 +1055,18 @@ async fn suggestions_include_aliases_and_headings_for_wikilink_completion() {
             .unwrap(),
     )
     .unwrap();
-    assert!(heading_suggestions
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|suggestion| {
-            suggestion["path"] == "guide.md"
-                && suggestion["match_type"] == "heading"
-                && suggestion["matched_text"] == "Deep Section"
-                && suggestion["target_anchor"] == "Deep Section"
-        }));
+    assert!(
+        heading_suggestions
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|suggestion| {
+                suggestion["path"] == "guide.md"
+                    && suggestion["match_type"] == "heading"
+                    && suggestion["matched_text"] == "Deep Section"
+                    && suggestion["target_anchor"] == "Deep Section"
+            })
+    );
 }
 
 #[tokio::test]
@@ -1313,21 +1341,25 @@ async fn link_index_tracks_moves_and_deletes() {
         .await
         .unwrap();
     let backlinks = store.backlinks(&library.slug, "renamed.md").await.unwrap();
-    assert!(backlinks
-        .links
-        .iter()
-        .any(|link| link.src_path == "folder/source.md"));
+    assert!(
+        backlinks
+            .links
+            .iter()
+            .any(|link| link.src_path == "folder/source.md")
+    );
 
     store
         .delete_document(&library.slug, "folder/source.md", DocumentSource::Rest)
         .await
         .unwrap();
-    assert!(store
-        .backlinks(&library.slug, "renamed.md")
-        .await
-        .unwrap()
-        .links
-        .is_empty());
+    assert!(
+        store
+            .backlinks(&library.slug, "renamed.md")
+            .await
+            .unwrap()
+            .links
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -1386,10 +1418,12 @@ async fn explicit_transactions_publish_atomically_and_rollback_staged_cas() {
         .await
         .unwrap();
 
-    assert!(store
-        .get_document(&library.slug, "docs/new.md")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&library.slug, "docs/new.md")
+            .await
+            .is_err()
+    );
     let still_visible = store
         .get_document(&library.slug, "docs/a.md")
         .await
@@ -1406,10 +1440,12 @@ async fn explicit_transactions_publish_atomically_and_rollback_staged_cas() {
             .content,
         b"new"
     );
-    assert!(store
-        .get_document(&library.slug, "docs/a.md")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&library.slug, "docs/a.md")
+            .await
+            .is_err()
+    );
     let moved = store
         .get_document(&library.slug, "docs/b.md")
         .await
@@ -1439,10 +1475,12 @@ async fn explicit_transactions_publish_atomically_and_rollback_staged_cas() {
         .unwrap();
     assert_eq!(store.gc().await.unwrap().removed, 0);
     store.rollback_transaction(&rollback_tx.id).await.unwrap();
-    assert!(store
-        .get_document(&library.slug, "docs/rolled.bin")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&library.slug, "docs/rolled.bin")
+            .await
+            .is_err()
+    );
     assert_eq!(store.gc().await.unwrap().removed, 1);
 }
 
@@ -1614,10 +1652,12 @@ async fn open_transaction_survives_restart_without_publishing_staged_cas() {
         )
         .await
         .unwrap();
-    assert!(store
-        .get_document(&library.slug, "docs/staged.bin")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&library.slug, "docs/staged.bin")
+            .await
+            .is_err()
+    );
     drop(store);
 
     let reopened = QuarryStore::open(StoreConfig {
@@ -1628,10 +1668,12 @@ async fn open_transaction_survives_restart_without_publishing_staged_cas() {
     .await
     .unwrap();
 
-    assert!(reopened
-        .get_document(&library.slug, "docs/staged.bin")
-        .await
-        .is_err());
+    assert!(
+        reopened
+            .get_document(&library.slug, "docs/staged.bin")
+            .await
+            .is_err()
+    );
     let transactions = reopened.list_transactions(&library.slug).await.unwrap();
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].state, quarry_core::TransactionState::Open);
@@ -2119,10 +2161,12 @@ async fn inode_paths_are_lookupable_and_moves_keep_inode_identity() {
         store.path_for_inode(&library.slug, inode).await.unwrap(),
         "archive/one.md"
     );
-    assert!(store
-        .inode_for_path(&library.slug, "plans/one.md")
-        .await
-        .is_err());
+    assert!(
+        store
+            .inode_for_path(&library.slug, "plans/one.md")
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -2201,10 +2245,12 @@ async fn move_document_can_reuse_deleted_target_path() {
             .unwrap(),
         source_inode
     );
-    assert!(store
-        .get_document(&library.slug, "drafts/source.md")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&library.slug, "drafts/source.md")
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -2289,10 +2335,12 @@ async fn committed_transaction_move_can_reuse_deleted_target_path() {
             .unwrap(),
         source_inode
     );
-    assert!(store
-        .get_document(&library.slug, "drafts/source.md")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&library.slug, "drafts/source.md")
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -2398,9 +2446,11 @@ async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() {
         .unwrap();
     let secret = tmp.document.path.clone();
     assert_eq!(secret.len(), 32);
-    assert!(secret
-        .chars()
-        .all(|character| character.is_ascii_hexdigit()));
+    assert!(
+        secret
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    );
     let expires_at = tmp
         .document
         .expires_at
@@ -2517,11 +2567,13 @@ async fn expired_documents_are_gone_and_excluded_from_live_queries() {
         .await
         .unwrap_err();
     assert!(matches!(err, QuarryError::Gone(_)));
-    assert!(store
-        .list_documents(&library.slug, None, None)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        store
+            .list_documents(&library.slug, None, None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     store
         .set_document_ttl(&library.slug, "gone.md", None)
@@ -3239,11 +3291,13 @@ async fn raw_documents_keep_the_byte_path_untouched() {
         .unwrap_err();
     assert!(matches!(export_refused, QuarryError::Unsupported(_)));
 
-    assert!(store
-        .load_block_tree(&outcome.document.id)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        store
+            .load_block_tree(&outcome.document.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     drop(store);
 
@@ -3256,11 +3310,13 @@ async fn raw_documents_keep_the_byte_path_untouched() {
             .content,
         bytes
     );
-    assert!(reopened
-        .load_block_tree(&outcome.document.id)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        reopened
+            .load_block_tree(&outcome.document.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -3290,10 +3346,12 @@ async fn import_surfaces_the_codecs_typed_unsupported_error() {
         quarry_collab_codec::Unsupported::new("critic markup")
     );
     // The rejected import left no document behind.
-    assert!(store
-        .get_document(&library.slug, "critic.md")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&library.slug, "critic.md")
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -3430,16 +3488,20 @@ async fn legacy_put_clears_the_block_projection_fail_closed() {
         .unwrap();
 
     // ...so the block projection is dropped rather than serving stale rows.
-    assert!(store
-        .load_block_tree(&document_id)
-        .await
-        .unwrap()
-        .is_empty());
-    assert!(store
-        .list_block_review_items(&document_id)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        store
+            .load_block_tree(&document_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .list_block_review_items(&document_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let stale = store.export_block_document(&document_id).await.unwrap_err();
     assert!(matches!(stale, QuarryError::NotFound(_)));
     // The byte path still serves the legacy write.
@@ -3516,16 +3578,20 @@ async fn delete_document_removes_the_block_projection() {
         .await
         .unwrap();
 
-    assert!(store
-        .load_block_tree(&document_id)
-        .await
-        .unwrap()
-        .is_empty());
-    assert!(store
-        .list_block_review_items(&document_id)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        store
+            .load_block_tree(&document_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .list_block_review_items(&document_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let exported = store.export_block_document(&document_id).await.unwrap_err();
     assert!(matches!(exported, QuarryError::NotFound(_)));
 }
@@ -3744,11 +3810,13 @@ async fn block_mutation_state_materializes_rows_for_legacy_written_documents() {
     assert_eq!(shape, vec!["h1", "p"]);
     assert_eq!(state.rows[1].text, "Body text.");
     // Nothing was persisted by the read.
-    assert!(store
-        .load_block_tree(&state.document_id)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        store
+            .load_block_tree(&state.document_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]

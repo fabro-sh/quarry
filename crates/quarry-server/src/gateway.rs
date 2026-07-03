@@ -152,25 +152,26 @@
 //! error — see the HONEST WINDOW note in [`apply_session_transaction`].
 
 use crate::{
-    json_response, json_with_etag, AgentBlockRef, AgentReviewComment, AgentReviewReply,
-    AgentReviewResponse, AgentReviewSuggestion, AgentSuggestionKind, AgentSuggestionPreview,
-    ApiError, AppState,
+    AgentBlockRef, AgentReviewComment, AgentReviewReply, AgentReviewResponse,
+    AgentReviewSuggestion, AgentSuggestionKind, AgentSuggestionPreview, ApiError, AppState,
+    json_response, json_with_etag,
 };
 use axum::http::StatusCode;
 use axum::response::Response;
 use quarry_collab_codec::{
-    block_rows_to_markdown, is_utf16_boundary, utf16_len, utf16_text_diff_hunks, Attrs, BlockRow,
-    LinkRange, MarkRun, TextDiff, KNOWN_BLOCK_TYPES,
+    Attrs, BlockRow, KNOWN_BLOCK_TYPES, LinkRange, MarkRun, TextDiff, block_rows_to_markdown,
+    is_utf16_boundary, utf16_len, utf16_text_diff_hunks,
 };
 use quarry_core::{
-    now_timestamp, render_markdown_frontmatter, DocumentSource, QuarryError, WritePrecondition,
+    DocumentSource, QuarryError, WritePrecondition, now_timestamp, render_markdown_frontmatter,
 };
 use quarry_storage::{
-    document_kind, BlockMutationCommit, BlockMutationOutcome, BlockMutationState, BlockReviewItem,
+    BlockMutationCommit, BlockMutationOutcome, BlockMutationState, BlockReviewItem,
     BlockReviewKind, BlockReviewState, BlockTransactionRecord, DocumentKind, DocumentScopeRef,
+    document_kind,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 use std::collections::{BTreeSet, HashMap};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -973,10 +974,10 @@ impl ApplyContext {
                 "block {block_id} already exists in this document"
             )));
         }
-        if let Some(parent) = parent_block_id {
-            if !self.model.blocks.contains_key(parent) {
-                return Err(GatewayError::block_deleted(parent));
-            }
+        if let Some(parent) = parent_block_id
+            && !self.model.blocks.contains_key(parent)
+        {
+            return Err(GatewayError::block_deleted(parent));
         }
         validate_block_type(block_type)?;
         validate_attrs(attrs)?;
@@ -1374,10 +1375,10 @@ impl ApplyContext {
         incoming_markdown: &str,
         canonical_markdown: &str,
     ) -> Result<(), GatewayError> {
-        if let Some(after) = after_block_id {
-            if !self.model.blocks.contains_key(after) {
-                return Err(GatewayError::block_deleted(after));
-            }
+        if let Some(after) = after_block_id
+            && !self.model.blocks.contains_key(after)
+        {
+            return Err(GatewayError::block_deleted(after));
         }
         let id = self.minted.mint();
         require_unused_item_id(self, &id)?;
@@ -2018,11 +2019,12 @@ fn rewrite_marks(
         if attrs.is_empty() {
             continue;
         }
-        if let Some(last) = result.last_mut() {
-            if last.end == segment_start && last.marks == attrs {
-                last.end = segment_end;
-                continue;
-            }
+        if let Some(last) = result.last_mut()
+            && last.end == segment_start
+            && last.marks == attrs
+        {
+            last.end = segment_end;
+            continue;
         }
         result.push(MarkRun {
             start: segment_start,
@@ -2336,7 +2338,7 @@ async fn apply_rows_transaction(
                     outcome,
                     status,
                     applied.changed_block_ids,
-                ))
+                ));
             }
             // Another write moved the head between load and commit: reload
             // the state and recompute against the new rows.

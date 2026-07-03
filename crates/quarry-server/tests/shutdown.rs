@@ -4,7 +4,7 @@ use quarry_server::{app_state, serve_state_with_shutdown};
 use quarry_storage::{QuarryStore, StoreConfig};
 #[cfg(feature = "lib-documents")]
 use tokio::io::AsyncWriteExt;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 #[tokio::test]
 async fn serve_with_shutdown_exits_and_releases_store_lock() {

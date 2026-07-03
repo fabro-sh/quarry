@@ -8,32 +8,32 @@ pub use session::{MSG_QUARRY_CHECKPOINT, MSG_QUARRY_CHECKPOINT_FAILED};
 
 use axum::body::Body;
 use axum::body::Bytes;
-use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::DefaultBodyLimit;
+use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{MatchedPath, Path, Query, Request, State};
 use axum::http::Uri;
-use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
-use futures_util::{stream, Stream};
+use futures_util::{Stream, stream};
 use percent_encoding::percent_decode_str;
 use quarry_collab_codec::{
-    review_markers, review_meta_with_inline_comment_bodies, ReviewMeta, ReviewMetaEntry,
-    ReviewSuggestionKind as CodecReviewSuggestionKind,
+    ReviewMeta, ReviewMetaEntry, ReviewSuggestionKind as CodecReviewSuggestionKind, review_markers,
+    review_meta_with_inline_comment_bodies,
 };
 use quarry_core::{
-    now_timestamp, CollabInviteToken, ConflictRecord, DocumentHistoryEntry, DocumentLink,
-    DocumentListEntry, DocumentSource, DocumentVersion, DocumentVersionContent, GcReport, GitPeer,
-    GraphEdge, GraphNode, GraphResponse, Library, LinkCollection, QuarryError, ReindexReport,
-    SearchResponse, SearchResult, SearchSuggestion, TransactionRecord, VersionDiff, WriteOutcome,
-    WritePrecondition,
+    CollabInviteToken, ConflictRecord, DocumentHistoryEntry, DocumentLink, DocumentListEntry,
+    DocumentSource, DocumentVersion, DocumentVersionContent, GcReport, GitPeer, GraphEdge,
+    GraphNode, GraphResponse, Library, LinkCollection, QuarryError, ReindexReport, SearchResponse,
+    SearchResult, SearchSuggestion, TransactionRecord, VersionDiff, WriteOutcome,
+    WritePrecondition, now_timestamp,
 };
 use quarry_git::{
-    export_worktree, import_worktree, pull_peer, push_peer, sync_peer, GitExportOptions,
-    GitExportResult, GitImportResult, GitSyncResult,
+    GitExportOptions, GitExportResult, GitImportResult, GitSyncResult, export_worktree,
+    import_worktree, pull_peer, push_peer, sync_peer,
 };
 use quarry_storage::{
     DocumentScopeRef, PutDocumentRequest, QuarryStore, StoreEvent, StoreEventKind,
@@ -1259,8 +1259,7 @@ async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiError> {
             skill_url: format!("{origin}/quarry.SKILL.md"),
             openapi_url: format!("{api_base}/openapi.json"),
             capabilities,
-            auth_note:
-                "Tmp document URLs are bearer capabilities: anyone with /tmp/{secret} can access that tmp document. Library REST APIs remain trusted-localhost for now.",
+            auth_note: "Tmp document URLs are bearer capabilities: anyone with /tmp/{secret} can access that tmp document. Library REST APIs remain trusted-localhost for now.",
             auth: AgentDiscoveryAuth {
                 mode: "trusted_localhost",
                 token_role: "tmp_capability_url",
@@ -1464,7 +1463,7 @@ async fn tmp_collab_websocket(
 async fn events(
     State(state): State<AppState>,
     Query(query): Query<EventsQuery>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>> + use<>>, ApiError> {
     events_for_library(
         &state.store,
         &query.library,
@@ -1481,7 +1480,7 @@ async fn events_for_library(
     document_path: Option<String>,
     presence_guard: Option<PresenceStreamGuard>,
     shutdown: CancellationToken,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>> + use<>>, ApiError> {
     let library = store.get_library(library).await?;
     tracing::debug!(
         event = "sse.stream.opened",
@@ -1613,7 +1612,7 @@ async fn events_for_tmp_document(
     document_id: String,
     presence_guard: Option<PresenceStreamGuard>,
     shutdown: CancellationToken,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>> + use<>>, ApiError> {
     tracing::debug!(
         event = "sse.stream.opened",
         scope = %"tmp",
@@ -3224,21 +3223,20 @@ async fn patch_document_metadata(
     // rows and review items fail-closed, and bypasses the session mutex).
     // It routes through the gateway as a zero-op transaction with a
     // metadata override instead — see `markdown_write::patch_block_document_metadata`.
-    if let Ok(head) = state.store.head_document(&library, path).await {
-        if quarry_storage::document_kind(path, &head.content_type)
+    if let Ok(head) = state.store.head_document(&library, path).await
+        && quarry_storage::document_kind(path, &head.content_type)
             == quarry_storage::DocumentKind::BlockDocument
-        {
-            return gateway::gateway_reply(
-                markdown_write::patch_block_document_metadata(
-                    &state,
-                    &library,
-                    path,
-                    patch,
-                    precondition_from_headers(&headers)?,
-                )
-                .await,
-            );
-        }
+    {
+        return gateway::gateway_reply(
+            markdown_write::patch_block_document_metadata(
+                &state,
+                &library,
+                path,
+                patch,
+                precondition_from_headers(&headers)?,
+            )
+            .await,
+        );
     }
     let outcome = state
         .store
@@ -3771,13 +3769,13 @@ fn split_markdown_blocks(markdown: &str) -> Vec<String> {
         let outside_fence = fence.is_none();
         let blank_outside_fence = outside_fence && trimmed.trim().is_empty();
 
-        if outside_fence && !blank_outside_fence {
-            if let Some(boundary) = pending_boundary.take() {
-                if block_start < boundary {
-                    blocks.push(markdown[block_start..boundary].to_string());
-                    block_start = boundary;
-                }
-            }
+        if outside_fence
+            && !blank_outside_fence
+            && let Some(boundary) = pending_boundary.take()
+            && block_start < boundary
+        {
+            blocks.push(markdown[block_start..boundary].to_string());
+            block_start = boundary;
         }
 
         update_markdown_fence(trimmed, &mut fence);
@@ -3794,24 +3792,25 @@ fn split_markdown_blocks(markdown: &str) -> Vec<String> {
     if offset < markdown.len() {
         let line = &markdown[offset..];
         let outside_fence = fence.is_none();
-        if outside_fence && !line.trim().is_empty() {
-            if let Some(boundary) = pending_boundary.take() {
-                if block_start < boundary {
-                    blocks.push(markdown[block_start..boundary].to_string());
-                    block_start = boundary;
-                }
-            }
+        if outside_fence
+            && !line.trim().is_empty()
+            && let Some(boundary) = pending_boundary.take()
+            && block_start < boundary
+        {
+            blocks.push(markdown[block_start..boundary].to_string());
+            block_start = boundary;
         }
         if outside_fence && line.trim().is_empty() {
             pending_boundary = Some(markdown.len());
         }
     }
 
-    if let Some(boundary) = pending_boundary {
-        if boundary > block_start && boundary == markdown.len() {
-            blocks.push(markdown[block_start..boundary].to_string());
-            return blocks;
-        }
+    if let Some(boundary) = pending_boundary
+        && boundary > block_start
+        && boundary == markdown.len()
+    {
+        blocks.push(markdown[block_start..boundary].to_string());
+        return blocks;
     }
     if block_start < markdown.len() {
         blocks.push(markdown[block_start..].to_string());
@@ -4459,7 +4458,7 @@ fn metadata_from_headers(headers: &HeaderMap, content_type: &str) -> Result<Json
 mod tests {
     use super::*;
     #[cfg(any(feature = "lib-documents", feature = "tmp-documents"))]
-    use axum::body::{to_bytes, Body};
+    use axum::body::{Body, to_bytes};
     #[cfg(any(feature = "lib-documents", feature = "tmp-documents"))]
     use axum::http::Method;
     use axum::response::IntoResponse;
@@ -5072,10 +5071,10 @@ mod tests {
 }
 
 fn precondition_from_headers(headers: &HeaderMap) -> Result<WritePrecondition, ApiError> {
-    if let Some(value) = headers.get(header::IF_NONE_MATCH) {
-        if value.to_str().unwrap_or_default().trim() == "*" {
-            return Ok(WritePrecondition::IfNoneMatch);
-        }
+    if let Some(value) = headers.get(header::IF_NONE_MATCH)
+        && value.to_str().unwrap_or_default().trim() == "*"
+    {
+        return Ok(WritePrecondition::IfNoneMatch);
     }
     if let Some(value) = headers.get(header::IF_MATCH) {
         let value = value

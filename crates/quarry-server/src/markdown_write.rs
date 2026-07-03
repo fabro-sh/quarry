@@ -41,21 +41,21 @@
 //! designated mover) — the merged order, ids, and anchors are identical
 //! either way, pinned by `sequential_ops_*` tests.
 
+use crate::AppState;
 use crate::gateway::{
     self, BlockOp, BlockTransactionActor, GatewayError, GatewayErrorCode, GatewayFailure,
     TransactionContext, TransactionPlan, TransactionReply, TransactionSettings,
 };
 use crate::log_redaction;
-use crate::AppState;
 use axum::http::StatusCode;
 use quarry_collab_codec::{
-    block_rows_to_markdown, reconcile, BlockRow, ReconcileBase, ReconcileOp,
+    BlockRow, ReconcileBase, ReconcileOp, block_rows_to_markdown, reconcile,
 };
 use quarry_core::{DocumentSource, QuarryError, WriteOutcome, WritePrecondition};
 use quarry_storage::{
-    document_kind, merge_json, split_markdown_frontmatter, BlockMarkdownWrite,
-    BlockMarkdownWriteOutcome, BlockMarkdownWriter, BlockReviewKind, BlockWriteBase, DocumentKind,
-    DocumentScopeRef,
+    BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockMarkdownWriter, BlockReviewKind,
+    BlockWriteBase, DocumentKind, DocumentScopeRef, document_kind, merge_json,
+    split_markdown_frontmatter,
 };
 use serde_json::Value as JsonValue;
 use std::future::Future;
@@ -119,10 +119,10 @@ async fn put_scoped_block_document(
                     QuarryError::PreconditionFailed(format!("{path} already exists")).into(),
                 ));
             }
-            if let Err(error) = head {
-                if !matches!(error, QuarryError::NotFound(_)) {
-                    return Err(error.into());
-                }
+            if let Err(error) = head
+                && !matches!(error, QuarryError::NotFound(_))
+            {
+                return Err(error.into());
             }
             BlockWriteBase::CurrentCanonical
         }
@@ -142,7 +142,7 @@ async fn put_scoped_block_document(
                             "If-Match {version_id} does not name a known version of {path}"
                         ))
                         .into(),
-                    ))
+                    ));
                 }
                 Err(error) => return Err(error.into()),
             }
@@ -304,7 +304,7 @@ pub(crate) async fn patch_block_document_metadata(
                     record.client_tx_id
                 ))
                 .into(),
-            ))
+            ));
         }
     };
     Ok(crate::json_with_etag(
@@ -545,7 +545,7 @@ async fn write_markdown_with(
                     record.client_tx_id
                 ))
                 .into(),
-            ))
+            ));
         }
     };
     if degraded {
@@ -1059,8 +1059,7 @@ mod tests {
 
     #[test]
     fn finds_the_first_complete_conflict_hunk() {
-        let markdown =
-            "Intro.\n\n<<<<<<< HEAD\nOurs line.\n=======\nTheirs line.\n>>>>>>> feature\n\nOutro.\n";
+        let markdown = "Intro.\n\n<<<<<<< HEAD\nOurs line.\n=======\nTheirs line.\n>>>>>>> feature\n\nOutro.\n";
 
         assert_eq!(
             first_conflict_marker_hunk(markdown).as_deref(),

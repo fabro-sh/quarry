@@ -16,15 +16,15 @@
 //!   row representation yet (known Phase Zero flag); a top-level block that
 //!   contains one falls back to a `raw_markdown` row preserving the source.
 
+use crate::Unsupported;
 use crate::markdown::{
-    browser_compatible_markdown_options, slate_from_block_events, CRITIC_MARKERS,
+    CRITIC_MARKERS, browser_compatible_markdown_options, slate_from_block_events,
 };
 use crate::markdown_writer::slate_to_markdown;
 use crate::slate::{Attrs, Node};
-use crate::Unsupported;
 use pulldown_cmark::{Event, Parser};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::ops::Range;
 
 /// Element types that are inline content inside a block, not blocks themselves.
@@ -464,7 +464,7 @@ fn extract_inline(
             Node::Element { ty, .. } => {
                 return Err(Unsupported::new(format!(
                     "inline <{ty}> has no block row representation"
-                )))
+                )));
             }
         }
     }
@@ -478,11 +478,12 @@ fn append_run(text: &mut String, runs: &mut Vec<MarkRun>, chunk: &str, marks: &A
         return;
     }
     let end = utf16_len(text);
-    if let Some(last) = runs.last_mut() {
-        if last.end == start && last.marks == *marks {
-            last.end = end;
-            return;
-        }
+    if let Some(last) = runs.last_mut()
+        && last.end == start
+        && last.marks == *marks
+    {
+        last.end = end;
+        return;
     }
     runs.push(MarkRun {
         start,

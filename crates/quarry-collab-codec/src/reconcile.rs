@@ -112,9 +112,9 @@
 //! The stable-anchor intersection is a sorted two-pointer merge (both LCS
 //! outputs are ascending in base index), not the spike's O(n²) scan.
 
-use crate::rows::{block_rows_to_markdown, markdown_to_block_rows, BlockRow, LinkRange, MarkRun};
-use crate::slate::Attrs;
 use crate::Unsupported;
+use crate::rows::{BlockRow, LinkRange, MarkRun, block_rows_to_markdown, markdown_to_block_rows};
+use crate::slate::Attrs;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 

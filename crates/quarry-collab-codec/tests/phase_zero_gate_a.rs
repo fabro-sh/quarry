@@ -44,8 +44,8 @@
 //!   `naive_yjs_move_without_anchor_transplant_loses_anchor_resolution`.
 
 use quarry_collab_codec::attrs;
-use quarry_collab_codec::{apply_built, build_nodes, xmltext_to_slate, Attrs as SlateAttrs, Node};
-use serde_json::{json, Value};
+use quarry_collab_codec::{Attrs as SlateAttrs, Node, apply_built, build_nodes, xmltext_to_slate};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use yrs::branch::{Branch, BranchID};
 use yrs::types::text::YChange;
@@ -424,11 +424,12 @@ fn append_run(text: &mut String, runs: &mut Vec<MarkRun>, chunk: &str, marks: &S
         return;
     }
     let end = utf16_len(text);
-    if let Some(last) = runs.last_mut() {
-        if last.end == start && last.marks == *marks {
-            last.end = end;
-            return;
-        }
+    if let Some(last) = runs.last_mut()
+        && last.end == start
+        && last.marks == *marks
+    {
+        last.end = end;
+        return;
     }
     runs.push(MarkRun {
         start,

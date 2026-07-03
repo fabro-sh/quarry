@@ -1,14 +1,14 @@
 use git2::{
-    build::{CheckoutBuilder, RepoBuilder},
     FetchOptions, IndexAddOption, ObjectType, PushOptions, Repository, Signature,
+    build::{CheckoutBuilder, RepoBuilder},
 };
 use quarry_core::{
-    normalize_path, render_markdown_frontmatter, ConflictRecord, DocumentListEntry, DocumentSource,
-    Library, QuarryError, Result, SyncStateEntry, WriteOutcome, GIT_BINARY_WARN_THRESHOLD,
+    ConflictRecord, DocumentListEntry, DocumentSource, GIT_BINARY_WARN_THRESHOLD, Library,
+    QuarryError, Result, SyncStateEntry, WriteOutcome, normalize_path, render_markdown_frontmatter,
 };
 use quarry_storage::{
-    split_markdown_frontmatter, BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockWriteBase,
-    DocumentKind, DocumentScopeRef, PutDocumentRequest, QuarryStore, TransactionMetadata,
+    BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockWriteBase, DocumentKind, DocumentScopeRef,
+    PutDocumentRequest, QuarryStore, TransactionMetadata, split_markdown_frontmatter,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;

@@ -264,10 +264,12 @@ async fn projection_renames_unlinks_and_removes_empty_directories() {
     projection.unlink("drafts/new.md").await.unwrap();
     projection.rmdir("drafts").await.unwrap();
 
-    assert!(store
-        .get_document(&library.slug, "drafts/new.md")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&library.slug, "drafts/new.md")
+            .await
+            .is_err()
+    );
     assert!(projection.list_dir("").await.unwrap().is_empty());
 }
 
@@ -949,8 +951,10 @@ async fn atomic_save_rename_preserves_target_identity_block_ids_and_anchors() {
     assert_eq!(kept.state, quarry_storage::BlockReviewState::Open);
     assert_eq!(kept.block_id, ids_before[1]);
     // The temp document is gone.
-    assert!(store
-        .head_document(&library.slug, "doc.md.tmp")
-        .await
-        .is_err());
+    assert!(
+        store
+            .head_document(&library.slug, "doc.md.tmp")
+            .await
+            .is_err()
+    );
 }

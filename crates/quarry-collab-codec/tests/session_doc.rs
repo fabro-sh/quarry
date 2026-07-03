@@ -10,11 +10,11 @@
 //! collapse) are re-proven here against the mark representation.
 
 use quarry_collab_codec::{
+    Attrs, BlockRow, LinkRange, MarkRun, Node, SessionAnchor, SessionAnchorKind, SessionProjection,
     apply_built, build_nodes, project_session_nodes, reconcile_session_children,
-    seed_session_nodes, xmltext_to_slate, Attrs, BlockRow, LinkRange, MarkRun, Node, SessionAnchor,
-    SessionAnchorKind, SessionProjection,
+    seed_session_nodes, xmltext_to_slate,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use yrs::branch::{Branch, BranchID};
 use yrs::types::text::YChange;
 use yrs::updates::decoder::Decode;
@@ -1113,7 +1113,7 @@ fn splice_does_not_recreate_the_block_element() {
 #[test]
 fn review_meta_map_round_trips_through_the_doc() {
     use quarry_collab_codec::{
-        read_review_meta_from_map, write_review_meta_to_map, ReviewMeta, ReviewMetaEntry,
+        ReviewMeta, ReviewMetaEntry, read_review_meta_from_map, write_review_meta_to_map,
     };
     let doc = new_session_doc();
     let meta = ReviewMeta {

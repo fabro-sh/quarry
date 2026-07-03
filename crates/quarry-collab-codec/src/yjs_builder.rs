@@ -1,11 +1,11 @@
+use crate::Unsupported;
 use crate::review::{ReviewMeta, ReviewMetaEntry, ReviewMetaPatch};
 use crate::slate::{Attrs as SlateAttrs, Node};
-use crate::Unsupported;
 use serde_json::{Number, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
-use yrs::types::text::YChange;
 use yrs::types::Attrs;
+use yrs::types::text::YChange;
 use yrs::{
     Any, Doc, Map, MapRef, OffsetKind, Options, Out, ReadTxn, Text, Transact, WriteTxn, Xml,
     XmlTextPrelim, XmlTextRef,

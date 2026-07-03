@@ -1,11 +1,11 @@
-use crate::normalize::normalize_insert_nodes;
-use crate::slate::{attrs, Attrs, Node};
 use crate::Unsupported;
+use crate::normalize::normalize_insert_nodes;
+use crate::slate::{Attrs, Node, attrs};
 use indexmap::IndexMap;
 use pulldown_cmark::{
     Alignment, CodeBlockKind, Event, HeadingLevel, LinkType, Options, Parser, Tag, TagEnd,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub(crate) const CRITIC_MARKERS: [&str; 6] = ["{==", "{++", "{--", "{~~", "{>>", "{#"];
 
@@ -166,7 +166,7 @@ impl EventParser {
             | Tag::DefinitionListTitle
             | Tag::DefinitionListDefinition
             | Tag::MetadataBlock(_) => {
-                return Err(Unsupported::new(format!("unsupported block {tag:?}")))
+                return Err(Unsupported::new(format!("unsupported block {tag:?}")));
             }
             Tag::Item
             | Tag::TableHead
@@ -181,7 +181,7 @@ impl EventParser {
             | Tag::Image { .. } => {
                 return Err(Unsupported::new(format!(
                     "unexpected inline/container tag {tag:?}"
-                )))
+                )));
             }
         }
         Ok(())
@@ -207,13 +207,13 @@ impl EventParser {
                 | Event::Start(Tag::Table(_))
                 | Event::Start(Tag::CodeBlock(_))
                 | Event::Start(Tag::BlockQuote(_)) => {
-                    return Err(Unsupported::new("nested block inside blockquote"))
+                    return Err(Unsupported::new("nested block inside blockquote"));
                 }
                 Event::Text(text) if text.trim().is_empty() => {}
                 other => {
                     return Err(Unsupported::new(format!(
                         "unsupported blockquote event {other:?}"
-                    )))
+                    )));
                 }
             }
         }
@@ -229,7 +229,7 @@ impl EventParser {
                 other => {
                     return Err(Unsupported::new(format!(
                         "unsupported code event {other:?}"
-                    )))
+                    )));
                 }
             }
         }
@@ -297,7 +297,7 @@ impl EventParser {
                 other => {
                     return Err(Unsupported::new(format!(
                         "unsupported list event {other:?}"
-                    )))
+                    )));
                 }
             }
         }
@@ -356,7 +356,7 @@ impl EventParser {
                 other => {
                     return Err(Unsupported::new(format!(
                         "unsupported list item event {other:?}"
-                    )))
+                    )));
                 }
             }
         }
@@ -385,7 +385,7 @@ impl EventParser {
                 other => {
                     return Err(Unsupported::new(format!(
                         "unsupported table event {other:?}"
-                    )))
+                    )));
                 }
             }
         }
@@ -416,7 +416,7 @@ impl EventParser {
                 other => {
                     return Err(Unsupported::new(format!(
                         "unsupported table section event {other:?}"
-                    )))
+                    )));
                 }
             }
         }
@@ -433,7 +433,7 @@ impl EventParser {
                 other => {
                     return Err(Unsupported::new(format!(
                         "unsupported table row event {other:?}"
-                    )))
+                    )));
                 }
             }
         }
@@ -469,7 +469,7 @@ impl EventParser {
                 other => {
                     return Err(Unsupported::new(format!(
                         "unsupported table cell event {other:?}"
-                    )))
+                    )));
                 }
             }
         }
@@ -498,17 +498,17 @@ impl EventParser {
                     InlineEventResult::Unhandled(Event::Start(other)) => {
                         return Err(Unsupported::new(format!(
                             "unsupported inline start {other:?}"
-                        )))
+                        )));
                     }
                     InlineEventResult::Unhandled(Event::End(found)) => {
                         return Err(Unsupported::new(format!(
                             "unexpected inline end {found:?}, expected {end:?}"
-                        )))
+                        )));
                     }
                     InlineEventResult::Unhandled(other) => {
                         return Err(Unsupported::new(format!(
                             "unsupported inline event {other:?}"
-                        )))
+                        )));
                     }
                 },
             }
@@ -548,7 +548,7 @@ impl EventParser {
                     InlineEventResult::Unhandled(other) => {
                         return Err(Unsupported::new(format!(
                             "unsupported tight list item event {other:?}"
-                        )))
+                        )));
                     }
                 },
             }

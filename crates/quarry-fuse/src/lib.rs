@@ -1,5 +1,5 @@
 use quarry_core::{
-    normalize_path, parent_dirs, DocumentSource, QuarryError, Result, WritePrecondition,
+    DocumentSource, QuarryError, Result, WritePrecondition, normalize_path, parent_dirs,
 };
 use quarry_storage::{
     BlockMarkdownWrite, BlockWriteBase, DocumentKind, DocumentScopeRef, PutDocumentRequest,
@@ -8,8 +8,8 @@ use quarry_storage::{
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use tokio::sync::{Mutex, Notify, RwLock};
 
@@ -924,7 +924,7 @@ fn content_type_for_path(path: &str) -> String {
 
 #[cfg(target_os = "linux")]
 mod linux_mount {
-    use super::{normalize_mount_path, FuseAttr, FuseNodeKind, FuseProjection};
+    use super::{FuseAttr, FuseNodeKind, FuseProjection, normalize_mount_path};
     use bytes::Bytes;
     use fuse3::raw::prelude::*;
     use fuse3::{Errno, Inode, MountOptions, Timestamp};

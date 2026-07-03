@@ -1,5 +1,5 @@
 use quarry_core::{DocumentSource, TransactionState, WritePrecondition};
-use quarry_git::{export_worktree, import_worktree, push_peer, sync_peer, GitExportOptions};
+use quarry_git::{GitExportOptions, export_worktree, import_worktree, push_peer, sync_peer};
 use quarry_storage::{QuarryStore, StoreConfig};
 use std::path::Path;
 
@@ -176,14 +176,18 @@ async fn import_ignores_quarry_metadata_directory_and_orphan_sidecars() {
             .content,
         b"kept\n"
     );
-    assert!(store
-        .get_document(&library.slug, ".quarry/marker.json")
-        .await
-        .is_err());
-    assert!(store
-        .get_document(&library.slug, "unpaired.quarrymeta.yaml")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&library.slug, ".quarry/marker.json")
+            .await
+            .is_err()
+    );
+    assert!(
+        store
+            .get_document(&library.slug, "unpaired.quarrymeta.yaml")
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -249,10 +253,12 @@ async fn failed_import_rolls_back_transaction_instead_of_leaving_it_open() {
     let transactions = store.list_transactions(&library.slug).await.unwrap();
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].state, TransactionState::RolledBack);
-    assert!(store
-        .get_document(&library.slug, "valid.bin")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&library.slug, "valid.bin")
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -868,10 +874,12 @@ async fn sync_records_both_deleted_as_clean_state() {
     let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
 
     assert!(result.conflicts.is_empty());
-    assert!(store
-        .get_document(&library.slug, "notes/remove.md")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&library.slug, "notes/remove.md")
+            .await
+            .is_err()
+    );
     assert!(!repo.path().join("notes/remove.md").exists());
     let state = store
         .sync_state(&peer.id, "notes/remove.md")
@@ -915,10 +923,12 @@ async fn sync_applies_git_only_delete_to_quarry() {
     let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
 
     assert!(result.conflicts.is_empty());
-    assert!(store
-        .get_document(&library.slug, "notes/remove.md")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&library.slug, "notes/remove.md")
+            .await
+            .is_err()
+    );
     assert!(!repo.path().join("notes/remove.md").exists());
     let state = store
         .sync_state(&peer.id, "notes/remove.md")
@@ -1082,10 +1092,12 @@ async fn sync_records_conflict_when_quarry_deletes_and_git_changes() {
         .theirs_version_id
         .as_deref()
         .expect("the git-side conflict should record the imported version id");
-    assert!(store
-        .get_document(&library.slug, "notes/plan.md")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&library.slug, "notes/plan.md")
+            .await
+            .is_err()
+    );
     let conflict_path = result.conflict_paths[0].clone();
     assert!(conflict_path.starts_with("notes/plan.md.conflict-git-"));
     let sibling = store
@@ -1250,11 +1262,13 @@ async fn push_peer_does_not_advance_sync_state_when_remote_push_fails() {
         .await
         .unwrap_err();
 
-    assert!(store
-        .sync_state(&peer.id, "notes/pushed.md")
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        store
+            .sync_state(&peer.id, "notes/pushed.md")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -1649,10 +1663,12 @@ async fn sync_pairs_pure_git_renames_into_identity_preserving_moves() {
         moved.id, document_id,
         "the rename preserves the document id"
     );
-    assert!(store
-        .get_document(&library.slug, "notes/old.md")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&library.slug, "notes/old.md")
+            .await
+            .is_err()
+    );
     let ids_after: Vec<String> = store
         .load_block_tree(&document_id)
         .await
@@ -1739,10 +1755,12 @@ async fn sync_treats_renamed_and_edited_files_as_delete_plus_create() {
         created.id, outcome.document.id,
         "no pairing without a byte match"
     );
-    assert!(store
-        .get_document(&library.slug, "notes/old.md")
-        .await
-        .is_err());
+    assert!(
+        store
+            .get_document(&library.slug, "notes/old.md")
+            .await
+            .is_err()
+    );
 }
 
 /// Duplicate content on either side makes pairing ambiguous; the sync

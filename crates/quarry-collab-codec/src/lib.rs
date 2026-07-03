@@ -11,32 +11,32 @@ mod trailing;
 mod yjs_builder;
 
 pub use markdown::{block_markdown_to_slate, block_markdown_to_slate_raw};
-pub use markdown_writer::{is_known_inline_mark, slate_to_markdown, KNOWN_BLOCK_TYPES};
-pub use reconcile::{reconcile, ReconcileBase, ReconcileConflict, ReconcileOp, ReconcileOutcome};
+pub use markdown_writer::{KNOWN_BLOCK_TYPES, is_known_inline_mark, slate_to_markdown};
+pub use reconcile::{ReconcileBase, ReconcileConflict, ReconcileOp, ReconcileOutcome, reconcile};
 pub use review::{
-    has_review_endmatter, hydrate_inline_comment_bodies, inline_comment_body,
-    parse_review_document, review_block_to_slate, review_blocks_to_slate, review_markdown_to_slate,
-    review_markers, review_meta_with_inline_comment_bodies, split_review_endmatter,
     ReviewCommentMarker, ReviewDocument, ReviewMarkers, ReviewMeta, ReviewMetaEntry,
-    ReviewMetaPatch, ReviewSuggestionKind, ReviewSuggestionMarker,
+    ReviewMetaPatch, ReviewSuggestionKind, ReviewSuggestionMarker, has_review_endmatter,
+    hydrate_inline_comment_bodies, inline_comment_body, parse_review_document,
+    review_block_to_slate, review_blocks_to_slate, review_markdown_to_slate, review_markers,
+    review_meta_with_inline_comment_bodies, split_review_endmatter,
 };
 pub use rows::{
-    block_rows_to_markdown, block_rows_to_nodes, is_utf16_boundary, markdown_to_block_rows,
-    utf16_len, BlockRow, LinkRange, MarkRun,
+    BlockRow, LinkRange, MarkRun, block_rows_to_markdown, block_rows_to_nodes, is_utf16_boundary,
+    markdown_to_block_rows, utf16_len,
 };
 pub use session_doc::{
-    project_session_nodes, read_review_meta_from_map, reconcile_session_children,
-    seed_session_nodes, SessionAnchor, SessionAnchorKind, SessionProjection,
+    SessionAnchor, SessionAnchorKind, SessionProjection, project_session_nodes,
+    read_review_meta_from_map, reconcile_session_children, seed_session_nodes,
 };
-pub use slate::{attrs, Attrs, Node};
+pub use slate::{Attrs, Node, attrs};
 pub use text_diff::{
-    utf16_text_diff, utf16_text_diff_hunks, utf16_text_diff_hunks_bounded, TextDiff,
-    MULTI_HUNK_CHAR_LIMIT,
+    MULTI_HUNK_CHAR_LIMIT, TextDiff, utf16_text_diff, utf16_text_diff_hunks,
+    utf16_text_diff_hunks_bounded,
 };
 pub use trailing::{is_empty_paragraph, strip_trailing_empty_paragraphs};
 pub use yjs_builder::{
-    apply_built, apply_review_patch_to_map, build_nodes, encode_update_v1_from_built,
-    encode_update_v1_from_built_with_review, write_review_meta_to_map, xmltext_to_slate, BuiltNode,
+    BuiltNode, apply_built, apply_review_patch_to_map, build_nodes, encode_update_v1_from_built,
+    encode_update_v1_from_built_with_review, write_review_meta_to_map, xmltext_to_slate,
 };
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]

@@ -86,23 +86,23 @@
 //!   projection must always export — the containment rules above exist to
 //!   keep every reachable doc shape projectable.
 
-use crate::collab::{serve_session_socket, SHARED_ROOT};
+use crate::collab::{SHARED_ROOT, serve_session_socket};
 use axum::extract::ws::WebSocket;
 use quarry_collab_codec::{
-    apply_built, block_rows_to_markdown, build_nodes, project_session_nodes,
-    read_review_meta_from_map, seed_session_nodes, utf16_len, write_review_meta_to_map, BlockRow,
-    Node, ReviewMeta, ReviewMetaEntry, SessionAnchor, SessionAnchorKind, SessionProjection,
-    Unsupported,
+    BlockRow, Node, ReviewMeta, ReviewMetaEntry, SessionAnchor, SessionAnchorKind,
+    SessionProjection, Unsupported, apply_built, block_rows_to_markdown, build_nodes,
+    project_session_nodes, read_review_meta_from_map, seed_session_nodes, utf16_len,
+    write_review_meta_to_map,
 };
-use quarry_core::{now_timestamp, render_markdown_frontmatter, QuarryError, WriteOutcome};
+use quarry_core::{QuarryError, WriteOutcome, now_timestamp, render_markdown_frontmatter};
 use quarry_storage::{
     BlockMutationCommit, BlockMutationOutcome, BlockReviewItem, BlockReviewKind, BlockReviewState,
     DocumentScopeRef, QuarryStore,
 };
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, MutexGuard as StdMutexGuard};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -1246,13 +1246,13 @@ impl<'a> ReviewReconciliation<'a> {
             created_at,
             updated_at,
         };
-        if entry.edited_at.is_none() {
-            if let Some(prior_reply) = prior_reply {
-                let mut comparable = reply.clone();
-                comparable.updated_at = prior_reply.updated_at.clone();
-                if comparable != *prior_reply {
-                    reply.updated_at = self.now.to_string();
-                }
+        if entry.edited_at.is_none()
+            && let Some(prior_reply) = prior_reply
+        {
+            let mut comparable = reply.clone();
+            comparable.updated_at = prior_reply.updated_at.clone();
+            if comparable != *prior_reply {
+                reply.updated_at = self.now.to_string();
             }
         }
         reply

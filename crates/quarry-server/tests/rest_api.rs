@@ -1,16 +1,16 @@
 #![cfg(feature = "lib-documents")]
 
-use axum::body::{to_bytes, Body};
-use axum::http::{header, Method, Request, StatusCode};
+use axum::body::{Body, to_bytes};
+use axum::http::{Method, Request, StatusCode, header};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
-use quarry_collab_codec::{xmltext_to_slate, Node};
+use quarry_collab_codec::{Node, xmltext_to_slate};
 use quarry_core::DocumentSource;
 use quarry_server::{app_state, router, router_with_state, serve_state_with_shutdown};
 use quarry_storage::{QuarryStore, StoreConfig, StoreEvent, StoreEventKind};
 use serde_json::Value;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
 use tower::ServiceExt;
 use tracing_subscriber::fmt::MakeWriter;
@@ -514,11 +514,12 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert!(body
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|document| document["path"] != "notes/one.md"));
+    assert!(
+        body.as_array()
+            .unwrap()
+            .iter()
+            .all(|document| document["path"] != "notes/one.md")
+    );
 
     let response = app
         .clone()
@@ -664,9 +665,10 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/ttl"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/events/pending"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/events/ack"].is_object());
-    assert!(openapi["paths"]
-        ["/v1/libraries/{library}/transactions/{tx}/documents/{path}/metadata"]
-        .is_object());
+    assert!(
+        openapi["paths"]["/v1/libraries/{library}/transactions/{tx}/documents/{path}/metadata"]
+            .is_object()
+    );
     assert!(openapi["paths"]["/v1/libraries/{library}/git/peers"]["post"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/git/peers"]["get"].is_object());
 }
@@ -706,9 +708,11 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
     let secret = created["document"]["path"].as_str().unwrap().to_string();
     let document_id = created["document"]["id"].as_str().unwrap().to_string();
     assert_eq!(secret.len(), 32);
-    assert!(secret
-        .chars()
-        .all(|character| character.is_ascii_hexdigit()));
+    assert!(
+        secret
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    );
     assert_eq!(created["document"]["library_id"], Value::Null);
     assert_json_timestamp(&created["document"]["expires_at"]);
 
@@ -742,10 +746,12 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
         response.headers()["x-quarry-document-id"],
         document_id.as_str()
     );
-    assert!(response.headers()["x-quarry-expires-at"]
-        .to_str()
-        .unwrap()
-        .starts_with("20"));
+    assert!(
+        response.headers()["x-quarry-expires-at"]
+            .to_str()
+            .unwrap()
+            .starts_with("20")
+    );
     assert_eq!(
         to_bytes(response.into_body(), usize::MAX).await.unwrap(),
         "draft one"
@@ -1973,71 +1979,95 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
     assert!(body["endpoints"]["review_process"].is_null());
     assert!(body["route_hints"]["edit"].is_null());
     assert!(body["route_hints"]["ops"].is_null());
-    assert!(body["capabilities"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|capability| capability == "presence"));
-    assert!(body["capabilities"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|capability| capability == "transactions"));
-    assert!(body["capabilities"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|capability| capability == "review"));
+    assert!(
+        body["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|capability| capability == "presence")
+    );
+    assert!(
+        body["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|capability| capability == "transactions")
+    );
+    assert!(
+        body["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|capability| capability == "review")
+    );
     if cfg!(feature = "tmp-documents") {
-        assert!(body["capabilities"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|capability| capability == "tmp_documents"));
-        assert!(!body["capabilities"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|capability| capability == &removed_tmp_signal));
+        assert!(
+            body["capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|capability| capability == "tmp_documents")
+        );
+        assert!(
+            !body["capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|capability| capability == &removed_tmp_signal)
+        );
     }
-    assert!(body["auth_note"]
-        .as_str()
-        .unwrap()
-        .contains("trusted-localhost"));
+    assert!(
+        body["auth_note"]
+            .as_str()
+            .unwrap()
+            .contains("trusted-localhost")
+    );
     assert_eq!(body["auth"]["mode"], "trusted_localhost");
     assert!(body["presence_statuses"].as_array().unwrap().len() >= 6);
-    assert!(body["transaction_operations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|operation| operation == "replace_block_content"));
-    assert!(body["transaction_operations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|operation| operation == "set_block_type"));
-    assert!(body["transaction_operations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|operation| operation == "comment.add"));
-    assert!(body["transaction_operations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|operation| operation == "comment.edit"));
-    assert!(body["transaction_operations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|operation| operation == "suggestion.accept"));
-    assert!(!body["limitations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|limitation| limitation
-            .as_str()
-            .is_some_and(|limitation| limitation.contains("comment.reply"))));
+    assert!(
+        body["transaction_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation == "replace_block_content")
+    );
+    assert!(
+        body["transaction_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation == "set_block_type")
+    );
+    assert!(
+        body["transaction_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation == "comment.add")
+    );
+    assert!(
+        body["transaction_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation == "comment.edit")
+    );
+    assert!(
+        body["transaction_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation == "suggestion.accept")
+    );
+    assert!(
+        !body["limitations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|limitation| limitation
+                .as_str()
+                .is_some_and(|limitation| limitation.contains("comment.reply")))
+    );
 }
 
 #[tokio::test]
@@ -2437,15 +2467,19 @@ transaction: quarry_storage::TransactionMetadata::default(),
         body["results"][0]["head_version_id"],
         latest_intro.version.id
     );
-    assert!(body["results"][0]["matched_fields"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|field| field == "body"));
-    assert!(body["results"][0]["snippet"]
-        .as_str()
-        .unwrap()
-        .contains("unique-search"));
+    assert!(
+        body["results"][0]["matched_fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field == "body")
+    );
+    assert!(
+        body["results"][0]["snippet"]
+            .as_str()
+            .unwrap()
+            .contains("unique-search")
+    );
 
     let response = app
         .clone()
@@ -2541,9 +2575,11 @@ transaction: quarry_storage::TransactionMetadata::default(),
     assert!(links
         .iter()
         .any(|link| link["target_kind"] == "markdown_link" && link["target_path"] == "guide.md"));
-    assert!(links
-        .iter()
-        .any(|link| link["target_kind"] == "tag" && link["target_text"] == "planning"));
+    assert!(
+        links
+            .iter()
+            .any(|link| link["target_kind"] == "tag" && link["target_text"] == "planning")
+    );
 
     let response = app
         .clone()
@@ -2558,11 +2594,13 @@ transaction: quarry_storage::TransactionMetadata::default(),
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert!(body["links"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|link| link["src_path"] == "intro.md"));
+    assert!(
+        body["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|link| link["src_path"] == "intro.md")
+    );
 
     let response = app
         .clone()
@@ -2577,21 +2615,27 @@ transaction: quarry_storage::TransactionMetadata::default(),
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert!(body["nodes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|node| node["path"] == "intro.md"));
-    assert!(body["edges"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|edge| { edge["source_path"] == "intro.md" && edge["target_path"] == "daily.md" }));
-    assert!(!body["nodes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|node| node["path"] == "chain.md"));
+    assert!(
+        body["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["path"] == "intro.md")
+    );
+    assert!(
+        body["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|edge| { edge["source_path"] == "intro.md" && edge["target_path"] == "daily.md" })
+    );
+    assert!(
+        !body["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["path"] == "chain.md")
+    );
 
     let response = app
         .clone()
@@ -2606,16 +2650,20 @@ transaction: quarry_storage::TransactionMetadata::default(),
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert!(body["nodes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|node| node["path"] == "chain.md"));
-    assert!(body["edges"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|edge| { edge["source_path"] == "daily.md" && edge["target_path"] == "chain.md" }));
+    assert!(
+        body["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["path"] == "chain.md")
+    );
+    assert!(
+        body["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|edge| { edge["source_path"] == "daily.md" && edge["target_path"] == "chain.md" })
+    );
 
     let response = app
         .clone()
@@ -2650,9 +2698,11 @@ transaction: quarry_storage::TransactionMetadata::default(),
     let body: Value = response_json(response).await;
     let nodes = body["nodes"].as_array().unwrap();
     assert!(!nodes.is_empty());
-    assert!(nodes
-        .iter()
-        .all(|node| node["path"].as_str().unwrap().starts_with("projects/")));
+    assert!(
+        nodes
+            .iter()
+            .all(|node| node["path"].as_str().unwrap().starts_with("projects/"))
+    );
     assert!(body["edges"].as_array().unwrap().iter().any(|edge| {
         edge["source_path"] == "projects/brief.md" && edge["target_path"] == "projects/roadmap.md"
     }));
@@ -2681,9 +2731,11 @@ transaction: quarry_storage::TransactionMetadata::default(),
     let body: Value = response_json(response).await;
     let edges = body["edges"].as_array().unwrap();
     assert!(!edges.is_empty());
-    assert!(edges
-        .iter()
-        .all(|edge| edge["target_kind"] == "tag" && edge["target_text"] == "planning"));
+    assert!(
+        edges
+            .iter()
+            .all(|edge| edge["target_kind"] == "tag" && edge["target_text"] == "planning")
+    );
 
     let response = app
         .clone()
@@ -2752,10 +2804,12 @@ transaction: quarry_storage::TransactionMetadata::default(),
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert!(body["content"]
-        .as_str()
-        .unwrap()
-        .contains("[[Daily|today]]"));
+    assert!(
+        body["content"]
+            .as_str()
+            .unwrap()
+            .contains("[[Daily|today]]")
+    );
 
     let response = app
         .clone()
@@ -2823,10 +2877,12 @@ transaction: quarry_storage::TransactionMetadata::default(),
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(response.headers()[header::CONTENT_TYPE]
-        .to_str()
-        .unwrap()
-        .starts_with("text/event-stream"));
+    assert!(
+        response.headers()[header::CONTENT_TYPE]
+            .to_str()
+            .unwrap()
+            .starts_with("text/event-stream")
+    );
 
     let response = app
         .clone()
@@ -2840,10 +2896,12 @@ transaction: quarry_storage::TransactionMetadata::default(),
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(response.headers()[header::CONTENT_TYPE]
-        .to_str()
-        .unwrap()
-        .starts_with("text/event-stream"));
+    assert!(
+        response.headers()[header::CONTENT_TYPE]
+            .to_str()
+            .unwrap()
+            .starts_with("text/event-stream")
+    );
 
     let response = app
         .oneshot(
@@ -2874,9 +2932,11 @@ transaction: quarry_storage::TransactionMetadata::default(),
         .as_array()
         .expect("AgentBlockRef should expose required fields");
     assert!(block_ref_required.iter().any(|value| value == "ordinal"));
-    assert!(!block_ref_required
-        .iter()
-        .any(|value| value == "contentHash"));
+    assert!(
+        !block_ref_required
+            .iter()
+            .any(|value| value == "contentHash")
+    );
     let content_hash_schema =
         &openapi["components"]["schemas"]["AgentBlockRef"]["properties"]["contentHash"];
     assert_schema_type_contains(content_hash_schema, "string");
@@ -2916,33 +2976,39 @@ transaction: quarry_storage::TransactionMetadata::default(),
     );
     let library_presence_entry = &openapi["components"]["schemas"]["AgentPresenceEntry"];
     assert!(library_presence_entry["properties"]["path"].is_object());
-    assert!(library_presence_entry["required"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|field| field == "path"));
+    assert!(
+        library_presence_entry["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field == "path")
+    );
     let tmp_presence_entry = &openapi["components"]["schemas"]["TmpAgentPresenceEntry"];
     assert!(tmp_presence_entry.is_object());
     assert!(tmp_presence_entry["properties"].get("path").is_none());
     assert!(tmp_presence_entry["properties"].get("library").is_none());
     let tmp_presence_required = tmp_presence_entry["required"].as_array().unwrap();
-    assert!(tmp_presence_required
-        .iter()
-        .any(|field| field == "documentId"));
+    assert!(
+        tmp_presence_required
+            .iter()
+            .any(|field| field == "documentId")
+    );
     assert!(tmp_presence_required.iter().any(|field| field == "agentId"));
     assert!(tmp_presence_required.iter().any(|field| field == "status"));
-    assert!(tmp_presence_required
-        .iter()
-        .any(|field| field == "updatedAt"));
+    assert!(
+        tmp_presence_required
+            .iter()
+            .any(|field| field == "updatedAt")
+    );
     assert!(!tmp_presence_required.iter().any(|field| field == "path"));
     assert_eq!(
-        openapi["paths"]["/v1/tmp/documents/{secret}/presence"]["get"]["responses"]["200"]
-            ["content"]["application/json"]["schema"]["$ref"],
+        openapi["paths"]["/v1/tmp/documents/{secret}/presence"]["get"]["responses"]["200"]["content"]
+            ["application/json"]["schema"]["$ref"],
         "#/components/schemas/TmpAgentPresenceListResponse"
     );
     assert_eq!(
-        openapi["paths"]["/v1/tmp/documents/{secret}/presence"]["post"]["responses"]["200"]
-            ["content"]["application/json"]["schema"]["$ref"],
+        openapi["paths"]["/v1/tmp/documents/{secret}/presence"]["post"]["responses"]["200"]["content"]
+            ["application/json"]["schema"]["$ref"],
         "#/components/schemas/TmpAgentPresenceResponse"
     );
     assert_path_parameter_enum_contains(
@@ -4073,10 +4139,10 @@ async fn wait_for_yjs_review_entry<S>(
 where
     S: Stream<Item = Result<TungsteniteMessage, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
-    if let Some(entry) = review_entry_from_doc(doc, section, id) {
-        if matches(&entry) {
-            return entry;
-        }
+    if let Some(entry) = review_entry_from_doc(doc, section, id)
+        && matches(&entry)
+    {
+        return entry;
     }
     timeout(Duration::from_secs(2), async {
         loop {
@@ -4449,10 +4515,12 @@ async fn markdown_put_rejects_raw_downgrade_without_opt_in() {
     let status = response.status();
     let body = response_json(response).await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert!(body["error"]
-        .as_str()
-        .unwrap()
-        .contains("Markdown block document"));
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("Markdown block document")
+    );
 
     let document = store.get_document("blocks", "guide").await.unwrap();
     assert_eq!(document.version.content_type, "text/markdown");
@@ -5132,10 +5200,12 @@ async fn block_transaction_suggestion_accept_applies_replacement_and_resolves() 
     assert!(review["suggestions"].as_array().unwrap().is_empty());
     let review = get_block_review(&app, "doc.md", true).await;
     assert_eq!(review["suggestions"][0]["status"], "resolved");
-    assert!(review["suggestions"][0]["replies"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(
+        review["suggestions"][0]["replies"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
     // Accepting again: already resolved.
     let (status, body) = post_block_transaction(
@@ -5209,10 +5279,12 @@ async fn block_transaction_suggestion_reject_resolves_without_changing_text() {
     );
     let review = get_block_review(&app, "doc.md", true).await;
     assert_eq!(review["suggestions"][0]["status"], "resolved");
-    assert!(review["suggestions"][0]["replies"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(
+        review["suggestions"][0]["replies"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
     let (status, body) = post_block_transaction(
         &app,
