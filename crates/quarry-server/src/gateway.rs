@@ -2317,37 +2317,15 @@ async fn apply_rows_transaction(
         let status = transaction_status(&ctx.base_clock, &snapshot)?;
         let planned = plan(&snapshot)?;
         let applied = apply_ops(&snapshot, &planned.ops, &ctx.actor, &ctx.client_tx_id)?;
-        let metadata = settings
-            .metadata
-            .clone()
-            .unwrap_or_else(|| snapshot.metadata.clone());
-        let commit = BlockMutationCommit {
-            document_id: snapshot.document_id.clone(),
-            expected_head_version_id: snapshot.head_version_id.clone(),
-            client_tx_id: ctx.client_tx_id.clone(),
-            actor_kind: ctx.actor.kind.clone(),
-            actor_id: ctx.actor.id.clone(),
-            transaction_actor: settings
-                .transaction
-                .actor
-                .clone()
-                .or_else(|| Some(ctx.actor.display())),
-            transaction_message: settings.transaction.message.clone(),
-            transaction_provenance: commit_provenance(settings),
-            origin_id: settings.origin_id.clone(),
-            source: settings.source.clone(),
-            recorded_ops: recorded_ops(
-                &planned.ops_json,
-                &ctx.actor,
-                status,
-                &applied.changed_block_ids,
-            ),
-            metadata: metadata.clone(),
-            content_type: snapshot.content_type.clone(),
-            rows: applied.rows.clone(),
-            review_items: applied.review_items,
-            normalized_markdown: normalized_markdown(&applied.rows, &metadata)?,
-        };
+        let commit = build_block_mutation_commit(
+            &snapshot,
+            ctx,
+            settings,
+            &planned,
+            &applied,
+            status,
+            settings.origin_id.clone(),
+        )?;
         match state
             .store
             .commit_block_mutation_for_scope(scope, commit)
@@ -2450,41 +2428,20 @@ async fn apply_session_transaction(
 
     // 4. Checkpoint-before-ack: commit the applied state as this
     //    transaction's version.
-    let metadata = settings
-        .metadata
-        .clone()
-        .unwrap_or_else(|| session_snapshot.metadata.clone());
-    let commit = BlockMutationCommit {
-        document_id: session_snapshot.document_id.clone(),
-        expected_head_version_id: session_snapshot.head_version_id.clone(),
-        client_tx_id: ctx.client_tx_id.clone(),
-        actor_kind: ctx.actor.kind.clone(),
-        actor_id: ctx.actor.id.clone(),
-        transaction_actor: settings
-            .transaction
-            .actor
-            .clone()
-            .or_else(|| Some(ctx.actor.display())),
-        transaction_message: settings.transaction.message.clone(),
-        transaction_provenance: commit_provenance(settings),
-        // In-session browsers classify this as a benign refresh
-        // (`session-events.ts`), exactly like checkpoint commits — for
-        // whole-file writes too, since the session doc already carries the
-        // merged state when the event fires.
-        origin_id: Some(format!("agent-injected:tx:{}", ctx.client_tx_id)),
-        source: settings.source.clone(),
-        recorded_ops: recorded_ops(
-            &planned.ops_json,
-            &ctx.actor,
-            status,
-            &applied.changed_block_ids,
-        ),
-        metadata: metadata.clone(),
-        content_type: session_snapshot.content_type.clone(),
-        rows: applied.rows.clone(),
-        review_items: applied.review_items.clone(),
-        normalized_markdown: normalized_markdown(&applied.rows, &metadata)?,
-    };
+    // In-session browsers classify this as a benign refresh
+    // (`session-events.ts`), exactly like checkpoint commits — for
+    // whole-file writes too, since the session doc already carries the
+    // merged state when the event fires.
+    let origin_id = Some(format!("agent-injected:tx:{}", ctx.client_tx_id));
+    let commit = build_block_mutation_commit(
+        &session_snapshot,
+        ctx,
+        settings,
+        &planned,
+        &applied,
+        status,
+        origin_id,
+    )?;
     match state
         .store
         .commit_block_mutation_for_scope(scope, commit)
@@ -2538,6 +2495,48 @@ async fn apply_session_transaction(
         }
         Err(error) => Err(error.into()),
     }
+}
+
+fn build_block_mutation_commit(
+    snapshot: &BlockMutationState,
+    ctx: &TransactionContext,
+    settings: &TransactionSettings,
+    planned: &TransactionPlan,
+    applied: &ApplyResult,
+    status: &str,
+    origin_id: Option<String>,
+) -> Result<BlockMutationCommit, GatewayFailure> {
+    let metadata = settings
+        .metadata
+        .clone()
+        .unwrap_or_else(|| snapshot.metadata.clone());
+    Ok(BlockMutationCommit {
+        document_id: snapshot.document_id.clone(),
+        expected_head_version_id: snapshot.head_version_id.clone(),
+        client_tx_id: ctx.client_tx_id.clone(),
+        actor_kind: ctx.actor.kind.clone(),
+        actor_id: ctx.actor.id.clone(),
+        transaction_actor: settings
+            .transaction
+            .actor
+            .clone()
+            .or_else(|| Some(ctx.actor.display())),
+        transaction_message: settings.transaction.message.clone(),
+        transaction_provenance: commit_provenance(settings),
+        origin_id,
+        source: settings.source.clone(),
+        recorded_ops: recorded_ops(
+            &planned.ops_json,
+            &ctx.actor,
+            status,
+            &applied.changed_block_ids,
+        ),
+        metadata: metadata.clone(),
+        content_type: snapshot.content_type.clone(),
+        rows: applied.rows.clone(),
+        review_items: applied.review_items.clone(),
+        normalized_markdown: normalized_markdown(&applied.rows, &metadata)?,
+    })
 }
 
 fn recorded_ops(
