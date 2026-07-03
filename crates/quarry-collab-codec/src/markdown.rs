@@ -591,7 +591,7 @@ impl EventParser {
                         children.push(Node::element(
                             "img",
                             attrs([
-                                ("caption", serde_json::to_value(caption).unwrap()),
+                                ("caption", serialize_caption_nodes(caption)?),
                                 ("url", json!(dest_url.to_string())),
                             ]),
                             vec![empty_text()],
@@ -741,7 +741,7 @@ impl EventParser {
                     children.push(Node::element(
                         "img",
                         attrs([
-                            ("caption", serde_json::to_value(caption).unwrap()),
+                            ("caption", serialize_caption_nodes(caption)?),
                             ("url", json!(dest_url.to_string())),
                         ]),
                         vec![empty_text()],
@@ -807,6 +807,11 @@ fn list_attrs(ctx: &ListContext, checked: Option<bool>) -> Attrs {
         attrs.insert("listStyleType".to_string(), json!("disc"));
     }
     attrs
+}
+
+fn serialize_caption_nodes(caption: Vec<Node>) -> Result<Value, Unsupported> {
+    serde_json::to_value(caption)
+        .map_err(|error| Unsupported::new(format!("image caption serialization failed: {error}")))
 }
 
 fn text_nodes(text: &str, context: &InlineContext) -> Vec<Node> {
