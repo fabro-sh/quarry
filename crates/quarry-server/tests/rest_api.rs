@@ -10,7 +10,7 @@ use futures_util::{SinkExt, Stream, StreamExt};
 use quarry_collab_codec::Node;
 use quarry_core::DocumentSource;
 use quarry_server::{app_state, router, router_with_state, serve_state_with_shutdown};
-use quarry_storage::{QuarryStore, StoreConfig, StoreEvent, StoreEventKind};
+use quarry_storage::{QuarryStore, StoreEvent, StoreEventKind};
 use serde_json::Value;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -2899,14 +2899,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
 
 #[tokio::test]
 async fn version_history_includes_transaction_metadata() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     let app = router(store);
 
     let response = app
@@ -3133,14 +3126,7 @@ async fn delete_move_and_restore_record_transaction_actor_header() {
 
 #[tokio::test]
 async fn raw_document_restore_records_transaction_actor_header() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     store.create_library("actorraw").await.unwrap();
     let app = router(store);
 
@@ -3247,14 +3233,7 @@ async fn version_actor(app: &axum::Router, library: &str, path: &str, version_id
 
 #[tokio::test]
 async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     let library = store.create_library("actions").await.unwrap();
     store.create_library("other").await.unwrap();
     let written = store
@@ -3398,14 +3377,7 @@ async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() {
 
 #[tokio::test]
 async fn rest_api_marks_ambiguous_links() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     let library = store.create_library("ambiguous").await.unwrap();
 
     store
@@ -3477,14 +3449,7 @@ async fn rest_api_marks_ambiguous_links() {
 
 #[tokio::test]
 async fn rest_api_marks_external_links() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     let library = store.create_library("external").await.unwrap();
 
     store
@@ -3529,14 +3494,7 @@ async fn rest_api_marks_external_links() {
 
 #[tokio::test]
 async fn rest_api_supports_transaction_metadata_patch_and_move() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     let library = store.create_library("txactions").await.unwrap();
     store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -3640,14 +3598,7 @@ async fn rest_api_supports_transaction_metadata_patch_and_move() {
 
 #[tokio::test]
 async fn rest_api_rejects_stale_transaction_commit_with_precondition_failed() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     let app = router(store);
 
     let response = app
@@ -3760,14 +3711,7 @@ async fn rest_api_rejects_stale_transaction_commit_with_precondition_failed() {
 
 #[tokio::test]
 async fn rest_api_scopes_transaction_routes_to_the_url_library() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     let library = store.create_library("txscope").await.unwrap();
     store.create_library("other").await.unwrap();
     store
@@ -5760,14 +5704,7 @@ async fn spawn_session_server() -> (
     QuarryStore,
     tokio::task::JoinHandle<()>,
 ) {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (root, store) = open_test_store().await;
     let app = router(store.clone());
     let response = app
         .clone()
@@ -5796,14 +5733,7 @@ async fn spawn_shutdown_session_server() -> (
     tokio::sync::oneshot::Sender<()>,
     tokio::task::JoinHandle<std::io::Result<()>>,
 ) {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (root, store) = open_test_store().await;
     let state = app_state(store.clone());
     let app = router_with_state(state.clone());
     let response = app
