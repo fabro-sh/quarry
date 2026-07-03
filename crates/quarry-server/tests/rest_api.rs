@@ -26,9 +26,9 @@ use yrs::{Doc, Map, Out, ReadTxn, Text, Transact, WriteTxn, XmlTextRef};
 mod common;
 
 use common::{
-    WsSocket, apply_yjs_message, document_test_app, empty_yjs_doc, json_request, response_json,
-    sync_yjs_doc_from_socket, wait_for_server, wait_for_yjs_sync_update, yjs_plain_text,
-    yjs_slate_children,
+    WsSocket, apply_yjs_message, document_test_app, empty_yjs_doc, json_request, open_test_store,
+    response_json, sync_yjs_doc_from_socket, wait_for_server, wait_for_yjs_sync_update,
+    yjs_plain_text, yjs_slate_children,
 };
 
 const COLLAB_ROOT: &str = "content";
@@ -907,14 +907,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
 
 #[tokio::test]
 async fn agent_snapshot_exposes_snapshot_scoped_block_refs() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     let library = store.create_library("agent").await.unwrap();
     let written = store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -962,14 +955,7 @@ async fn agent_snapshot_exposes_snapshot_scoped_block_refs() {
 
 #[tokio::test]
 async fn agent_review_lists_open_comments_replies_and_suggestions() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     let library = store.create_library("agentreviewread").await.unwrap();
     let markdown = "Alpha {==target==}{>>Needs work.<<}{#c1} and {==done==}{>>Fixed.<<}{#c2}.\n\nUse {~~old~>new~~}{#s1} wording and `{++literal++}{#s_code}`.\n\n```text\n{==ignored==}{>>Nope<<}{#c_code}\n{--gone--}{#s_code2}\n```\n\n---\ncomments:\n  c1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user:a\n  c2:\n    at: \"2026-01-02T00:00:00.000Z\"\n    by: user:b\n    status: resolved\n  c_code:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: user:code\n  r1:\n    at: \"2026-01-01T01:00:00.000Z\"\n    body: Reply body.\n    by: ai:codex\n    re: c1\n  r2:\n    at: \"2026-01-03T01:00:00.000Z\"\n    body: Suggestion reply.\n    by: user:a\n    re: s1\nsuggestions:\n  s1:\n    at: \"2026-01-03T00:00:00.000Z\"\n    by: ai:codex\n  s_code:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: ai:code\n  s_code2:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: ai:code\n";
     let written = store
@@ -1072,14 +1058,7 @@ async fn agent_review_lists_open_comments_replies_and_suggestions() {
 
 #[tokio::test]
 async fn agent_review_reports_explicit_inline_markers_without_endmatter() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     let library = store.create_library("agentrevieworphan").await.unwrap();
     let written = store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -1129,14 +1108,7 @@ async fn agent_review_reports_explicit_inline_markers_without_endmatter() {
 
 #[tokio::test]
 async fn agent_review_matches_snapshot_errors_for_missing_and_non_markdown() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     let library = store.create_library("agentreviewerrors").await.unwrap();
     store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -1339,15 +1311,7 @@ async fn agent_presence_records_status_by_document() {
 
 #[tokio::test]
 async fn tmp_agent_presence_omits_capability_path() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
-    let app = router(store);
+    let (_root, app, _store) = document_test_app().await;
 
     let response = app
         .clone()
@@ -1422,15 +1386,7 @@ async fn tmp_agent_presence_omits_capability_path() {
 #[tokio::test(flavor = "current_thread")]
 async fn tmp_sse_logging_redacts_capability_path() {
     let (logs, _guard) = capture_debug_logs();
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
-    let app = router(store);
+    let (_root, app, _store) = document_test_app().await;
 
     let response = app
         .clone()
@@ -1478,14 +1434,7 @@ async fn tmp_sse_logging_redacts_capability_path() {
 }
 
 async fn presence_test_app(library: &str) -> (tempfile::TempDir, axum::Router) {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (root, store) = open_test_store().await;
     let library = store.create_library(library).await.unwrap();
     store
         .put_document(quarry_storage::PutDocumentRequest {
