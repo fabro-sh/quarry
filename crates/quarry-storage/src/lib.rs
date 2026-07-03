@@ -3087,7 +3087,7 @@ impl QuarryStore {
 
     pub async fn get_conflict(&self, conflict_id: &str) -> Result<ConflictRecord> {
         let conn = self.conn()?;
-        self.conflict_conn(&conn, conflict_id).await
+        Self::conflict_conn(&conn, conflict_id).await
     }
 
     pub async fn record_conflict(
@@ -3130,7 +3130,7 @@ impl QuarryStore {
                     )
                     .await
                     .map_err(map_turso_error)?;
-                    store.conflict_conn(conn, &conflict.id).await
+                    Self::conflict_conn(conn, &conflict.id).await
                 })
             })
             .await?;
@@ -3145,7 +3145,7 @@ impl QuarryStore {
     pub async fn resolve_conflict(&self, conflict_id: &str) -> Result<ConflictRecord> {
         let conflict_id = conflict_id.to_string();
         let conflict = self
-            .write_transaction(move |store, conn| {
+            .write_transaction(move |_store, conn| {
                 Box::pin(async move {
                     conn.execute(
                         "UPDATE conflicts SET status = ?1, resolved_at = ?2 WHERE id = ?3",
@@ -3157,7 +3157,7 @@ impl QuarryStore {
                     )
                     .await
                     .map_err(map_turso_error)?;
-                    store.conflict_conn(conn, &conflict_id).await
+                    Self::conflict_conn(conn, &conflict_id).await
                 })
             })
             .await?;
@@ -4260,7 +4260,7 @@ impl QuarryStore {
         }
     }
 
-    async fn conflict_conn(&self, conn: &Connection, conflict_id: &str) -> Result<ConflictRecord> {
+    async fn conflict_conn(conn: &Connection, conflict_id: &str) -> Result<ConflictRecord> {
         let mut rows = conn
             .query(
                 "SELECT c.id, c.library_id, c.path, c.ours_version_id, c.theirs_version_id,
