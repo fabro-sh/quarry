@@ -1,5 +1,6 @@
+use crate::headers::etag;
 use crate::presence::PresenceStreamGuard;
-use crate::{ApiError, AppState, etag};
+use crate::{ApiError, AppState};
 use axum::extract::{Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::{Stream, stream};
