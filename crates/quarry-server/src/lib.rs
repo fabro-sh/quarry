@@ -251,7 +251,7 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
                 .head(document_handlers::head_document)
                 .put(document_handlers::put_document)
                 .post(post_document_action)
-                .patch(patch_document_metadata)
+                .patch(document_handlers::patch_document_metadata)
                 .delete(document_handlers::delete_document),
         )
         .route(
@@ -580,7 +580,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         document_handlers::head_document,
         document_handlers::put_document,
         post_document_action,
-        patch_document_metadata,
+        document_handlers::patch_document_metadata,
         document_handlers::delete_document,
         transaction_handlers::begin_transaction,
         transaction_handlers::stage_put_document,
@@ -1545,74 +1545,6 @@ async fn document_version_diff_openapi() {}
     reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
 )]
 async fn document_version_restore_openapi() {}
-
-#[utoipa::path(
-    patch,
-    path = "/v1/libraries/{library}/documents/{path}/metadata",
-    params(("library" = String, Path), ("path" = String, Path)),
-    request_body = JsonValue,
-    responses((status = 200, body = WriteOutcome))
-)]
-async fn patch_document_metadata(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((library, path)): Path<(String, String)>,
-    Json(patch): Json<JsonValue>,
-) -> Result<Response, ApiError> {
-    let (document_path, subresource) = parse_document_subresource(&path);
-    if subresource == DocumentSubResource::Ttl {
-        let request: TtlRequest = serde_json::from_value(patch)
-            .map_err(|error| QuarryError::InvalidPath(format!("invalid ttl request: {error}")))?;
-        let entry = state
-            .store
-            .set_document_ttl(&library, document_path, request.expires_at)
-            .await?;
-        return json_response(
-            StatusCode::OK,
-            &TtlResponse {
-                expires_at: entry.expires_at,
-            },
-        );
-    }
-
-    if subresource != DocumentSubResource::Metadata {
-        return Err(QuarryError::InvalidPath(
-            "metadata patch endpoint must end with /metadata".to_string(),
-        )
-        .into());
-    }
-    // Phase 4: a metadata patch on a BlockDocument must NOT destroy the
-    // block projection (the legacy path re-puts the content, which clears
-    // rows and review items fail-closed, and bypasses the session mutex).
-    // It routes through the gateway as a zero-op transaction with a
-    // metadata override instead — see `markdown_write::patch_block_document_metadata`.
-    if let Ok(head) = state.store.head_document(&library, document_path).await
-        && quarry_storage::document_kind(document_path, &head.content_type)
-            == quarry_storage::DocumentKind::BlockDocument
-    {
-        return gateway::gateway_reply(
-            markdown_write::patch_block_document_metadata(
-                &state,
-                &library,
-                document_path,
-                patch,
-                precondition_from_headers(&headers)?,
-            )
-            .await,
-        );
-    }
-    let outcome = state
-        .store
-        .patch_metadata(
-            &library,
-            document_path,
-            patch,
-            DocumentSource::Rest,
-            precondition_from_headers(&headers)?,
-        )
-        .await?;
-    json_with_etag(StatusCode::OK, &outcome, &outcome.version.id)
-}
 
 #[utoipa::path(
     patch,

@@ -3,10 +3,10 @@ use crate::presence::PresenceStreamGuard;
 use crate::review::{DocumentReviewQuery, agent_document_review, agent_document_snapshot};
 use crate::sse::events_for_library;
 use crate::{
-    ApiError, AppState, DocumentSubResource, ErrorResponse, bytes_response_with_expiry,
-    content_type, gateway, insert_document_headers, json_response, json_with_etag,
-    metadata_from_headers, optional_header, parse_document_subresource, precondition_from_headers,
-    reject_block_document_downgrade_for_library, touch_agent_presence,
+    ApiError, AppState, DocumentSubResource, ErrorResponse, QuarryError, TtlRequest, TtlResponse,
+    bytes_response_with_expiry, content_type, gateway, insert_document_headers, json_response,
+    json_with_etag, metadata_from_headers, optional_header, parse_document_subresource,
+    precondition_from_headers, reject_block_document_downgrade_for_library, touch_agent_presence,
     transaction_metadata_from_headers,
 };
 use axum::Json;
@@ -18,6 +18,7 @@ use axum::response::{IntoResponse, Response};
 use quarry_core::{DocumentListEntry, DocumentSource, TransactionRecord, WriteOutcome};
 use quarry_storage::PutDocumentRequest;
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ListQuery {
@@ -283,6 +284,74 @@ pub(crate) async fn put_document(
             origin_id,
             transaction,
         })
+        .await?;
+    json_with_etag(StatusCode::OK, &outcome, &outcome.version.id)
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v1/libraries/{library}/documents/{path}/metadata",
+    params(("library" = String, Path), ("path" = String, Path)),
+    request_body = JsonValue,
+    responses((status = 200, body = WriteOutcome))
+)]
+pub(crate) async fn patch_document_metadata(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((library, path)): Path<(String, String)>,
+    Json(patch): Json<JsonValue>,
+) -> Result<Response, ApiError> {
+    let (document_path, subresource) = parse_document_subresource(&path);
+    if subresource == DocumentSubResource::Ttl {
+        let request: TtlRequest = serde_json::from_value(patch)
+            .map_err(|error| QuarryError::InvalidPath(format!("invalid ttl request: {error}")))?;
+        let entry = state
+            .store
+            .set_document_ttl(&library, document_path, request.expires_at)
+            .await?;
+        return json_response(
+            StatusCode::OK,
+            &TtlResponse {
+                expires_at: entry.expires_at,
+            },
+        );
+    }
+
+    if subresource != DocumentSubResource::Metadata {
+        return Err(QuarryError::InvalidPath(
+            "metadata patch endpoint must end with /metadata".to_string(),
+        )
+        .into());
+    }
+    // Phase 4: a metadata patch on a BlockDocument must NOT destroy the
+    // block projection (the legacy path re-puts the content, which clears
+    // rows and review items fail-closed, and bypasses the session mutex).
+    // It routes through the gateway as a zero-op transaction with a
+    // metadata override instead — see `markdown_write::patch_block_document_metadata`.
+    if let Ok(head) = state.store.head_document(&library, document_path).await
+        && quarry_storage::document_kind(document_path, &head.content_type)
+            == quarry_storage::DocumentKind::BlockDocument
+    {
+        return gateway::gateway_reply(
+            markdown_write::patch_block_document_metadata(
+                &state,
+                &library,
+                document_path,
+                patch,
+                precondition_from_headers(&headers)?,
+            )
+            .await,
+        );
+    }
+    let outcome = state
+        .store
+        .patch_metadata(
+            &library,
+            document_path,
+            patch,
+            DocumentSource::Rest,
+            precondition_from_headers(&headers)?,
+        )
         .await?;
     json_with_etag(StatusCode::OK, &outcome, &outcome.version.id)
 }
