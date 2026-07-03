@@ -4,7 +4,7 @@ use git2::{
 };
 use quarry_core::{
     normalize_path, render_markdown_frontmatter, ConflictRecord, DocumentListEntry, DocumentSource,
-    Library, QuarryError, Result, SyncStateEntry, GIT_BINARY_WARN_THRESHOLD,
+    Library, QuarryError, Result, SyncStateEntry, WriteOutcome, GIT_BINARY_WARN_THRESHOLD,
 };
 use quarry_storage::{
     split_markdown_frontmatter, BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockWriteBase,
@@ -595,36 +595,18 @@ impl<'a> SyncPathReconciler<'a> {
         // through the block writer (a first import — fresh ids, no base) so
         // they are ordinary BlockDocuments, not raw bytes with a cleared
         // projection.
-        let sibling_version_id = if is_block_file(path, &git.content_type) {
-            write_markdown_file(
-                self.store,
-                &self.library.slug,
-                Some(self.peer_id),
-                &conflict_path,
-                git,
-                BlockWriteBase::CurrentCanonical,
-            )
-            .await?
-            .outcome
-            .version
-            .id
-        } else {
-            self.store
-                .put_document(PutDocumentRequest {
-                    library: self.library.slug.clone(),
-                    path: conflict_path.clone(),
-                    content: git.content.clone(),
-                    metadata: git.metadata.clone(),
-                    content_type: git.content_type.clone(),
-                    source: DocumentSource::Git,
-                    precondition: quarry_core::WritePrecondition::None,
-                    origin_id: None,
-                    transaction: TransactionMetadata::default(),
-                })
-                .await?
-                .version
-                .id
-        };
+        let sibling_version_id = write_git_file_to_document(
+            self.store,
+            &self.library.slug,
+            Some(self.peer_id),
+            &conflict_path,
+            git,
+            BlockWriteBase::CurrentCanonical,
+            quarry_core::WritePrecondition::None,
+        )
+        .await?
+        .version
+        .id;
         let conflict = self
             .store
             .record_conflict(&self.library.slug, path, None, Some(sibling_version_id))
@@ -648,35 +630,52 @@ impl<'a> SyncPathReconciler<'a> {
         git: &GitFile,
         precondition: quarry_core::WritePrecondition,
     ) -> Result<()> {
-        if is_block_file(path, &git.content_type) {
-            // When the Quarry document is unchanged since the last sync, the
-            // current canonical state is the common ancestor.
-            write_markdown_file(
-                self.store,
-                &self.library.slug,
-                Some(self.peer_id),
-                path,
-                git,
-                BlockWriteBase::CurrentCanonical,
-            )
-            .await?;
-        } else {
-            self.store
-                .put_document(PutDocumentRequest {
-                    library: self.library.slug.clone(),
-                    path: path.to_string(),
-                    content: git.content.clone(),
-                    metadata: git.metadata.clone(),
-                    content_type: git.content_type.clone(),
-                    source: DocumentSource::Git,
-                    precondition,
-                    origin_id: None,
-                    transaction: TransactionMetadata::default(),
-                })
-                .await?;
-        }
+        // When the Quarry document is unchanged since the last sync, the
+        // current canonical state is the common ancestor.
+        write_git_file_to_document(
+            self.store,
+            &self.library.slug,
+            Some(self.peer_id),
+            path,
+            git,
+            BlockWriteBase::CurrentCanonical,
+            precondition,
+        )
+        .await?;
         Ok(())
     }
+}
+
+async fn write_git_file_to_document(
+    store: &QuarryStore,
+    library: &str,
+    peer_id: Option<&str>,
+    path: &str,
+    git: &GitFile,
+    block_base: BlockWriteBase,
+    raw_precondition: quarry_core::WritePrecondition,
+) -> Result<WriteOutcome> {
+    if is_block_file(path, &git.content_type) {
+        return Ok(
+            write_markdown_file(store, library, peer_id, path, git, block_base)
+                .await?
+                .outcome,
+        );
+    }
+
+    store
+        .put_document(PutDocumentRequest {
+            library: library.to_string(),
+            path: path.to_string(),
+            content: git.content.clone(),
+            metadata: git.metadata.clone(),
+            content_type: git.content_type.clone(),
+            source: DocumentSource::Git,
+            precondition: raw_precondition,
+            origin_id: None,
+            transaction: TransactionMetadata::default(),
+        })
+        .await
 }
 
 /// Imports a Git worktree into a library.
