@@ -44,7 +44,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::future::{Future, IntoFuture};
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -72,6 +72,7 @@ const TMP_DOCUMENT_HTTP_BODY_LIMIT: usize =
 struct AgentEventJournal {
     inner: Arc<Mutex<AgentEventJournalInner>>,
     acks: Arc<Mutex<HashMap<String, u64>>>,
+    ingest_task: Arc<StdMutex<Option<JoinHandle<()>>>>,
 }
 
 #[derive(Default)]
@@ -87,10 +88,10 @@ struct LoggedStoreEvent {
 }
 
 impl AgentEventJournal {
-    fn spawn_ingest(&self, store: QuarryStore, shutdown: CancellationToken) -> JoinHandle<()> {
+    fn spawn_ingest(&self, store: QuarryStore, shutdown: CancellationToken) {
         let journal = self.clone();
         let mut receiver = store.subscribe_events();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             loop {
                 tokio::select! {
                     biased;
@@ -111,7 +112,34 @@ impl AgentEventJournal {
                     }
                 }
             }
-        })
+        });
+        if let Some(previous) = self
+            .ingest_task
+            .lock()
+            .expect("agent event ingest task lock poisoned")
+            .replace(task)
+        {
+            previous.abort();
+        }
+    }
+
+    async fn join_ingest(&self) {
+        let task = self
+            .ingest_task
+            .lock()
+            .expect("agent event ingest task lock poisoned")
+            .take();
+        if let Some(task) = task {
+            match task.await {
+                Ok(()) => {}
+                Err(error) if error.is_cancelled() => {}
+                Err(error) => tracing::debug!(
+                    event = "agent_event_journal.ingest_join_failed",
+                    ?error,
+                    "agent event journal ingest task ended with an unexpected join error"
+                ),
+            }
+        }
     }
 
     async fn push(&self, event: StoreEvent) {
@@ -567,18 +595,20 @@ where
         "quarry REST server listening"
     );
     let shutdown_token = state.shutdown_token();
+    let shutdown_token_for_signal = shutdown_token.clone();
+    let agent_events = state.agent_events.clone();
     let (shutdown_started_tx, shutdown_started_rx) = tokio::sync::oneshot::channel::<()>();
     let server = axum::serve(listener, router_with_state(state))
         .with_graceful_shutdown(async move {
             shutdown.await;
-            shutdown_token.cancel();
+            shutdown_token_for_signal.cancel();
             let _ = shutdown_started_tx.send(());
         })
         .into_future();
     tokio::pin!(server);
     tokio::pin!(shutdown_started_rx);
 
-    tokio::select! {
+    let result = tokio::select! {
         result = &mut server => result,
         _ = &mut shutdown_started_rx => {
             match tokio::time::timeout(SHUTDOWN_GRACE_PERIOD, &mut server).await {
@@ -593,7 +623,10 @@ where
                 }
             }
         }
-    }
+    };
+    shutdown_token.cancel();
+    agent_events.join_ingest().await;
+    result
 }
 
 pub async fn shutdown_signal() {
@@ -4694,13 +4727,12 @@ mod tests {
         let (_root, store) = test_store().await;
         let journal = AgentEventJournal::default();
         let shutdown = CancellationToken::new();
-        let ingest = journal.spawn_ingest(store, shutdown.clone());
+        journal.spawn_ingest(store, shutdown.clone());
 
         shutdown.cancel();
-        timeout(Duration::from_secs(1), ingest)
+        timeout(Duration::from_secs(1), journal.join_ingest())
             .await
-            .expect("journal ingest should exit after shutdown")
-            .unwrap();
+            .expect("journal ingest should exit after shutdown");
     }
 
     #[test]

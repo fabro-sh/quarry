@@ -321,6 +321,7 @@ impl SessionHub {
                     "final session checkpoint failed; un-checkpointed edits are lost"
                 );
             }
+            session.shutdown_background_tasks().await;
             if state
                 .session
                 .as_ref()
@@ -348,7 +349,7 @@ pub(crate) struct LiveSession {
     broadcast_tx: broadcast::Sender<Vec<u8>>,
     _doc_sub: yrs::Subscription,
     _awareness_sub: yrs::Subscription,
-    awareness_task: JoinHandle<()>,
+    awareness_task: StdMutex<Option<JoinHandle<()>>>,
     checkpoint_task: StdMutex<Option<JoinHandle<()>>>,
     /// Bumped on every doc update (browser or server).
     update_seq: Arc<AtomicU64>,
@@ -381,7 +382,9 @@ struct CommittedState {
 
 impl Drop for LiveSession {
     fn drop(&mut self) {
-        self.awareness_task.abort();
+        if let Some(task) = self.awareness_task.lock().unwrap().take() {
+            task.abort();
+        }
         if let Some(task) = self.checkpoint_task.lock().unwrap().take() {
             task.abort();
         }
@@ -476,7 +479,7 @@ impl LiveSession {
             broadcast_tx,
             _doc_sub: doc_sub,
             _awareness_sub: awareness_sub,
-            awareness_task,
+            awareness_task: StdMutex::new(Some(awareness_task)),
             checkpoint_task: StdMutex::new(None),
             update_seq,
             committed: StdMutex::new(CommittedState {
@@ -553,6 +556,30 @@ impl LiveSession {
         match &self.scope {
             DocumentScopeRef::Library { slug } => format!("library:{slug}"),
             DocumentScopeRef::Tmp => "tmp".to_string(),
+        }
+    }
+
+    async fn shutdown_background_tasks(&self) {
+        let checkpoint_task = self.checkpoint_task.lock().unwrap().take();
+        let awareness_task = self.awareness_task.lock().unwrap().take();
+        for (task_name, task) in [
+            ("checkpoint", checkpoint_task),
+            ("awareness", awareness_task),
+        ] {
+            if let Some(task) = task {
+                task.abort();
+                match task.await {
+                    Ok(()) => {}
+                    Err(error) if error.is_cancelled() => {}
+                    Err(error) => tracing::debug!(
+                        event = "collab.session.task_join_failed",
+                        %task_name,
+                        document_id = %self.document_id,
+                        ?error,
+                        "collab session background task ended with an unexpected join error"
+                    ),
+                }
+            }
         }
     }
 
