@@ -3778,27 +3778,8 @@ impl QuarryStore {
         library_id: &str,
         path: &str,
     ) -> Result<DocumentListEntry> {
-        let mut rows = conn
-            .query(
-                "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
-                 FROM documents d
-                 JOIN document_versions v ON v.id = d.head_version_id
-                 WHERE d.document_scope = 'library'
-                   AND d.library_id = ?1
-                   AND d.path = ?2
-                   AND d.deleted_at IS NULL
-                   AND d.head_version_id IS NOT NULL
-                 LIMIT 1",
-                params![library_id.to_string(), path.to_string()],
-            )
+        self.scoped_document_entry_any_conn(conn, DocumentLookupScope::Library { library_id }, path)
             .await
-            .map_err(map_turso_error)?;
-        rows.next()
-            .await
-            .map_err(map_turso_error)?
-            .map(|row| document_entry_from_row(&row))
-            .transpose()?
-            .ok_or_else(|| QuarryError::NotFound(path.to_string()))
     }
 
     async fn tmp_document_entry_conn(
@@ -3808,6 +3789,56 @@ impl QuarryStore {
     ) -> Result<DocumentListEntry> {
         self.scoped_document_entry_conn(conn, DocumentLookupScope::Tmp, path)
             .await
+    }
+
+    async fn tmp_document_entry_any_conn(
+        &self,
+        conn: &Connection,
+        path: &str,
+    ) -> Result<DocumentListEntry> {
+        self.scoped_document_entry_any_conn(conn, DocumentLookupScope::Tmp, path)
+            .await
+    }
+
+    async fn scoped_document_entry_any_conn(
+        &self,
+        conn: &Connection,
+        scope: DocumentLookupScope<'_>,
+        path: &str,
+    ) -> Result<DocumentListEntry> {
+        let (scope_filter, binds) = match scope {
+            DocumentLookupScope::Library { library_id } => (
+                "d.document_scope = 'library'
+                   AND d.library_id = ?1
+                   AND d.path = ?2",
+                vec![
+                    Value::Text(library_id.to_string()),
+                    Value::Text(path.to_string()),
+                ],
+            ),
+            DocumentLookupScope::Tmp => (
+                "d.document_scope = 'tmp'
+                   AND d.library_id IS NULL
+                   AND d.path = ?1",
+                vec![Value::Text(path.to_string())],
+            ),
+        };
+        let sql = format!(
+            "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
+             FROM documents d
+             JOIN document_versions v ON v.id = d.head_version_id
+             WHERE {scope_filter}
+               AND d.deleted_at IS NULL
+               AND d.head_version_id IS NOT NULL
+             LIMIT 1"
+        );
+        let mut rows = conn.query(&sql, binds).await.map_err(map_turso_error)?;
+        rows.next()
+            .await
+            .map_err(map_turso_error)?
+            .map(|row| document_entry_from_row(&row))
+            .transpose()?
+            .ok_or_else(|| QuarryError::NotFound(path.to_string()))
     }
 
     async fn scoped_document_entry_conn(
@@ -3862,34 +3893,6 @@ impl QuarryStore {
             }
             Err(QuarryError::NotFound(path.to_string()))
         }
-    }
-
-    async fn tmp_document_entry_any_conn(
-        &self,
-        conn: &Connection,
-        path: &str,
-    ) -> Result<DocumentListEntry> {
-        let mut rows = conn
-            .query(
-                "SELECT d.id, d.library_id, d.path, d.head_version_id, v.content_type, v.byte_size, v.content_hash, v.metadata_json, d.expires_at, d.updated_at
-                 FROM documents d
-                 JOIN document_versions v ON v.id = d.head_version_id
-                 WHERE d.document_scope = 'tmp'
-                   AND d.library_id IS NULL
-                   AND d.path = ?1
-                   AND d.deleted_at IS NULL
-                   AND d.head_version_id IS NOT NULL
-                 LIMIT 1",
-                params![path.to_string()],
-            )
-            .await
-            .map_err(map_turso_error)?;
-        rows.next()
-            .await
-            .map_err(map_turso_error)?
-            .map(|row| document_entry_from_row(&row))
-            .transpose()?
-            .ok_or_else(|| QuarryError::NotFound(path.to_string()))
     }
 
     async fn document_entries_for_library_conn(
