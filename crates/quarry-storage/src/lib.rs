@@ -583,9 +583,9 @@ impl QuarryStore {
     pub async fn create_library(&self, slug: &str) -> Result<Library> {
         validate_slug(slug)?;
         let slug = slug.to_string();
-        self.write_transaction(move |store, conn| {
+        self.write_transaction(move |_store, conn| {
             Box::pin(async move {
-                if let Some(existing) = store.library_by_slug_or_id_conn(conn, &slug).await? {
+                if let Some(existing) = Self::library_by_slug_or_id_conn(conn, &slug).await? {
                     return Ok(existing);
                 }
                 let now = now_timestamp();
@@ -631,7 +631,7 @@ impl QuarryStore {
 
     pub async fn get_library(&self, slug_or_id: &str) -> Result<Library> {
         let conn = self.conn()?;
-        self.library_by_slug_or_id_conn(&conn, slug_or_id)
+        Self::library_by_slug_or_id_conn(&conn, slug_or_id)
             .await?
             .ok_or_else(|| QuarryError::NotFound(format!("library {slug_or_id}")))
     }
@@ -648,7 +648,7 @@ impl QuarryStore {
         let (metadata, library_id) = self
             .write_transaction(move |store, conn| {
                 Box::pin(async move {
-                    let library = store.require_library_conn(conn, &library).await?;
+                    let library = Self::require_library_conn(conn, &library).await?;
                     let library_id = library.id.clone();
                     ensure_inode_conn(conn, &library.id, "").await?;
                     if !path.is_empty() {
@@ -707,7 +707,7 @@ impl QuarryStore {
         let (metadata, library_id) = self
             .write_transaction(move |store, conn| {
                 Box::pin(async move {
-                    let library = store.require_library_conn(conn, &library).await?;
+                    let library = Self::require_library_conn(conn, &library).await?;
                     let library_id = library.id.clone();
                     let updated = conn
                         .execute(
@@ -766,9 +766,9 @@ impl QuarryStore {
         let event_to_path = to_path.clone();
         let source_for_event = source.clone();
         let library_id = self
-            .write_transaction(move |store, conn| {
+            .write_transaction(move |_store, conn| {
                 Box::pin(async move {
-                    let library = store.require_library_conn(conn, &library).await?;
+                    let library = Self::require_library_conn(conn, &library).await?;
                     let library_id = library.id.clone();
                     let from_prefix = format!("{from_path}/");
                     let mut rows = conn
@@ -869,9 +869,9 @@ impl QuarryStore {
         let library = library.to_string();
         let event_path = path.clone();
         let library_id = self
-            .write_transaction(move |store, conn| {
+            .write_transaction(move |_store, conn| {
                 Box::pin(async move {
-                    let library = store.require_library_conn(conn, &library).await?;
+                    let library = Self::require_library_conn(conn, &library).await?;
                     let library_id = library.id.clone();
                     conn.execute(
                         "DELETE FROM dir_metadata WHERE library_id = ?1 AND path = ?2",
@@ -897,7 +897,7 @@ impl QuarryStore {
         prefix: Option<&str>,
     ) -> Result<Vec<DirectoryMetadata>> {
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         let normalized_prefix = match prefix {
             Some("") | None => None,
             Some(prefix) => Some(normalize_directory_path(prefix)?),
@@ -932,7 +932,7 @@ impl QuarryStore {
     pub async fn inode_for_path(&self, library: &str, path: &str) -> Result<i64> {
         let path = normalize_directory_path(path)?;
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         let mut rows = conn
             .query(
                 "SELECT inode FROM inodes WHERE library_id = ?1 AND path = ?2 LIMIT 1",
@@ -953,7 +953,7 @@ impl QuarryStore {
             return Err(QuarryError::InvalidPath(format!("invalid inode {inode}")));
         }
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         let mut rows = conn
             .query(
                 "SELECT path FROM inodes WHERE library_id = ?1 AND inode = ?2 LIMIT 1",
@@ -1046,7 +1046,7 @@ impl QuarryStore {
         let outcome = self
             .write_transaction(move |store, conn| {
                 Box::pin(async move {
-                    let library = store.require_library_conn(conn, &library).await?;
+                    let library = Self::require_library_conn(conn, &library).await?;
                     store
                         .check_precondition_conn(conn, &library.id, &path, &precondition)
                         .await?;
@@ -1136,7 +1136,7 @@ impl QuarryStore {
     pub async fn get_document(&self, library: &str, path: &str) -> Result<Document> {
         let path = normalize_path(path)?;
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         self.document_conn(&conn, &library.id, &path).await
     }
 
@@ -1438,7 +1438,7 @@ impl QuarryStore {
         let library = library.to_string();
         self.write_transaction(move |store, conn| {
             Box::pin(async move {
-                let library = store.require_library_conn(conn, &library).await?;
+                let library = Self::require_library_conn(conn, &library).await?;
                 let doc_id = store
                     .library_document_id_any_conn(conn, &library.id, &path)
                     .await?
@@ -1474,7 +1474,7 @@ impl QuarryStore {
         let library = library.to_string();
         self.write_transaction(move |store, conn| {
             Box::pin(async move {
-                let library = store.require_library_conn(conn, &library).await?;
+                let library = Self::require_library_conn(conn, &library).await?;
                 store
                     .check_tmp_precondition_conn(conn, &tmp_path, &precondition)
                     .await?;
@@ -1538,7 +1538,7 @@ impl QuarryStore {
         let library = library.to_string();
         self.write_transaction(move |store, conn| {
             Box::pin(async move {
-                let library = store.require_library_conn(conn, &library).await?;
+                let library = Self::require_library_conn(conn, &library).await?;
                 let (document_id, _) = store
                     .document_identity_conn(conn, &library.id, &path)
                     .await?
@@ -1578,7 +1578,7 @@ impl QuarryStore {
     ) -> Result<Vec<CollabInviteToken>> {
         let path = normalize_path(path)?;
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         let (document_id, _) = self
             .document_identity_conn(&conn, &library.id, &path)
             .await?
@@ -1616,7 +1616,7 @@ impl QuarryStore {
     pub async fn head_document(&self, library: &str, path: &str) -> Result<DocumentListEntry> {
         let path = normalize_path(path)?;
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         self.document_entry_conn(&conn, &library.id, &path).await
     }
 
@@ -1627,7 +1627,7 @@ impl QuarryStore {
         limit: Option<u64>,
     ) -> Result<Vec<DocumentListEntry>> {
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         let normalized_prefix = match prefix {
             Some("") | None => None,
             Some(prefix) => Some(normalize_prefix(prefix)?),
@@ -1688,7 +1688,7 @@ impl QuarryStore {
         let tag_query_lc = query.trim_start_matches('#').to_lowercase();
         let limit = limit.unwrap_or(50).min(100) as usize;
         let conn = self.conn()?;
-        let library_record = self.require_library_conn(&conn, library).await?;
+        let library_record = Self::require_library_conn(&conn, library).await?;
         let documents = self
             .document_entries_for_library_conn(&conn, &library_record.id, 10_000)
             .await?;
@@ -1775,7 +1775,7 @@ impl QuarryStore {
         let query_lc = query.trim().to_lowercase();
         let limit = limit.unwrap_or(20).min(100) as usize;
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         let documents = self
             .document_entries_for_library_conn(&conn, &library.id, 10_000)
             .await?;
@@ -1849,7 +1849,7 @@ impl QuarryStore {
         let (library_id, report) = self
             .write_transaction(move |store, conn| {
                 Box::pin(async move {
-                    let library = store.require_library_conn(conn, &library).await?;
+                    let library = Self::require_library_conn(conn, &library).await?;
                     let library_id = library.id.clone();
                     let indexed_documents = store.reindex_links_conn(conn, &library.id).await?;
                     Ok((
@@ -1874,7 +1874,7 @@ impl QuarryStore {
         conflicts: usize,
     ) -> Result<()> {
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         self.emit_event(StoreEvent::git_sync_completed(
             library.id,
             peer_id.to_string(),
@@ -1887,7 +1887,7 @@ impl QuarryStore {
     pub async fn outgoing_links(&self, library: &str, path: &str) -> Result<LinkCollection> {
         let path = normalize_path(path)?;
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         let document = self.document_entry_conn(&conn, &library.id, &path).await?;
         Ok(LinkCollection {
             path: document.path.clone(),
@@ -1900,7 +1900,7 @@ impl QuarryStore {
     pub async fn backlinks(&self, library: &str, path: &str) -> Result<LinkCollection> {
         let path = normalize_path(path)?;
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         let target = self.document_entry_conn(&conn, &library.id, &path).await?;
         Ok(LinkCollection {
             path: target.path,
@@ -1934,7 +1934,7 @@ impl QuarryStore {
             .filter(|folder| !folder.is_empty());
         let tag = tag.map(normalize_graph_tag).filter(|tag| !tag.is_empty());
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         let documents = self
             .document_entries_for_library_conn(&conn, &library.id, 10_000)
             .await?;
@@ -2102,7 +2102,7 @@ impl QuarryStore {
     ) -> Result<Vec<DocumentVersion>> {
         let path = normalize_path(path)?;
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         let document_id = self
             .document_id_conn(&conn, &library.id, &path)
             .await?
@@ -2142,7 +2142,7 @@ impl QuarryStore {
     ) -> Result<DocumentVersionContent> {
         let path = normalize_path(path)?;
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         let document_id = self
             .document_id_conn(&conn, &library.id, &path)
             .await?
@@ -2165,7 +2165,7 @@ impl QuarryStore {
     ) -> Result<VersionDiff> {
         let path = normalize_path(path)?;
         let conn = self.conn()?;
-        let library_record = self.require_library_conn(&conn, library).await?;
+        let library_record = Self::require_library_conn(&conn, library).await?;
         let document_id = self
             .document_id_conn(&conn, &library_record.id, &path)
             .await?
@@ -2207,7 +2207,7 @@ impl QuarryStore {
     ) -> Result<WriteOutcome> {
         let path = normalize_path(path)?;
         let conn = self.conn()?;
-        let library_record = self.require_library_conn(&conn, library).await?;
+        let library_record = Self::require_library_conn(&conn, library).await?;
         let document_id = self
             .document_id_conn(&conn, &library_record.id, &path)
             .await?
@@ -2263,7 +2263,7 @@ impl QuarryStore {
         let (tx, doc_id) = self
             .write_transaction(move |store, conn| {
                 Box::pin(async move {
-                    let library = store.require_library_conn(conn, &library).await?;
+                    let library = Self::require_library_conn(conn, &library).await?;
                     let (doc_id, head_version_id) = store
                         .document_identity_conn(conn, &library.id, &path)
                         .await?
@@ -2346,7 +2346,7 @@ impl QuarryStore {
         let (tx, doc_id) = self
             .write_transaction(move |store, conn| {
                 Box::pin(async move {
-                    let library = store.require_library_conn(conn, &library).await?;
+                    let library = Self::require_library_conn(conn, &library).await?;
                     let (doc_id, head_version_id) = store
                         .document_identity_conn(conn, &library.id, &from_path)
                         .await?
@@ -2428,7 +2428,7 @@ impl QuarryStore {
         let (tx, doc_id) = self
             .write_transaction(move |store, conn| {
                 Box::pin(async move {
-                    let library = store.require_library_conn(conn, &library).await?;
+                    let library = Self::require_library_conn(conn, &library).await?;
                     let from_document = store.document_conn(conn, &library.id, &from_path).await?;
                     let (to_doc_id, old_to_version_id) = store
                         .document_identity_conn(conn, &library.id, &to_path)
@@ -2537,9 +2537,9 @@ impl QuarryStore {
     ) -> Result<TransactionRecord> {
         let library = library.to_string();
         let tx = self
-            .write_transaction(move |store, conn| {
+            .write_transaction(move |_store, conn| {
                 Box::pin(async move {
-                    let library = store.require_library_conn(conn, &library).await?;
+                    let library = Self::require_library_conn(conn, &library).await?;
                     insert_transaction_conn(conn, &library.id, source, actor, message, provenance)
                         .await
                 })
@@ -2557,7 +2557,7 @@ impl QuarryStore {
 
     pub async fn list_transactions(&self, library: &str) -> Result<Vec<TransactionRecord>> {
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         let mut rows = conn
             .query(
                 "SELECT id, library_id, state, actor, source, message, provenance_json, created_at, committed_at
@@ -2938,9 +2938,9 @@ impl QuarryStore {
 
     pub async fn create_git_peer(&self, library: &str, config: JsonValue) -> Result<GitPeer> {
         let library = library.to_string();
-        self.write_transaction(move |store, conn| {
+        self.write_transaction(move |_store, conn| {
             Box::pin(async move {
-                let library = store.require_library_conn(conn, &library).await?;
+                let library = Self::require_library_conn(conn, &library).await?;
                 let peer = GitPeer {
                     id: Uuid::new_v4().to_string(),
                     library_id: library.id,
@@ -2966,7 +2966,7 @@ impl QuarryStore {
 
     pub async fn list_git_peers(&self, library: &str) -> Result<Vec<GitPeer>> {
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         let mut rows = conn
             .query(
                 "SELECT id, library_id, kind, config_json FROM sync_peers
@@ -3063,7 +3063,7 @@ impl QuarryStore {
 
     pub async fn list_conflicts(&self, library: &str) -> Result<Vec<ConflictRecord>> {
         let conn = self.conn()?;
-        let library = self.require_library_conn(&conn, library).await?;
+        let library = Self::require_library_conn(&conn, library).await?;
         let mut rows = conn
             .query(
                 "SELECT c.id, c.library_id, c.path, c.ours_version_id, c.theirs_version_id,
@@ -3100,9 +3100,9 @@ impl QuarryStore {
         let path = normalize_path(path)?;
         let library = library.to_string();
         let conflict = self
-            .write_transaction(move |store, conn| {
+            .write_transaction(move |_store, conn| {
                 Box::pin(async move {
-                    let library = store.require_library_conn(conn, &library).await?;
+                    let library = Self::require_library_conn(conn, &library).await?;
                     let conflict = ConflictRecord {
                         id: Uuid::new_v4().to_string(),
                         library_id: library.id,
@@ -3232,7 +3232,6 @@ impl QuarryStore {
     }
 
     async fn library_by_slug_or_id_conn(
-        &self,
         conn: &Connection,
         slug_or_id: &str,
     ) -> Result<Option<Library>> {
@@ -3250,8 +3249,8 @@ impl QuarryStore {
         }
     }
 
-    async fn require_library_conn(&self, conn: &Connection, slug_or_id: &str) -> Result<Library> {
-        self.library_by_slug_or_id_conn(conn, slug_or_id)
+    async fn require_library_conn(conn: &Connection, slug_or_id: &str) -> Result<Library> {
+        Self::library_by_slug_or_id_conn(conn, slug_or_id)
             .await?
             .ok_or_else(|| QuarryError::NotFound(format!("library {slug_or_id}")))
     }

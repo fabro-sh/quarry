@@ -945,7 +945,7 @@ impl QuarryStore {
             };
             let document = match scope {
                 DocumentScopeRef::Library { slug } => {
-                    let library = self.require_library_conn(&conn, slug).await?;
+                    let library = QuarryStore::require_library_conn(&conn, slug).await?;
                     self.document_conn(&conn, &library.id, &path).await?
                 }
                 DocumentScopeRef::Tmp => self.tmp_document_conn(&conn, &path).await?,
@@ -1629,7 +1629,7 @@ impl QuarryStore {
     ) -> Result<ResolvedDocumentScope> {
         match scope {
             DocumentScopeRef::Library { slug } => {
-                let library = self.require_library_conn(conn, slug).await?;
+                let library = QuarryStore::require_library_conn(conn, slug).await?;
                 Ok(ResolvedDocumentScope::Library { id: library.id })
             }
             DocumentScopeRef::Tmp => Ok(ResolvedDocumentScope::Tmp),
