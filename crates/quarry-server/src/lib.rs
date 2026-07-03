@@ -3,6 +3,7 @@ mod assets;
 mod collab;
 mod conflicts;
 mod discovery;
+mod document_handlers;
 mod error;
 mod gateway;
 mod git_handlers;
@@ -219,7 +220,10 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
             "/v1/libraries/{library}",
             get(library_handlers::get_library),
         )
-        .route("/v1/libraries/{library}/documents", get(list_documents))
+        .route(
+            "/v1/libraries/{library}/documents",
+            get(document_handlers::list_documents),
+        )
         .route(
             "/v1/libraries/{library}/search",
             get(search_handlers::search_documents),
@@ -530,7 +534,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         library_handlers::create_library,
         library_handlers::list_libraries,
         library_handlers::get_library,
-        list_documents,
+        document_handlers::list_documents,
         create_tmp_document,
         tmp_collab_websocket_openapi,
         get_tmp_document,
@@ -790,12 +794,6 @@ async fn admin_gc(State(state): State<AppState>) -> Result<Json<GcReport>, ApiEr
     Ok(Json(report))
 }
 
-#[derive(Debug, Deserialize)]
-struct ListQuery {
-    prefix: Option<String>,
-    limit: Option<u64>,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentPresenceStatus {
@@ -908,25 +906,6 @@ struct DocumentGetQuery {
     against: Option<String>,
     #[serde(default, flatten)]
     review: DocumentReviewQuery,
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/documents",
-    params(("library" = String, Path), ("prefix" = Option<String>, Query), ("limit" = Option<u64>, Query)),
-    responses((status = 200, body = [DocumentListEntry]))
-)]
-async fn list_documents(
-    State(state): State<AppState>,
-    Path(library): Path<String>,
-    Query(query): Query<ListQuery>,
-) -> Result<Json<Vec<DocumentListEntry>>, ApiError> {
-    Ok(Json(
-        state
-            .store
-            .list_documents(&library, query.prefix.as_deref(), query.limit)
-            .await?,
-    ))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
