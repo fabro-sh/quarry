@@ -2906,11 +2906,13 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
         &["1", "true", "yes", "0", "false", "no"],
     );
     // The legacy mutation facades are gone from the OpenAPI document.
-    for endpoint in ["edit", "ops", "review"] {
-        let operation = &openapi["paths"]
-            [format!("/v1/libraries/{{library}}/documents/{{path}}/{endpoint}")]["post"];
-        assert!(operation.is_null(), "{endpoint} POST should be deleted");
-    }
+    let edit_operation = &openapi["paths"]["/v1/libraries/{library}/documents/{path}/edit"]["post"];
+    assert!(edit_operation.is_null(), "edit POST should be deleted");
+    let ops_operation = &openapi["paths"]["/v1/libraries/{library}/documents/{path}/ops"]["post"];
+    assert!(ops_operation.is_null(), "ops POST should be deleted");
+    let review_operation =
+        &openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"]["post"];
+    assert!(review_operation.is_null(), "review POST should be deleted");
 }
 
 #[tokio::test]
@@ -3448,20 +3450,30 @@ async fn rest_api_marks_ambiguous_links() {
     .unwrap();
     let library = store.create_library("ambiguous").await.unwrap();
 
-    for path in ["alpha/target.md", "omega/target.md"] {
-        store
-            .put_document(
-                &library.slug,
-                path,
-                b"# Target\n".to_vec(),
-                serde_json::json!({"content_type": "text/markdown"}),
-                "text/markdown",
-                DocumentSource::Rest,
-                quarry_core::WritePrecondition::None,
-            )
-            .await
-            .unwrap();
-    }
+    store
+        .put_document(
+            &library.slug,
+            "alpha/target.md",
+            b"# Target\n".to_vec(),
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "omega/target.md",
+            b"# Target\n".to_vec(),
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            quarry_core::WritePrecondition::None,
+        )
+        .await
+        .unwrap();
     store
         .put_document(
             &library.slug,

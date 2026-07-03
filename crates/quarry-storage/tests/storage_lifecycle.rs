@@ -1074,20 +1074,30 @@ async fn ambiguous_short_wikilinks_remain_unresolved() {
     .unwrap();
     let library = store.create_library("ambiguouslinks").await.unwrap();
 
-    for path in ["alpha/target.md", "omega/target.md"] {
-        store
-            .put_document(
-                &library.slug,
-                path,
-                b"# Target\n".to_vec(),
-                serde_json::json!({"content_type": "text/markdown"}),
-                "text/markdown",
-                DocumentSource::Rest,
-                WritePrecondition::None,
-            )
-            .await
-            .unwrap();
-    }
+    store
+        .put_document(
+            &library.slug,
+            "alpha/target.md",
+            b"# Target\n".to_vec(),
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    store
+        .put_document(
+            &library.slug,
+            "omega/target.md",
+            b"# Target\n".to_vec(),
+            serde_json::json!({"content_type": "text/markdown"}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
     store
         .put_document(
             &library.slug,
@@ -2536,21 +2546,45 @@ async fn tmp_documents_reject_non_markdown_media_types_on_create_and_update() {
     let root = tempfile::tempdir().unwrap();
     let store = open_block_store(root.path()).await;
 
-    for content_type in ["text/plain", "application/json", "image/png"] {
-        let error = store
-            .create_tmp_document(
-                b"not markdown".to_vec(),
-                serde_json::json!({}),
-                content_type,
-                TmpTtl::Default,
-            )
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(error, QuarryError::UnsupportedMediaType(_)),
-            "{content_type} should be rejected, got {error:?}"
-        );
-    }
+    let error = store
+        .create_tmp_document(
+            b"not markdown".to_vec(),
+            serde_json::json!({}),
+            "text/plain",
+            TmpTtl::Default,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, QuarryError::UnsupportedMediaType(_)),
+        "text/plain should be rejected, got {error:?}"
+    );
+    let error = store
+        .create_tmp_document(
+            b"not markdown".to_vec(),
+            serde_json::json!({}),
+            "application/json",
+            TmpTtl::Default,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, QuarryError::UnsupportedMediaType(_)),
+        "application/json should be rejected, got {error:?}"
+    );
+    let error = store
+        .create_tmp_document(
+            b"not markdown".to_vec(),
+            serde_json::json!({}),
+            "image/png",
+            TmpTtl::Default,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, QuarryError::UnsupportedMediaType(_)),
+        "image/png should be rejected, got {error:?}"
+    );
 
     let valid = store
         .create_tmp_document(
@@ -2562,23 +2596,51 @@ async fn tmp_documents_reject_non_markdown_media_types_on_create_and_update() {
         .await
         .unwrap();
 
-    for content_type in ["text/plain", "application/json", "image/png"] {
-        let error = store
-            .put_tmp_document(
-                &valid.document.path,
-                b"replacement".to_vec(),
-                serde_json::json!({}),
-                content_type,
-                TmpTtl::Unchanged,
-                WritePrecondition::IfMatch(valid.version.id.clone()),
-            )
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(error, QuarryError::UnsupportedMediaType(_)),
-            "{content_type} should be rejected, got {error:?}"
-        );
-    }
+    let error = store
+        .put_tmp_document(
+            &valid.document.path,
+            b"replacement".to_vec(),
+            serde_json::json!({}),
+            "text/plain",
+            TmpTtl::Unchanged,
+            WritePrecondition::IfMatch(valid.version.id.clone()),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, QuarryError::UnsupportedMediaType(_)),
+        "text/plain should be rejected, got {error:?}"
+    );
+    let error = store
+        .put_tmp_document(
+            &valid.document.path,
+            b"replacement".to_vec(),
+            serde_json::json!({}),
+            "application/json",
+            TmpTtl::Unchanged,
+            WritePrecondition::IfMatch(valid.version.id.clone()),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, QuarryError::UnsupportedMediaType(_)),
+        "application/json should be rejected, got {error:?}"
+    );
+    let error = store
+        .put_tmp_document(
+            &valid.document.path,
+            b"replacement".to_vec(),
+            serde_json::json!({}),
+            "image/png",
+            TmpTtl::Unchanged,
+            WritePrecondition::IfMatch(valid.version.id.clone()),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, QuarryError::UnsupportedMediaType(_)),
+        "image/png should be rejected, got {error:?}"
+    );
 
     let head = store.head_tmp_document(&valid.document.path).await.unwrap();
     assert_eq!(head.head_version_id, valid.version.id);
