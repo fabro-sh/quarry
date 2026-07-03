@@ -1000,70 +1000,80 @@ fn reconcile_review_items(
     meta: &ReviewMeta,
     now: &str,
 ) -> HashMap<String, BlockReviewItem> {
-    let texts: HashMap<&str, &str> = projection
-        .rows
-        .iter()
-        .map(|row| (row.block_id.as_str(), row.text.as_str()))
-        .collect();
-    let extracted: HashMap<&str, &SessionAnchor> = projection
-        .anchors
-        .iter()
-        .map(|anchor| (anchor.id.as_str(), anchor))
-        .collect();
-    let mut items: HashMap<String, BlockReviewItem> = HashMap::new();
+    ReviewReconciliation::new(document_id, prior, projection, meta, now).run()
+}
 
-    // 1. Prior items: update from the doc or pass through.
-    for (id, item) in prior {
-        if !doc_represented(item) {
-            items.insert(id.clone(), clamped(item.clone(), &texts));
-            continue;
+struct ReviewReconciliation<'a> {
+    document_id: &'a str,
+    prior: &'a HashMap<String, BlockReviewItem>,
+    projection: &'a SessionProjection,
+    meta: &'a ReviewMeta,
+    now: &'a str,
+    texts: HashMap<&'a str, &'a str>,
+    extracted: HashMap<&'a str, &'a SessionAnchor>,
+    items: HashMap<String, BlockReviewItem>,
+}
+
+impl<'a> ReviewReconciliation<'a> {
+    fn new(
+        document_id: &'a str,
+        prior: &'a HashMap<String, BlockReviewItem>,
+        projection: &'a SessionProjection,
+        meta: &'a ReviewMeta,
+        now: &'a str,
+    ) -> Self {
+        let texts = projection
+            .rows
+            .iter()
+            .map(|row| (row.block_id.as_str(), row.text.as_str()))
+            .collect();
+        let extracted = projection
+            .anchors
+            .iter()
+            .map(|anchor| (anchor.id.as_str(), anchor))
+            .collect();
+        Self {
+            document_id,
+            prior,
+            projection,
+            meta,
+            now,
+            texts,
+            extracted,
+            items: HashMap::new(),
         }
-        if item.parent_item_id.is_some() {
-            // Replies are handled with their thread root below.
-            continue;
+    }
+
+    fn run(mut self) -> HashMap<String, BlockReviewItem> {
+        self.reconcile_prior_items();
+        self.insert_browser_created_anchors();
+        self.upsert_reply_items();
+        self.items
+    }
+
+    fn reconcile_prior_items(&mut self) {
+        for (id, item) in self.prior {
+            if !doc_represented(item) {
+                self.items
+                    .insert(id.clone(), clamped(item.clone(), &self.texts));
+                continue;
+            }
+            if item.parent_item_id.is_some() {
+                // Replies are handled with their thread root below.
+                continue;
+            }
+            self.reconcile_prior_root(id, item);
         }
-        let meta_entry = match item.kind {
-            BlockReviewKind::Suggestion => meta.suggestions.get(id),
-            _ => meta.comments.get(id),
-        };
-        match (extracted.get(id.as_str()), meta_entry) {
+    }
+
+    fn reconcile_prior_root(&mut self, id: &str, item: &BlockReviewItem) {
+        let meta_entry = self.meta_entry_for(item.kind, id);
+        match (self.extracted.get(id), meta_entry) {
             (Some(anchor), entry) => {
-                let mut updated = item.clone();
-                updated.block_id = anchor.block_id.clone();
-                updated.start_offset = anchor.start;
-                updated.end_offset = anchor.end;
-                if item.kind == BlockReviewKind::Suggestion {
-                    updated.replacement = match &anchor.kind {
-                        SessionAnchorKind::Suggestion { replacement, .. } => {
-                            Some(replacement.clone())
-                        }
-                        SessionAnchorKind::Comment => None,
-                    };
-                }
-                if let Some(entry) = entry {
-                    updated.body = entry.body.clone().or(updated.body);
-                    let resolved = entry.status.as_deref() == Some("resolved");
-                    updated.state = if resolved {
-                        BlockReviewState::Resolved
-                    } else if anchor.start == anchor.end && item.kind == BlockReviewKind::Comment {
-                        BlockReviewState::Orphaned
-                    } else {
-                        BlockReviewState::Open
-                    };
-                } else if anchor.start == anchor.end && item.kind == BlockReviewKind::Comment {
-                    updated.state = BlockReviewState::Orphaned;
-                }
-                if updated != *item {
-                    let body_changed = updated.body != item.body;
-                    updated.updated_at = if body_changed {
-                        entry
-                            .and_then(|entry| entry.edited_at.clone())
-                            .unwrap_or_else(|| now.to_string())
-                    } else {
-                        now.to_string()
-                    };
-                }
-                items.insert(id.clone(), updated);
+                self.items.insert(
+                    id.to_string(),
+                    self.updated_from_anchor(item, anchor, entry),
+                );
             }
             (None, Some(_)) => {
                 // The anchored text was deleted but the entry remains: the
@@ -1073,8 +1083,9 @@ fn reconcile_review_items(
                     BlockReviewKind::Suggestion => BlockReviewState::Invalidated,
                     _ => BlockReviewState::Orphaned,
                 };
-                updated.updated_at = now.to_string();
-                items.insert(id.clone(), clamped(updated, &texts));
+                updated.updated_at = self.now.to_string();
+                self.items
+                    .insert(id.to_string(), clamped(updated, &self.texts));
             }
             (None, None) => {
                 // Browser deleted the item (comment delete, suggestion
@@ -1083,87 +1094,143 @@ fn reconcile_review_items(
         }
     }
 
-    // 2. Browser-created anchors (ids the session never seeded).
-    for anchor in &projection.anchors {
-        if items.contains_key(&anchor.id) || prior.contains_key(&anchor.id) {
-            continue;
+    fn updated_from_anchor(
+        &self,
+        item: &BlockReviewItem,
+        anchor: &SessionAnchor,
+        entry: Option<&ReviewMetaEntry>,
+    ) -> BlockReviewItem {
+        let mut updated = item.clone();
+        updated.block_id = anchor.block_id.clone();
+        updated.start_offset = anchor.start;
+        updated.end_offset = anchor.end;
+        if item.kind == BlockReviewKind::Suggestion {
+            updated.replacement = match &anchor.kind {
+                SessionAnchorKind::Suggestion { replacement, .. } => Some(replacement.clone()),
+                SessionAnchorKind::Comment => None,
+            };
         }
+        if let Some(entry) = entry {
+            updated.body = entry.body.clone().or(updated.body);
+            let resolved = entry.status.as_deref() == Some("resolved");
+            updated.state = if resolved {
+                BlockReviewState::Resolved
+            } else if anchor.start == anchor.end && item.kind == BlockReviewKind::Comment {
+                BlockReviewState::Orphaned
+            } else {
+                BlockReviewState::Open
+            };
+        } else if anchor.start == anchor.end && item.kind == BlockReviewKind::Comment {
+            updated.state = BlockReviewState::Orphaned;
+        }
+        if updated != *item {
+            let body_changed = updated.body != item.body;
+            updated.updated_at = if body_changed {
+                entry
+                    .and_then(|entry| entry.edited_at.clone())
+                    .unwrap_or_else(|| self.now.to_string())
+            } else {
+                self.now.to_string()
+            };
+        }
+        updated
+    }
+
+    fn insert_browser_created_anchors(&mut self) {
+        for anchor in &self.projection.anchors {
+            if self.items.contains_key(&anchor.id) || self.prior.contains_key(&anchor.id) {
+                continue;
+            }
+            self.items
+                .insert(anchor.id.clone(), self.browser_created_item(anchor));
+        }
+    }
+
+    fn browser_created_item(&self, anchor: &SessionAnchor) -> BlockReviewItem {
         let (kind, meta_entry, replacement, anchor_author) = match &anchor.kind {
             SessionAnchorKind::Suggestion {
                 replacement, by, ..
             } => (
                 BlockReviewKind::Suggestion,
-                meta.suggestions.get(&anchor.id),
+                self.meta.suggestions.get(&anchor.id),
                 Some(replacement.clone()),
                 by.clone(),
             ),
             SessionAnchorKind::Comment => (
                 BlockReviewKind::Comment,
-                meta.comments.get(&anchor.id),
+                self.meta.comments.get(&anchor.id),
                 None,
                 None,
             ),
         };
-        let quote = texts
+        let quote = self
+            .texts
             .get(anchor.block_id.as_str())
             .map(|text| utf16_slice_clamped(text, anchor.start, anchor.end));
         let created_at = meta_entry
             .map(|entry| entry.at.clone())
             .filter(|at| !at.is_empty())
-            .unwrap_or_else(|| now.to_string());
+            .unwrap_or_else(|| self.now.to_string());
         let updated_at = meta_entry
             .and_then(|entry| entry.edited_at.clone())
             .unwrap_or_else(|| created_at.clone());
-        items.insert(
-            anchor.id.clone(),
-            BlockReviewItem {
-                id: anchor.id.clone(),
-                document_id: document_id.to_string(),
-                block_id: anchor.block_id.clone(),
-                kind,
-                start_offset: anchor.start,
-                end_offset: anchor.end,
-                body: meta_entry.and_then(|entry| entry.body.clone()),
-                replacement,
-                author: meta_entry.map(|entry| entry.by.clone()).or(anchor_author),
-                state: if meta_entry
-                    .is_some_and(|entry| entry.status.as_deref() == Some("resolved"))
-                {
-                    BlockReviewState::Resolved
-                } else {
-                    BlockReviewState::Open
-                },
-                quote,
-                context_before: None,
-                context_after: None,
-                parent_item_id: None,
-                created_at,
-                updated_at,
+        BlockReviewItem {
+            id: anchor.id.clone(),
+            document_id: self.document_id.to_string(),
+            block_id: anchor.block_id.clone(),
+            kind,
+            start_offset: anchor.start,
+            end_offset: anchor.end,
+            body: meta_entry.and_then(|entry| entry.body.clone()),
+            replacement,
+            author: meta_entry.map(|entry| entry.by.clone()).or(anchor_author),
+            state: if meta_entry.is_some_and(|entry| entry.status.as_deref() == Some("resolved")) {
+                BlockReviewState::Resolved
+            } else {
+                BlockReviewState::Open
             },
-        );
+            quote,
+            context_before: None,
+            context_after: None,
+            parent_item_id: None,
+            created_at,
+            updated_at,
+        }
     }
 
-    // 3. Replies: meta entries threading onto a root that survived.
-    for (id, entry) in &meta.comments {
-        let Some(parent_id) = &entry.re else {
-            continue;
-        };
-        let Some(root) = items.get(parent_id).cloned() else {
-            continue;
-        };
-        let prior_reply = prior.get(id);
+    fn upsert_reply_items(&mut self) {
+        for (id, entry) in &self.meta.comments {
+            let Some(parent_id) = &entry.re else {
+                continue;
+            };
+            let Some(root) = self.items.get(parent_id).cloned() else {
+                continue;
+            };
+            self.items
+                .insert(id.clone(), self.reply_item(id, entry, parent_id, &root));
+        }
+    }
+
+    fn reply_item(
+        &self,
+        id: &str,
+        entry: &ReviewMetaEntry,
+        parent_id: &str,
+        root: &BlockReviewItem,
+    ) -> BlockReviewItem {
+        let prior_reply = self.prior.get(id);
         let created_at = prior_reply
             .map(|item| item.created_at.clone())
             .or_else(|| Some(entry.at.clone()).filter(|at| !at.is_empty()))
-            .unwrap_or_else(|| now.to_string());
+            .unwrap_or_else(|| self.now.to_string());
         let updated_at = entry
             .edited_at
             .clone()
             .or_else(|| prior_reply.map(|item| item.updated_at.clone()))
             .unwrap_or_else(|| created_at.clone());
-        let reply = BlockReviewItem {
-            id: id.clone(),
-            document_id: document_id.to_string(),
+        let mut reply = BlockReviewItem {
+            id: id.to_string(),
+            document_id: self.document_id.to_string(),
             block_id: root.block_id.clone(),
             kind: BlockReviewKind::Comment,
             start_offset: root.start_offset,
@@ -1175,24 +1242,28 @@ fn reconcile_review_items(
             quote: root.quote.clone(),
             context_before: None,
             context_after: None,
-            parent_item_id: Some(parent_id.clone()),
+            parent_item_id: Some(parent_id.to_string()),
             created_at,
             updated_at,
         };
-        let mut reply = reply;
         if entry.edited_at.is_none() {
             if let Some(prior_reply) = prior_reply {
                 let mut comparable = reply.clone();
                 comparable.updated_at = prior_reply.updated_at.clone();
                 if comparable != *prior_reply {
-                    reply.updated_at = now.to_string();
+                    reply.updated_at = self.now.to_string();
                 }
             }
         }
-        items.insert(id.clone(), reply);
+        reply
     }
 
-    items
+    fn meta_entry_for(&self, kind: BlockReviewKind, id: &str) -> Option<&ReviewMetaEntry> {
+        match kind {
+            BlockReviewKind::Suggestion => self.meta.suggestions.get(id),
+            _ => self.meta.comments.get(id),
+        }
+    }
 }
 
 /// Anchors of pass-through items must stay valid against the new text:
