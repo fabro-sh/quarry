@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use utoipa::ToSchema;
@@ -71,14 +72,13 @@ struct Marker {
 }
 
 pub async fn push_peer(store: &QuarryStore, library: &str, peer_id: &str) -> Result<GitSyncResult> {
-    let store_clone = store.clone();
-    let library = library.to_string();
-    let peer_id = peer_id.to_string();
-    store
-        .run_global_operation(
-            async move { push_peer_inner(&store_clone, &library, &peer_id).await },
-        )
-        .await
+    run_peer_operation(
+        store,
+        library,
+        peer_id,
+        |store, library, peer_id| async move { push_peer_inner(&store, &library, &peer_id).await },
+    )
+    .await
 }
 
 async fn push_peer_inner(
@@ -137,14 +137,13 @@ async fn push_peer_inner(
 }
 
 pub async fn pull_peer(store: &QuarryStore, library: &str, peer_id: &str) -> Result<GitSyncResult> {
-    let store_clone = store.clone();
-    let library = library.to_string();
-    let peer_id = peer_id.to_string();
-    store
-        .run_global_operation(
-            async move { pull_peer_inner(&store_clone, &library, &peer_id).await },
-        )
-        .await
+    run_peer_operation(
+        store,
+        library,
+        peer_id,
+        |store, library, peer_id| async move { pull_peer_inner(&store, &library, &peer_id).await },
+    )
+    .await
 }
 
 async fn pull_peer_inner(
@@ -193,13 +192,30 @@ async fn pull_peer_inner(
 }
 
 pub async fn sync_peer(store: &QuarryStore, library: &str, peer_id: &str) -> Result<GitSyncResult> {
+    run_peer_operation(
+        store,
+        library,
+        peer_id,
+        |store, library, peer_id| async move { sync_peer_inner(&store, &library, &peer_id).await },
+    )
+    .await
+}
+
+async fn run_peer_operation<F, Fut>(
+    store: &QuarryStore,
+    library: &str,
+    peer_id: &str,
+    operation: F,
+) -> Result<GitSyncResult>
+where
+    F: FnOnce(QuarryStore, String, String) -> Fut,
+    Fut: Future<Output = Result<GitSyncResult>> + Send + 'static,
+{
     let store_clone = store.clone();
     let library = library.to_string();
     let peer_id = peer_id.to_string();
     store
-        .run_global_operation(
-            async move { sync_peer_inner(&store_clone, &library, &peer_id).await },
-        )
+        .run_global_operation(operation(store_clone, library, peer_id))
         .await
 }
 
