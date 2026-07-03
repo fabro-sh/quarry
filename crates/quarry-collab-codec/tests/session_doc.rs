@@ -1206,5 +1206,4 @@ fn projection_reads_text_inserted_by_a_plain_yjs_client() {
 // Sanity: Offset import is used by the sticky-index spike; keep the
 // production crate honest about not needing it (compile-time witness that
 // the anchors-as-marks projection never touches sticky indices).
-#[allow(dead_code)]
 fn _sticky_indices_unused(_offset: Offset) {}
