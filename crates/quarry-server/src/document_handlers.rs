@@ -1,17 +1,22 @@
+use crate::markdown_write;
 use crate::presence::PresenceStreamGuard;
 use crate::review::{DocumentReviewQuery, agent_document_review, agent_document_snapshot};
 use crate::sse::events_for_library;
 use crate::{
-    ApiError, AppState, DocumentSubResource, ErrorResponse, bytes_response_with_expiry, gateway,
-    insert_document_headers, json_response, optional_header, parse_document_subresource,
-    touch_agent_presence, transaction_metadata_from_headers,
+    ApiError, AppState, DocumentSubResource, ErrorResponse, bytes_response_with_expiry,
+    content_type, gateway, insert_document_headers, json_response, json_with_etag,
+    metadata_from_headers, optional_header, parse_document_subresource, precondition_from_headers,
+    reject_block_document_downgrade_for_library, touch_agent_presence,
+    transaction_metadata_from_headers,
 };
 use axum::Json;
 use axum::body::Body;
+use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use quarry_core::{DocumentListEntry, DocumentSource, TransactionRecord};
+use quarry_core::{DocumentListEntry, DocumentSource, TransactionRecord, WriteOutcome};
+use quarry_storage::PutDocumentRequest;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -182,6 +187,104 @@ pub(crate) async fn get_document(
         &document.id,
         document.expires_at.as_deref(),
     )
+}
+
+#[utoipa::path(
+    put,
+    path = "/v1/libraries/{library}/documents/{path}",
+    params(
+        ("library" = String, Path),
+        ("path" = String, Path),
+        (
+            "If-Match" = Option<String>,
+            Header,
+            description = "Optional ETag/document clock used as the merge base for Markdown writes"
+        ),
+        (
+            "If-None-Match" = Option<String>,
+            Header,
+            description = "Use * to create a new document"
+        ),
+        (
+            "X-Quarry-Allow-Document-Kind-Change" = Option<String>,
+            Header,
+            description = "Set to true to intentionally change an existing Markdown block document into a raw document"
+        )
+    ),
+    request_body(
+        description = "Whole-document Markdown writes require Content-Type: text/markdown. Raw writes must use an explicit raw media type; existing Markdown documents reject raw kind changes unless X-Quarry-Allow-Document-Kind-Change: true is sent.",
+        content(
+            (String = "text/markdown"),
+            (String = "text/plain"),
+            (String = "application/octet-stream")
+        )
+    ),
+    responses(
+        (status = 200, body = WriteOutcome),
+        (status = 409, description = "Existing Markdown document would be changed into a raw document without X-Quarry-Allow-Document-Kind-Change: true", body = ErrorResponse),
+        (status = 412, body = ErrorResponse)
+    )
+)]
+pub(crate) async fn put_document(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((library, path)): Path<(String, String)>,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    touch_agent_presence(&state, &headers, Some(&library), &path).await?;
+    let content_type = content_type(&headers);
+    let metadata = metadata_from_headers(&headers, &content_type)?;
+    let precondition = precondition_from_headers(&headers)?;
+    let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
+    let transaction = transaction_metadata_from_headers(&headers)?;
+    let incoming_kind = quarry_storage::document_kind(&path, &content_type);
+
+    // Phase 4: a BlockDocument PUT is a whole-file write reconciled via
+    // diff3 against the canonical block rows — block ids and review anchors
+    // survive, true conflicts become review items, and a live session
+    // receives the merge as a collaborator edit. RawDocuments keep the
+    // untouched legacy byte path below.
+    reject_block_document_downgrade_for_library(
+        &state.store,
+        &headers,
+        &library,
+        &path,
+        incoming_kind,
+    )
+    .await?;
+    if incoming_kind == quarry_storage::DocumentKind::BlockDocument {
+        return gateway::gateway_reply(
+            markdown_write::put_block_document(
+                &state,
+                &library,
+                &path,
+                markdown_write::PutBlockDocumentRequest {
+                    body: body.to_vec(),
+                    metadata,
+                    precondition,
+                    origin_id,
+                    transaction,
+                },
+            )
+            .await,
+        );
+    }
+
+    let outcome = state
+        .store
+        .put_document(PutDocumentRequest {
+            library,
+            path,
+            content: body.to_vec(),
+            metadata,
+            content_type,
+            source: DocumentSource::Rest,
+            precondition,
+            origin_id,
+            transaction,
+        })
+        .await?;
+    json_with_etag(StatusCode::OK, &outcome, &outcome.version.id)
 }
 
 #[utoipa::path(

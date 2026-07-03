@@ -55,7 +55,7 @@ use quarry_core::{
     WritePrecondition,
 };
 use quarry_git::{GitExportResult, GitImportResult, GitSyncResult};
-use quarry_storage::{DocumentScopeRef, PutDocumentRequest, QuarryStore};
+use quarry_storage::{DocumentScopeRef, QuarryStore};
 use review::{
     AgentBlockRef, AgentDocumentSnapshot, AgentReviewComment, AgentReviewConflict,
     AgentReviewReply, AgentReviewResponse, AgentReviewSuggestion, AgentSnapshotBlock,
@@ -249,7 +249,7 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
             "/v1/libraries/{library}/documents/{*path}",
             get(document_handlers::get_document)
                 .head(document_handlers::head_document)
-                .put(put_document)
+                .put(document_handlers::put_document)
                 .post(post_document_action)
                 .patch(patch_document_metadata)
                 .delete(document_handlers::delete_document),
@@ -578,7 +578,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         document_version_restore_openapi,
         document_ttl_openapi,
         document_handlers::head_document,
-        put_document,
+        document_handlers::put_document,
         post_document_action,
         patch_document_metadata,
         document_handlers::delete_document,
@@ -1547,104 +1547,6 @@ async fn document_version_diff_openapi() {}
 async fn document_version_restore_openapi() {}
 
 #[utoipa::path(
-    put,
-    path = "/v1/libraries/{library}/documents/{path}",
-    params(
-        ("library" = String, Path),
-        ("path" = String, Path),
-        (
-            "If-Match" = Option<String>,
-            Header,
-            description = "Optional ETag/document clock used as the merge base for Markdown writes"
-        ),
-        (
-            "If-None-Match" = Option<String>,
-            Header,
-            description = "Use * to create a new document"
-        ),
-        (
-            "X-Quarry-Allow-Document-Kind-Change" = Option<String>,
-            Header,
-            description = "Set to true to intentionally change an existing Markdown block document into a raw document"
-        )
-    ),
-    request_body(
-        description = "Whole-document Markdown writes require Content-Type: text/markdown. Raw writes must use an explicit raw media type; existing Markdown documents reject raw kind changes unless X-Quarry-Allow-Document-Kind-Change: true is sent.",
-        content(
-            (String = "text/markdown"),
-            (String = "text/plain"),
-            (String = "application/octet-stream")
-        )
-    ),
-    responses(
-        (status = 200, body = WriteOutcome),
-        (status = 409, description = "Existing Markdown document would be changed into a raw document without X-Quarry-Allow-Document-Kind-Change: true", body = ErrorResponse),
-        (status = 412, body = ErrorResponse)
-    )
-)]
-async fn put_document(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((library, path)): Path<(String, String)>,
-    body: Bytes,
-) -> Result<Response, ApiError> {
-    touch_agent_presence(&state, &headers, Some(&library), &path).await?;
-    let content_type = content_type(&headers);
-    let metadata = metadata_from_headers(&headers, &content_type)?;
-    let precondition = precondition_from_headers(&headers)?;
-    let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
-    let transaction = transaction_metadata_from_headers(&headers)?;
-    let incoming_kind = quarry_storage::document_kind(&path, &content_type);
-
-    // Phase 4: a BlockDocument PUT is a whole-file write reconciled via
-    // diff3 against the canonical block rows — block ids and review anchors
-    // survive, true conflicts become review items, and a live session
-    // receives the merge as a collaborator edit. RawDocuments keep the
-    // untouched legacy byte path below.
-    reject_block_document_downgrade_for_library(
-        &state.store,
-        &headers,
-        &library,
-        &path,
-        incoming_kind,
-    )
-    .await?;
-    if incoming_kind == quarry_storage::DocumentKind::BlockDocument {
-        return gateway::gateway_reply(
-            markdown_write::put_block_document(
-                &state,
-                &library,
-                &path,
-                markdown_write::PutBlockDocumentRequest {
-                    body: body.to_vec(),
-                    metadata,
-                    precondition,
-                    origin_id,
-                    transaction,
-                },
-            )
-            .await,
-        );
-    }
-
-    let outcome = state
-        .store
-        .put_document(PutDocumentRequest {
-            library,
-            path,
-            content: body.to_vec(),
-            metadata,
-            content_type,
-            source: DocumentSource::Rest,
-            precondition,
-            origin_id,
-            transaction,
-        })
-        .await?;
-    json_with_etag(StatusCode::OK, &outcome, &outcome.version.id)
-}
-
-#[utoipa::path(
     patch,
     path = "/v1/libraries/{library}/documents/{path}/metadata",
     params(("library" = String, Path), ("path" = String, Path)),
@@ -2169,7 +2071,7 @@ mod tests {
         let (_root, store) = test_store().await;
         let library = store.create_library("doc-sse-shutdown").await.unwrap();
         store
-            .put_document(PutDocumentRequest {
+            .put_document(quarry_storage::PutDocumentRequest {
                 library: library.slug.clone(),
                 path: "live.md".to_string(),
                 content: b"hello".to_vec(),
