@@ -1178,14 +1178,7 @@ async fn agent_review_matches_snapshot_errors_for_missing_and_non_markdown() {
 
 #[tokio::test]
 async fn agent_presence_records_status_by_document() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     let library = store.create_library("presence").await.unwrap();
     let written = store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -1691,15 +1684,7 @@ async fn document_write_with_agent_header_touches_presence() {
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
 async fn tmp_document_read_with_agent_header_auto_joins_presence() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
-    let app = router(store);
+    let (_root, app, _store) = document_test_app().await;
 
     let response = app
         .clone()
@@ -1751,15 +1736,7 @@ async fn tmp_document_read_with_agent_header_auto_joins_presence() {
 
 #[tokio::test]
 async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
-    let app = router(store);
+    let (_root, app, _store) = document_test_app().await;
 
     let response = app
         .clone()
@@ -1999,14 +1976,7 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
 
 #[tokio::test]
 async fn collab_share_endpoints_mint_list_and_revoke_invite_tokens() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     let library = store.create_library("shares").await.unwrap();
     let written = store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -2072,14 +2042,7 @@ async fn collab_share_endpoints_mint_list_and_revoke_invite_tokens() {
 
 #[tokio::test]
 async fn agent_events_pending_and_ack_expose_sparse_event_signals() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     store.create_library("eventfallback").await.unwrap();
     let app = router(store);
 
@@ -2167,14 +2130,7 @@ async fn agent_events_pending_and_ack_expose_sparse_event_signals() {
 
 #[tokio::test]
 async fn document_put_events_echo_origin_id() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     store.create_library("collab-events").await.unwrap();
     let mut events = store.subscribe_events();
     let app = router(store);
@@ -2208,14 +2164,7 @@ async fn document_put_events_echo_origin_id() {
 
 #[tokio::test]
 async fn document_delete_events_echo_origin_id_and_doc_id() {
-    let root = tempfile::tempdir().unwrap();
-    let store = QuarryStore::open(StoreConfig {
-        db_path: root.path().join("quarry.db"),
-        cas_path: root.path().join("cas"),
-        lock_path: None,
-    })
-    .await
-    .unwrap();
+    let (_root, store) = open_test_store().await;
     store.create_library("delete-origin").await.unwrap();
     let written = store
         .put_document(quarry_storage::PutDocumentRequest {
