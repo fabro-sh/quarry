@@ -24,6 +24,16 @@ use yrs::{
 const COLLAB_ROOT: &str = "content";
 const REVIEW_ROOT: &str = "review";
 
+fn assert_json_timestamp(value: &Value) {
+    let timestamp = value.as_str().expect("timestamp should be a string");
+    chrono::DateTime::parse_from_rfc3339(timestamp).expect("timestamp should parse as RFC 3339");
+}
+
+fn assert_json_uuid(value: &Value) {
+    let id = value.as_str().expect("id should be a string");
+    uuid::Uuid::parse_str(id).expect("id should parse as a UUID");
+}
+
 #[tokio::test]
 async fn rest_api_attaches_and_preserves_request_ids() {
     let root = tempfile::tempdir().unwrap();
@@ -700,7 +710,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
         .chars()
         .all(|character| character.is_ascii_hexdigit()));
     assert_eq!(created["document"]["library_id"], Value::Null);
-    assert!(created["document"]["expires_at"].as_str().is_some());
+    assert_json_timestamp(&created["document"]["expires_at"]);
 
     let response = app
         .clone()
@@ -1381,7 +1391,7 @@ async fn tmp_agent_presence_omits_capability_path() {
     assert_eq!(presence["current"]["agentId"], "agent-tmp");
     assert_eq!(presence["current"]["status"], "thinking");
     assert_eq!(presence["current"]["by"], "ai:codex");
-    assert!(presence["current"]["updatedAt"].as_str().is_some());
+    assert_json_timestamp(&presence["current"]["updatedAt"]);
     assert!(presence["current"].get("path").is_none());
     assert!(presence["current"].get("library").is_none());
     assert!(presence["presence"][0].get("path").is_none());
@@ -2081,7 +2091,7 @@ async fn collab_share_endpoints_mint_list_and_revoke_invite_tokens() {
     assert_eq!(response.status(), StatusCode::OK);
     let token: Value = response_json(response).await;
     assert_eq!(token["id"], token_id);
-    assert!(token["revoked_at"].as_str().is_some());
+    assert_json_timestamp(&token["revoked_at"]);
 }
 
 #[tokio::test]
@@ -2129,7 +2139,9 @@ async fn agent_events_pending_and_ack_expose_sparse_event_signals() {
             if body["events"].as_array().unwrap().iter().any(|event| {
                 event["event"] == "doc.changed"
                     && event["data"]["path"] == "live.md"
-                    && event["data"]["version_id"].as_str().is_some()
+                    && event["data"]["version_id"]
+                        .as_str()
+                        .is_some_and(|version_id| uuid::Uuid::parse_str(version_id).is_ok())
             }) {
                 break body;
             }
@@ -3435,7 +3447,7 @@ async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() {
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body["status"], "resolved");
-    assert!(body["resolved_at"].as_str().is_some());
+    assert_json_timestamp(&body["resolved_at"]);
 }
 
 #[tokio::test]
@@ -4314,7 +4326,7 @@ async fn blocks_route_materializes_rows_with_stable_ids() {
     assert_eq!(blocks[0]["text"], "Title");
     assert_eq!(blocks[1]["block_type"], "p");
     assert_eq!(blocks[1]["text"], "Body one.");
-    assert!(first["document_clock"].as_str().is_some());
+    assert_json_uuid(&first["document_clock"]);
 
     // A second read returns the same persisted ids and clock: the lazy
     // materialization happened exactly once.
@@ -4445,7 +4457,7 @@ async fn block_transaction_insert_block_commits_one_version_and_emits_events() {
     .await;
     assert_eq!(ack["status"], "committed");
     assert_eq!(ack["changed_block_ids"].as_array().unwrap().len(), 1);
-    assert!(ack["transaction_id"].as_str().is_some());
+    assert_json_uuid(&ack["transaction_id"]);
     let clock = ack["document_clock"].as_str().unwrap();
     assert_ne!(clock, tree["document_clock"].as_str().unwrap());
 
@@ -7118,10 +7130,14 @@ async fn session_review_transaction_renders_marks_and_meta_for_browsers() {
     )
     .await;
     let entry = wait_for_yjs_review_entry(&mut socket, &doc, "comments", &comment_id, |entry| {
-        entry["body"] == "Edited live comment." && entry["editedAt"].as_str().is_some()
+        entry["body"] == "Edited live comment."
+            && entry["editedAt"]
+                .as_str()
+                .is_some_and(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).is_ok())
     })
     .await;
     assert_eq!(entry["body"], "Edited live comment.");
+    assert_json_timestamp(&entry["editedAt"]);
     assert_ne!(entry["editedAt"], entry["at"]);
 
     socket.close(None).await.unwrap();

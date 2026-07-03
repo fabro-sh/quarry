@@ -229,7 +229,7 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
         .await
         .unwrap();
     assert!(small.version.content_hash.is_none());
-    assert!(small.version.inline_content.is_some());
+    assert_eq!(small.version.inline_content.as_deref(), Some(&b"one"[..]));
 
     let large_bytes = vec![b'x'; INLINE_CONTENT_THRESHOLD + 1];
     let large = store
@@ -244,7 +244,11 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
         )
         .await
         .unwrap();
-    assert!(large.version.content_hash.is_some());
+    let expected_large_hash = quarry_cas::DiskCas::hash(&large_bytes);
+    assert_eq!(
+        large.version.content_hash.as_deref(),
+        Some(expected_large_hash.as_str())
+    );
     assert!(large.version.inline_content.is_none());
     let listed_large = store
         .list_documents(&alpha.slug, Some("assets/"), None)
@@ -438,7 +442,12 @@ async fn manages_stateful_collab_invite_tokens_by_document_id() {
 
     let revoked = store.revoke_collab_invite_token(&token.id).await.unwrap();
     assert_eq!(revoked.id, token.id);
-    assert!(revoked.revoked_at.is_some());
+    let revoked_at = revoked
+        .revoked_at
+        .as_deref()
+        .expect("revoked token should record a timestamp");
+    chrono::DateTime::parse_from_rfc3339(revoked_at)
+        .expect("revoked token timestamp should parse as RFC 3339");
 
     let error = store
         .create_collab_invite_token(&library.slug, "live.md", "owner", None)
@@ -2312,7 +2321,13 @@ async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() {
     assert!(secret
         .chars()
         .all(|character| character.is_ascii_hexdigit()));
-    assert!(tmp.document.expires_at.is_some());
+    let expires_at = tmp
+        .document
+        .expires_at
+        .as_deref()
+        .expect("tmp document should record an expiry timestamp");
+    chrono::DateTime::parse_from_rfc3339(expires_at)
+        .expect("tmp document expiry should parse as RFC 3339");
     assert_eq!(tmp.document.library_id, None);
 
     let updated = store

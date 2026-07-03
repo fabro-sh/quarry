@@ -73,7 +73,11 @@ async fn import_export_roundtrip_preserves_bytes_metadata_and_marker_safety() {
     )
     .await
     .unwrap();
-    assert!(exported.commit_id.is_some());
+    let commit_id = exported
+        .commit_id
+        .as_deref()
+        .expect("export should create a commit id");
+    git2::Oid::from_str(commit_id).expect("export commit id should parse as a Git OID");
     assert_eq!(
         std::fs::read_to_string(output.path().join(".quarry/marker.json")).unwrap(),
         format!(
@@ -1036,7 +1040,10 @@ async fn sync_records_conflict_when_quarry_deletes_and_git_changes() {
 
     assert_eq!(result.conflicts.len(), 1);
     assert_eq!(result.conflicts[0].ours_version_id, None);
-    assert!(result.conflicts[0].theirs_version_id.is_some());
+    let theirs_version_id = result.conflicts[0]
+        .theirs_version_id
+        .as_deref()
+        .expect("the git-side conflict should record the imported version id");
     assert!(store
         .get_document(&library.slug, "notes/plan.md")
         .await
@@ -1047,6 +1054,7 @@ async fn sync_records_conflict_when_quarry_deletes_and_git_changes() {
         .get_document(&library.slug, &conflict_path)
         .await
         .unwrap();
+    assert_eq!(sibling.version.id.as_str(), theirs_version_id);
     assert_eq!(sibling.content, b"theirs\n");
     // Markdown siblings import through the block writer (Phase 7): they are
     // ordinary BlockDocuments with a projection, not raw bytes.
@@ -1632,7 +1640,10 @@ async fn sync_pairs_pure_git_renames_into_identity_preserving_moves() {
         .await
         .unwrap()
         .expect("the new path carries the sync state");
-    assert!(new_state.last_synced_doc_version_id.is_some());
+    assert_eq!(
+        new_state.last_synced_doc_version_id.as_deref(),
+        Some(moved.version.id.as_str())
+    );
 }
 
 /// Rename-and-edit between syncs does not byte-match, so it stays the

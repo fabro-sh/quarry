@@ -28,6 +28,12 @@ use yrs::{Doc, OffsetKind, Options, Out, ReadTxn, Text, Transact, Update, WriteT
 #[cfg(feature = "tmp-documents")]
 const COLLAB_ROOT: &str = "content";
 
+#[cfg(feature = "tmp-documents")]
+fn assert_json_timestamp(value: &Value) {
+    let timestamp = value.as_str().expect("timestamp should be a string");
+    chrono::DateTime::parse_from_rfc3339(timestamp).expect("timestamp should parse as RFC 3339");
+}
+
 #[tokio::test]
 async fn document_feature_surface_matches_compiled_features() {
     let root = tempfile::tempdir().unwrap();
@@ -386,7 +392,7 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
     assert_eq!(presence["current"]["documentId"], document_id);
     assert_eq!(presence["current"]["agentId"], "agent-a");
     assert_eq!(presence["current"]["status"], "waiting");
-    assert!(presence["current"]["updatedAt"].as_str().is_some());
+    assert_json_timestamp(&presence["current"]["updatedAt"]);
     assert!(presence["current"].get("library").is_none());
     assert!(presence["current"].get("path").is_none());
     assert!(presence["presence"][0].get("path").is_none());
@@ -497,7 +503,7 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
         .chars()
         .all(|character| character.is_ascii_hexdigit()));
     assert_eq!(created["document"]["library_id"], Value::Null);
-    assert!(created["document"]["expires_at"].as_str().is_some());
+    assert_json_timestamp(&created["document"]["expires_at"]);
 
     let response = app
         .clone()

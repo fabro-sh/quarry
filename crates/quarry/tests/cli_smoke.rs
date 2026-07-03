@@ -3,6 +3,12 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "lib-documents")]
+fn assert_content_hash(hash: &str) {
+    assert_eq!(hash.len(), 64);
+    assert!(hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
+}
+
+#[cfg(feature = "lib-documents")]
 #[test]
 fn cli_default_debug_logs_stay_on_stderr_and_stdout_stays_payload_only() {
     let temp = tempfile::tempdir().unwrap();
@@ -292,16 +298,28 @@ fn cli_backup_restore_preserves_metadata_versions_and_cas_content() {
             vec![b'b'; quarry_core::INLINE_CONTENT_THRESHOLD + 2]
         );
         assert_eq!(document.version.content_type, "application/octet-stream");
-        assert!(document.version.content_hash.is_some());
+        let content_hash = document
+            .version
+            .content_hash
+            .as_deref()
+            .expect("large document should be content-addressed");
+        assert_content_hash(content_hash);
 
         let versions = store
             .raw_version_history("assets", "blobs/large.bin")
             .await
             .unwrap();
         assert_eq!(versions.len(), 2);
-        assert!(versions
-            .iter()
-            .all(|version| version.content_hash.is_some()));
+        let first_hash = versions[0]
+            .content_hash
+            .as_deref()
+            .expect("first raw version should be content-addressed");
+        assert_content_hash(first_hash);
+        let second_hash = versions[1]
+            .content_hash
+            .as_deref()
+            .expect("second raw version should be content-addressed");
+        assert_content_hash(second_hash);
     });
 }
 
