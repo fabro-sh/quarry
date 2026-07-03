@@ -617,10 +617,13 @@ async fn import_worktree_transaction(
         if !entry.file_type().is_file() {
             continue;
         }
-        let relative = entry
-            .path()
-            .strip_prefix(repo_dir)
-            .map_err(|err| QuarryError::Storage(err.to_string()))?;
+        let relative =
+            entry
+                .path()
+                .strip_prefix(repo_dir)
+                .map_err(|err| QuarryError::StorageSource {
+                    source: Box::new(err),
+                })?;
         if is_sidecar(relative) {
             continue;
         }
@@ -1207,10 +1210,13 @@ fn worktree_snapshot(repo_dir: &Path) -> Result<HashMap<String, GitFile>> {
         if !entry.file_type().is_file() {
             continue;
         }
-        let relative = entry
-            .path()
-            .strip_prefix(repo_dir)
-            .map_err(|err| QuarryError::Storage(err.to_string()))?;
+        let relative =
+            entry
+                .path()
+                .strip_prefix(repo_dir)
+                .map_err(|err| QuarryError::StorageSource {
+                    source: Box::new(err),
+                })?;
         if is_sidecar(relative) {
             continue;
         }

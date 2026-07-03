@@ -318,7 +318,7 @@ pub(crate) async fn patch_block_document_metadata(
         TransactionReply::Committed(committed) => committed,
         TransactionReply::Replayed(record) => {
             return Err(GatewayFailure::Api(
-                QuarryError::Storage(format!(
+                QuarryError::Invariant(format!(
                     "fresh client_tx_id {} unexpectedly replayed",
                     record.client_tx_id
                 ))
@@ -559,7 +559,7 @@ async fn write_markdown_with(
         // Unreachable with a fresh UUID client_tx_id; surface honestly.
         TransactionReply::Replayed(record) => {
             return Err(GatewayFailure::Api(
-                QuarryError::Storage(format!(
+                QuarryError::Invariant(format!(
                     "fresh client_tx_id {} unexpectedly replayed",
                     record.client_tx_id
                 ))
@@ -944,7 +944,7 @@ fn failure_to_quarry(failure: GatewayFailure) -> QuarryError {
                 QuarryError::PayloadTooLarge(error.message().to_string())
             }
             StatusCode::BAD_REQUEST => QuarryError::InvalidInput(error.message().to_string()),
-            _ => QuarryError::Storage(error.message().to_string()),
+            _ => QuarryError::Invariant(error.message().to_string()),
         },
     }
 }

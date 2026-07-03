@@ -5100,7 +5100,7 @@ fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<Str
             value
                 .to_str()
                 .map(str::to_string)
-                .map_err(|_| QuarryError::Storage(format!("invalid {name} header")).into())
+                .map_err(|_| QuarryError::InvalidInput(format!("invalid {name} header")).into())
         })
         .transpose()
 }
@@ -5312,7 +5312,7 @@ fn etag(version_id: &str) -> String {
 
 fn checked_header_value(name: &str, value: &str) -> Result<HeaderValue, ApiError> {
     HeaderValue::from_str(value).map_err(|error| {
-        QuarryError::Storage(format!("invalid {name} response header value: {error}")).into()
+        QuarryError::Invariant(format!("invalid {name} response header value: {error}")).into()
     })
 }
 

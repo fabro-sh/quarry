@@ -466,7 +466,7 @@ impl LiveSession {
                     let _ = sink.send(encoder.to_vec());
                     let _ = dirty.send(());
                 })
-                .map_err(|error| QuarryError::Storage(format!("observe session doc: {error}")))?
+                .map_err(|error| QuarryError::Invariant(format!("observe session doc: {error}")))?
         };
         let (awareness_changes_tx, mut awareness_changes_rx) = unbounded_channel();
         let awareness_sub = lock.on_update(move |_awareness, event, _origin| {
@@ -790,7 +790,7 @@ impl LiveSession {
         let fragment =
             quarry_collab_codec::xmltext_to_slate(&txn, &root).map_err(session_projection_error)?;
         let Node::Element { children, .. } = fragment else {
-            return Err(QuarryError::Storage(
+            return Err(QuarryError::Invariant(
                 "session doc root did not project to a fragment".to_string(),
             ));
         };
@@ -873,7 +873,7 @@ fn session_projection_error(error: Unsupported) -> QuarryError {
 
 fn content_root<T: ReadTxn>(txn: &T) -> Result<XmlTextRef, QuarryError> {
     let text = txn.get_text(SHARED_ROOT).ok_or_else(|| {
-        QuarryError::Storage("session doc is missing its content root".to_string())
+        QuarryError::Invariant("session doc is missing its content root".to_string())
     })?;
     let root: &XmlTextRef = text.as_ref();
     Ok(root.clone())

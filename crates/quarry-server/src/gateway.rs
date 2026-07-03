@@ -2477,7 +2477,7 @@ fn stale_base(token: &str) -> GatewayError {
 fn replay_response(record: &BlockTransactionRecord) -> Result<Response, GatewayFailure> {
     let document_clock = record.resulting_version_id.clone().ok_or_else(|| {
         GatewayFailure::Api(
-            QuarryError::Storage(format!(
+            QuarryError::Invariant(format!(
                 "block transaction {} has no resulting version to replay",
                 record.id
             ))
