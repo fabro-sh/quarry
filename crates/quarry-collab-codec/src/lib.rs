@@ -1,14 +1,14 @@
-pub mod markdown;
-pub mod markdown_writer;
-pub mod normalize;
-pub mod reconcile;
-pub mod review;
-pub mod rows;
-pub mod session_doc;
-pub mod slate;
-pub mod text_diff;
-pub mod trailing;
-pub mod yjs_builder;
+mod markdown;
+mod markdown_writer;
+mod normalize;
+mod reconcile;
+mod review;
+mod rows;
+mod session_doc;
+mod slate;
+mod text_diff;
+mod trailing;
+mod yjs_builder;
 
 pub use markdown::{block_markdown_to_slate, block_markdown_to_slate_raw};
 pub use markdown_writer::{is_known_inline_mark, slate_to_markdown, KNOWN_BLOCK_TYPES};
@@ -28,7 +28,7 @@ pub use session_doc::{
     project_session_nodes, read_review_meta_from_map, reconcile_session_children,
     seed_session_nodes, SessionAnchor, SessionAnchorKind, SessionProjection,
 };
-pub use slate::{Attrs, Node};
+pub use slate::{attrs, Attrs, Node};
 pub use text_diff::{
     utf16_text_diff, utf16_text_diff_hunks, utf16_text_diff_hunks_bounded, TextDiff,
     MULTI_HUNK_CHAR_LIMIT,

@@ -43,7 +43,7 @@
 //!   on the dead branch — see
 //!   `naive_yjs_move_without_anchor_transplant_loses_anchor_resolution`.
 
-use quarry_collab_codec::slate::attrs;
+use quarry_collab_codec::attrs;
 use quarry_collab_codec::{apply_built, build_nodes, xmltext_to_slate, Attrs as SlateAttrs, Node};
 use serde_json::{json, Value};
 use std::collections::HashMap;

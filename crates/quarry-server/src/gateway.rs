@@ -50,7 +50,7 @@
 //! - `replace_block_content` computes a multi-hunk character-level UTF-16
 //!   diff between old and new text (falling back to the single minimal
 //!   common-prefix/suffix hunk when the changed middle exceeds
-//!   [`quarry_collab_codec::text_diff::MULTI_HUNK_CHAR_LIMIT`]). Review
+//!   [`quarry_collab_codec::MULTI_HUNK_CHAR_LIMIT`]). Review
 //!   anchors entirely inside preserved
 //!   spans — including unchanged text BETWEEN hunks — keep their offsets,
 //!   shifted by the length delta of the hunks before them; anchors
@@ -672,8 +672,8 @@ fn unquote_clock(token: &str) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Anchor adjustment over text-diff hunks (the diff itself lives in
-// quarry_collab_codec::text_diff, shared with the session splice).
+// Anchor adjustment over text-diff hunks (the diff helper is shared with the
+// session splice through the quarry_collab_codec facade).
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

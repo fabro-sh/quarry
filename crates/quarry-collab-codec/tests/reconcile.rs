@@ -1,6 +1,6 @@
 //! Production diff3 reconciliation — the Gate C spike scenarios
 //! (`phase_zero_gate_c.rs`, kept untouched) promoted against
-//! `quarry_collab_codec::reconcile`, plus the production additions:
+//! the `quarry_collab_codec::reconcile` facade export, plus the production additions:
 //! `set_block_type` pairing (approved improvement over the spike, which
 //! lacked the op), the container and raw_markdown pairing boundaries, the
 //! canonical empty-paragraph rule, equality-semantics pins (marks/attrs), and
@@ -11,7 +11,7 @@
 //! semantics: ID-addressed ops, then deletes, then detach every move target,
 //! then place moves and inserts at their stated final indices ascending.
 
-use quarry_collab_codec::slate::attrs;
+use quarry_collab_codec::attrs;
 use quarry_collab_codec::{
     markdown_to_block_rows, reconcile, Attrs, BlockRow, MarkRun, ReconcileBase, ReconcileConflict,
     ReconcileOp, ReconcileOutcome,

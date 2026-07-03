@@ -8,7 +8,7 @@
 //!
 //! - The FIRST subscriber seeds a fresh doc from canonical block rows (and
 //!   review anchors, overlaid as the browser's comment/suggestion marks —
-//!   see `quarry_collab_codec::session_doc`). If the stored projection is
+//!   see the `quarry_collab_codec` session projection exports). If the stored projection is
 //!   missing, rows are materialized in-memory from the head Markdown; the
 //!   first checkpoint persists them.
 //! - Updates broadcast to peers over the y-sync v1 protocol; awareness is

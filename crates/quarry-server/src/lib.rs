@@ -3278,9 +3278,9 @@ async fn agent_presence_list_openapi() {}
 #[allow(dead_code)]
 async fn agent_presence_openapi() {}
 
-// `ReviewMeta` / `ReviewMetaEntry` and the endmatter readers now live in
-// `quarry_collab_codec::review` (single-sourced with the slate conversion that
-// needs them); imported at the top of this module.
+// `ReviewMeta` / `ReviewMetaEntry` and the endmatter readers are imported from
+// the `quarry_collab_codec` facade, single-sourced with the slate conversion
+// that needs them.
 
 async fn agent_presence_document(
     state: &AppState,

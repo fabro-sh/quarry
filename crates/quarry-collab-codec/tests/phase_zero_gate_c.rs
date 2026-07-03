@@ -100,7 +100,7 @@
 //!   incoming side removes the stale copy — but it is a duplication surprise
 //!   until then.
 
-use quarry_collab_codec::slate::attrs;
+use quarry_collab_codec::attrs;
 use quarry_collab_codec::{block_markdown_to_slate, Attrs as SlateAttrs, Node};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
