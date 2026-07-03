@@ -572,44 +572,44 @@ impl QuarryStore {
         mode: Option<i64>,
     ) -> Result<DirectoryMetadata> {
         let path = normalize_directory_path(path)?;
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
-            let library_id = library.id.clone();
-            ensure_inode_conn(&conn, &library.id, "").await?;
-            if !path.is_empty() {
-                for dir in directory_path_and_parents(&path) {
-                    ensure_inode_conn(&conn, &library.id, &dir).await?;
-                    conn.execute(
-                        "INSERT INTO dir_metadata (library_id, path, mode, mtime)
+        let library = library.to_string();
+        let event_path = path.clone();
+        let (metadata, library_id) = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    let library = store.require_library_conn(conn, &library).await?;
+                    let library_id = library.id.clone();
+                    ensure_inode_conn(conn, &library.id, "").await?;
+                    if !path.is_empty() {
+                        for dir in directory_path_and_parents(&path) {
+                            ensure_inode_conn(conn, &library.id, &dir).await?;
+                            conn.execute(
+                                "INSERT INTO dir_metadata (library_id, path, mode, mtime)
                          VALUES (?1, ?2, ?3, ?4)
                          ON CONFLICT(library_id, path) DO UPDATE SET
                            mode = COALESCE(excluded.mode, dir_metadata.mode),
                            mtime = excluded.mtime",
-                        vec![
-                            Value::Text(library.id.clone()),
-                            Value::Text(dir),
-                            mode.map(Value::Integer).unwrap_or(Value::Null),
-                            Value::Text(now_timestamp()),
-                        ],
-                    )
-                    .await
-                    .map_err(map_turso_error)?;
-                }
-            }
-            let metadata = self
-                .directory_metadata_conn(&conn, &library.id, &path)
-                .await?;
-            Ok((metadata, library_id))
-        }
-        .await;
-        let (metadata, library_id) = finish_tx(&conn, result).await?;
+                                vec![
+                                    Value::Text(library.id.clone()),
+                                    Value::Text(dir),
+                                    mode.map(Value::Integer).unwrap_or(Value::Null),
+                                    Value::Text(now_timestamp()),
+                                ],
+                            )
+                            .await
+                            .map_err(map_turso_error)?;
+                        }
+                    }
+                    let metadata = store
+                        .directory_metadata_conn(conn, &library.id, &path)
+                        .await?;
+                    Ok((metadata, library_id))
+                })
+            })
+            .await?;
         self.emit_event(StoreEvent::directory_put(
             library_id,
-            path,
+            event_path,
             DocumentSource::Fuse,
         ));
         Ok(metadata)
@@ -629,44 +629,43 @@ impl QuarryStore {
                 "cannot update root directory metadata".to_string(),
             ));
         }
+        let library = library.to_string();
+        let event_path = path.clone();
+        let mtime = mtime.map(str::to_string);
         let source_for_event = source.clone();
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
-            let library_id = library.id.clone();
-            let updated = conn
-                .execute(
-                    "UPDATE dir_metadata
+        let (metadata, library_id) = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    let library = store.require_library_conn(conn, &library).await?;
+                    let library_id = library.id.clone();
+                    let updated = conn
+                        .execute(
+                            "UPDATE dir_metadata
                      SET mode = COALESCE(?1, mode),
                          mtime = COALESCE(?2, mtime)
                      WHERE library_id = ?3 AND path = ?4",
-                    vec![
-                        mode.map(Value::Integer).unwrap_or(Value::Null),
-                        mtime
-                            .map(|value| Value::Text(value.to_string()))
-                            .unwrap_or(Value::Null),
-                        Value::Text(library.id.clone()),
-                        Value::Text(path.clone()),
-                    ],
-                )
-                .await
-                .map_err(map_turso_error)?;
-            if updated == 0 {
-                return Err(QuarryError::NotFound(path.clone()));
-            }
-            let metadata = self
-                .directory_metadata_conn(&conn, &library.id, &path)
-                .await?;
-            Ok((metadata, library_id))
-        }
-        .await;
-        let (metadata, library_id) = finish_tx(&conn, result).await?;
+                            vec![
+                                mode.map(Value::Integer).unwrap_or(Value::Null),
+                                mtime.map(Value::Text).unwrap_or(Value::Null),
+                                Value::Text(library.id.clone()),
+                                Value::Text(path.clone()),
+                            ],
+                        )
+                        .await
+                        .map_err(map_turso_error)?;
+                    if updated == 0 {
+                        return Err(QuarryError::NotFound(path.clone()));
+                    }
+                    let metadata = store
+                        .directory_metadata_conn(conn, &library.id, &path)
+                        .await?;
+                    Ok((metadata, library_id))
+                })
+            })
+            .await?;
         self.emit_event(StoreEvent::directory_put(
             library_id,
-            path,
+            event_path,
             source_for_event,
         ));
         Ok(metadata)
@@ -691,35 +690,36 @@ impl QuarryStore {
                 "cannot move {from_path} into itself"
             )));
         }
+        let library = library.to_string();
+        let event_from_path = from_path.clone();
+        let event_to_path = to_path.clone();
         let source_for_event = source.clone();
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
-            let library_id = library.id.clone();
-            let from_prefix = format!("{from_path}/");
-            let mut rows = conn
-                .query(
-                    "SELECT path, mode, mtime FROM dir_metadata
+        let library_id = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    let library = store.require_library_conn(conn, &library).await?;
+                    let library_id = library.id.clone();
+                    let from_prefix = format!("{from_path}/");
+                    let mut rows = conn
+                        .query(
+                            "SELECT path, mode, mtime FROM dir_metadata
                      WHERE library_id = ?1 AND (path = ?2 OR path LIKE ?3)
                      ORDER BY length(path)",
-                    params![
-                        library.id.clone(),
-                        from_path.clone(),
-                        format!("{from_prefix}%")
-                    ],
-                )
-                .await
-                .map_err(map_turso_error)?;
-            let mut directories = Vec::new();
-            while let Some(row) = rows.next().await.map_err(map_turso_error)? {
-                directories.push((text(&row, 0)?, opt_int(&row, 1)?, text(&row, 2)?));
-            }
-            let mut document_rows = conn
-                .query(
-                    "SELECT 1 FROM documents
+                            params![
+                                library.id.clone(),
+                                from_path.clone(),
+                                format!("{from_prefix}%")
+                            ],
+                        )
+                        .await
+                        .map_err(map_turso_error)?;
+                    let mut directories = Vec::new();
+                    while let Some(row) = rows.next().await.map_err(map_turso_error)? {
+                        directories.push((text(&row, 0)?, opt_int(&row, 1)?, text(&row, 2)?));
+                    }
+                    let mut document_rows = conn
+                        .query(
+                            "SELECT 1 FROM documents
                      WHERE document_scope = 'library'
                        AND library_id = ?1
                        AND deleted_at IS NULL
@@ -727,62 +727,62 @@ impl QuarryStore {
                        AND (expires_at IS NULL OR expires_at > ?2)
                        AND path LIKE ?3
                      LIMIT 1",
-                    params![
-                        library.id.clone(),
-                        now_timestamp(),
-                        format!("{from_prefix}%")
-                    ],
-                )
-                .await
-                .map_err(map_turso_error)?;
-            let has_documents = document_rows
-                .next()
-                .await
-                .map_err(map_turso_error)?
-                .is_some();
-            if directories.is_empty() && !has_documents {
-                return Err(QuarryError::NotFound(from_path.clone()));
-            }
-            move_path_prefix_inodes_conn(&conn, &library.id, &from_path, &to_path).await?;
-            for (old_path, _, _) in &directories {
-                let new_path = replace_path_prefix(old_path, &from_path, &to_path);
-                conn.execute(
-                    "DELETE FROM dir_metadata WHERE library_id = ?1 AND path = ?2",
-                    params![library.id.clone(), new_path],
-                )
-                .await
-                .map_err(map_turso_error)?;
-            }
-            for (old_path, _, _) in &directories {
-                conn.execute(
-                    "DELETE FROM dir_metadata WHERE library_id = ?1 AND path = ?2",
-                    params![library.id.clone(), old_path.clone()],
-                )
-                .await
-                .map_err(map_turso_error)?;
-            }
-            for (old_path, mode, mtime) in directories {
-                conn.execute(
-                    "INSERT INTO dir_metadata (library_id, path, mode, mtime)
+                            params![
+                                library.id.clone(),
+                                now_timestamp(),
+                                format!("{from_prefix}%")
+                            ],
+                        )
+                        .await
+                        .map_err(map_turso_error)?;
+                    let has_documents = document_rows
+                        .next()
+                        .await
+                        .map_err(map_turso_error)?
+                        .is_some();
+                    if directories.is_empty() && !has_documents {
+                        return Err(QuarryError::NotFound(from_path.clone()));
+                    }
+                    move_path_prefix_inodes_conn(conn, &library.id, &from_path, &to_path).await?;
+                    for (old_path, _, _) in &directories {
+                        let new_path = replace_path_prefix(old_path, &from_path, &to_path);
+                        conn.execute(
+                            "DELETE FROM dir_metadata WHERE library_id = ?1 AND path = ?2",
+                            params![library.id.clone(), new_path],
+                        )
+                        .await
+                        .map_err(map_turso_error)?;
+                    }
+                    for (old_path, _, _) in &directories {
+                        conn.execute(
+                            "DELETE FROM dir_metadata WHERE library_id = ?1 AND path = ?2",
+                            params![library.id.clone(), old_path.clone()],
+                        )
+                        .await
+                        .map_err(map_turso_error)?;
+                    }
+                    for (old_path, mode, mtime) in directories {
+                        conn.execute(
+                            "INSERT INTO dir_metadata (library_id, path, mode, mtime)
                      VALUES (?1, ?2, ?3, ?4)",
-                    vec![
-                        Value::Text(library.id.clone()),
-                        Value::Text(replace_path_prefix(&old_path, &from_path, &to_path)),
-                        mode.map(Value::Integer).unwrap_or(Value::Null),
-                        Value::Text(mtime),
-                    ],
-                )
-                .await
-                .map_err(map_turso_error)?;
-            }
-            Ok(library_id)
-        }
-        .await;
-        let library_id = finish_tx(&conn, result).await?;
+                            vec![
+                                Value::Text(library.id.clone()),
+                                Value::Text(replace_path_prefix(&old_path, &from_path, &to_path)),
+                                mode.map(Value::Integer).unwrap_or(Value::Null),
+                                Value::Text(mtime),
+                            ],
+                        )
+                        .await
+                        .map_err(map_turso_error)?;
+                    }
+                    Ok(library_id)
+                })
+            })
+            .await?;
         self.emit_event(StoreEvent::directory_move(
             library_id,
-            from_path,
-            to_path,
+            event_from_path,
+            event_to_path,
             source_for_event,
         ));
         Ok(())
@@ -795,26 +795,26 @@ impl QuarryStore {
                 "cannot remove root directory".to_string(),
             ));
         }
-        let _operation_guard = self.normal_write_gate().await;
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            let library = self.require_library_conn(&conn, library).await?;
-            let library_id = library.id.clone();
-            conn.execute(
-                "DELETE FROM dir_metadata WHERE library_id = ?1 AND path = ?2",
-                params![library.id, path.clone()],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            Ok(library_id)
-        }
-        .await;
-        let library_id = finish_tx(&conn, result).await?;
+        let library = library.to_string();
+        let event_path = path.clone();
+        let library_id = self
+            .write_transaction(move |store, conn| {
+                Box::pin(async move {
+                    let library = store.require_library_conn(conn, &library).await?;
+                    let library_id = library.id.clone();
+                    conn.execute(
+                        "DELETE FROM dir_metadata WHERE library_id = ?1 AND path = ?2",
+                        params![library.id, path.clone()],
+                    )
+                    .await
+                    .map_err(map_turso_error)?;
+                    Ok(library_id)
+                })
+            })
+            .await?;
         self.emit_event(StoreEvent::directory_delete(
             library_id,
-            path,
+            event_path,
             DocumentSource::Fuse,
         ));
         Ok(())
