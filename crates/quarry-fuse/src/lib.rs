@@ -2,7 +2,8 @@ use quarry_core::{
     normalize_path, parent_dirs, DocumentSource, QuarryError, Result, WritePrecondition,
 };
 use quarry_storage::{
-    BlockMarkdownWrite, BlockWriteBase, DocumentKind, DocumentScopeRef, QuarryStore,
+    BlockMarkdownWrite, BlockWriteBase, DocumentKind, DocumentScopeRef, PutDocumentRequest,
+    QuarryStore, TransactionMetadata,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
@@ -235,15 +236,17 @@ impl FuseProjection {
                 .id
         } else {
             self.store
-                .put_document(
-                    &self.library,
-                    &path,
-                    Vec::new(),
-                    serde_json::json!({ "content_type": content_type }),
-                    &content_type,
-                    DocumentSource::Fuse,
-                    WritePrecondition::IfNoneMatch,
-                )
+                .put_document(PutDocumentRequest {
+                    library: self.library.clone(),
+                    path: path.clone(),
+                    content: Vec::new(),
+                    metadata: serde_json::json!({ "content_type": content_type }),
+                    content_type,
+                    source: DocumentSource::Fuse,
+                    precondition: WritePrecondition::IfNoneMatch,
+                    origin_id: None,
+                    transaction: TransactionMetadata::default(),
+                })
                 .await?
                 .version
                 .id
@@ -616,15 +619,17 @@ impl FuseProjection {
                 .map(|_| ())
         } else {
             self.store
-                .put_document(
-                    &self.library,
-                    &path,
-                    document.content,
-                    document.metadata,
-                    &document.version.content_type,
-                    DocumentSource::Fuse,
-                    WritePrecondition::IfMatch(document.version.id),
-                )
+                .put_document(PutDocumentRequest {
+                    library: self.library.clone(),
+                    path,
+                    content: document.content,
+                    metadata: document.metadata,
+                    content_type: document.version.content_type,
+                    source: DocumentSource::Fuse,
+                    precondition: WritePrecondition::IfMatch(document.version.id),
+                    origin_id: None,
+                    transaction: TransactionMetadata::default(),
+                })
                 .await
                 .map(|_| ())
         }
@@ -708,15 +713,17 @@ impl FuseProjection {
                 WritePrecondition::None
             };
             self.store
-                .put_document(
-                    &self.library,
-                    &handle.path,
-                    handle.content.clone(),
-                    serde_json::json!({ "content_type": content_type }),
-                    &content_type,
-                    DocumentSource::Fuse,
+                .put_document(PutDocumentRequest {
+                    library: self.library.clone(),
+                    path: handle.path.clone(),
+                    content: handle.content.clone(),
+                    metadata: serde_json::json!({ "content_type": content_type }),
+                    content_type,
+                    source: DocumentSource::Fuse,
                     precondition,
-                )
+                    origin_id: None,
+                    transaction: TransactionMetadata::default(),
+                })
                 .await?
         };
         self.remember_parent_dirs(&handle.path).await;

@@ -217,15 +217,17 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
     assert_ne!(alpha.id, beta.id);
 
     let small = store
-        .put_document(
-            &alpha.slug,
-            "notes/plan.md",
-            b"one".to_vec(),
-            serde_json::json!({"content_type":"text/markdown","topic":"plan"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: alpha.slug.to_string(),
+            path: ("notes/plan.md").to_string(),
+            content: b"one".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown","topic":"plan"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     assert!(small.version.content_hash.is_none());
@@ -233,15 +235,17 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
 
     let large_bytes = vec![b'x'; INLINE_CONTENT_THRESHOLD + 1];
     let large = store
-        .put_document(
-            &alpha.slug,
-            "assets/large.bin",
-            large_bytes.clone(),
-            serde_json::json!({"content_type":"application/octet-stream"}),
-            "application/octet-stream",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: alpha.slug.to_string(),
+            path: ("assets/large.bin").to_string(),
+            content: large_bytes.clone(),
+            metadata: serde_json::json!({"content_type":"application/octet-stream"}),
+            content_type: ("application/octet-stream").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let expected_large_hash = quarry_cas::DiskCas::hash(&large_bytes);
@@ -260,15 +264,17 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
     assert_eq!(listed_large.content_hash, large.version.content_hash);
 
     let second = store
-        .put_document(
-            &alpha.slug,
-            "notes/plan.md",
-            b"two".to_vec(),
-            serde_json::json!({"content_type":"text/markdown","topic":"plan"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::IfMatch(small.version.id.clone()),
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: alpha.slug.to_string(),
+            path: ("notes/plan.md").to_string(),
+            content: b"two".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown","topic":"plan"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::IfMatch(small.version.id.clone()),
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     assert_ne!(small.version.id, second.version.id);
@@ -407,15 +413,17 @@ async fn manages_stateful_collab_invite_tokens_by_document_id() {
     .unwrap();
     let library = store.create_library("shares").await.unwrap();
     let written = store
-        .put_document(
-            &library.slug,
-            "live.md",
-            b"markdown head".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("live.md").to_string(),
+            content: b"markdown head".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -474,15 +482,17 @@ async fn concurrent_auto_commit_writes_publish_without_lost_documents() {
         let library = library.slug.clone();
         handles.push(tokio::spawn(async move {
             store
-                .put_document(
-                    &library,
-                    &format!("notes/{index}.md"),
-                    format!("document {index}\n").into_bytes(),
-                    serde_json::json!({"content_type":"text/markdown"}),
-                    "text/markdown",
-                    DocumentSource::Rest,
-                    WritePrecondition::None,
-                )
+                .put_document(quarry_storage::PutDocumentRequest {
+                    library: library.to_string(),
+                    path: format!("notes/{index}.md").to_string(),
+                    content: format!("document {index}\n").into_bytes(),
+                    metadata: serde_json::json!({"content_type":"text/markdown"}),
+                    content_type: ("text/markdown").to_string(),
+                    source: DocumentSource::Rest,
+                    precondition: WritePrecondition::None,
+                    origin_id: None,
+                    transaction: quarry_storage::TransactionMetadata::default(),
+                })
                 .await
                 .unwrap();
         }));
@@ -522,15 +532,17 @@ async fn put_after_delete_same_path_creates_new_document_identity_and_history() 
     let library = store.create_library("recreate").await.unwrap();
 
     let first = store
-        .put_document(
-            &library.slug,
-            "notes/daily.md",
-            b"old".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/daily.md").to_string(),
+            content: b"old".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
@@ -538,15 +550,17 @@ async fn put_after_delete_same_path_creates_new_document_identity_and_history() 
         .await
         .unwrap();
     let second = store
-        .put_document(
-            &library.slug,
-            "notes/daily.md",
-            b"new".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/daily.md").to_string(),
+            content: b"new".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -584,15 +598,17 @@ async fn explicit_transaction_recreate_same_path_uses_new_document_identity() {
     let library = store.create_library("txrecreate").await.unwrap();
 
     let first = store
-        .put_document(
-            &library.slug,
-            "notes/daily.md",
-            b"old".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/daily.md").to_string(),
+            content: b"old".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
@@ -661,31 +677,31 @@ async fn autosave_tagged_writes_keep_raw_versions_but_group_history() {
     };
 
     let first = store
-        .put_document_with_transaction(
-            &library.slug,
-            "notes/daily.md",
-            b"one".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-            Some("browser:s1".to_string()),
-            transaction(),
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/daily.md").to_string(),
+            content: b"one".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: Some("browser:s1".to_string()),
+            transaction: transaction(),
+        })
         .await
         .unwrap();
     store
-        .put_document_with_transaction(
-            &library.slug,
-            "notes/daily.md",
-            b"two".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::IfMatch(first.version.id),
-            Some("browser:s1".to_string()),
-            transaction(),
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/daily.md").to_string(),
+            content: b"two".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::IfMatch(first.version.id),
+            origin_id: Some("browser:s1".to_string()),
+            transaction: transaction(),
+        })
         .await
         .unwrap();
 
@@ -785,31 +801,35 @@ async fn link_index_updates_from_markdown_writes_and_ignores_binary_content() {
     let library = store.create_library("links").await.unwrap();
 
     store
-        .put_document(
-            &library.slug,
-            "target.md",
-            b"# Target Heading\n\nTarget body.\n".to_vec(),
-            serde_json::json!({
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("target.md").to_string(),
+            content: b"# Target Heading\n\nTarget body.\n".to_vec(),
+            metadata: serde_json::json!({
                 "content_type": "text/markdown",
                 "aliases": ["Target Alias"]
             }),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
     let source = store
-        .put_document(
-            &library.slug,
-            "source.md",
-            b"See [[Target Alias#Target Heading|alias]], ![[target]], [target](target.md), [[Missing]], and #tag.\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+library: library.slug.to_string(),
+path: ("source.md").to_string(),
+content: b"See [[Target Alias#Target Heading|alias]], ![[target]], [target](target.md), [[Missing]], and #tag.\n".to_vec(),
+metadata: serde_json::json!({"content_type":"text/markdown"}),
+content_type: ("text/markdown").to_string(),
+source: DocumentSource::Rest,
+precondition: WritePrecondition::None,
+origin_id: None,
+transaction: quarry_storage::TransactionMetadata::default(),
+})
         .await
         .unwrap();
 
@@ -851,15 +871,17 @@ async fn link_index_updates_from_markdown_writes_and_ignores_binary_content() {
     }));
 
     store
-        .put_document(
-            &library.slug,
-            "raw.bin",
-            b"[[target]] should not be indexed from binary content".to_vec(),
-            serde_json::json!({"content_type":"application/octet-stream"}),
-            "application/octet-stream",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("raw.bin").to_string(),
+            content: b"[[target]] should not be indexed from binary content".to_vec(),
+            metadata: serde_json::json!({"content_type":"application/octet-stream"}),
+            content_type: ("application/octet-stream").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     assert!(store
@@ -895,15 +917,17 @@ async fn link_index_updates_from_markdown_writes_and_ignores_binary_content() {
         .any(|node| node.path == "raw.bin"));
 
     store
-        .put_document(
-            &library.slug,
-            "source.md",
-            b"No links now.\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::IfMatch(source.version.id.clone()),
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("source.md").to_string(),
+            content: b"No links now.\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::IfMatch(source.version.id.clone()),
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     assert!(store
@@ -963,19 +987,21 @@ async fn suggestions_include_aliases_and_headings_for_wikilink_completion() {
     let library = store.create_library("suggestions").await.unwrap();
 
     store
-        .put_document(
-            &library.slug,
-            "guide.md",
-            b"# Deep Section\n\nGuide body.\n".to_vec(),
-            serde_json::json!({
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("guide.md").to_string(),
+            content: b"# Deep Section\n\nGuide body.\n".to_vec(),
+            metadata: serde_json::json!({
                 "content_type": "text/markdown",
                 "title": "Guide",
                 "aliases": ["Shortcut"]
             }),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -1028,27 +1054,31 @@ async fn markdown_frontmatter_aliases_participate_in_link_resolution() {
     let library = store.create_library("frontmatterlinks").await.unwrap();
 
     store
-        .put_document(
-            &library.slug,
-            "guide.md",
-            b"---\naliases:\n  - Front Alias\n---\n# Guide\n".to_vec(),
-            serde_json::json!({"content_type": "text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("guide.md").to_string(),
+            content: b"---\naliases:\n  - Front Alias\n---\n# Guide\n".to_vec(),
+            metadata: serde_json::json!({"content_type": "text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "source.md",
-            b"See [[Front Alias]].\n".to_vec(),
-            serde_json::json!({"content_type": "text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("source.md").to_string(),
+            content: b"See [[Front Alias]].\n".to_vec(),
+            metadata: serde_json::json!({"content_type": "text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -1084,39 +1114,45 @@ async fn ambiguous_short_wikilinks_remain_unresolved() {
     let library = store.create_library("ambiguouslinks").await.unwrap();
 
     store
-        .put_document(
-            &library.slug,
-            "alpha/target.md",
-            b"# Target\n".to_vec(),
-            serde_json::json!({"content_type": "text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("alpha/target.md").to_string(),
+            content: b"# Target\n".to_vec(),
+            metadata: serde_json::json!({"content_type": "text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "omega/target.md",
-            b"# Target\n".to_vec(),
-            serde_json::json!({"content_type": "text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("omega/target.md").to_string(),
+            content: b"# Target\n".to_vec(),
+            metadata: serde_json::json!({"content_type": "text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "source.md",
-            b"See [[target]].\n".to_vec(),
-            serde_json::json!({"content_type": "text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("source.md").to_string(),
+            content: b"See [[target]].\n".to_vec(),
+            metadata: serde_json::json!({"content_type": "text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -1150,15 +1186,18 @@ async fn markdown_links_without_document_targets_are_external() {
     let library = store.create_library("externallinks").await.unwrap();
 
     store
-        .put_document(
-            &library.slug,
-            "source.md",
-            b"[site](https://example.com)\n\n[anchor](#section)\n\n[gone](gone.md)\n".to_vec(),
-            serde_json::json!({"content_type": "text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("source.md").to_string(),
+            content: b"[site](https://example.com)\n\n[anchor](#section)\n\n[gone](gone.md)\n"
+                .to_vec(),
+            metadata: serde_json::json!({"content_type": "text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -1219,30 +1258,34 @@ async fn link_index_tracks_moves_and_deletes() {
     let library = store.create_library("links").await.unwrap();
 
     store
-        .put_document(
-            &library.slug,
-            "target.md",
-            b"# Target\n".to_vec(),
-            serde_json::json!({
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("target.md").to_string(),
+            content: b"# Target\n".to_vec(),
+            metadata: serde_json::json!({
                 "content_type": "text/markdown",
                 "aliases": ["target"]
             }),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "source.md",
-            b"See [[target]].\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("source.md").to_string(),
+            content: b"See [[target]].\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -1300,15 +1343,17 @@ async fn explicit_transactions_publish_atomically_and_rollback_staged_cas() {
 
     let library = store.create_library("txlib").await.unwrap();
     let base = store
-        .put_document(
-            &library.slug,
-            "docs/a.md",
-            b"base".to_vec(),
-            serde_json::json!({"content_type":"text/markdown","topic":"old"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("docs/a.md").to_string(),
+            content: b"base".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown","topic":"old"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -1414,15 +1459,17 @@ async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_new
     let library = store.create_library("txraces").await.unwrap();
 
     let base = store
-        .put_document(
-            &library.slug,
-            "docs/a.md",
-            b"base".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("docs/a.md").to_string(),
+            content: b"base".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let tx = store
@@ -1446,15 +1493,17 @@ async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_new
         .await
         .unwrap();
     let newer = store
-        .put_document(
-            &library.slug,
-            "docs/a.md",
-            b"newer".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::IfMatch(base.version.id),
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("docs/a.md").to_string(),
+            content: b"newer".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::IfMatch(base.version.id),
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -1471,15 +1520,17 @@ async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_new
     store.rollback_transaction(&tx.id).await.unwrap();
 
     store
-        .put_document(
-            &library.slug,
-            "docs/source.md",
-            b"source".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("docs/source.md").to_string(),
+            content: b"source".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let move_tx = store
@@ -1497,15 +1548,17 @@ async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_new
         .await
         .unwrap();
     let target = store
-        .put_document(
-            &library.slug,
-            "docs/target.md",
-            b"target winner".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("docs/target.md").to_string(),
+            content: b"target winner".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -1605,15 +1658,17 @@ async fn global_operation_lock_blocks_normal_writes_until_released() {
     let writer_library = library.slug.clone();
     let mut write = tokio::spawn(async move {
         writer_store
-            .put_document(
-                &writer_library,
-                "notes/blocked.md",
-                b"blocked".to_vec(),
-                serde_json::json!({"content_type":"text/markdown"}),
-                "text/markdown",
-                DocumentSource::Rest,
-                WritePrecondition::None,
-            )
+            .put_document(quarry_storage::PutDocumentRequest {
+                library: writer_library.to_string(),
+                path: ("notes/blocked.md").to_string(),
+                content: b"blocked".to_vec(),
+                metadata: serde_json::json!({"content_type":"text/markdown"}),
+                content_type: ("text/markdown").to_string(),
+                source: DocumentSource::Rest,
+                precondition: WritePrecondition::None,
+                origin_id: None,
+                transaction: quarry_storage::TransactionMetadata::default(),
+            })
             .await
     });
 
@@ -1699,27 +1754,31 @@ async fn paths_are_normalized_reserved_paths_rejected_and_keys_case_sensitive() 
     let library = store.create_library("paths").await.unwrap();
 
     store
-        .put_document(
-            &library.slug,
-            "/Notes/Plan.md",
-            b"upper".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("/Notes/Plan.md").to_string(),
+            content: b"upper".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "notes/plan.md",
-            b"lower".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/plan.md").to_string(),
+            content: b"lower".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -1740,15 +1799,17 @@ async fn paths_are_normalized_reserved_paths_rejected_and_keys_case_sensitive() 
         b"lower"
     );
     let error = store
-        .put_document(
-            &library.slug,
-            ".quarry/marker.json",
-            b"reserved".to_vec(),
-            serde_json::json!({}),
-            "application/octet-stream",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: (".quarry/marker.json").to_string(),
+            content: b"reserved".to_vec(),
+            metadata: serde_json::json!({}),
+            content_type: ("application/octet-stream").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap_err();
     assert!(error.to_string().contains("reserved"));
@@ -1775,15 +1836,17 @@ async fn stores_lists_and_reopens_one_thousand_mixed_size_documents() {
             format!("doc {index}\n").into_bytes()
         };
         store
-            .put_document(
-                &library.slug,
-                &format!("docs/{index:04}.bin"),
-                content,
-                serde_json::json!({"content_type":"application/octet-stream","index":index}),
-                "application/octet-stream",
-                DocumentSource::Rest,
-                WritePrecondition::None,
-            )
+            .put_document(quarry_storage::PutDocumentRequest {
+library: library.slug.to_string(),
+path: format!("docs/{index:04}.bin").to_string(),
+content,
+metadata: serde_json::json!({"content_type":"application/octet-stream","index":index}),
+content_type: ("application/octet-stream").to_string(),
+source: DocumentSource::Rest,
+precondition: WritePrecondition::None,
+origin_id: None,
+transaction: quarry_storage::TransactionMetadata::default(),
+})
             .await
             .unwrap();
     }
@@ -1836,15 +1899,17 @@ async fn visible_writes_emit_in_process_store_events() {
     let mut events = store.subscribe_events();
 
     let write = store
-        .put_document(
-            &library.slug,
-            "notes/a.md",
-            b"a".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/a.md").to_string(),
+            content: b"a".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let event = events.recv().await.unwrap();
@@ -1946,16 +2011,17 @@ async fn document_mutation_events_include_origin_and_document_identity() {
     let mut events = store.subscribe_events();
 
     let write = store
-        .put_document_with_origin(
-            &library.slug,
-            "notes/a.md",
-            b"a".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-            Some("browser:origin-1".to_string()),
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/a.md").to_string(),
+            content: b"a".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: Some("browser:origin-1".to_string()),
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let event = events.recv().await.unwrap();
@@ -2009,15 +2075,17 @@ async fn inode_paths_are_lookupable_and_moves_keep_inode_identity() {
     .unwrap();
     let library = store.create_library("notes").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "plans/one.md",
-            b"one\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("plans/one.md").to_string(),
+            content: b"one\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let inode = store
@@ -2069,27 +2137,31 @@ async fn move_document_can_reuse_deleted_target_path() {
     .unwrap();
     let library = store.create_library("notes").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "drafts/source.md",
-            b"source\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("drafts/source.md").to_string(),
+            content: b"source\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "drafts/target.md",
-            b"deleted\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("drafts/target.md").to_string(),
+            content: b"deleted\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let source_inode = store
@@ -2147,27 +2219,31 @@ async fn committed_transaction_move_can_reuse_deleted_target_path() {
     .unwrap();
     let library = store.create_library("notes").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "drafts/source.md",
-            b"source\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("drafts/source.md").to_string(),
+            content: b"source\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "drafts/target.md",
-            b"deleted\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("drafts/target.md").to_string(),
+            content: b"deleted\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let source_inode = store
@@ -2256,15 +2332,17 @@ async fn opening_old_schema_migrates_documents_to_active_path_uniqueness() {
     .unwrap();
     let library = store.create_library("migrated").await.unwrap();
     let first = store
-        .put_document(
-            &library.slug,
-            "same.md",
-            b"old".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("same.md").to_string(),
+            content: b"old".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
@@ -2272,15 +2350,17 @@ async fn opening_old_schema_migrates_documents_to_active_path_uniqueness() {
         .await
         .unwrap();
     let second = store
-        .put_document(
-            &library.slug,
-            "same.md",
-            b"new".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("same.md").to_string(),
+            content: b"new".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -2411,15 +2491,17 @@ async fn expired_documents_are_gone_and_excluded_from_live_queries() {
 
     let library = store.create_library("ttl").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "gone.md",
-            b"old".to_vec(),
-            serde_json::json!({}),
-            "text/plain",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("gone.md").to_string(),
+            content: b"old".to_vec(),
+            metadata: serde_json::json!({}),
+            content_type: ("text/plain").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
@@ -3111,15 +3193,17 @@ async fn raw_documents_keep_the_byte_path_untouched() {
     let library = store.create_library("raw").await.unwrap();
     let bytes = vec![0u8, 159, 146, 150, 255, 0, 13, 10];
     let outcome = store
-        .put_document(
-            &library.slug,
-            "assets/data.bin",
-            bytes.clone(),
-            serde_json::json!({"content_type": "application/octet-stream"}),
-            "application/octet-stream",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("assets/data.bin").to_string(),
+            content: bytes.clone(),
+            metadata: serde_json::json!({"content_type": "application/octet-stream"}),
+            content_type: ("application/octet-stream").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -3331,15 +3415,17 @@ async fn legacy_put_clears_the_block_projection_fail_closed() {
 
     // A legacy put bypasses the import path...
     store
-        .put_document(
-            &library.slug,
-            "doc.md",
-            b"Rewritten outside the block path.\n".to_vec(),
-            serde_json::json!({}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("doc.md").to_string(),
+            content: b"Rewritten outside the block path.\n".to_vec(),
+            metadata: serde_json::json!({}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -3631,15 +3717,17 @@ async fn block_mutation_state_materializes_rows_for_legacy_written_documents() {
     let library = store.create_library("legacy-state").await.unwrap();
     // A legacy put creates a markdown document with no block projection.
     store
-        .put_document(
-            &library.slug,
-            "legacy.md",
-            b"# Title\n\nBody text.\n".to_vec(),
-            serde_json::json!({}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("legacy.md").to_string(),
+            content: b"# Title\n\nBody text.\n".to_vec(),
+            metadata: serde_json::json!({}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 

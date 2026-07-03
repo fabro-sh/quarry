@@ -45,27 +45,31 @@ async fn projection_lists_virtual_directories_and_reads_committed_documents() {
     let store = test_store().await;
     let library = store.create_library("notes").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "plans/one.md",
-            b"one\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("plans/one.md").to_string(),
+            content: b"one\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "plans/two.md",
-            b"two\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("plans/two.md").to_string(),
+            content: b"two\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -145,15 +149,17 @@ async fn projection_truncate_open_replaces_existing_content_on_release() {
     let store = test_store().await;
     let library = store.create_library("notes").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "drafts/existing.md",
-            b"old content that should be removed".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("drafts/existing.md").to_string(),
+            content: b"old content that should be removed".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let projection = FuseProjection::open(store.clone(), &library.slug, false)
@@ -234,15 +240,17 @@ async fn projection_renames_unlinks_and_removes_empty_directories() {
     let store = test_store().await;
     let library = store.create_library("notes").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "drafts/old.md",
-            b"old\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("drafts/old.md").to_string(),
+            content: b"old\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let projection = FuseProjection::open(store.clone(), &library.slug, false)
@@ -268,27 +276,31 @@ async fn projection_rename_file_over_existing_file_replaces_target() {
     let store = test_store().await;
     let library = store.create_library("notes").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "drafts/current.md",
-            b"old\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("drafts/current.md").to_string(),
+            content: b"old\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "drafts/.current.md.tmp",
-            b"new\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("drafts/.current.md.tmp").to_string(),
+            content: b"new\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let projection = FuseProjection::open(store.clone(), &library.slug, false)
@@ -379,15 +391,17 @@ async fn projection_observes_store_events_for_cache_invalidation() {
     let before = projection.invalidation_generation();
 
     store
-        .put_document(
-            &library.slug,
-            "plans/event.md",
-            b"event\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("plans/event.md").to_string(),
+            content: b"event\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -405,15 +419,17 @@ async fn projection_uses_storage_backed_stable_inodes() {
     let store = test_store().await;
     let library = store.create_library("notes").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "plans/one.md",
-            b"one\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("plans/one.md").to_string(),
+            content: b"one\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let projection = FuseProjection::open(store.clone(), &library.slug, true)
@@ -439,15 +455,17 @@ async fn projection_preserves_file_inode_across_rename() {
     let store = test_store().await;
     let library = store.create_library("notes").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "plans/one.md",
-            b"one\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("plans/one.md").to_string(),
+            content: b"one\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let projection = FuseProjection::open(store, &library.slug, false)
@@ -491,15 +509,17 @@ async fn projection_preserves_tree_inodes_across_directory_rename_and_reopen() {
     let store = test_store().await;
     let library = store.create_library("notes").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "drafts/one.md",
-            b"one\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("drafts/one.md").to_string(),
+            content: b"one\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let projection = FuseProjection::open(store.clone(), &library.slug, false)

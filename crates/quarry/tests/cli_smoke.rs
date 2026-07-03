@@ -123,15 +123,17 @@ fn cli_conflict_resolve_rejects_conflicts_from_another_library() {
             let library = store.create_library("actions").await.unwrap();
             store.create_library("other").await.unwrap();
             let written = store
-                .put_document(
-                    &library.slug,
-                    "notes/a.md",
-                    b"hello\n".to_vec(),
-                    serde_json::json!({"content_type":"text/markdown"}),
-                    "text/markdown",
-                    quarry_core::DocumentSource::Rest,
-                    quarry_core::WritePrecondition::None,
-                )
+                .put_document(quarry_storage::PutDocumentRequest {
+                    library: library.slug.to_string(),
+                    path: ("notes/a.md").to_string(),
+                    content: b"hello\n".to_vec(),
+                    metadata: serde_json::json!({"content_type":"text/markdown"}),
+                    content_type: ("text/markdown").to_string(),
+                    source: quarry_core::DocumentSource::Rest,
+                    precondition: quarry_core::WritePrecondition::None,
+                    origin_id: None,
+                    transaction: quarry_storage::TransactionMetadata::default(),
+                })
                 .await
                 .unwrap();
             store

@@ -15,6 +15,8 @@ use quarry_server::serve;
 use quarry_server::{serve_state_with_shutdown, shutdown_signal};
 #[cfg(feature = "lib-documents")]
 use quarry_storage::{BlockMarkdownWrite, BlockWriteBase, DocumentKind, DocumentScopeRef};
+#[cfg(feature = "lib-documents")]
+use quarry_storage::{PutDocumentRequest, TransactionMetadata};
 use quarry_storage::{QuarryStore, StoreConfig};
 #[cfg(feature = "lib-documents")]
 use serde_json::json;
@@ -481,15 +483,17 @@ pub async fn run() -> Result<()> {
                     );
                 }
                 store
-                    .put_document(
-                        &command.library,
-                        &command.path,
-                        bytes,
-                        json!({"content_type": content_type}),
-                        &content_type,
-                        DocumentSource::Cli,
-                        WritePrecondition::None,
-                    )
+                    .put_document(PutDocumentRequest {
+                        library: command.library.clone(),
+                        path: command.path.clone(),
+                        content: bytes,
+                        metadata: json!({"content_type": content_type}),
+                        content_type,
+                        source: DocumentSource::Cli,
+                        precondition: WritePrecondition::None,
+                        origin_id: None,
+                        transaction: TransactionMetadata::default(),
+                    })
                     .await?
             };
             println!("{}", serde_json::to_string_pretty(&outcome)?);

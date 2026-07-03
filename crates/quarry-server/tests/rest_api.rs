@@ -933,15 +933,17 @@ async fn agent_snapshot_exposes_snapshot_scoped_block_refs() {
     .unwrap();
     let library = store.create_library("agent").await.unwrap();
     let written = store
-        .put_document(
-            &library.slug,
-            "notes/one.md",
-            b"# Title\n\nFirst paragraph.\n\nSecond paragraph.\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/one.md").to_string(),
+            content: b"# Title\n\nFirst paragraph.\n\nSecond paragraph.\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let app = router(store);
@@ -987,15 +989,17 @@ async fn agent_review_lists_open_comments_replies_and_suggestions() {
     let library = store.create_library("agentreviewread").await.unwrap();
     let markdown = "Alpha {==target==}{>>Needs work.<<}{#c1} and {==done==}{>>Fixed.<<}{#c2}.\n\nUse {~~old~>new~~}{#s1} wording and `{++literal++}{#s_code}`.\n\n```text\n{==ignored==}{>>Nope<<}{#c_code}\n{--gone--}{#s_code2}\n```\n\n---\ncomments:\n  c1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user:a\n  c2:\n    at: \"2026-01-02T00:00:00.000Z\"\n    by: user:b\n    status: resolved\n  c_code:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: user:code\n  r1:\n    at: \"2026-01-01T01:00:00.000Z\"\n    body: Reply body.\n    by: ai:codex\n    re: c1\n  r2:\n    at: \"2026-01-03T01:00:00.000Z\"\n    body: Suggestion reply.\n    by: user:a\n    re: s1\nsuggestions:\n  s1:\n    at: \"2026-01-03T00:00:00.000Z\"\n    by: ai:codex\n  s_code:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: ai:code\n  s_code2:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: ai:code\n";
     let written = store
-        .put_document(
-            &library.slug,
-            "notes/review.md",
-            markdown.as_bytes().to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/review.md").to_string(),
+            content: markdown.as_bytes().to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let app = router(store);
@@ -1094,15 +1098,18 @@ async fn agent_review_reports_explicit_inline_markers_without_endmatter() {
     .unwrap();
     let library = store.create_library("agentrevieworphan").await.unwrap();
     let written = store
-        .put_document(
-            &library.slug,
-            "notes/review.md",
-            b"See {==this==}{>>Check it<<}{#c_orphan}.\n\nAdd {++better++}{#s_orphan}.\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/review.md").to_string(),
+            content: b"See {==this==}{>>Check it<<}{#c_orphan}.\n\nAdd {++better++}{#s_orphan}.\n"
+                .to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let app = router(store);
@@ -1148,15 +1155,17 @@ async fn agent_review_matches_snapshot_errors_for_missing_and_non_markdown() {
     .unwrap();
     let library = store.create_library("agentreviewerrors").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "notes/plain.txt",
-            b"plain text".to_vec(),
-            serde_json::json!({"content_type":"text/plain"}),
-            "text/plain",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/plain.txt").to_string(),
+            content: b"plain text".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/plain"}),
+            content_type: ("text/plain").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let app = router(store);
@@ -1223,40 +1232,46 @@ async fn agent_presence_records_status_by_document() {
     .unwrap();
     let library = store.create_library("presence").await.unwrap();
     let written = store
-        .put_document(
-            &library.slug,
-            "live.md",
-            b"hello".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("live.md").to_string(),
+            content: b"hello".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "other.md",
-            b"other".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("other.md").to_string(),
+            content: b"other".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let other_library = store.create_library("presence-other").await.unwrap();
     store
-        .put_document(
-            &other_library.slug,
-            "live.md",
-            b"other library".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: other_library.slug.to_string(),
+            path: ("live.md").to_string(),
+            content: b"other library".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let app = router(store);
@@ -1489,15 +1504,17 @@ async fn presence_test_app(library: &str) -> (tempfile::TempDir, axum::Router) {
     .unwrap();
     let library = store.create_library(library).await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "live.md",
-            b"hello".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("live.md").to_string(),
+            content: b"hello".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     (root, router(store))
@@ -2035,15 +2052,17 @@ async fn collab_share_endpoints_mint_list_and_revoke_invite_tokens() {
     .unwrap();
     let library = store.create_library("shares").await.unwrap();
     let written = store
-        .put_document(
-            &library.slug,
-            "live.md",
-            b"hello".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("live.md").to_string(),
+            content: b"hello".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let app = router(store);
@@ -2242,15 +2261,17 @@ async fn document_delete_events_echo_origin_id_and_doc_id() {
     .unwrap();
     store.create_library("delete-origin").await.unwrap();
     let written = store
-        .put_document(
-            "delete-origin",
-            "live.md",
-            b"live".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: ("delete-origin").to_string(),
+            path: ("live.md").to_string(),
+            content: b"live".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let mut events = store.subscribe_events();
@@ -2295,91 +2316,105 @@ async fn rest_api_supports_browser_search_links_versions_and_events() {
     .unwrap();
     let library = store.create_library("browser").await.unwrap();
     let first_intro = store
-        .put_document(
-            &library.slug,
-            "intro.md",
-            b"# Intro\n\nLinks to [[Daily|today]], [[Missing]], [Guide](guide.md), and #planning.\n".to_vec(),
-            serde_json::json!({"title":"Intro","content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+library: library.slug.to_string(),
+path: ("intro.md").to_string(),
+content: b"# Intro\n\nLinks to [[Daily|today]], [[Missing]], [Guide](guide.md), and #planning.\n".to_vec(),
+metadata: serde_json::json!({"title":"Intro","content_type":"text/markdown"}),
+content_type: ("text/markdown").to_string(),
+source: DocumentSource::Rest,
+precondition: quarry_core::WritePrecondition::None,
+origin_id: None,
+transaction: quarry_storage::TransactionMetadata::default(),
+})
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "daily.md",
-            b"# Daily\n\nBacklinked target with [[Chain]].\n".to_vec(),
-            serde_json::json!({"title":"Daily","content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("daily.md").to_string(),
+            content: b"# Daily\n\nBacklinked target with [[Chain]].\n".to_vec(),
+            metadata: serde_json::json!({"title":"Daily","content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "guide.md",
-            b"# Guide\n".to_vec(),
-            serde_json::json!({
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("guide.md").to_string(),
+            content: b"# Guide\n".to_vec(),
+            metadata: serde_json::json!({
                 "aliases": ["Manual Alias"],
                 "title":"Guide",
                 "content_type":"text/markdown"
             }),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let latest_intro = store
-        .put_document(
-            &library.slug,
-            "intro.md",
-            b"# Intro\n\nLinks to [[Daily|today]], [[Missing]], [Guide](guide.md), and #planning.\nupdated browser body with unique-search term.\n".to_vec(),
-            serde_json::json!({"title":"Intro","content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::IfMatch(first_intro.version.id.clone()),
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+library: library.slug.to_string(),
+path: ("intro.md").to_string(),
+content: b"# Intro\n\nLinks to [[Daily|today]], [[Missing]], [Guide](guide.md), and #planning.\nupdated browser body with unique-search term.\n".to_vec(),
+metadata: serde_json::json!({"title":"Intro","content_type":"text/markdown"}),
+content_type: ("text/markdown").to_string(),
+source: DocumentSource::Rest,
+precondition: quarry_core::WritePrecondition::IfMatch(first_intro.version.id.clone()),
+origin_id: None,
+transaction: quarry_storage::TransactionMetadata::default(),
+})
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "chain.md",
-            b"# Chain\n".to_vec(),
-            serde_json::json!({"title":"Chain","content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("chain.md").to_string(),
+            content: b"# Chain\n".to_vec(),
+            metadata: serde_json::json!({"title":"Chain","content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "projects/roadmap.md",
-            b"# Roadmap\n".to_vec(),
-            serde_json::json!({"title":"Roadmap","content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("projects/roadmap.md").to_string(),
+            content: b"# Roadmap\n".to_vec(),
+            metadata: serde_json::json!({"title":"Roadmap","content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "projects/brief.md",
-            b"# Brief\n\nSee [[Roadmap]] and #planning.\n".to_vec(),
-            serde_json::json!({"title":"Brief","content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("projects/brief.md").to_string(),
+            content: b"# Brief\n\nSee [[Roadmap]] and #planning.\n".to_vec(),
+            metadata: serde_json::json!({"title":"Brief","content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let app = router(store);
@@ -3316,27 +3351,31 @@ async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() {
     let library = store.create_library("actions").await.unwrap();
     store.create_library("other").await.unwrap();
     let written = store
-        .put_document(
-            &library.slug,
-            "a.md",
-            b"hello".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("a.md").to_string(),
+            content: b"hello".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let sibling = store
-        .put_document(
-            &library.slug,
-            "a.conflict.md",
-            b"git version".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Git,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("a.conflict.md").to_string(),
+            content: b"git version".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Git,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let conflict = store
@@ -3463,39 +3502,45 @@ async fn rest_api_marks_ambiguous_links() {
     let library = store.create_library("ambiguous").await.unwrap();
 
     store
-        .put_document(
-            &library.slug,
-            "alpha/target.md",
-            b"# Target\n".to_vec(),
-            serde_json::json!({"content_type": "text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("alpha/target.md").to_string(),
+            content: b"# Target\n".to_vec(),
+            metadata: serde_json::json!({"content_type": "text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "omega/target.md",
-            b"# Target\n".to_vec(),
-            serde_json::json!({"content_type": "text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("omega/target.md").to_string(),
+            content: b"# Target\n".to_vec(),
+            metadata: serde_json::json!({"content_type": "text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     store
-        .put_document(
-            &library.slug,
-            "source.md",
-            b"See [[target]].\n".to_vec(),
-            serde_json::json!({"content_type": "text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("source.md").to_string(),
+            content: b"See [[target]].\n".to_vec(),
+            metadata: serde_json::json!({"content_type": "text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let app = router(store);
@@ -3536,15 +3581,17 @@ async fn rest_api_marks_external_links() {
     let library = store.create_library("external").await.unwrap();
 
     store
-        .put_document(
-            &library.slug,
-            "source.md",
-            b"[site](https://example.com)\n".to_vec(),
-            serde_json::json!({"content_type": "text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("source.md").to_string(),
+            content: b"[site](https://example.com)\n".to_vec(),
+            metadata: serde_json::json!({"content_type": "text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let app = router(store);
@@ -3585,15 +3632,17 @@ async fn rest_api_supports_transaction_metadata_patch_and_move() {
     .unwrap();
     let library = store.create_library("txactions").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "drafts/a.md",
-            b"draft".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("drafts/a.md").to_string(),
+            content: b"draft".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let app = router(store);
@@ -3815,15 +3864,17 @@ async fn rest_api_scopes_transaction_routes_to_the_url_library() {
     let library = store.create_library("txscope").await.unwrap();
     store.create_library("other").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "drafts/a.md",
-            b"draft".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            quarry_core::WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("drafts/a.md").to_string(),
+            content: b"draft".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: quarry_core::WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let app = router(store);

@@ -36,7 +36,8 @@ use quarry_git::{
     GitExportResult, GitImportResult, GitSyncResult,
 };
 use quarry_storage::{
-    DocumentScopeRef, QuarryStore, StoreEvent, StoreEventKind, TransactionMetadata,
+    DocumentScopeRef, PutDocumentRequest, QuarryStore, StoreEvent, StoreEventKind,
+    TransactionMetadata,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -3193,17 +3194,17 @@ async fn put_document(
 
     let outcome = state
         .store
-        .put_document_with_transaction(
-            &library,
-            &path,
-            body.to_vec(),
+        .put_document(PutDocumentRequest {
+            library,
+            path,
+            content: body.to_vec(),
             metadata,
-            &content_type,
-            DocumentSource::Rest,
+            content_type,
+            source: DocumentSource::Rest,
             precondition,
             origin_id,
             transaction,
-        )
+        })
         .await?;
     json_with_etag(StatusCode::OK, &outcome, &outcome.version.id)
 }
@@ -4727,15 +4728,17 @@ mod tests {
         let (_root, store) = test_store().await;
         let library = store.create_library("doc-sse-shutdown").await.unwrap();
         store
-            .put_document(
-                &library.slug,
-                "live.md",
-                b"hello".to_vec(),
-                serde_json::json!({"content_type":"text/markdown"}),
-                "text/markdown",
-                DocumentSource::Rest,
-                WritePrecondition::None,
-            )
+            .put_document(PutDocumentRequest {
+                library: library.slug.clone(),
+                path: "live.md".to_string(),
+                content: b"hello".to_vec(),
+                metadata: serde_json::json!({"content_type":"text/markdown"}),
+                content_type: "text/markdown".to_string(),
+                source: DocumentSource::Rest,
+                precondition: WritePrecondition::None,
+                origin_id: None,
+                transaction: TransactionMetadata::default(),
+            })
             .await
             .unwrap();
         let state = app_state(store);

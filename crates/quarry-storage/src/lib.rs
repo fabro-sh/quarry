@@ -98,6 +98,19 @@ pub struct TransactionMetadata {
     pub provenance: Option<JsonValue>,
 }
 
+#[derive(Clone, Debug)]
+pub struct PutDocumentRequest {
+    pub library: String,
+    pub path: String,
+    pub content: Vec<u8>,
+    pub metadata: JsonValue,
+    pub content_type: String,
+    pub source: DocumentSource,
+    pub precondition: WritePrecondition,
+    pub origin_id: Option<String>,
+    pub transaction: TransactionMetadata,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TmpTtl {
     Default,
@@ -898,82 +911,20 @@ impl QuarryStore {
             .ok_or_else(|| QuarryError::NotFound(format!("inode {inode}")))
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn put_document(
-        &self,
-        library: &str,
-        path: &str,
-        content: Vec<u8>,
-        metadata: JsonValue,
-        content_type: &str,
-        source: DocumentSource,
-        precondition: WritePrecondition,
-    ) -> Result<WriteOutcome> {
-        self.put_document_with_origin(
-            library,
-            path,
-            content,
-            metadata,
-            content_type,
-            source,
-            precondition,
-            None,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn put_document_with_origin(
-        &self,
-        library: &str,
-        path: &str,
-        content: Vec<u8>,
-        metadata: JsonValue,
-        content_type: &str,
-        source: DocumentSource,
-        precondition: WritePrecondition,
-        origin_id: Option<String>,
-    ) -> Result<WriteOutcome> {
-        self.put_document_with_transaction(
-            library,
-            path,
-            content,
-            metadata,
-            content_type,
-            source,
-            precondition,
-            origin_id,
-            TransactionMetadata::default(),
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn put_document_with_transaction(
-        &self,
-        library: &str,
-        path: &str,
-        content: Vec<u8>,
-        metadata: JsonValue,
-        content_type: &str,
-        source: DocumentSource,
-        precondition: WritePrecondition,
-        origin_id: Option<String>,
-        transaction: TransactionMetadata,
-    ) -> Result<WriteOutcome> {
+    pub async fn put_document(&self, request: PutDocumentRequest) -> Result<WriteOutcome> {
         let outcome = self
             .commit_document_without_events_with_transaction(
-                library,
-                path,
-                content,
-                metadata,
-                content_type,
-                source,
-                precondition,
-                transaction,
+                &request.library,
+                &request.path,
+                request.content,
+                request.metadata,
+                &request.content_type,
+                request.source,
+                request.precondition,
+                request.transaction,
             )
             .await?;
-        self.emit_document_put_events(&outcome, origin_id);
+        self.emit_document_put_events(&outcome, request.origin_id);
         Ok(outcome)
     }
 
@@ -2200,16 +2151,16 @@ impl QuarryStore {
             .await?;
         drop(conn);
 
-        self.put_document_with_transaction(
-            library,
-            &path,
+        self.put_document(PutDocumentRequest {
+            library: library.to_string(),
+            path,
             content,
-            version.metadata,
-            &version.content_type,
-            DocumentSource::Rest,
-            WritePrecondition::None,
+            metadata: version.metadata,
+            content_type: version.content_type,
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
             origin_id,
-            TransactionMetadata {
+            transaction: TransactionMetadata {
                 actor,
                 message: Some(format!("Restore version {version_id}")),
                 provenance: Some(serde_json::json!({
@@ -2217,7 +2168,7 @@ impl QuarryStore {
                     "history": {"kind": "checkpoint", "reason": "restore"}
                 })),
             },
-        )
+        })
         .await
     }
 
@@ -2494,15 +2445,17 @@ impl QuarryStore {
             let current = self.get_document(library, path).await?;
             let mut metadata = current.metadata;
             merge_json(&mut metadata, patch);
-            self.put_document(
-                library,
-                path,
-                current.content,
+            self.put_document(PutDocumentRequest {
+                library: library.to_string(),
+                path: path.to_string(),
+                content: current.content,
                 metadata,
-                &current.version.content_type,
+                content_type: current.version.content_type,
                 source,
                 precondition,
-            )
+                origin_id: None,
+                transaction: TransactionMetadata::default(),
+            })
             .await
         })
         .await

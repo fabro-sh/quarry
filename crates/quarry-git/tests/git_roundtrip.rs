@@ -116,15 +116,17 @@ async fn export_refuses_document_paths_reserved_for_git_sidecars() {
     let store = open_store(root.path()).await;
     let library = store.create_library("reservedgit").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "notes/data.quarrymeta.yaml",
-            b"not sidecar\n".to_vec(),
-            serde_json::json!({"content_type":"application/x-yaml"}),
-            "application/x-yaml",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/data.quarrymeta.yaml").to_string(),
+            content: b"not sidecar\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"application/x-yaml"}),
+            content_type: ("application/x-yaml").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -326,15 +328,17 @@ async fn export_refuses_large_git_blobs_unless_forced() {
     let store = open_store(root.path()).await;
     let library = store.create_library("largegit").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "assets/large.bin",
-            vec![b'x'; quarry_core::GIT_BINARY_WARN_THRESHOLD + 1],
-            serde_json::json!({"content_type":"application/octet-stream"}),
-            "application/octet-stream",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("assets/large.bin").to_string(),
+            content: vec![b'x'; quarry_core::GIT_BINARY_WARN_THRESHOLD + 1],
+            metadata: serde_json::json!({"content_type":"application/octet-stream"}),
+            content_type: ("application/octet-stream").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -374,15 +378,17 @@ async fn sync_preserves_both_sides_when_quarry_and_git_change_same_path() {
     let store = open_store(root.path()).await;
     let library = store.create_library("syncdocs").await.unwrap();
     let baseline = store
-        .put_document(
-            &library.slug,
-            "notes/plan.md",
-            b"base\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/plan.md").to_string(),
+            content: b"base\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let repo = tempfile::tempdir().unwrap();
@@ -407,15 +413,17 @@ async fn sync_preserves_both_sides_when_quarry_and_git_change_same_path() {
     );
 
     let ours = store
-        .put_document(
-            &library.slug,
-            "notes/plan.md",
-            b"ours\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::IfMatch(baseline.version.id.clone()),
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/plan.md").to_string(),
+            content: b"ours\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::IfMatch(baseline.version.id.clone()),
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     std::fs::write(repo.path().join("notes/plan.md"), "theirs\n").unwrap();
@@ -470,15 +478,17 @@ async fn sync_with_both_sides_unchanged_does_not_create_new_git_commit() {
     let store = open_store(root.path()).await;
     let library = store.create_library("unchanged").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "notes/stable.md",
-            b"stable\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/stable.md").to_string(),
+            content: b"stable\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let repo = tempfile::tempdir().unwrap();
@@ -537,15 +547,17 @@ async fn sync_exports_quarry_only_content_change_to_git() {
     let store = open_store(root.path()).await;
     let library = store.create_library("quarrychange").await.unwrap();
     let baseline = store
-        .put_document(
-            &library.slug,
-            "notes/plan.md",
-            b"base\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/plan.md").to_string(),
+            content: b"base\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let repo = tempfile::tempdir().unwrap();
@@ -558,15 +570,17 @@ async fn sync_exports_quarry_only_content_change_to_git() {
         .unwrap();
     push_peer(&store, &library.slug, &peer.id).await.unwrap();
     let updated = store
-        .put_document(
-            &library.slug,
-            "notes/plan.md",
-            b"from quarry\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::IfMatch(baseline.version.id),
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/plan.md").to_string(),
+            content: b"from quarry\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::IfMatch(baseline.version.id),
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -596,15 +610,17 @@ async fn sync_imports_git_only_content_change_to_quarry() {
     let store = open_store(root.path()).await;
     let library = store.create_library("gitchange").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "notes/plan.md",
-            b"base\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/plan.md").to_string(),
+            content: b"base\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let repo = tempfile::tempdir().unwrap();
@@ -642,15 +658,17 @@ async fn sync_does_not_advance_sync_state_when_export_fails() {
     let store = open_store(root.path()).await;
     let library = store.create_library("failedsync").await.unwrap();
     let baseline = store
-        .put_document(
-            &library.slug,
-            "notes/plan.md",
-            b"base\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/plan.md").to_string(),
+            content: b"base\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let repo = tempfile::tempdir().unwrap();
@@ -664,15 +682,17 @@ async fn sync_does_not_advance_sync_state_when_export_fails() {
     push_peer(&store, &library.slug, &peer.id).await.unwrap();
     std::fs::write(repo.path().join("notes/plan.md"), "from git\n").unwrap();
     store
-        .put_document(
-            &library.slug,
-            "assets/too-large.bin",
-            vec![b'x'; quarry_core::GIT_BINARY_WARN_THRESHOLD + 1],
-            serde_json::json!({"content_type":"application/octet-stream"}),
-            "application/octet-stream",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("assets/too-large.bin").to_string(),
+            content: vec![b'x'; quarry_core::GIT_BINARY_WARN_THRESHOLD + 1],
+            metadata: serde_json::json!({"content_type":"application/octet-stream"}),
+            content_type: ("application/octet-stream").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
 
@@ -698,15 +718,17 @@ async fn sync_accepts_both_changed_to_same_content_without_conflict() {
     let store = open_store(root.path()).await;
     let library = store.create_library("samechange").await.unwrap();
     let baseline = store
-        .put_document(
-            &library.slug,
-            "notes/plan.md",
-            b"base\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/plan.md").to_string(),
+            content: b"base\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let repo = tempfile::tempdir().unwrap();
@@ -719,15 +741,17 @@ async fn sync_accepts_both_changed_to_same_content_without_conflict() {
         .unwrap();
     push_peer(&store, &library.slug, &peer.id).await.unwrap();
     let ours = store
-        .put_document(
-            &library.slug,
-            "notes/plan.md",
-            b"same\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::IfMatch(baseline.version.id),
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/plan.md").to_string(),
+            content: b"same\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::IfMatch(baseline.version.id),
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     std::fs::write(repo.path().join("notes/plan.md"), "same\n").unwrap();
@@ -766,15 +790,17 @@ async fn sync_preserves_both_sides_when_both_create_same_path_differently() {
         .unwrap();
     push_peer(&store, &library.slug, &peer.id).await.unwrap();
     let ours = store
-        .put_document(
-            &library.slug,
-            "notes/new.md",
-            b"ours\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/new.md").to_string(),
+            content: b"ours\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     std::fs::create_dir_all(repo.path().join("notes")).unwrap();
@@ -811,15 +837,17 @@ async fn sync_records_both_deleted_as_clean_state() {
     let store = open_store(root.path()).await;
     let library = store.create_library("bothdeleted").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "notes/remove.md",
-            b"base\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/remove.md").to_string(),
+            content: b"base\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let repo = tempfile::tempdir().unwrap();
@@ -860,15 +888,17 @@ async fn sync_applies_git_only_delete_to_quarry() {
     let store = open_store(root.path()).await;
     let library = store.create_library("gitdelete").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "notes/remove.md",
-            b"base\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/remove.md").to_string(),
+            content: b"base\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let repo = tempfile::tempdir().unwrap();
@@ -905,15 +935,17 @@ async fn sync_applies_quarry_only_delete_to_git() {
     let store = open_store(root.path()).await;
     let library = store.create_library("quarrydelete").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "notes/remove.md",
-            b"base\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/remove.md").to_string(),
+            content: b"base\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let repo = tempfile::tempdir().unwrap();
@@ -949,15 +981,17 @@ async fn sync_records_conflict_when_quarry_changes_and_git_deletes() {
     let store = open_store(root.path()).await;
     let library = store.create_library("changeddelete").await.unwrap();
     let baseline = store
-        .put_document(
-            &library.slug,
-            "notes/plan.md",
-            b"base\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/plan.md").to_string(),
+            content: b"base\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let repo = tempfile::tempdir().unwrap();
@@ -971,15 +1005,17 @@ async fn sync_records_conflict_when_quarry_changes_and_git_deletes() {
     push_peer(&store, &library.slug, &peer.id).await.unwrap();
 
     let ours = store
-        .put_document(
-            &library.slug,
-            "notes/plan.md",
-            b"ours\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::IfMatch(baseline.version.id),
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/plan.md").to_string(),
+            content: b"ours\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::IfMatch(baseline.version.id),
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     std::fs::remove_file(repo.path().join("notes/plan.md")).unwrap();
@@ -1009,15 +1045,17 @@ async fn sync_records_conflict_when_quarry_deletes_and_git_changes() {
     let store = open_store(root.path()).await;
     let library = store.create_library("deletedchange").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "notes/plan.md",
-            b"base\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/plan.md").to_string(),
+            content: b"base\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let repo = tempfile::tempdir().unwrap();
@@ -1076,15 +1114,17 @@ async fn sync_aborts_when_git_delete_batch_exceeds_configured_safety_limit() {
     let library = store.create_library("safety").await.unwrap();
     for index in 0..5 {
         store
-            .put_document(
-                &library.slug,
-                &format!("notes/{index}.md"),
-                format!("doc {index}\n").into_bytes(),
-                serde_json::json!({"content_type":"text/markdown"}),
-                "text/markdown",
-                DocumentSource::Rest,
-                WritePrecondition::None,
-            )
+            .put_document(quarry_storage::PutDocumentRequest {
+                library: library.slug.to_string(),
+                path: format!("notes/{index}.md").to_string(),
+                content: format!("doc {index}\n").into_bytes(),
+                metadata: serde_json::json!({"content_type":"text/markdown"}),
+                content_type: ("text/markdown").to_string(),
+                source: DocumentSource::Rest,
+                precondition: WritePrecondition::None,
+                origin_id: None,
+                transaction: quarry_storage::TransactionMetadata::default(),
+            })
             .await
             .unwrap();
     }
@@ -1128,15 +1168,17 @@ async fn push_peer_updates_configured_remote_branch() {
     let store = open_store(root.path()).await;
     let library = store.create_library("pushremote").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "notes/pushed.md",
-            b"from quarry\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/pushed.md").to_string(),
+            content: b"from quarry\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let worktree = tempfile::tempdir().unwrap();
@@ -1177,15 +1219,17 @@ async fn push_peer_does_not_advance_sync_state_when_remote_push_fails() {
     let store = open_store(root.path()).await;
     let library = store.create_library("pushfailure").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "notes/pushed.md",
-            b"from quarry\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/pushed.md").to_string(),
+            content: b"from quarry\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let worktree = tempfile::tempdir().unwrap();
@@ -1274,15 +1318,17 @@ async fn sync_peer_fetches_remote_branch_and_pushes_merged_tree() {
     let store = open_store(root.path()).await;
     let library = store.create_library("syncremote").await.unwrap();
     store
-        .put_document(
-            &library.slug,
-            "notes/local.md",
-            b"from quarry\n".to_vec(),
-            serde_json::json!({"content_type":"text/markdown"}),
-            "text/markdown",
-            DocumentSource::Rest,
-            WritePrecondition::None,
-        )
+        .put_document(quarry_storage::PutDocumentRequest {
+            library: library.slug.to_string(),
+            path: ("notes/local.md").to_string(),
+            content: b"from quarry\n".to_vec(),
+            metadata: serde_json::json!({"content_type":"text/markdown"}),
+            content_type: ("text/markdown").to_string(),
+            source: DocumentSource::Rest,
+            precondition: WritePrecondition::None,
+            origin_id: None,
+            transaction: quarry_storage::TransactionMetadata::default(),
+        })
         .await
         .unwrap();
     let remote = tempfile::tempdir().unwrap();

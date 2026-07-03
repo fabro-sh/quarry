@@ -8,7 +8,7 @@ use quarry_core::{
 };
 use quarry_storage::{
     split_markdown_frontmatter, BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockWriteBase,
-    DocumentKind, DocumentScopeRef, QuarryStore,
+    DocumentKind, DocumentScopeRef, PutDocumentRequest, QuarryStore, TransactionMetadata,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -534,15 +534,17 @@ impl<'a> SyncPathReconciler<'a> {
         let conflict_path = conflict_sibling_path(path);
         let outcome = self
             .store
-            .put_document(
-                &self.library.slug,
-                &conflict_path,
-                git.content.clone(),
-                git.metadata.clone(),
-                &git.content_type,
-                DocumentSource::Git,
-                quarry_core::WritePrecondition::None,
-            )
+            .put_document(PutDocumentRequest {
+                library: self.library.slug.clone(),
+                path: conflict_path.clone(),
+                content: git.content.clone(),
+                metadata: git.metadata.clone(),
+                content_type: git.content_type.clone(),
+                source: DocumentSource::Git,
+                precondition: quarry_core::WritePrecondition::None,
+                origin_id: None,
+                transaction: TransactionMetadata::default(),
+            })
             .await?;
         let conflict = self
             .store
@@ -592,15 +594,17 @@ impl<'a> SyncPathReconciler<'a> {
             .id
         } else {
             self.store
-                .put_document(
-                    &self.library.slug,
-                    &conflict_path,
-                    git.content.clone(),
-                    git.metadata.clone(),
-                    &git.content_type,
-                    DocumentSource::Git,
-                    quarry_core::WritePrecondition::None,
-                )
+                .put_document(PutDocumentRequest {
+                    library: self.library.slug.clone(),
+                    path: conflict_path.clone(),
+                    content: git.content.clone(),
+                    metadata: git.metadata.clone(),
+                    content_type: git.content_type.clone(),
+                    source: DocumentSource::Git,
+                    precondition: quarry_core::WritePrecondition::None,
+                    origin_id: None,
+                    transaction: TransactionMetadata::default(),
+                })
                 .await?
                 .version
                 .id
@@ -642,15 +646,17 @@ impl<'a> SyncPathReconciler<'a> {
             .await?;
         } else {
             self.store
-                .put_document(
-                    &self.library.slug,
-                    path,
-                    git.content.clone(),
-                    git.metadata.clone(),
-                    &git.content_type,
-                    DocumentSource::Git,
+                .put_document(PutDocumentRequest {
+                    library: self.library.slug.clone(),
+                    path: path.to_string(),
+                    content: git.content.clone(),
+                    metadata: git.metadata.clone(),
+                    content_type: git.content_type.clone(),
+                    source: DocumentSource::Git,
                     precondition,
-                )
+                    origin_id: None,
+                    transaction: TransactionMetadata::default(),
+                })
                 .await?;
         }
         Ok(())
