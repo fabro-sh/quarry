@@ -8,9 +8,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::header;
 use axum::http::{Method, Request, StatusCode};
 #[cfg(feature = "tmp-documents")]
-use futures_util::{Sink, SinkExt, Stream, StreamExt};
-#[cfg(feature = "tmp-documents")]
-use quarry_collab_codec::{Node, xmltext_to_slate};
+use futures_util::{SinkExt, StreamExt};
 #[cfg(feature = "tmp-documents")]
 use quarry_server::{app_state, router_with_state, serve_state_with_shutdown};
 use serde_json::Value;
@@ -22,15 +20,16 @@ use tower::ServiceExt;
 #[cfg(feature = "tmp-documents")]
 use yrs::sync::{Message as YMessage, SyncMessage};
 #[cfg(feature = "tmp-documents")]
-use yrs::updates::decoder::Decode;
-#[cfg(feature = "tmp-documents")]
 use yrs::updates::encoder::Encode;
 #[cfg(feature = "tmp-documents")]
-use yrs::{Doc, OffsetKind, Options, Out, ReadTxn, Text, Transact, Update, WriteTxn, XmlTextRef};
+use yrs::{Doc, Out, ReadTxn, Text, Transact, WriteTxn, XmlTextRef};
 
 mod common;
 
-use common::{document_test_app, json_request, open_test_store, response_json};
+use common::{
+    WsSocket, document_test_app, empty_yjs_doc, json_request, open_test_store, response_json,
+    sync_yjs_doc_from_socket, wait_for_server, wait_for_yjs_sync_update, yjs_plain_text,
+};
 
 #[cfg(feature = "tmp-documents")]
 const COLLAB_ROOT: &str = "content";
@@ -573,24 +572,6 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
 }
 
 #[cfg(feature = "tmp-documents")]
-async fn wait_for_server(addr: std::net::SocketAddr) {
-    timeout(Duration::from_secs(2), async {
-        loop {
-            match tokio::net::TcpStream::connect(addr).await {
-                Ok(_) => break,
-                Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
-            }
-        }
-    })
-    .await
-    .expect("server did not start listening");
-}
-
-#[cfg(feature = "tmp-documents")]
-type WsSocket =
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-
-#[cfg(feature = "tmp-documents")]
 async fn connect_tmp_session(addr: std::net::SocketAddr, secret: &str) -> (WsSocket, Doc) {
     let (mut socket, _) =
         tokio_tungstenite::connect_async(format!("ws://{addr}/v1/tmp/collab/{secret}/content"))
@@ -599,33 +580,6 @@ async fn connect_tmp_session(addr: std::net::SocketAddr, secret: &str) -> (WsSoc
     let doc = empty_yjs_doc();
     sync_yjs_doc_from_socket(&mut socket, &doc).await;
     (socket, doc)
-}
-
-#[cfg(feature = "tmp-documents")]
-fn empty_yjs_doc() -> Doc {
-    Doc::with_options(Options {
-        offset_kind: OffsetKind::Utf16,
-        ..Default::default()
-    })
-}
-
-#[cfg(feature = "tmp-documents")]
-async fn sync_yjs_doc_from_socket<S>(socket: &mut S, doc: &Doc)
-where
-    S: Sink<TungsteniteMessage>
-        + Stream<Item = Result<TungsteniteMessage, tokio_tungstenite::tungstenite::Error>>
-        + Unpin,
-    <S as Sink<TungsteniteMessage>>::Error: std::fmt::Debug,
-{
-    socket
-        .send(TungsteniteMessage::Binary(
-            YMessage::Sync(SyncMessage::SyncStep1(doc.transact().state_vector()))
-                .encode_v1()
-                .into(),
-        ))
-        .await
-        .unwrap();
-    wait_for_yjs_sync_update(socket, doc).await;
 }
 
 #[cfg(feature = "tmp-documents")]
@@ -655,41 +609,6 @@ async fn send_local_edit(
 }
 
 #[cfg(feature = "tmp-documents")]
-async fn wait_for_yjs_sync_update<S>(socket: &mut S, doc: &Doc)
-where
-    S: Stream<Item = Result<TungsteniteMessage, tokio_tungstenite::tungstenite::Error>> + Unpin,
-{
-    timeout(Duration::from_secs(2), async {
-        loop {
-            let message = socket.next().await.unwrap().unwrap();
-            let TungsteniteMessage::Binary(bytes) = message else {
-                continue;
-            };
-            if apply_yjs_message(doc, bytes.as_ref()) {
-                break;
-            }
-        }
-    })
-    .await
-    .unwrap();
-}
-
-#[cfg(feature = "tmp-documents")]
-fn apply_yjs_message(doc: &Doc, bytes: &[u8]) -> bool {
-    let update = match YMessage::decode_v1(bytes) {
-        Ok(YMessage::Sync(SyncMessage::Update(update) | SyncMessage::SyncStep2(update))) => update,
-        _ => return false,
-    };
-    if update.is_empty() {
-        return false;
-    }
-    let mut txn = doc.transact_mut();
-    txn.apply_update(Update::decode_v1(&update).unwrap())
-        .unwrap();
-    true
-}
-
-#[cfg(feature = "tmp-documents")]
 fn nth_block_text_in(txn: &mut yrs::TransactionMut<'_>, index: usize) -> XmlTextRef {
     use yrs::types::text::YChange;
     let text = txn.get_or_insert_text(COLLAB_ROOT);
@@ -708,31 +627,6 @@ fn nth_block_text_in(txn: &mut yrs::TransactionMut<'_>, index: usize) -> XmlText
         })
         .collect();
     embeds[index].clone()
-}
-
-#[cfg(feature = "tmp-documents")]
-fn yjs_plain_text(doc: &Doc) -> String {
-    fn collect(node: &Node, out: &mut String) {
-        match node {
-            Node::Text { text, .. } => out.push_str(text),
-            Node::Element { children, .. } => {
-                for child in children {
-                    collect(child, out);
-                }
-            }
-        }
-    }
-    let txn = doc.transact();
-    let text = txn.get_text(COLLAB_ROOT).unwrap();
-    let root: &XmlTextRef = text.as_ref();
-    let Node::Element { children, .. } = xmltext_to_slate(&txn, root).unwrap() else {
-        panic!("collab root should decode as a Slate fragment");
-    };
-    let mut out = String::new();
-    for node in children {
-        collect(&node, &mut out);
-    }
-    out
 }
 
 #[cfg(feature = "tmp-documents")]
