@@ -4,7 +4,7 @@ use git2::{
 };
 use quarry_core::{
     normalize_path, render_markdown_frontmatter, ConflictRecord, DocumentListEntry, DocumentSource,
-    QuarryError, Result, SyncStateEntry, GIT_BINARY_WARN_THRESHOLD,
+    Library, QuarryError, Result, SyncStateEntry, GIT_BINARY_WARN_THRESHOLD,
 };
 use quarry_storage::{
     split_markdown_frontmatter, BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockWriteBase,
@@ -268,264 +268,19 @@ async fn sync_peer_inner(
         peer.max_delete_percent,
     )?;
 
-    let mut imported_paths = Vec::new();
-    let mut conflict_paths = Vec::new();
-    let mut conflicts = Vec::new();
-    let mut deleted_sync_paths = BTreeSet::new();
-    let mut renamed_paths = renamed_from.clone();
-
-    for rename in &renames {
-        store
-            .move_document(
-                &library_record.slug,
-                &rename.from,
-                &rename.to,
-                DocumentSource::Git,
-            )
-            .await?;
-        tracing::info!(
-            event = "git.sync.rename_paired",
-            library = library_record.slug,
-            peer_id,
-            from = %rename.from,
-            to = %rename.to,
-            "git-side rename paired into an identity-preserving move"
-        );
-        // The old path's sync state clears below; the moved document exports
-        // at its new path, which records the new state.
-        deleted_sync_paths.insert(rename.from.clone());
-        renamed_paths.insert(rename.to.clone());
-        imported_paths.push(rename.to.clone());
+    let sync_paths = SyncPathReconciler {
+        store,
+        library: &library_record,
+        peer_id,
+        paths,
+        doc_map: &doc_map,
+        git_map: &git_map,
+        sync_states: &sync_states,
+        renames: &renames,
+        renamed_from,
     }
-
-    for path in paths {
-        if renamed_paths.contains(&path) {
-            continue;
-        }
-        let doc = doc_map.get(&path);
-        let git = git_map.get(&path);
-        let state = sync_states.get(&path);
-        let last_doc = state
-            .as_ref()
-            .and_then(|state| state.last_synced_doc_version_id.as_deref());
-        let last_git = state
-            .as_ref()
-            .and_then(|state| state.last_synced_git_oid.as_deref());
-        let doc_changed = doc
-            .map(|doc| Some(doc.head_version_id.as_str()) != last_doc)
-            .unwrap_or(last_doc.is_some());
-        let git_changed = git
-            .map(|git| Some(git.oid.as_str()) != last_git)
-            .unwrap_or(last_git.is_some());
-
-        match (doc, git, doc_changed, git_changed) {
-            (Some(doc), Some(git), true, true) => {
-                let current = store.get_document(&library_record.slug, &path).await?;
-                if current.content == git.content {
-                    continue;
-                }
-                if is_block_file(&path, &git.content_type) {
-                    // Phase 4: both sides changed a Markdown document —
-                    // diff3 against the peer's shadow base. Without one, the
-                    // last-synced version's content is the common ancestor;
-                    // without even that (both sides created the path
-                    // independently) an EMPTY base keeps it conservative:
-                    // differences conflict instead of silently overwriting.
-                    // Non-conflicting hunks from both sides land; true
-                    // conflicts become review items, never sibling files or
-                    // sync failures.
-                    let ancestor = match last_doc {
-                        Some(version_id) => {
-                            let version = store
-                                .document_version(&library_record.slug, &path, version_id)
-                                .await?;
-                            BlockWriteBase::Markdown {
-                                markdown: version.content,
-                                version_id: Some(version_id.to_string()),
-                            }
-                        }
-                        None => BlockWriteBase::Markdown {
-                            markdown: String::new(),
-                            version_id: None,
-                        },
-                    };
-                    write_markdown_file(
-                        store,
-                        &library_record.slug,
-                        Some(peer_id),
-                        &path,
-                        git,
-                        ancestor,
-                    )
-                    .await?;
-                    imported_paths.push(path);
-                    continue;
-                }
-
-                let conflict_path = conflict_sibling_path(&path);
-                let outcome = store
-                    .put_document(
-                        &library_record.slug,
-                        &conflict_path,
-                        git.content.clone(),
-                        git.metadata.clone(),
-                        &git.content_type,
-                        DocumentSource::Git,
-                        quarry_core::WritePrecondition::None,
-                    )
-                    .await?;
-                let conflict = store
-                    .record_conflict(
-                        &library_record.slug,
-                        &path,
-                        Some(doc.head_version_id.clone()),
-                        Some(outcome.version.id.clone()),
-                    )
-                    .await?;
-                log_git_conflict_recorded(
-                    &library_record,
-                    peer_id,
-                    &path,
-                    Some(&conflict_path),
-                    &conflict,
-                );
-                conflict_paths.push(conflict_path);
-                conflicts.push(conflict);
-            }
-            (Some(doc), None, true, true) => {
-                let conflict = store
-                    .record_conflict(
-                        &library_record.slug,
-                        &path,
-                        Some(doc.head_version_id.clone()),
-                        None,
-                    )
-                    .await?;
-                log_git_conflict_recorded(&library_record, peer_id, &path, None, &conflict);
-                conflicts.push(conflict);
-            }
-            (Some(_doc), None, false, true) => {
-                store
-                    .delete_document(&library_record.slug, &path, DocumentSource::Git)
-                    .await?;
-                deleted_sync_paths.insert(path.clone());
-                imported_paths.push(path);
-            }
-            (None, Some(git), true, true) if last_doc.is_some() => {
-                let conflict_path = conflict_sibling_path(&path);
-                // Delete-vs-create: Quarry deleted the path, Git changed it.
-                // The Git side is preserved as a sibling document; Markdown
-                // siblings import through the block writer (a first import —
-                // fresh ids, no base) so they are ordinary BlockDocuments,
-                // not raw bytes with a cleared projection.
-                let sibling_version_id = if is_block_file(&path, &git.content_type) {
-                    write_markdown_file(
-                        store,
-                        &library_record.slug,
-                        Some(peer_id),
-                        &conflict_path,
-                        git,
-                        BlockWriteBase::CurrentCanonical,
-                    )
-                    .await?
-                    .outcome
-                    .version
-                    .id
-                } else {
-                    store
-                        .put_document(
-                            &library_record.slug,
-                            &conflict_path,
-                            git.content.clone(),
-                            git.metadata.clone(),
-                            &git.content_type,
-                            DocumentSource::Git,
-                            quarry_core::WritePrecondition::None,
-                        )
-                        .await?
-                        .version
-                        .id
-                };
-                let conflict = store
-                    .record_conflict(&library_record.slug, &path, None, Some(sibling_version_id))
-                    .await?;
-                log_git_conflict_recorded(
-                    &library_record,
-                    peer_id,
-                    &path,
-                    Some(&conflict_path),
-                    &conflict,
-                );
-                deleted_sync_paths.insert(path.clone());
-                conflict_paths.push(conflict_path);
-                conflicts.push(conflict);
-            }
-            (None, Some(_git), true, false) if last_doc.is_some() => {
-                deleted_sync_paths.insert(path.clone());
-            }
-            (None, None, true, true) | (None, None, true, false) | (None, None, false, true) => {
-                deleted_sync_paths.insert(path.clone());
-            }
-            (None, Some(git), _, true) | (None, Some(git), _, false) => {
-                if is_block_file(&path, &git.content_type) {
-                    write_markdown_file(
-                        store,
-                        &library_record.slug,
-                        Some(peer_id),
-                        &path,
-                        git,
-                        BlockWriteBase::CurrentCanonical,
-                    )
-                    .await?;
-                } else {
-                    store
-                        .put_document(
-                            &library_record.slug,
-                            &path,
-                            git.content.clone(),
-                            git.metadata.clone(),
-                            &git.content_type,
-                            DocumentSource::Git,
-                            quarry_core::WritePrecondition::None,
-                        )
-                        .await?;
-                }
-                imported_paths.push(path);
-            }
-            (Some(_), None, true, _) => {
-                // Quarry changed or created the path; export publishes it below.
-            }
-            (Some(doc), Some(git), false, true) => {
-                if is_block_file(&path, &git.content_type) {
-                    // The document is unchanged since the last sync, so the
-                    // current canonical state IS the common ancestor.
-                    write_markdown_file(
-                        store,
-                        &library_record.slug,
-                        Some(peer_id),
-                        &path,
-                        git,
-                        BlockWriteBase::CurrentCanonical,
-                    )
-                    .await?;
-                } else {
-                    store
-                        .put_document(
-                            &library_record.slug,
-                            &path,
-                            git.content.clone(),
-                            git.metadata.clone(),
-                            &git.content_type,
-                            DocumentSource::Git,
-                            quarry_core::WritePrecondition::IfMatch(doc.head_version_id.clone()),
-                        )
-                        .await?;
-                }
-                imported_paths.push(path);
-            }
-            _ => {}
-        }
-    }
+    .run()
+    .await?;
 
     let export = export_worktree(
         store,
@@ -542,7 +297,7 @@ async fn sync_peer_inner(
         push_remote(&peer.repo, remote, &peer.branch)?;
     }
     record_exported_sync_state(store, &library_record.slug, peer_id, &peer.repo).await?;
-    for path in &deleted_sync_paths {
+    for path in &sync_paths.deleted_sync_paths {
         store.upsert_sync_state(peer_id, path, None, None).await?;
     }
     tracing::info!(
@@ -551,21 +306,355 @@ async fn sync_peer_inner(
         library_id = %library_record.id,
         peer_id,
         branch = peer.branch,
-        imported_paths = imported_paths.len(),
+        imported_paths = sync_paths.imported_paths.len(),
         exported_paths = export.exported_paths.len(),
-        conflicts = conflicts.len(),
+        conflicts = sync_paths.conflicts.len(),
         remote_url = peer.remote.as_deref().map(redact_remote_url).unwrap_or_default(),
         duration_ms = started.elapsed().as_millis() as u64,
         "Git sync completed"
     );
 
     Ok(GitSyncResult {
-        imported_paths,
+        imported_paths: sync_paths.imported_paths,
         exported_paths: export.exported_paths,
-        conflict_paths,
-        conflicts,
+        conflict_paths: sync_paths.conflict_paths,
+        conflicts: sync_paths.conflicts,
         commit_id: export.commit_id,
     })
+}
+
+struct SyncPathReconciler<'a> {
+    store: &'a QuarryStore,
+    library: &'a Library,
+    peer_id: &'a str,
+    paths: BTreeSet<String>,
+    doc_map: &'a HashMap<String, DocumentListEntry>,
+    git_map: &'a HashMap<String, GitFile>,
+    sync_states: &'a HashMap<String, SyncStateEntry>,
+    renames: &'a [RenamePair],
+    renamed_from: BTreeSet<String>,
+}
+
+struct SyncPathOutcome {
+    imported_paths: Vec<String>,
+    conflict_paths: Vec<String>,
+    conflicts: Vec<ConflictRecord>,
+    deleted_sync_paths: BTreeSet<String>,
+}
+
+struct SyncPathAccumulator {
+    imported_paths: Vec<String>,
+    conflict_paths: Vec<String>,
+    conflicts: Vec<ConflictRecord>,
+    deleted_sync_paths: BTreeSet<String>,
+    renamed_paths: BTreeSet<String>,
+}
+
+impl From<SyncPathAccumulator> for SyncPathOutcome {
+    fn from(accumulator: SyncPathAccumulator) -> Self {
+        Self {
+            imported_paths: accumulator.imported_paths,
+            conflict_paths: accumulator.conflict_paths,
+            conflicts: accumulator.conflicts,
+            deleted_sync_paths: accumulator.deleted_sync_paths,
+        }
+    }
+}
+
+impl<'a> SyncPathReconciler<'a> {
+    async fn run(self) -> Result<SyncPathOutcome> {
+        let mut accumulator = SyncPathAccumulator {
+            imported_paths: Vec::new(),
+            conflict_paths: Vec::new(),
+            conflicts: Vec::new(),
+            deleted_sync_paths: BTreeSet::new(),
+            renamed_paths: self.renamed_from.clone(),
+        };
+        self.apply_renames(&mut accumulator).await?;
+        for path in self.paths.iter().cloned() {
+            self.process_path(path, &mut accumulator).await?;
+        }
+        Ok(accumulator.into())
+    }
+
+    async fn apply_renames(&self, accumulator: &mut SyncPathAccumulator) -> Result<()> {
+        for rename in self.renames {
+            self.store
+                .move_document(
+                    &self.library.slug,
+                    &rename.from,
+                    &rename.to,
+                    DocumentSource::Git,
+                )
+                .await?;
+            tracing::info!(
+                event = "git.sync.rename_paired",
+                library = self.library.slug,
+                peer_id = self.peer_id,
+                from = %rename.from,
+                to = %rename.to,
+                "git-side rename paired into an identity-preserving move"
+            );
+            // The old path's sync state clears below; the moved document exports
+            // at its new path, which records the new state.
+            accumulator.deleted_sync_paths.insert(rename.from.clone());
+            accumulator.renamed_paths.insert(rename.to.clone());
+            accumulator.imported_paths.push(rename.to.clone());
+        }
+        Ok(())
+    }
+
+    async fn process_path(
+        &self,
+        path: String,
+        accumulator: &mut SyncPathAccumulator,
+    ) -> Result<()> {
+        if accumulator.renamed_paths.contains(&path) {
+            return Ok(());
+        }
+        let doc = self.doc_map.get(&path);
+        let git = self.git_map.get(&path);
+        let state = self.sync_states.get(&path);
+        let last_doc = state.and_then(|state| state.last_synced_doc_version_id.as_deref());
+        let last_git = state.and_then(|state| state.last_synced_git_oid.as_deref());
+        let doc_changed = doc
+            .map(|doc| Some(doc.head_version_id.as_str()) != last_doc)
+            .unwrap_or(last_doc.is_some());
+        let git_changed = git
+            .map(|git| Some(git.oid.as_str()) != last_git)
+            .unwrap_or(last_git.is_some());
+
+        match (doc, git, doc_changed, git_changed) {
+            (Some(doc), Some(git), true, true) => {
+                self.import_both_changed_path(&path, doc, git, last_doc, accumulator)
+                    .await?;
+            }
+            (Some(doc), None, true, true) => {
+                let conflict = self
+                    .store
+                    .record_conflict(
+                        &self.library.slug,
+                        &path,
+                        Some(doc.head_version_id.clone()),
+                        None,
+                    )
+                    .await?;
+                log_git_conflict_recorded(self.library, self.peer_id, &path, None, &conflict);
+                accumulator.conflicts.push(conflict);
+            }
+            (Some(_doc), None, false, true) => {
+                self.store
+                    .delete_document(&self.library.slug, &path, DocumentSource::Git)
+                    .await?;
+                accumulator.deleted_sync_paths.insert(path.clone());
+                accumulator.imported_paths.push(path);
+            }
+            (None, Some(git), true, true) if last_doc.is_some() => {
+                self.record_delete_vs_create_conflict(&path, git, accumulator)
+                    .await?;
+            }
+            (None, Some(_git), true, false) if last_doc.is_some() => {
+                accumulator.deleted_sync_paths.insert(path);
+            }
+            (None, None, true, true) | (None, None, true, false) | (None, None, false, true) => {
+                accumulator.deleted_sync_paths.insert(path);
+            }
+            (None, Some(git), _, true) | (None, Some(git), _, false) => {
+                self.import_git_file(&path, git, quarry_core::WritePrecondition::None)
+                    .await?;
+                accumulator.imported_paths.push(path);
+            }
+            (Some(_), None, true, _) => {
+                // Quarry changed or created the path; export publishes it below.
+            }
+            (Some(doc), Some(git), false, true) => {
+                self.import_git_file(
+                    &path,
+                    git,
+                    quarry_core::WritePrecondition::IfMatch(doc.head_version_id.clone()),
+                )
+                .await?;
+                accumulator.imported_paths.push(path);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn import_both_changed_path(
+        &self,
+        path: &str,
+        doc: &DocumentListEntry,
+        git: &GitFile,
+        last_doc: Option<&str>,
+        accumulator: &mut SyncPathAccumulator,
+    ) -> Result<()> {
+        let current = self.store.get_document(&self.library.slug, path).await?;
+        if current.content == git.content {
+            return Ok(());
+        }
+        if is_block_file(path, &git.content_type) {
+            // Phase 4: both sides changed a Markdown document — diff3
+            // against the peer's shadow base. Without one, the last-synced
+            // version's content is the common ancestor; without even that
+            // (both sides created the path independently) an EMPTY base keeps
+            // it conservative: differences conflict instead of silently
+            // overwriting. Non-conflicting hunks from both sides land; true
+            // conflicts become review items, never sibling files or sync
+            // failures.
+            let ancestor = match last_doc {
+                Some(version_id) => {
+                    let version = self
+                        .store
+                        .document_version(&self.library.slug, path, version_id)
+                        .await?;
+                    BlockWriteBase::Markdown {
+                        markdown: version.content,
+                        version_id: Some(version_id.to_string()),
+                    }
+                }
+                None => BlockWriteBase::Markdown {
+                    markdown: String::new(),
+                    version_id: None,
+                },
+            };
+            write_markdown_file(
+                self.store,
+                &self.library.slug,
+                Some(self.peer_id),
+                path,
+                git,
+                ancestor,
+            )
+            .await?;
+            accumulator.imported_paths.push(path.to_string());
+            return Ok(());
+        }
+
+        let conflict_path = conflict_sibling_path(path);
+        let outcome = self
+            .store
+            .put_document(
+                &self.library.slug,
+                &conflict_path,
+                git.content.clone(),
+                git.metadata.clone(),
+                &git.content_type,
+                DocumentSource::Git,
+                quarry_core::WritePrecondition::None,
+            )
+            .await?;
+        let conflict = self
+            .store
+            .record_conflict(
+                &self.library.slug,
+                path,
+                Some(doc.head_version_id.clone()),
+                Some(outcome.version.id.clone()),
+            )
+            .await?;
+        log_git_conflict_recorded(
+            self.library,
+            self.peer_id,
+            path,
+            Some(&conflict_path),
+            &conflict,
+        );
+        accumulator.conflict_paths.push(conflict_path);
+        accumulator.conflicts.push(conflict);
+        Ok(())
+    }
+
+    async fn record_delete_vs_create_conflict(
+        &self,
+        path: &str,
+        git: &GitFile,
+        accumulator: &mut SyncPathAccumulator,
+    ) -> Result<()> {
+        let conflict_path = conflict_sibling_path(path);
+        // Delete-vs-create: Quarry deleted the path, Git changed it. The Git
+        // side is preserved as a sibling document; Markdown siblings import
+        // through the block writer (a first import — fresh ids, no base) so
+        // they are ordinary BlockDocuments, not raw bytes with a cleared
+        // projection.
+        let sibling_version_id = if is_block_file(path, &git.content_type) {
+            write_markdown_file(
+                self.store,
+                &self.library.slug,
+                Some(self.peer_id),
+                &conflict_path,
+                git,
+                BlockWriteBase::CurrentCanonical,
+            )
+            .await?
+            .outcome
+            .version
+            .id
+        } else {
+            self.store
+                .put_document(
+                    &self.library.slug,
+                    &conflict_path,
+                    git.content.clone(),
+                    git.metadata.clone(),
+                    &git.content_type,
+                    DocumentSource::Git,
+                    quarry_core::WritePrecondition::None,
+                )
+                .await?
+                .version
+                .id
+        };
+        let conflict = self
+            .store
+            .record_conflict(&self.library.slug, path, None, Some(sibling_version_id))
+            .await?;
+        log_git_conflict_recorded(
+            self.library,
+            self.peer_id,
+            path,
+            Some(&conflict_path),
+            &conflict,
+        );
+        accumulator.deleted_sync_paths.insert(path.to_string());
+        accumulator.conflict_paths.push(conflict_path);
+        accumulator.conflicts.push(conflict);
+        Ok(())
+    }
+
+    async fn import_git_file(
+        &self,
+        path: &str,
+        git: &GitFile,
+        precondition: quarry_core::WritePrecondition,
+    ) -> Result<()> {
+        if is_block_file(path, &git.content_type) {
+            // When the Quarry document is unchanged since the last sync, the
+            // current canonical state is the common ancestor.
+            write_markdown_file(
+                self.store,
+                &self.library.slug,
+                Some(self.peer_id),
+                path,
+                git,
+                BlockWriteBase::CurrentCanonical,
+            )
+            .await?;
+        } else {
+            self.store
+                .put_document(
+                    &self.library.slug,
+                    path,
+                    git.content.clone(),
+                    git.metadata.clone(),
+                    &git.content_type,
+                    DocumentSource::Git,
+                    precondition,
+                )
+                .await?;
+        }
+        Ok(())
+    }
 }
 
 /// Imports a Git worktree into a library.
