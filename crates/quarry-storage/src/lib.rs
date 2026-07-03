@@ -41,6 +41,12 @@ pub const TMP_DOCUMENT_DEFAULT_CONTENT_TYPE: &str = "text/markdown";
 
 type WriteTransactionFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DocumentLookupScope<'a> {
+    Library { library_id: &'a str },
+    Tmp,
+}
+
 /// True when `value` has the exact shape of a tmp document capability secret.
 pub fn is_tmp_document_secret(value: &str) -> bool {
     value.len() == TMP_DOCUMENT_SECRET_LEN
@@ -4143,107 +4149,85 @@ impl QuarryStore {
         library_id: &str,
         path: &str,
     ) -> Result<Document> {
-        let now = now_timestamp();
-        let mut rows = conn
-            .query(
-                "SELECT d.id, d.library_id, d.path, d.created_at, d.updated_at, d.expires_at,
-                        v.id, v.document_id, v.tx_id, v.content_hash, v.inline_content,
-                        v.metadata_json, v.content_type, v.byte_size, v.created_at
-                 FROM documents d
-                 JOIN document_versions v ON v.id = d.head_version_id
-                 WHERE d.document_scope = 'library'
-                   AND d.library_id = ?1
-                   AND d.path = ?2
-                   AND d.deleted_at IS NULL
-                   AND d.head_version_id IS NOT NULL
-                   AND (d.expires_at IS NULL OR d.expires_at > ?3)
-                 LIMIT 1",
-                params![library_id.to_string(), path.to_string(), now.clone()],
-            )
+        self.scoped_document_conn(conn, DocumentLookupScope::Library { library_id }, path)
             .await
-            .map_err(map_turso_error)?;
-        let Some(row) = rows.next().await.map_err(map_turso_error)? else {
-            self.error_if_library_document_expired_conn(conn, library_id, path, &now)
-                .await?;
-            return Err(QuarryError::NotFound(path.to_string()));
-        };
-        let version = DocumentVersion {
-            id: text(&row, 6)?,
-            document_id: text(&row, 7)?,
-            tx_id: text(&row, 8)?,
-            transaction_source: None,
-            transaction_actor: None,
-            transaction_message: None,
-            transaction_provenance: None,
-            content_hash: opt_text(&row, 9)?,
-            inline_content: opt_blob(&row, 10)?,
-            metadata: serde_json::from_str(&text(&row, 11)?)?,
-            content_type: text(&row, 12)?,
-            byte_size: int(&row, 13)? as u64,
-            created_at: text(&row, 14)?,
-        };
-        let content = match (&version.inline_content, &version.content_hash) {
-            (Some(bytes), None) => bytes.clone(),
-            (None, Some(hash)) => self.cas.read(hash)?,
-            _ => {
-                return Err(QuarryError::Invariant(format!(
-                    "version {} violates inline/CAS invariant",
-                    version.id
-                )));
-            }
-        };
-        Ok(Document {
-            id: text(&row, 0)?,
-            library_id: opt_text(&row, 1)?,
-            path: text(&row, 2)?,
-            metadata: version.metadata.clone(),
-            version,
-            content,
-            expires_at: opt_text(&row, 5)?,
-            created_at: text(&row, 3)?,
-            updated_at: text(&row, 4)?,
-        })
     }
 
     async fn tmp_document_conn(&self, conn: &Connection, path: &str) -> Result<Document> {
+        self.scoped_document_conn(conn, DocumentLookupScope::Tmp, path)
+            .await
+    }
+
+    async fn scoped_document_conn(
+        &self,
+        conn: &Connection,
+        scope: DocumentLookupScope<'_>,
+        path: &str,
+    ) -> Result<Document> {
         let now = now_timestamp();
-        let mut rows = conn
-            .query(
-                "SELECT d.id, d.library_id, d.path, d.created_at, d.updated_at, d.expires_at,
-                        v.id, v.document_id, v.tx_id, v.content_hash, v.inline_content,
-                        v.metadata_json, v.content_type, v.byte_size, v.created_at
-                 FROM documents d
-                 JOIN document_versions v ON v.id = d.head_version_id
-                 WHERE d.document_scope = 'tmp'
+        let (scope_filter, binds) = match scope {
+            DocumentLookupScope::Library { library_id } => (
+                "d.document_scope = 'library'
+                   AND d.library_id = ?1
+                   AND d.path = ?2
+                   AND (d.expires_at IS NULL OR d.expires_at > ?3)",
+                vec![
+                    Value::Text(library_id.to_string()),
+                    Value::Text(path.to_string()),
+                    Value::Text(now.clone()),
+                ],
+            ),
+            DocumentLookupScope::Tmp => (
+                "d.document_scope = 'tmp'
                    AND d.library_id IS NULL
                    AND d.path = ?1
-                   AND d.deleted_at IS NULL
-                   AND d.head_version_id IS NOT NULL
-                   AND d.expires_at > ?2
-                 LIMIT 1",
-                params![path.to_string(), now.clone()],
-            )
-            .await
-            .map_err(map_turso_error)?;
+                   AND d.expires_at > ?2",
+                vec![Value::Text(path.to_string()), Value::Text(now.clone())],
+            ),
+        };
+        let sql = format!(
+            "SELECT d.id, d.library_id, d.path, d.created_at, d.updated_at, d.expires_at,
+                    v.id, v.document_id, v.tx_id, v.content_hash, v.inline_content,
+                    v.metadata_json, v.content_type, v.byte_size, v.created_at
+             FROM documents d
+             JOIN document_versions v ON v.id = d.head_version_id
+             WHERE {scope_filter}
+               AND d.deleted_at IS NULL
+               AND d.head_version_id IS NOT NULL
+             LIMIT 1"
+        );
+        let mut rows = conn.query(&sql, binds).await.map_err(map_turso_error)?;
         let Some(row) = rows.next().await.map_err(map_turso_error)? else {
-            self.error_if_tmp_document_expired_conn(conn, path, &now)
-                .await?;
+            match scope {
+                DocumentLookupScope::Library { library_id } => {
+                    self.error_if_library_document_expired_conn(conn, library_id, path, &now)
+                        .await?;
+                }
+                DocumentLookupScope::Tmp => {
+                    self.error_if_tmp_document_expired_conn(conn, path, &now)
+                        .await?;
+                }
+            }
             return Err(QuarryError::NotFound(path.to_string()));
         };
+        self.document_from_row(&row)
+    }
+
+    fn document_from_row(&self, row: &Row) -> Result<Document> {
         let version = DocumentVersion {
-            id: text(&row, 6)?,
-            document_id: text(&row, 7)?,
-            tx_id: text(&row, 8)?,
+            id: text(row, 6)?,
+            document_id: text(row, 7)?,
+            tx_id: text(row, 8)?,
             transaction_source: None,
             transaction_actor: None,
             transaction_message: None,
             transaction_provenance: None,
-            content_hash: opt_text(&row, 9)?,
-            inline_content: opt_blob(&row, 10)?,
-            metadata: serde_json::from_str(&text(&row, 11)?)?,
-            content_type: text(&row, 12)?,
-            byte_size: int(&row, 13)? as u64,
-            created_at: text(&row, 14)?,
+            content_hash: opt_text(row, 9)?,
+            inline_content: opt_blob(row, 10)?,
+            metadata: serde_json::from_str(&text(row, 11)?)?,
+            content_type: text(row, 12)?,
+            byte_size: int(row, 13)? as u64,
+            created_at: text(row, 14)?,
         };
         let content = match (&version.inline_content, &version.content_hash) {
             (Some(bytes), None) => bytes.clone(),
@@ -4256,15 +4240,15 @@ impl QuarryStore {
             }
         };
         Ok(Document {
-            id: text(&row, 0)?,
-            library_id: opt_text(&row, 1)?,
-            path: text(&row, 2)?,
+            id: text(row, 0)?,
+            library_id: opt_text(row, 1)?,
+            path: text(row, 2)?,
             metadata: version.metadata.clone(),
             version,
             content,
-            expires_at: opt_text(&row, 5)?,
-            created_at: text(&row, 3)?,
-            updated_at: text(&row, 4)?,
+            expires_at: opt_text(row, 5)?,
+            created_at: text(row, 3)?,
+            updated_at: text(row, 4)?,
         })
     }
 
