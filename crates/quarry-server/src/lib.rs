@@ -3979,9 +3979,10 @@ async fn post_transaction_document_action(
     Path((library, tx, path)): Path<(String, String, String)>,
     Json(request): Json<MoveRequest>,
 ) -> Result<Json<JsonValue>, ApiError> {
-    let Some(from_path) = path.strip_suffix("/move") else {
+    let (from_path, subresource) = parse_document_subresource(&path);
+    if subresource != DocumentSubResource::Move {
         return Err(QuarryError::NotFound(path).into());
-    };
+    }
     scoped_transaction(&state.store, &library, &tx).await?;
     state
         .store
@@ -4002,14 +4003,18 @@ async fn patch_transaction_document_metadata(
     Path((library, tx, path)): Path<(String, String, String)>,
     Json(patch): Json<JsonValue>,
 ) -> Result<Response, ApiError> {
-    let Some(path) = path.strip_suffix("/metadata") else {
+    let (document_path, subresource) = parse_document_subresource(&path);
+    if subresource != DocumentSubResource::Metadata {
         return Err(QuarryError::InvalidPath(
             "metadata patch endpoint must end with /metadata".to_string(),
         )
         .into());
-    };
+    }
     scoped_transaction(&state.store, &library, &tx).await?;
-    let version = state.store.stage_metadata(&tx, path, patch).await?;
+    let version = state
+        .store
+        .stage_metadata(&tx, document_path, patch)
+        .await?;
     json_with_etag(StatusCode::OK, &version, &version.id)
 }
 
@@ -4614,6 +4619,14 @@ mod tests {
         assert_eq!(
             parse_document_subresource("notes/daily.md/blocks"),
             ("notes/daily.md", DocumentSubResource::Blocks)
+        );
+        assert_eq!(
+            parse_document_subresource("notes/daily.md/move"),
+            ("notes/daily.md", DocumentSubResource::Move)
+        );
+        assert_eq!(
+            parse_document_subresource("notes/daily.md/metadata"),
+            ("notes/daily.md", DocumentSubResource::Metadata)
         );
         assert_eq!(
             parse_document_subresource("notes/daily.md/versions/raw"),
