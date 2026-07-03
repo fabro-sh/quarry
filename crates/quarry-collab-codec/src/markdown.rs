@@ -85,6 +85,11 @@ struct InlineContext {
     marks: Attrs,
 }
 
+enum InlineEventResult {
+    Handled,
+    Unhandled(Event<'static>),
+}
+
 impl EventParser {
     fn parse_top_level(&mut self) -> Result<Vec<Node>, Unsupported> {
         let mut nodes = Vec::new();
@@ -488,131 +493,24 @@ impl EventParser {
         while let Some(event) = self.next() {
             match event {
                 Event::End(found) if found == end => break,
-                Event::Text(text) => children.extend(text_nodes(&text, &context)),
-                Event::Code(code) => {
-                    let mut marks = context.marks.clone();
-                    marks.insert("code".to_string(), json!(true));
-                    children.push(Node::text(code.to_string(), marks));
-                }
-                // CommonMark: a soft break is collapsible whitespace, a hard
-                // break is a real line break.
-                Event::SoftBreak => {
-                    children.push(Node::text(" ", context.marks.clone()));
-                }
-                Event::HardBreak => {
-                    children.push(Node::text("\n", context.marks.clone()));
-                }
-                Event::Html(html) | Event::InlineHtml(html) => {
-                    if let Some(mark) = opening_inline_mark(&html) {
-                        context.marks.insert(mark.to_string(), json!(true));
-                    } else if let Some(mark) = closing_inline_mark(&html) {
-                        context.marks.shift_remove(mark);
-                    } else if !html.trim().is_empty() {
-                        return Err(Unsupported::new("inline html"));
-                    }
-                }
-                Event::Start(tag) => match tag {
-                    Tag::Emphasis => {
-                        let mut marks = context.marks.clone();
-                        marks.insert("italic".to_string(), json!(true));
-                        children.extend(
-                            self.parse_inline_until(TagEnd::Emphasis, InlineContext { marks })?,
-                        );
-                    }
-                    Tag::Strong => {
-                        let mut marks = context.marks.clone();
-                        marks.insert("bold".to_string(), json!(true));
-                        children.extend(
-                            self.parse_inline_until(TagEnd::Strong, InlineContext { marks })?,
-                        );
-                    }
-                    Tag::Strikethrough => {
-                        let mut marks = context.marks.clone();
-                        marks.insert("strikethrough".to_string(), json!(true));
-                        children.extend(
-                            self.parse_inline_until(
-                                TagEnd::Strikethrough,
-                                InlineContext { marks },
-                            )?,
-                        );
-                    }
-                    Tag::Superscript => {
-                        let mut marks = context.marks.clone();
-                        marks.insert("superscript".to_string(), json!(true));
-                        children.extend(
-                            self.parse_inline_until(TagEnd::Superscript, InlineContext { marks })?,
-                        );
-                    }
-                    Tag::Subscript => {
-                        let mut marks = context.marks.clone();
-                        marks.insert("subscript".to_string(), json!(true));
-                        children.extend(
-                            self.parse_inline_until(TagEnd::Subscript, InlineContext { marks })?,
-                        );
-                    }
-                    Tag::Link {
-                        link_type: LinkType::WikiLink { .. },
-                        dest_url,
-                        ..
-                    } => {
-                        let link_children =
-                            self.parse_inline_until(TagEnd::Link, InlineContext::default())?;
-                        children.push(wikilink_from_link(dest_url.as_ref(), link_children));
-                    }
-                    Tag::Link { dest_url, .. } => {
-                        let link_children = self.parse_inline_until(
-                            TagEnd::Link,
-                            InlineContext {
-                                marks: context.marks.clone(),
-                            },
-                        )?;
-                        children.push(Node::element(
-                            "a",
-                            attrs([("url", json!(dest_url.to_string()))]),
-                            link_children,
-                        ));
-                    }
-                    Tag::Image {
-                        link_type: LinkType::WikiLink { .. },
-                        dest_url,
-                        ..
-                    } => {
-                        let link_children =
-                            self.parse_inline_until(TagEnd::Image, InlineContext::default())?;
-                        children.push(wikilink_from_link_with_embed(
-                            dest_url.as_ref(),
-                            link_children,
-                            true,
-                        ));
-                    }
-                    Tag::Image { dest_url, .. } => {
-                        let caption =
-                            self.parse_inline_until(TagEnd::Image, InlineContext::default())?;
-                        children.push(Node::element(
-                            "img",
-                            attrs([
-                                ("caption", serialize_caption_nodes(caption)?),
-                                ("url", json!(dest_url.to_string())),
-                            ]),
-                            vec![empty_text()],
-                        ));
-                    }
-                    other => {
+                event => match self.apply_inline_event(event, &mut children, &mut context)? {
+                    InlineEventResult::Handled => {}
+                    InlineEventResult::Unhandled(Event::Start(other)) => {
                         return Err(Unsupported::new(format!(
                             "unsupported inline start {other:?}"
                         )))
                     }
+                    InlineEventResult::Unhandled(Event::End(found)) => {
+                        return Err(Unsupported::new(format!(
+                            "unexpected inline end {found:?}, expected {end:?}"
+                        )))
+                    }
+                    InlineEventResult::Unhandled(other) => {
+                        return Err(Unsupported::new(format!(
+                            "unsupported inline event {other:?}"
+                        )))
+                    }
                 },
-                Event::End(found) => {
-                    return Err(Unsupported::new(format!(
-                        "unexpected inline end {found:?}, expected {end:?}"
-                    )))
-                }
-                other => {
-                    return Err(Unsupported::new(format!(
-                        "unsupported inline event {other:?}"
-                    )))
-                }
             }
         }
         if children.is_empty() {
@@ -645,119 +543,136 @@ impl EventParser {
                     self.back();
                     break;
                 }
-                Event::Text(text) => children.extend(text_nodes(&text, &context)),
-                Event::Code(code) => {
-                    let mut marks = context.marks.clone();
-                    marks.insert("code".to_string(), json!(true));
-                    children.push(Node::text(code.to_string(), marks));
-                }
-                Event::SoftBreak => {
-                    children.push(Node::text(" ", context.marks.clone()));
-                }
-                Event::HardBreak => {
-                    children.push(Node::text("\n", context.marks.clone()));
-                }
-                Event::Html(html) | Event::InlineHtml(html) => {
-                    if let Some(mark) = opening_inline_mark(&html) {
-                        context.marks.insert(mark.to_string(), json!(true));
-                    } else if let Some(mark) = closing_inline_mark(&html) {
-                        context.marks.shift_remove(mark);
-                    } else if !html.trim().is_empty() {
-                        return Err(Unsupported::new("inline html"));
+                event => match self.apply_inline_event(event, &mut children, &mut context)? {
+                    InlineEventResult::Handled => {}
+                    InlineEventResult::Unhandled(other) => {
+                        return Err(Unsupported::new(format!(
+                            "unsupported tight list item event {other:?}"
+                        )))
                     }
-                }
-                Event::Start(Tag::Emphasis) => {
-                    let mut marks = context.marks.clone();
-                    marks.insert("italic".to_string(), json!(true));
-                    children.extend(
-                        self.parse_inline_until(TagEnd::Emphasis, InlineContext { marks })?,
-                    );
-                }
-                Event::Start(Tag::Strong) => {
-                    let mut marks = context.marks.clone();
-                    marks.insert("bold".to_string(), json!(true));
-                    children
-                        .extend(self.parse_inline_until(TagEnd::Strong, InlineContext { marks })?);
-                }
-                Event::Start(Tag::Strikethrough) => {
-                    let mut marks = context.marks.clone();
-                    marks.insert("strikethrough".to_string(), json!(true));
-                    children.extend(
-                        self.parse_inline_until(TagEnd::Strikethrough, InlineContext { marks })?,
-                    );
-                }
-                Event::Start(Tag::Superscript) => {
-                    let mut marks = context.marks.clone();
-                    marks.insert("superscript".to_string(), json!(true));
-                    children.extend(
-                        self.parse_inline_until(TagEnd::Superscript, InlineContext { marks })?,
-                    );
-                }
-                Event::Start(Tag::Subscript) => {
-                    let mut marks = context.marks.clone();
-                    marks.insert("subscript".to_string(), json!(true));
-                    children.extend(
-                        self.parse_inline_until(TagEnd::Subscript, InlineContext { marks })?,
-                    );
-                }
-                Event::Start(Tag::Link {
-                    link_type: LinkType::WikiLink { .. },
-                    dest_url,
-                    ..
-                }) => {
-                    let link_children =
-                        self.parse_inline_until(TagEnd::Link, InlineContext::default())?;
-                    children.push(wikilink_from_link(dest_url.as_ref(), link_children));
-                }
-                Event::Start(Tag::Link { dest_url, .. }) => {
-                    let link_children = self.parse_inline_until(
-                        TagEnd::Link,
-                        InlineContext {
-                            marks: context.marks.clone(),
-                        },
-                    )?;
-                    children.push(Node::element(
-                        "a",
-                        attrs([("url", json!(dest_url.to_string()))]),
-                        link_children,
-                    ));
-                }
-                Event::Start(Tag::Image {
-                    link_type: LinkType::WikiLink { .. },
-                    dest_url,
-                    ..
-                }) => {
-                    let link_children =
-                        self.parse_inline_until(TagEnd::Image, InlineContext::default())?;
-                    children.push(wikilink_from_link_with_embed(
-                        dest_url.as_ref(),
-                        link_children,
-                        true,
-                    ));
-                }
-                Event::Start(Tag::Image { dest_url, .. }) => {
-                    let caption =
-                        self.parse_inline_until(TagEnd::Image, InlineContext::default())?;
-                    children.push(Node::element(
-                        "img",
-                        attrs([
-                            ("caption", serialize_caption_nodes(caption)?),
-                            ("url", json!(dest_url.to_string())),
-                        ]),
-                        vec![empty_text()],
-                    ));
-                }
-                other => {
-                    return Err(Unsupported::new(format!(
-                        "unsupported tight list item event {other:?}"
-                    )))
-                }
+                },
             }
         }
         if children.is_empty() {
             children.push(empty_text());
         }
         Ok((children, ended_item))
+    }
+
+    fn apply_inline_event(
+        &mut self,
+        event: Event<'static>,
+        children: &mut Vec<Node>,
+        context: &mut InlineContext,
+    ) -> Result<InlineEventResult, Unsupported> {
+        match event {
+            Event::Text(text) => children.extend(text_nodes(&text, context)),
+            Event::Code(code) => {
+                let mut marks = context.marks.clone();
+                marks.insert("code".to_string(), json!(true));
+                children.push(Node::text(code.to_string(), marks));
+            }
+            // CommonMark: a soft break is collapsible whitespace, a hard
+            // break is a real line break.
+            Event::SoftBreak => children.push(Node::text(" ", context.marks.clone())),
+            Event::HardBreak => children.push(Node::text("\n", context.marks.clone())),
+            Event::Html(html) | Event::InlineHtml(html) => {
+                if let Some(mark) = opening_inline_mark(&html) {
+                    context.marks.insert(mark.to_string(), json!(true));
+                } else if let Some(mark) = closing_inline_mark(&html) {
+                    context.marks.shift_remove(mark);
+                } else if !html.trim().is_empty() {
+                    return Err(Unsupported::new("inline html"));
+                }
+            }
+            Event::Start(tag) => return self.apply_inline_start(tag, children, context),
+            other => return Ok(InlineEventResult::Unhandled(other)),
+        }
+        Ok(InlineEventResult::Handled)
+    }
+
+    fn apply_inline_start(
+        &mut self,
+        tag: Tag<'static>,
+        children: &mut Vec<Node>,
+        context: &InlineContext,
+    ) -> Result<InlineEventResult, Unsupported> {
+        match tag {
+            Tag::Emphasis => {
+                self.parse_marked_inline(children, context, "italic", TagEnd::Emphasis)?
+            }
+            Tag::Strong => self.parse_marked_inline(children, context, "bold", TagEnd::Strong)?,
+            Tag::Strikethrough => {
+                self.parse_marked_inline(children, context, "strikethrough", TagEnd::Strikethrough)?
+            }
+            Tag::Superscript => {
+                self.parse_marked_inline(children, context, "superscript", TagEnd::Superscript)?
+            }
+            Tag::Subscript => {
+                self.parse_marked_inline(children, context, "subscript", TagEnd::Subscript)?
+            }
+            Tag::Link {
+                link_type: LinkType::WikiLink { .. },
+                dest_url,
+                ..
+            } => {
+                let link_children =
+                    self.parse_inline_until(TagEnd::Link, InlineContext::default())?;
+                children.push(wikilink_from_link(dest_url.as_ref(), link_children));
+            }
+            Tag::Link { dest_url, .. } => {
+                let link_children = self.parse_inline_until(
+                    TagEnd::Link,
+                    InlineContext {
+                        marks: context.marks.clone(),
+                    },
+                )?;
+                children.push(Node::element(
+                    "a",
+                    attrs([("url", json!(dest_url.to_string()))]),
+                    link_children,
+                ));
+            }
+            Tag::Image {
+                link_type: LinkType::WikiLink { .. },
+                dest_url,
+                ..
+            } => {
+                let link_children =
+                    self.parse_inline_until(TagEnd::Image, InlineContext::default())?;
+                children.push(wikilink_from_link_with_embed(
+                    dest_url.as_ref(),
+                    link_children,
+                    true,
+                ));
+            }
+            Tag::Image { dest_url, .. } => {
+                let caption = self.parse_inline_until(TagEnd::Image, InlineContext::default())?;
+                children.push(Node::element(
+                    "img",
+                    attrs([
+                        ("caption", serialize_caption_nodes(caption)?),
+                        ("url", json!(dest_url.to_string())),
+                    ]),
+                    vec![empty_text()],
+                ));
+            }
+            other => return Ok(InlineEventResult::Unhandled(Event::Start(other))),
+        }
+        Ok(InlineEventResult::Handled)
+    }
+
+    fn parse_marked_inline(
+        &mut self,
+        children: &mut Vec<Node>,
+        context: &InlineContext,
+        mark: &str,
+        end: TagEnd,
+    ) -> Result<(), Unsupported> {
+        let mut marks = context.marks.clone();
+        marks.insert(mark.to_string(), json!(true));
+        children.extend(self.parse_inline_until(end, InlineContext { marks })?);
+        Ok(())
     }
 }
 
