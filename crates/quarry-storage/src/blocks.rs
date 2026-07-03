@@ -700,68 +700,67 @@ impl QuarryStore {
     /// character boundaries (never inside a surrogate pair), and a collapsed
     /// range (`start == end`) is only legal for orphaned anchors.
     pub async fn put_block_review_item(&self, item: NewBlockReviewItem) -> Result<BlockReviewItem> {
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            if item.kind != BlockReviewKind::Conflict {
-                let block_text = block_text_conn(&conn, &item.document_id, &item.block_id).await?;
-                validate_anchor_offsets(&item, &block_text)?;
-            }
-            // Conflict items (Phase 4) anchor by `after_block_id` in
-            // `block_id` ("" = document start) with a collapsed placement
-            // range — no text anchor to validate (mirrors
-            // validate_review_items_against_rows).
-            let id = Uuid::new_v4().to_string();
-            let now = now_timestamp();
-            conn.execute(
-                "INSERT INTO block_review_items
+        self.write_transaction(move |_store, conn| {
+            Box::pin(async move {
+                if item.kind != BlockReviewKind::Conflict {
+                    let block_text =
+                        block_text_conn(conn, &item.document_id, &item.block_id).await?;
+                    validate_anchor_offsets(&item, &block_text)?;
+                }
+                // Conflict items (Phase 4) anchor by `after_block_id` in
+                // `block_id` ("" = document start) with a collapsed placement
+                // range — no text anchor to validate (mirrors
+                // validate_review_items_against_rows).
+                let id = Uuid::new_v4().to_string();
+                let now = now_timestamp();
+                conn.execute(
+                    "INSERT INTO block_review_items
                  (id, document_id, block_id, kind, start_offset, end_offset, body, replacement,
                   author, state, quote, context_before, context_after, parent_item_id,
                   created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
-                vec![
-                    Value::Text(id.clone()),
-                    Value::Text(item.document_id.clone()),
-                    Value::Text(item.block_id.clone()),
-                    Value::Text(item.kind.as_str().to_string()),
-                    Value::Integer(i64::from(item.start_offset)),
-                    Value::Integer(i64::from(item.end_offset)),
-                    opt_value(item.body.clone()),
-                    opt_value(item.replacement.clone()),
-                    opt_value(item.author.clone()),
-                    Value::Text(item.state.as_str().to_string()),
-                    opt_value(item.quote.clone()),
-                    opt_value(item.context_before.clone()),
-                    opt_value(item.context_after.clone()),
-                    opt_value(item.parent_item_id.clone()),
-                    Value::Text(now.clone()),
-                    Value::Text(now.clone()),
-                ],
-            )
-            .await
-            .map_err(map_turso_error)?;
-            Ok(BlockReviewItem {
-                id,
-                document_id: item.document_id,
-                block_id: item.block_id,
-                kind: item.kind,
-                start_offset: item.start_offset,
-                end_offset: item.end_offset,
-                body: item.body,
-                replacement: item.replacement,
-                author: item.author,
-                state: item.state,
-                quote: item.quote,
-                context_before: item.context_before,
-                context_after: item.context_after,
-                parent_item_id: item.parent_item_id,
-                created_at: now.clone(),
-                updated_at: now,
+                    vec![
+                        Value::Text(id.clone()),
+                        Value::Text(item.document_id.clone()),
+                        Value::Text(item.block_id.clone()),
+                        Value::Text(item.kind.as_str().to_string()),
+                        Value::Integer(i64::from(item.start_offset)),
+                        Value::Integer(i64::from(item.end_offset)),
+                        opt_value(item.body.clone()),
+                        opt_value(item.replacement.clone()),
+                        opt_value(item.author.clone()),
+                        Value::Text(item.state.as_str().to_string()),
+                        opt_value(item.quote.clone()),
+                        opt_value(item.context_before.clone()),
+                        opt_value(item.context_after.clone()),
+                        opt_value(item.parent_item_id.clone()),
+                        Value::Text(now.clone()),
+                        Value::Text(now.clone()),
+                    ],
+                )
+                .await
+                .map_err(map_turso_error)?;
+                Ok(BlockReviewItem {
+                    id,
+                    document_id: item.document_id,
+                    block_id: item.block_id,
+                    kind: item.kind,
+                    start_offset: item.start_offset,
+                    end_offset: item.end_offset,
+                    body: item.body,
+                    replacement: item.replacement,
+                    author: item.author,
+                    state: item.state,
+                    quote: item.quote,
+                    context_before: item.context_before,
+                    context_after: item.context_after,
+                    parent_item_id: item.parent_item_id,
+                    created_at: now.clone(),
+                    updated_at: now,
+                })
             })
-        }
-        .await;
-        finish_tx(&conn, result).await
+        })
+        .await
     }
 
     pub async fn list_block_review_items(&self, document_id: &str) -> Result<Vec<BlockReviewItem>> {
@@ -793,36 +792,43 @@ impl QuarryStore {
         base_markdown: &str,
         base_version_id: Option<String>,
     ) -> Result<BlockShadowBase> {
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        let updated_at = now_timestamp();
-        conn.execute(
-            "INSERT INTO block_shadow_bases
+        let surface = surface.to_string();
+        let scope_key = scope_key.to_string();
+        let document_id = document_id.to_string();
+        let base_markdown = base_markdown.to_string();
+        self.write_transaction(move |_store, conn| {
+            Box::pin(async move {
+                let updated_at = now_timestamp();
+                conn.execute(
+                    "INSERT INTO block_shadow_bases
              (surface, scope_key, document_id, base_markdown, base_version_id, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(surface, scope_key, document_id) DO UPDATE SET
                base_markdown = excluded.base_markdown,
                base_version_id = excluded.base_version_id,
                updated_at = excluded.updated_at",
-            vec![
-                Value::Text(surface.to_string()),
-                Value::Text(scope_key.to_string()),
-                Value::Text(document_id.to_string()),
-                Value::Text(base_markdown.to_string()),
-                opt_value(base_version_id.clone()),
-                Value::Text(updated_at.clone()),
-            ],
-        )
-        .await
-        .map_err(map_turso_error)?;
-        Ok(BlockShadowBase {
-            surface: surface.to_string(),
-            scope_key: scope_key.to_string(),
-            document_id: document_id.to_string(),
-            base_markdown: base_markdown.to_string(),
-            base_version_id,
-            updated_at,
+                    vec![
+                        Value::Text(surface.clone()),
+                        Value::Text(scope_key.clone()),
+                        Value::Text(document_id.clone()),
+                        Value::Text(base_markdown.clone()),
+                        opt_value(base_version_id.clone()),
+                        Value::Text(updated_at.clone()),
+                    ],
+                )
+                .await
+                .map_err(map_turso_error)?;
+                Ok(BlockShadowBase {
+                    surface,
+                    scope_key,
+                    document_id,
+                    base_markdown,
+                    base_version_id,
+                    updated_at,
+                })
+            })
         })
+        .await
     }
 
     pub async fn block_shadow_base(
@@ -871,31 +877,32 @@ impl QuarryStore {
         ops: JsonValue,
         resulting_version_id: Option<String>,
     ) -> Result<BlockTransactionRecord> {
-        let _guard = self.acquire_write_lock().await;
-        let conn = self.conn()?;
-        begin_immediate(&conn).await?;
-        let result = async {
-            if block_transaction_conn(&conn, document_id, client_tx_id)
-                .await?
-                .is_some()
-            {
-                return Err(QuarryError::Conflict(format!(
-                    "block transaction {client_tx_id} already recorded for document {document_id}"
-                )));
-            }
-            insert_block_transaction_conn(
-                &conn,
-                document_id,
-                client_tx_id,
-                actor_kind,
-                actor_id,
-                ops,
-                resulting_version_id,
-            )
-            .await
-        }
-        .await;
-        finish_tx(&conn, result).await
+        let document_id = document_id.to_string();
+        let client_tx_id = client_tx_id.to_string();
+        let actor_kind = actor_kind.to_string();
+        self.write_transaction(move |_store, conn| {
+            Box::pin(async move {
+                if block_transaction_conn(conn, &document_id, &client_tx_id)
+                    .await?
+                    .is_some()
+                {
+                    return Err(QuarryError::Conflict(format!(
+                        "block transaction {client_tx_id} already recorded for document {document_id}"
+                    )));
+                }
+                insert_block_transaction_conn(
+                    conn,
+                    &document_id,
+                    &client_tx_id,
+                    &actor_kind,
+                    actor_id,
+                    ops,
+                    resulting_version_id,
+                )
+                .await
+            })
+        })
+        .await
     }
 
     pub async fn block_transaction(

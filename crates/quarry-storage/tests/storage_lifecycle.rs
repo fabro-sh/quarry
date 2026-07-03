@@ -1713,6 +1713,24 @@ async fn global_operation_lock_blocks_normal_writes_until_released() {
         })
         .await
         .unwrap();
+    let block_document = store
+        .import_block_document(
+            &library.slug,
+            "notes/blocks.md",
+            "Review me.\n",
+            serde_json::json!({}),
+            "text/markdown",
+            DocumentSource::Rest,
+            WritePrecondition::None,
+        )
+        .await
+        .unwrap();
+    let block_id = store
+        .load_block_tree(&block_document.document.id)
+        .await
+        .unwrap()[0]
+        .block_id
+        .clone();
 
     let guard = store.acquire_global_operation_lock().await;
     let writer_store = store.clone();
@@ -1771,6 +1789,105 @@ async fn global_operation_lock_blocks_normal_writes_until_released() {
         .unwrap()
         .unwrap();
     assert_eq!(token.role, "editor");
+
+    let guard = store.acquire_global_operation_lock().await;
+    let shadow_store = store.clone();
+    let shadow_document_id = block_document.document.id.clone();
+    let mut shadow = tokio::spawn(async move {
+        shadow_store
+            .put_block_shadow_base(
+                "test",
+                "peer:notes/blocks.md",
+                &shadow_document_id,
+                "Review me.\n",
+                None,
+            )
+            .await
+    });
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut shadow)
+            .await
+            .is_err(),
+        "block shadow writes should wait while a global operation lock is held"
+    );
+
+    drop(guard);
+    let shadow_base = tokio::time::timeout(Duration::from_secs(1), shadow)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(shadow_base.base_markdown, "Review me.\n");
+
+    let guard = store.acquire_global_operation_lock().await;
+    let tx_store = store.clone();
+    let tx_document_id = block_document.document.id.clone();
+    let mut block_tx = tokio::spawn(async move {
+        tx_store
+            .record_block_transaction(
+                &tx_document_id,
+                "lock-test",
+                "agent",
+                None,
+                serde_json::json!([]),
+                None,
+            )
+            .await
+    });
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut block_tx)
+            .await
+            .is_err(),
+        "block transaction writes should wait while a global operation lock is held"
+    );
+
+    drop(guard);
+    let recorded = tokio::time::timeout(Duration::from_secs(1), block_tx)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(recorded.client_tx_id, "lock-test");
+
+    let guard = store.acquire_global_operation_lock().await;
+    let review_store = store.clone();
+    let review_document_id = block_document.document.id.clone();
+    let mut review = tokio::spawn(async move {
+        review_store
+            .put_block_review_item(NewBlockReviewItem {
+                document_id: review_document_id,
+                block_id,
+                kind: BlockReviewKind::Comment,
+                start_offset: 0,
+                end_offset: 6,
+                body: Some("note".to_string()),
+                replacement: None,
+                author: Some("agent".to_string()),
+                state: BlockReviewState::Open,
+                quote: None,
+                context_before: None,
+                context_after: None,
+                parent_item_id: None,
+            })
+            .await
+    });
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut review)
+            .await
+            .is_err(),
+        "block review writes should wait while a global operation lock is held"
+    );
+
+    drop(guard);
+    let review_item = tokio::time::timeout(Duration::from_secs(1), review)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(review_item.body.as_deref(), Some("note"));
 }
 
 #[tokio::test]
