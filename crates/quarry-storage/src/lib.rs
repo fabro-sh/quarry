@@ -3458,33 +3458,9 @@ impl QuarryStore {
         library_id: &str,
         path: &str,
     ) -> Result<Option<String>> {
-        let now = now_timestamp();
-        let mut rows = conn
-            .query(
-                "SELECT id FROM documents
-                 WHERE document_scope = 'library'
-                   AND library_id = ?1
-                   AND path = ?2
-                   AND deleted_at IS NULL
-                   AND head_version_id IS NOT NULL
-                   AND (expires_at IS NULL OR expires_at > ?3)
-                 LIMIT 1",
-                params![library_id.to_string(), path.to_string(), now.clone()],
-            )
+        self.scoped_document_identity_conn(conn, DocumentLookupScope::Library { library_id }, path)
             .await
-            .map_err(map_turso_error)?;
-        let id = rows
-            .next()
-            .await
-            .map_err(map_turso_error)?
-            .map(|row| text(&row, 0))
-            .transpose()?;
-        if id.is_some() {
-            return Ok(id);
-        }
-        self.error_if_library_document_expired_conn(conn, library_id, path, &now)
-            .await?;
-        Ok(None)
+            .map(|identity| identity.map(|(id, _)| id))
     }
 
     async fn document_identity_conn(
@@ -3493,28 +3469,59 @@ impl QuarryStore {
         library_id: &str,
         path: &str,
     ) -> Result<Option<(String, Option<String>)>> {
+        self.scoped_document_identity_conn(conn, DocumentLookupScope::Library { library_id }, path)
+            .await
+    }
+
+    async fn scoped_document_identity_conn(
+        &self,
+        conn: &Connection,
+        scope: DocumentLookupScope<'_>,
+        path: &str,
+    ) -> Result<Option<(String, Option<String>)>> {
         let now = now_timestamp();
-        let mut rows = conn
-            .query(
-                "SELECT id, head_version_id FROM documents
-                 WHERE document_scope = 'library'
+        let (scope_filter, binds) = match scope {
+            DocumentLookupScope::Library { library_id } => (
+                "document_scope = 'library'
                    AND library_id = ?1
                    AND path = ?2
-                   AND deleted_at IS NULL
-                   AND head_version_id IS NOT NULL
-                   AND (expires_at IS NULL OR expires_at > ?3)
-                 LIMIT 1",
-                params![library_id.to_string(), path.to_string(), now.clone()],
-            )
-            .await
-            .map_err(map_turso_error)?;
+                   AND (expires_at IS NULL OR expires_at > ?3)",
+                vec![
+                    Value::Text(library_id.to_string()),
+                    Value::Text(path.to_string()),
+                    Value::Text(now.clone()),
+                ],
+            ),
+            DocumentLookupScope::Tmp => (
+                "document_scope = 'tmp'
+                   AND library_id IS NULL
+                   AND path = ?1
+                   AND expires_at > ?2",
+                vec![Value::Text(path.to_string()), Value::Text(now.clone())],
+            ),
+        };
+        let sql = format!(
+            "SELECT id, head_version_id FROM documents
+             WHERE {scope_filter}
+               AND deleted_at IS NULL
+               AND head_version_id IS NOT NULL
+             LIMIT 1"
+        );
+        let mut rows = conn.query(&sql, binds).await.map_err(map_turso_error)?;
         if let Some(row) = rows.next().await.map_err(map_turso_error)? {
-            Ok(Some((text(&row, 0)?, opt_text(&row, 1)?)))
-        } else {
-            self.error_if_library_document_expired_conn(conn, library_id, path, &now)
-                .await?;
-            Ok(None)
+            return Ok(Some((text(&row, 0)?, opt_text(&row, 1)?)));
         }
+        match scope {
+            DocumentLookupScope::Library { library_id } => {
+                self.error_if_library_document_expired_conn(conn, library_id, path, &now)
+                    .await?;
+            }
+            DocumentLookupScope::Tmp => {
+                self.error_if_tmp_document_expired_conn(conn, path, &now)
+                    .await?;
+            }
+        }
+        Ok(None)
     }
 
     async fn library_document_id_any_conn(
@@ -3544,33 +3551,9 @@ impl QuarryStore {
     }
 
     async fn tmp_document_id_conn(&self, conn: &Connection, path: &str) -> Result<Option<String>> {
-        let now = now_timestamp();
-        let mut rows = conn
-            .query(
-                "SELECT id FROM documents
-                 WHERE document_scope = 'tmp'
-                   AND library_id IS NULL
-                   AND path = ?1
-                   AND deleted_at IS NULL
-                   AND head_version_id IS NOT NULL
-                   AND expires_at > ?2
-                 LIMIT 1",
-                params![path.to_string(), now.clone()],
-            )
+        self.scoped_document_identity_conn(conn, DocumentLookupScope::Tmp, path)
             .await
-            .map_err(map_turso_error)?;
-        let id = rows
-            .next()
-            .await
-            .map_err(map_turso_error)?
-            .map(|row| text(&row, 0))
-            .transpose()?;
-        if id.is_some() {
-            return Ok(id);
-        }
-        self.error_if_tmp_document_expired_conn(conn, path, &now)
-            .await?;
-        Ok(None)
+            .map(|identity| identity.map(|(id, _)| id))
     }
 
     async fn tmp_document_identity_conn(
@@ -3578,28 +3561,8 @@ impl QuarryStore {
         conn: &Connection,
         path: &str,
     ) -> Result<Option<(String, Option<String>)>> {
-        let now = now_timestamp();
-        let mut rows = conn
-            .query(
-                "SELECT id, head_version_id FROM documents
-                 WHERE document_scope = 'tmp'
-                   AND library_id IS NULL
-                   AND path = ?1
-                   AND deleted_at IS NULL
-                   AND head_version_id IS NOT NULL
-                   AND expires_at > ?2
-                 LIMIT 1",
-                params![path.to_string(), now.clone()],
-            )
+        self.scoped_document_identity_conn(conn, DocumentLookupScope::Tmp, path)
             .await
-            .map_err(map_turso_error)?;
-        if let Some(row) = rows.next().await.map_err(map_turso_error)? {
-            Ok(Some((text(&row, 0)?, opt_text(&row, 1)?)))
-        } else {
-            self.error_if_tmp_document_expired_conn(conn, path, &now)
-                .await?;
-            Ok(None)
-        }
     }
 
     async fn tmp_document_expires_at_conn(
