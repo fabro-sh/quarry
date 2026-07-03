@@ -1201,14 +1201,16 @@ impl ApplyContext {
     ) -> Result<(), GatewayError> {
         add_review_item(
             self,
-            block_id,
-            start,
-            end,
-            BlockReviewKind::Comment,
-            Some(body.to_string()),
-            None,
-            quote.clone(),
-            None,
+            ReviewItemDraft {
+                block_id,
+                start,
+                end,
+                kind: BlockReviewKind::Comment,
+                body: Some(body.to_string()),
+                replacement: None,
+                quote: quote.clone(),
+                parent_item_id: None,
+            },
         )?;
         Ok(())
     }
@@ -1289,14 +1291,16 @@ impl ApplyContext {
     ) -> Result<(), GatewayError> {
         add_review_item(
             self,
-            block_id,
-            start,
-            end,
-            BlockReviewKind::Suggestion,
-            body.clone(),
-            Some(replacement.to_string()),
-            quote.clone(),
-            None,
+            ReviewItemDraft {
+                block_id,
+                start,
+                end,
+                kind: BlockReviewKind::Suggestion,
+                body: body.clone(),
+                replacement: Some(replacement.to_string()),
+                quote: quote.clone(),
+                parent_item_id: None,
+            },
         )?;
         Ok(())
     }
@@ -1649,10 +1653,8 @@ fn replace_block_text(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn add_review_item(
-    ctx: &mut ApplyContext,
-    block_id: &str,
+struct ReviewItemDraft<'a> {
+    block_id: &'a str,
     start: u32,
     end: u32,
     kind: BlockReviewKind,
@@ -1660,7 +1662,22 @@ fn add_review_item(
     replacement: Option<String>,
     quote: Option<String>,
     parent_item_id: Option<String>,
+}
+
+fn add_review_item(
+    ctx: &mut ApplyContext,
+    draft: ReviewItemDraft<'_>,
 ) -> Result<String, GatewayError> {
+    let ReviewItemDraft {
+        block_id,
+        start,
+        end,
+        kind,
+        body,
+        replacement,
+        quote,
+        parent_item_id,
+    } = draft;
     let Some(block) = ctx.model.blocks.get(block_id) else {
         return Err(GatewayError::block_deleted(block_id));
     };
