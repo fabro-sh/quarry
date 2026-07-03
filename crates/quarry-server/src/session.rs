@@ -861,18 +861,16 @@ pub(crate) fn doc_anchors(items: &[BlockReviewItem]) -> Vec<SessionAnchor> {
         .map(|item| SessionAnchor {
             id: item.id.clone(),
             kind: match item.kind {
-                BlockReviewKind::Suggestion => SessionAnchorKind::Suggestion,
+                BlockReviewKind::Suggestion => SessionAnchorKind::Suggestion {
+                    replacement: item.replacement.clone().unwrap_or_default(),
+                    by: item.author.clone(),
+                    at_ms: chrono_ms(&item.created_at),
+                },
                 _ => SessionAnchorKind::Comment,
             },
             block_id: item.block_id.clone(),
             start: item.start_offset,
             end: item.end_offset,
-            replacement: match item.kind {
-                BlockReviewKind::Suggestion => Some(item.replacement.clone().unwrap_or_default()),
-                _ => None,
-            },
-            by: item.author.clone(),
-            at_ms: chrono_ms(&item.created_at),
         })
         .collect()
 }
@@ -969,7 +967,12 @@ fn reconcile_review_items(
                 updated.start_offset = anchor.start;
                 updated.end_offset = anchor.end;
                 if item.kind == BlockReviewKind::Suggestion {
-                    updated.replacement = anchor.replacement.clone();
+                    updated.replacement = match &anchor.kind {
+                        SessionAnchorKind::Suggestion { replacement, .. } => {
+                            Some(replacement.clone())
+                        }
+                        SessionAnchorKind::Comment => None,
+                    };
                 }
                 if let Some(entry) = entry {
                     updated.body = entry.body.clone().or(updated.body);
@@ -1019,12 +1022,21 @@ fn reconcile_review_items(
         if items.contains_key(&anchor.id) || prior.contains_key(&anchor.id) {
             continue;
         }
-        let (kind, meta_entry) = match anchor.kind {
-            SessionAnchorKind::Suggestion => (
+        let (kind, meta_entry, replacement, anchor_author) = match &anchor.kind {
+            SessionAnchorKind::Suggestion {
+                replacement, by, ..
+            } => (
                 BlockReviewKind::Suggestion,
                 meta.suggestions.get(&anchor.id),
+                Some(replacement.clone()),
+                by.clone(),
             ),
-            SessionAnchorKind::Comment => (BlockReviewKind::Comment, meta.comments.get(&anchor.id)),
+            SessionAnchorKind::Comment => (
+                BlockReviewKind::Comment,
+                meta.comments.get(&anchor.id),
+                None,
+                None,
+            ),
         };
         let quote = texts
             .get(anchor.block_id.as_str())
@@ -1046,10 +1058,8 @@ fn reconcile_review_items(
                 start_offset: anchor.start,
                 end_offset: anchor.end,
                 body: meta_entry.and_then(|entry| entry.body.clone()),
-                replacement: anchor.replacement.clone(),
-                author: meta_entry
-                    .map(|entry| entry.by.clone())
-                    .or_else(|| anchor.by.clone()),
+                replacement,
+                author: meta_entry.map(|entry| entry.by.clone()).or(anchor_author),
                 state: if meta_entry
                     .is_some_and(|entry| entry.status.as_deref() == Some("resolved"))
                 {
@@ -1313,10 +1323,6 @@ mod tests {
             block_id: "b1".to_string(),
             start,
             end,
-            replacement: matches!(kind, SessionAnchorKind::Suggestion)
-                .then(|| "replacement".to_string()),
-            by: Some("user".to_string()),
-            at_ms: 0,
         }
     }
 

@@ -101,15 +101,20 @@ const TRANSIENT_MARKS: [&str; 1] = ["comment_draft"];
 // Anchor model
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionAnchorKind {
     Comment,
-    Suggestion,
+    Suggestion {
+        replacement: String,
+        by: Option<String>,
+        at_ms: i64,
+    },
 }
 
 /// A review anchor as the session layer sees it: offsets in row coordinates
-/// (UTF-16, suggestion-insert text excluded). `by`/`at_ms` feed the
-/// `suggestion_<id>` mark payload the browser expects (`userId`/`createdAt`).
+/// (UTF-16, suggestion-insert text excluded). Suggestion-specific fields live
+/// on [`SessionAnchorKind::Suggestion`], so comment anchors cannot carry
+/// meaningless replacement metadata.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionAnchor {
     pub id: String,
@@ -117,10 +122,6 @@ pub struct SessionAnchor {
     pub block_id: String,
     pub start: u32,
     pub end: u32,
-    /// `Some` for suggestions (empty string = deletion suggestion).
-    pub replacement: Option<String>,
-    pub by: Option<String>,
-    pub at_ms: i64,
 }
 
 /// The checkpoint projection of a live session doc.
@@ -411,16 +412,19 @@ fn inline_children_with_anchors(
 }
 
 fn anchor_marks(anchor: &SessionAnchor) -> Attrs {
-    match anchor.kind {
+    match &anchor.kind {
         SessionAnchorKind::Comment => crate::slate::attrs([
             ("comment".to_string(), json!(true)),
             (format!("comment_{}", anchor.id), json!(true)),
         ]),
-        SessionAnchorKind::Suggestion => suggestion_marks(anchor, "remove"),
+        SessionAnchorKind::Suggestion { .. } => suggestion_marks(anchor, "remove"),
     }
 }
 
 fn suggestion_marks(anchor: &SessionAnchor, ty: &str) -> Attrs {
+    let SessionAnchorKind::Suggestion { by, at_ms, .. } = &anchor.kind else {
+        unreachable!("suggestion marks are only built for suggestion anchors");
+    };
     crate::slate::attrs([
         ("suggestion".to_string(), json!(true)),
         (
@@ -428,18 +432,17 @@ fn suggestion_marks(anchor: &SessionAnchor, ty: &str) -> Attrs {
             json!({
                 "id": anchor.id,
                 "type": ty,
-                "userId": anchor.by.clone().unwrap_or_else(|| "unknown".to_string()),
-                "createdAt": anchor.at_ms,
+                "userId": by.clone().unwrap_or_else(|| "unknown".to_string()),
+                "createdAt": at_ms,
             }),
         ),
     ])
 }
 
 fn insert_leaf(anchor: &SessionAnchor) -> Option<(u32, Segment)> {
-    if anchor.kind != SessionAnchorKind::Suggestion {
+    let SessionAnchorKind::Suggestion { replacement, .. } = &anchor.kind else {
         return None;
-    }
-    let replacement = anchor.replacement.as_deref().unwrap_or_default();
+    };
     if replacement.is_empty() {
         return None;
     }
@@ -681,8 +684,6 @@ struct AnchorRange {
     kind: SessionAnchorKind,
     start: u32,
     end: u32,
-    by: Option<String>,
-    at_ms: i64,
 }
 
 struct InsertedSuggestion {
@@ -834,25 +835,19 @@ fn append_leaf(
     let end = utf16_len(text);
     if start < end {
         for id in classified.comment_ids {
-            extend_range(
-                accumulator,
-                id,
-                SessionAnchorKind::Comment,
-                start,
-                end,
-                None,
-                0,
-            );
+            extend_range(accumulator, id, SessionAnchorKind::Comment, start, end);
         }
         for (id, _, by, at_ms) in classified.suggestions {
             extend_range(
                 accumulator,
                 id,
-                SessionAnchorKind::Suggestion,
+                SessionAnchorKind::Suggestion {
+                    replacement: String::new(),
+                    by,
+                    at_ms,
+                },
                 start,
                 end,
-                by,
-                at_ms,
             );
         }
     }
@@ -878,8 +873,6 @@ fn extend_range(
     kind: SessionAnchorKind,
     start: u32,
     end: u32,
-    by: Option<String>,
-    at_ms: i64,
 ) {
     accumulator
         .ranges
@@ -888,50 +881,48 @@ fn extend_range(
             range.start = range.start.min(start);
             range.end = range.end.max(end);
         })
-        .or_insert(AnchorRange {
-            kind,
-            start,
-            end,
-            by,
-            at_ms,
-        });
+        .or_insert(AnchorRange { kind, start, end });
 }
 
 impl AnchorAccumulator {
     fn into_anchors(mut self, block_id: &str) -> Vec<SessionAnchor> {
         let mut anchors = Vec::new();
         for (id, range) in std::mem::take(&mut self.ranges) {
-            let replacement = match range.kind {
-                SessionAnchorKind::Comment => None,
-                SessionAnchorKind::Suggestion => Some(
-                    self.inserts
+            let kind = match range.kind {
+                SessionAnchorKind::Comment => SessionAnchorKind::Comment,
+                SessionAnchorKind::Suggestion { by, at_ms, .. } => {
+                    let replacement = self
+                        .inserts
                         .remove(&id)
                         .map(|insert| insert.replacement)
-                        .unwrap_or_default(),
-                ),
+                        .unwrap_or_default();
+                    SessionAnchorKind::Suggestion {
+                        replacement,
+                        by,
+                        at_ms,
+                    }
+                }
             };
             anchors.push(SessionAnchor {
                 id,
-                kind: range.kind,
+                kind,
                 block_id: block_id.to_string(),
                 start: range.start,
                 end: range.end,
-                replacement,
-                by: range.by,
-                at_ms: range.at_ms,
             });
         }
         // Insert-only suggestions: a collapsed anchor at the insert position.
         for (id, insert) in self.inserts {
             anchors.push(SessionAnchor {
                 id,
-                kind: SessionAnchorKind::Suggestion,
+                kind: SessionAnchorKind::Suggestion {
+                    replacement: insert.replacement,
+                    by: insert.by,
+                    at_ms: insert.at_ms,
+                },
                 block_id: block_id.to_string(),
                 start: insert.position,
                 end: insert.position,
-                replacement: Some(insert.replacement),
-                by: insert.by,
-                at_ms: insert.at_ms,
             });
         }
         anchors

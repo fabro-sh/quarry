@@ -53,22 +53,20 @@ fn comment(id: &str, block_id: &str, start: u32, end: u32) -> SessionAnchor {
         block_id: block_id.to_string(),
         start,
         end,
-        replacement: None,
-        by: None,
-        at_ms: 0,
     }
 }
 
 fn suggestion(id: &str, block_id: &str, start: u32, end: u32, replacement: &str) -> SessionAnchor {
     SessionAnchor {
         id: id.to_string(),
-        kind: SessionAnchorKind::Suggestion,
+        kind: SessionAnchorKind::Suggestion {
+            replacement: replacement.to_string(),
+            by: Some("ai:codex".to_string()),
+            at_ms: 1_780_627_260_480,
+        },
         block_id: block_id.to_string(),
         start,
         end,
-        replacement: Some(replacement.to_string()),
-        by: Some("ai:codex".to_string()),
-        at_ms: 1_780_627_260_480,
     }
 }
 
@@ -132,15 +130,7 @@ fn sorted_anchors(mut anchors: Vec<SessionAnchor>) -> Vec<SessionAnchor> {
     anchors
 }
 
-/// Strips seed-side-only fields (`by`/`at_ms` are not recoverable for
-/// comments; suggestions carry them in their marks).
-fn comparable(mut anchors: Vec<SessionAnchor>) -> Vec<SessionAnchor> {
-    for anchor in &mut anchors {
-        if anchor.kind == SessionAnchorKind::Comment {
-            anchor.by = None;
-            anchor.at_ms = 0;
-        }
-    }
+fn comparable(anchors: Vec<SessionAnchor>) -> Vec<SessionAnchor> {
     sorted_anchors(anchors)
 }
 
