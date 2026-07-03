@@ -102,8 +102,8 @@ use quarry_storage::{
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::{Arc, MutexGuard as StdMutexGuard};
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::unbounded_channel;
@@ -382,16 +382,34 @@ struct CommittedState {
 
 impl Drop for LiveSession {
     fn drop(&mut self) {
-        if let Some(task) = self.awareness_task.lock().unwrap().take() {
+        if let Some(task) = self.awareness_task_lock().take() {
             task.abort();
         }
-        if let Some(task) = self.checkpoint_task.lock().unwrap().take() {
+        if let Some(task) = self.checkpoint_task_lock().take() {
             task.abort();
         }
     }
 }
 
 impl LiveSession {
+    fn awareness_task_lock(&self) -> StdMutexGuard<'_, Option<JoinHandle<()>>> {
+        self.awareness_task
+            .lock()
+            .expect("live session awareness task lock poisoned")
+    }
+
+    fn checkpoint_task_lock(&self) -> StdMutexGuard<'_, Option<JoinHandle<()>>> {
+        self.checkpoint_task
+            .lock()
+            .expect("live session checkpoint task lock poisoned")
+    }
+
+    fn committed_lock(&self) -> StdMutexGuard<'_, CommittedState> {
+        self.committed
+            .lock()
+            .expect("live session committed state lock poisoned")
+    }
+
     /// Seeds a fresh session from canonical state. `Ok(None)` when the
     /// document cannot host a session (missing, deleted, or raw).
     async fn seed(
@@ -518,7 +536,7 @@ impl LiveSession {
                 }
             })
         };
-        *session.checkpoint_task.lock().unwrap() = Some(checkpoint_task);
+        *session.checkpoint_task_lock() = Some(checkpoint_task);
 
         match &session.scope {
             DocumentScopeRef::Library { .. } => {
@@ -560,8 +578,8 @@ impl LiveSession {
     }
 
     async fn shutdown_background_tasks(&self) {
-        let checkpoint_task = self.checkpoint_task.lock().unwrap().take();
-        let awareness_task = self.awareness_task.lock().unwrap().take();
+        let checkpoint_task = self.checkpoint_task_lock().take();
+        let awareness_task = self.awareness_task_lock().take();
         for (task_name, task) in [
             ("checkpoint", checkpoint_task),
             ("awareness", awareness_task),
@@ -590,7 +608,7 @@ impl LiveSession {
     /// The checkpoint-ack frame for the current committed state, sent to
     /// each new subscriber on join.
     pub(crate) fn committed_ack_frame(&self) -> Vec<u8> {
-        checkpoint_ack_frame(&self.committed.lock().unwrap().snapshot)
+        checkpoint_ack_frame(&self.committed_lock().snapshot)
     }
 
     /// Captures the committed doc state under the doc write lock, records it,
@@ -609,7 +627,7 @@ impl LiveSession {
         let snapshot = awareness.doc().transact().snapshot().encode_v1();
         let frame = checkpoint_ack_frame(&snapshot);
         {
-            let mut committed = self.committed.lock().unwrap();
+            let mut committed = self.committed_lock();
             committed.checkpointed_seq = checkpointed_seq;
             committed.head_version_id = head_version_id;
             committed.items = items;
@@ -619,14 +637,8 @@ impl LiveSession {
     }
 
     pub(crate) fn items_snapshot(&self) -> Vec<BlockReviewItem> {
-        let mut items: Vec<BlockReviewItem> = self
-            .committed
-            .lock()
-            .unwrap()
-            .items
-            .values()
-            .cloned()
-            .collect();
+        let mut items: Vec<BlockReviewItem> =
+            self.committed_lock().items.values().cloned().collect();
         items.sort_by(|left, right| left.id.cmp(&right.id));
         items
     }
@@ -654,7 +666,7 @@ impl LiveSession {
     }
 
     pub(crate) fn is_dirty(&self) -> bool {
-        self.update_seq.load(Ordering::SeqCst) != self.committed.lock().unwrap().checkpointed_seq
+        self.update_seq.load(Ordering::SeqCst) != self.committed_lock().checkpointed_seq
     }
 
     /// Projects the locked doc and commits it as the new canonical state:
@@ -668,12 +680,12 @@ impl LiveSession {
     ) -> Result<WriteOutcome, QuarryError> {
         let seq = self.update_seq.load(Ordering::SeqCst);
         let (projection, meta) = self.project_locked(awareness)?;
-        let prior_items = self.committed.lock().unwrap().items.clone();
+        let prior_items = self.committed_lock().items.clone();
         let now = now_timestamp();
         let items =
             reconcile_review_items(&self.document_id, &prior_items, &projection, &meta, &now);
         let transaction_actor = {
-            let mut committed = self.committed.lock().unwrap();
+            let mut committed = self.committed_lock();
             if let Some(actor) = awareness_actor(awareness) {
                 committed.live_actor = Some(actor);
             }
@@ -690,7 +702,7 @@ impl LiveSession {
                     self.document_id
                 )));
             };
-            let expected_head_version_id = self.committed.lock().unwrap().head_version_id.clone();
+            let expected_head_version_id = self.committed_lock().head_version_id.clone();
             if attempt > 0 || head.head_version_id != expected_head_version_id {
                 tracing::warn!(
                     event = "collab.session.head_moved",
