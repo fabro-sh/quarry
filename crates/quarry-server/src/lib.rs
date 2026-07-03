@@ -2428,11 +2428,13 @@ async fn put_tmp_document(
         markdown_write::put_tmp_block_document(
             &state,
             &path,
-            body.to_vec(),
-            metadata,
-            precondition,
-            origin_id,
-            transaction,
+            markdown_write::PutBlockDocumentRequest {
+                body: body.to_vec(),
+                metadata,
+                precondition,
+                origin_id,
+                transaction,
+            },
         )
         .await,
     )
@@ -3164,11 +3166,13 @@ async fn put_document(
                 &state,
                 &library,
                 &path,
-                body.to_vec(),
-                metadata,
-                precondition,
-                origin_id,
-                transaction,
+                markdown_write::PutBlockDocumentRequest {
+                    body: body.to_vec(),
+                    metadata,
+                    precondition,
+                    origin_id,
+                    transaction,
+                },
             )
             .await,
         );

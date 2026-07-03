@@ -67,63 +67,44 @@ use uuid::Uuid;
 /// precondition degenerates to two-way. An `If-Match` naming an unknown
 /// version keeps the legacy 412 (client confusion, not a merge input);
 /// a KNOWN stale version merges instead of failing.
-#[allow(clippy::too_many_arguments)]
+pub(crate) struct PutBlockDocumentRequest {
+    pub body: Vec<u8>,
+    pub metadata: JsonValue,
+    pub precondition: WritePrecondition,
+    pub origin_id: Option<String>,
+    pub transaction: quarry_storage::TransactionMetadata,
+}
+
 pub(crate) async fn put_block_document(
     state: &AppState,
     library: &str,
     path: &str,
-    body: Vec<u8>,
-    metadata: JsonValue,
-    precondition: WritePrecondition,
-    origin_id: Option<String>,
-    transaction: quarry_storage::TransactionMetadata,
+    request: PutBlockDocumentRequest,
 ) -> Result<axum::response::Response, GatewayFailure> {
-    put_scoped_block_document(
-        state,
-        DocumentScopeRef::library(library),
-        path,
-        body,
-        metadata,
-        precondition,
-        origin_id,
-        transaction,
-    )
-    .await
+    put_scoped_block_document(state, DocumentScopeRef::library(library), path, request).await
 }
 
 pub(crate) async fn put_tmp_block_document(
     state: &AppState,
     path: &str,
-    body: Vec<u8>,
-    metadata: JsonValue,
-    precondition: WritePrecondition,
-    origin_id: Option<String>,
-    transaction: quarry_storage::TransactionMetadata,
+    request: PutBlockDocumentRequest,
 ) -> Result<axum::response::Response, GatewayFailure> {
-    put_scoped_block_document(
-        state,
-        DocumentScopeRef::Tmp,
-        path,
+    put_scoped_block_document(state, DocumentScopeRef::Tmp, path, request).await
+}
+
+async fn put_scoped_block_document(
+    state: &AppState,
+    scope: DocumentScopeRef,
+    path: &str,
+    request: PutBlockDocumentRequest,
+) -> Result<axum::response::Response, GatewayFailure> {
+    let PutBlockDocumentRequest {
         body,
         metadata,
         precondition,
         origin_id,
         transaction,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn put_scoped_block_document(
-    state: &AppState,
-    scope: DocumentScopeRef,
-    path: &str,
-    body: Vec<u8>,
-    metadata: JsonValue,
-    precondition: WritePrecondition,
-    origin_id: Option<String>,
-    transaction: quarry_storage::TransactionMetadata,
-) -> Result<axum::response::Response, GatewayFailure> {
+    } = request;
     let markdown = String::from_utf8(body).map_err(|_| {
         GatewayFailure::Api(
             QuarryError::InvalidInput(format!("markdown PUT body for {path} must be valid UTF-8"))
