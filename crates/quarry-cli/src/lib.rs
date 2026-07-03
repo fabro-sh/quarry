@@ -797,25 +797,14 @@ mod tests {
                 .split(',')
                 .any(|directive| directive == "warn")
         );
-        for crate_name in [
-            "quarry",
-            "quarry_cli",
-            "quarry_server",
-            "quarry_storage",
-            "quarry_git",
-            "quarry_fuse",
-            "quarry_cas",
-            "quarry_collab_codec",
-        ] {
-            assert!(
-                config
-                    .filter
-                    .split(',')
-                    .any(|directive| directive == format!("{crate_name}=debug")),
-                "default filter should enable {crate_name} at debug: {}",
-                config.filter
-            );
-        }
+        assert_default_filter_enables_crate(&config, "quarry");
+        assert_default_filter_enables_crate(&config, "quarry_cli");
+        assert_default_filter_enables_crate(&config, "quarry_server");
+        assert_default_filter_enables_crate(&config, "quarry_storage");
+        assert_default_filter_enables_crate(&config, "quarry_git");
+        assert_default_filter_enables_crate(&config, "quarry_fuse");
+        assert_default_filter_enables_crate(&config, "quarry_cas");
+        assert_default_filter_enables_crate(&config, "quarry_collab_codec");
     }
 
     #[test]
@@ -864,23 +853,35 @@ mod tests {
     #[cfg(not(feature = "lib-documents"))]
     #[test]
     fn library_document_commands_are_hidden_without_lib_documents() {
-        for args in [
-            vec!["quarry", "mount", "notes", "/tmp/quarry-mount"],
-            vec!["quarry", "get", "notes", "live.md"],
-            vec!["quarry", "put", "notes", "live.md", "/tmp/live.md"],
-            vec!["quarry", "list", "notes"],
-            vec!["quarry", "share", "notes", "live.md"],
-            vec!["quarry", "move", "notes", "old.md", "new.md"],
-            vec!["quarry", "delete", "notes", "live.md"],
-            vec!["quarry", "tx", "begin", "notes"],
-            vec!["quarry", "git", "peer", "list", "notes"],
-            vec!["quarry", "conflicts", "list", "notes"],
-        ] {
-            assert!(
-                Cli::try_parse_from(args.clone()).is_err(),
-                "{args:?} should require lib-documents"
-            );
-        }
+        assert_lib_document_command_hidden(["quarry", "mount", "notes", "/tmp/quarry-mount"]);
+        assert_lib_document_command_hidden(["quarry", "get", "notes", "live.md"]);
+        assert_lib_document_command_hidden(["quarry", "put", "notes", "live.md", "/tmp/live.md"]);
+        assert_lib_document_command_hidden(["quarry", "list", "notes"]);
+        assert_lib_document_command_hidden(["quarry", "share", "notes", "live.md"]);
+        assert_lib_document_command_hidden(["quarry", "move", "notes", "old.md", "new.md"]);
+        assert_lib_document_command_hidden(["quarry", "delete", "notes", "live.md"]);
+        assert_lib_document_command_hidden(["quarry", "tx", "begin", "notes"]);
+        assert_lib_document_command_hidden(["quarry", "git", "peer", "list", "notes"]);
+        assert_lib_document_command_hidden(["quarry", "conflicts", "list", "notes"]);
+    }
+
+    fn assert_default_filter_enables_crate(config: &logging::LogConfig, crate_name: &str) {
+        assert!(
+            config
+                .filter
+                .split(',')
+                .any(|directive| directive == format!("{crate_name}=debug")),
+            "default filter should enable {crate_name} at debug: {}",
+            config.filter
+        );
+    }
+
+    #[cfg(not(feature = "lib-documents"))]
+    fn assert_lib_document_command_hidden<const N: usize>(args: [&str; N]) {
+        assert!(
+            Cli::try_parse_from(args).is_err(),
+            "{args:?} should require lib-documents"
+        );
     }
 
     #[cfg(feature = "lib-documents")]
