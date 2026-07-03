@@ -49,15 +49,11 @@ pub enum QuarryError {
     Json(#[from] serde_json::Error),
     #[error("yaml error: {0}")]
     Yaml(#[from] serde_yaml::Error),
-    #[error("storage error: {0}")]
-    Storage(String),
     #[error("storage error: {source}")]
     StorageSource {
         #[source]
         source: Box<dyn StdError + Send + Sync + 'static>,
     },
-    #[error("git error: {0}")]
-    Git(String),
     #[error("git error: {source}")]
     GitSource {
         #[source]
