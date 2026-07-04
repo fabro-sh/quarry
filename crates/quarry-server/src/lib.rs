@@ -462,7 +462,7 @@ pub async fn shutdown_signal() {
             tracing::warn!(
                 event = "shutdown.signal.listen_failed",
                 signal = "ctrl_c",
-                %error,
+                ?error,
                 "failed to listen for Ctrl-C"
             );
         }
@@ -479,7 +479,7 @@ pub async fn shutdown_signal() {
                     tracing::warn!(
                         event = "shutdown.signal.listen_failed",
                         signal = "sigterm",
-                        %error,
+                        ?error,
                         "failed to listen for SIGTERM"
                     );
                     std::future::pending::<()>().await;
