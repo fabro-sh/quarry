@@ -766,19 +766,18 @@ async fn sync_accepts_both_changed_to_same_content_without_conflict() -> anyhow:
 }
 
 #[tokio::test]
-async fn sync_preserves_both_sides_when_both_create_same_path_differently() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_preserves_both_sides_when_both_create_same_path_differently() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("bothcreate").await.unwrap();
-    let repo = tempfile::tempdir().unwrap();
+    let library = store.create_library("bothcreate").await?;
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
     let ours = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -791,12 +790,11 @@ async fn sync_preserves_both_sides_when_both_create_same_path_differently() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    std::fs::create_dir_all(repo.path().join("notes")).unwrap();
-    std::fs::write(repo.path().join("notes/new.md"), "theirs\n").unwrap();
+        .await?;
+    std::fs::create_dir_all(repo.path().join("notes"))?;
+    std::fs::write(repo.path().join("notes/new.md"), "theirs\n")?;
 
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
     // Phase 4: with no common ancestor (both sides created the path
     // independently), the merge uses an EMPTY base — every difference is a
@@ -808,9 +806,9 @@ async fn sync_preserves_both_sides_when_both_create_same_path_differently() {
     let document = store
         .get_document(&library.slug, "notes/new.md")
         .await
-        .unwrap();
+        .context("original document should still exist")?;
     assert_eq!(document.content, b"ours\n");
-    let items = store.list_block_review_items(&document.id).await.unwrap();
+    let items = store.list_block_review_items(&document.id).await?;
     let conflicts: Vec<_> = items
         .iter()
         .filter(|item| item.kind == quarry_storage::BlockReviewKind::Conflict)
@@ -819,13 +817,14 @@ async fn sync_preserves_both_sides_when_both_create_same_path_differently() {
     assert_eq!(conflicts[0].body.as_deref(), Some("theirs\n"));
     assert_eq!(conflicts[0].quote.as_deref(), Some("ours\n"));
     assert_eq!(conflicts[0].context_before.as_deref(), Some(""));
+    Ok(())
 }
 
 #[tokio::test]
-async fn sync_records_both_deleted_as_clean_state() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_records_both_deleted_as_clean_state() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("bothdeleted").await.unwrap();
+    let library = store.create_library("bothdeleted").await?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -838,24 +837,21 @@ async fn sync_records_both_deleted_as_clean_state() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    let repo = tempfile::tempdir().unwrap();
+        .await?;
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
 
     store
         .delete_document(&library.slug, "notes/remove.md", DocumentSource::Rest)
-        .await
-        .unwrap();
-    std::fs::remove_file(repo.path().join("notes/remove.md")).unwrap();
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    std::fs::remove_file(repo.path().join("notes/remove.md"))?;
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
     assert!(result.conflicts.is_empty());
     assert!(
@@ -868,17 +864,18 @@ async fn sync_records_both_deleted_as_clean_state() {
     let state = store
         .sync_state(&peer.id, "notes/remove.md")
         .await
-        .unwrap()
-        .unwrap();
+        .context("sync state query should succeed")?
+        .context("sync state should exist")?;
     assert_eq!(state.last_synced_doc_version_id, None);
     assert_eq!(state.last_synced_git_oid, None);
+    Ok(())
 }
 
 #[tokio::test]
-async fn sync_applies_git_only_delete_to_quarry() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_applies_git_only_delete_to_quarry() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("gitdelete").await.unwrap();
+    let library = store.create_library("gitdelete").await?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -891,20 +888,18 @@ async fn sync_applies_git_only_delete_to_quarry() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    let repo = tempfile::tempdir().unwrap();
+        .await?;
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
 
-    std::fs::remove_file(repo.path().join("notes/remove.md")).unwrap();
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    std::fs::remove_file(repo.path().join("notes/remove.md"))?;
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
     assert!(result.conflicts.is_empty());
     assert!(
@@ -917,17 +912,18 @@ async fn sync_applies_git_only_delete_to_quarry() {
     let state = store
         .sync_state(&peer.id, "notes/remove.md")
         .await
-        .unwrap()
-        .unwrap();
+        .context("sync state query should succeed")?
+        .context("sync state should exist")?;
     assert_eq!(state.last_synced_doc_version_id, None);
     assert_eq!(state.last_synced_git_oid, None);
+    Ok(())
 }
 
 #[tokio::test]
-async fn sync_applies_quarry_only_delete_to_git() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_applies_quarry_only_delete_to_git() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("quarrydelete").await.unwrap();
+    let library = store.create_library("quarrydelete").await?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -940,40 +936,38 @@ async fn sync_applies_quarry_only_delete_to_git() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    let repo = tempfile::tempdir().unwrap();
+        .await?;
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
 
     store
         .delete_document(&library.slug, "notes/remove.md", DocumentSource::Rest)
-        .await
-        .unwrap();
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
     assert!(result.conflicts.is_empty());
     assert!(!repo.path().join("notes/remove.md").exists());
     let state = store
         .sync_state(&peer.id, "notes/remove.md")
         .await
-        .unwrap()
-        .unwrap();
+        .context("sync state query should succeed")?
+        .context("sync state should exist")?;
     assert_eq!(state.last_synced_doc_version_id, None);
     assert_eq!(state.last_synced_git_oid, None);
+    Ok(())
 }
 
 #[tokio::test]
-async fn sync_records_conflict_when_quarry_changes_and_git_deletes() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_records_conflict_when_quarry_changes_and_git_deletes() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("changeddelete").await.unwrap();
+    let library = store.create_library("changeddelete").await?;
     let baseline = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -986,17 +980,15 @@ async fn sync_records_conflict_when_quarry_changes_and_git_deletes() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    let repo = tempfile::tempdir().unwrap();
+        .await?;
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
 
     let ours = store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -1010,11 +1002,10 @@ async fn sync_records_conflict_when_quarry_changes_and_git_deletes() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    std::fs::remove_file(repo.path().join("notes/plan.md")).unwrap();
+        .await?;
+    std::fs::remove_file(repo.path().join("notes/plan.md"))?;
 
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
     assert_eq!(result.conflicts.len(), 1);
     assert_eq!(result.conflicts[0].ours_version_id, Some(ours.version.id));
@@ -1023,21 +1014,22 @@ async fn sync_records_conflict_when_quarry_changes_and_git_deletes() {
         store
             .get_document(&library.slug, "notes/plan.md")
             .await
-            .unwrap()
+            .context("quarry document should be preserved")?
             .content,
         b"ours\n"
     );
     assert_eq!(
-        std::fs::read_to_string(repo.path().join("notes/plan.md")).unwrap(),
+        std::fs::read_to_string(repo.path().join("notes/plan.md"))?,
         "ours\n"
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn sync_records_conflict_when_quarry_deletes_and_git_changes() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_records_conflict_when_quarry_deletes_and_git_changes() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("deletedchange").await.unwrap();
+    let library = store.create_library("deletedchange").await?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -1050,25 +1042,22 @@ async fn sync_records_conflict_when_quarry_deletes_and_git_changes() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    let repo = tempfile::tempdir().unwrap();
+        .await?;
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
 
     store
         .delete_document(&library.slug, "notes/plan.md", DocumentSource::Rest)
-        .await
-        .unwrap();
-    std::fs::write(repo.path().join("notes/plan.md"), "theirs\n").unwrap();
+        .await?;
+    std::fs::write(repo.path().join("notes/plan.md"), "theirs\n")?;
 
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
     assert_eq!(result.conflicts.len(), 1);
     assert_eq!(result.conflicts[0].ours_version_id, None);
@@ -1087,27 +1076,28 @@ async fn sync_records_conflict_when_quarry_deletes_and_git_changes() {
     let sibling = store
         .get_document(&library.slug, &conflict_path)
         .await
-        .unwrap();
+        .context("conflict sibling should exist")?;
     assert_eq!(sibling.version.id.as_str(), theirs_version_id);
     assert_eq!(sibling.content, b"theirs\n");
     // Markdown siblings import through the block writer (Phase 7): they are
     // ordinary BlockDocuments with a projection, not raw bytes.
     assert!(
-        !store.load_block_tree(&sibling.id).await.unwrap().is_empty(),
+        !store.load_block_tree(&sibling.id).await?.is_empty(),
         "markdown conflict sibling carries block rows"
     );
     assert!(!repo.path().join("notes/plan.md").exists());
     assert_eq!(
-        std::fs::read_to_string(repo.path().join(&conflict_path)).unwrap(),
+        std::fs::read_to_string(repo.path().join(&conflict_path))?,
         "theirs\n"
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn sync_aborts_when_git_delete_batch_exceeds_configured_safety_limit() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_aborts_when_git_delete_batch_exceeds_configured_safety_limit() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("safety").await.unwrap();
+    let library = store.create_library("safety").await?;
     for index in 0..5 {
         store
             .put_document(quarry_storage::PutDocumentRequest {
@@ -1121,10 +1111,9 @@ async fn sync_aborts_when_git_delete_batch_exceeds_configured_safety_limit() {
                 origin_id: None,
                 transaction: quarry_storage::TransactionMetadata::default(),
             })
-            .await
-            .unwrap();
+            .await?;
     }
-    let repo = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
@@ -1134,12 +1123,11 @@ async fn sync_aborts_when_git_delete_batch_exceeds_configured_safety_limit() {
                 "max_delete_percent": 50
             }),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
 
     for index in 0..4 {
-        std::fs::remove_file(repo.path().join(format!("notes/{index}.md"))).unwrap();
+        std::fs::remove_file(repo.path().join(format!("notes/{index}.md")))?;
     }
 
     let error = sync_peer(&store, &library.slug, &peer.id)
@@ -1151,11 +1139,12 @@ async fn sync_aborts_when_git_delete_batch_exceeds_configured_safety_limit() {
             store
                 .get_document(&library.slug, &format!("notes/{index}.md"))
                 .await
-                .unwrap()
+                .context("document should survive rejected delete batch")?
                 .content,
             format!("doc {index}\n").as_bytes()
         );
     }
+    Ok(())
 }
 
 #[tokio::test]
