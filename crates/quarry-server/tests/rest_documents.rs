@@ -8,7 +8,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
 use quarry_core::DocumentSource;
 use quarry_server::router;
-use quarry_storage::StoreEventKind;
+use quarry_storage::{QuarryStore, StoreEventKind};
 use serde_json::Value;
 use tokio::time::{Duration, timeout};
 use tower::ServiceExt;
@@ -16,6 +16,125 @@ use tower::ServiceExt;
 mod common;
 
 use common::{document_test_app, json_request, open_test_store, response_json};
+
+async fn block_test_app() -> (tempfile::TempDir, axum::Router, QuarryStore) {
+    let (root, app, store) = document_test_app().await;
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries",
+            serde_json::json!({"slug": "blocks"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    (root, app, store)
+}
+
+async fn put_block_markdown(app: &axum::Router, path: &str, body: &str) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/libraries/blocks/documents/{path}"))
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+async fn get_block_tree(app: &axum::Router, path: &str) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/libraries/blocks/documents/{path}/blocks"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response_json(response).await
+}
+
+async fn post_block_transaction(
+    app: &axum::Router,
+    path: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            &format!("/v1/libraries/blocks/documents/{path}/transactions"),
+            body,
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, response_json(response).await)
+}
+
+async fn commit_block_transaction(app: &axum::Router, path: &str, body: Value) -> Value {
+    let (status, ack) = post_block_transaction(app, path, body).await;
+    assert_eq!(status, StatusCode::OK, "transaction failed: {ack}");
+    ack
+}
+
+fn block_tx(client_tx_id: &str, ops: Value) -> Value {
+    serde_json::json!({
+        "client_tx_id": client_tx_id,
+        "actor": {"kind": "agent", "id": "agent-1", "label": "Agent One"},
+        "ops": ops
+    })
+}
+
+async fn get_document_markdown(app: &axum::Router, path: &str) -> String {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/libraries/blocks/documents/{path}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    String::from_utf8(body.to_vec()).unwrap()
+}
+
+async fn get_block_review(app: &axum::Router, path: &str, include_resolved: bool) -> Value {
+    let query = if include_resolved {
+        "?includeResolved=1"
+    } else {
+        ""
+    };
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v1/libraries/blocks/documents/{path}/review{query}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response_json(response).await
+}
 
 fn assert_json_timestamp(value: &Value) {
     let timestamp = value.as_str().expect("timestamp should be a string");
@@ -2551,4 +2670,100 @@ async fn rest_api_scopes_transaction_routes_to_the_url_library() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// RawDocuments keep the untouched byte path: bytes round-trip exactly and
+/// no block tables are touched.
+#[tokio::test]
+async fn raw_document_put_bypasses_the_block_model_entirely() {
+    let (_root, app, store) = block_test_app().await;
+    let bytes: Vec<u8> = vec![0u8, 159, 146, 150, 13, 10, 0];
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/data.bin")
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from(bytes.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let document = store.get_document("blocks", "data.bin").await.unwrap();
+    assert_eq!(document.content, bytes);
+    assert_eq!(
+        store.load_block_tree(&document.id).await.unwrap(),
+        Vec::<quarry_collab_codec::BlockRow>::new()
+    );
+}
+
+/// A metadata patch is frontmatter-only: it must NOT destroy the block
+/// projection. Rows, ids, review anchors, and conflict artifacts all survive;
+/// only the rendered frontmatter (and the version clock) moves.
+#[tokio::test]
+async fn metadata_patch_preserves_rows_anchors_and_conflict_items() {
+    let (_root, app, store) = block_test_app().await;
+    put_block_markdown(&app, "meta.md", "# Title\n\nAlpha.\n").await;
+    let tree = get_block_tree(&app, "meta.md").await;
+    let ids: Vec<String> = tree["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|block| block["block_id"].as_str().unwrap().to_string())
+        .collect();
+    commit_block_transaction(
+        &app,
+        "meta.md",
+        block_tx(
+            "tx-meta-anchor",
+            serde_json::json!([
+                {"op": "comment.add", "block_id": ids[1], "start": 0, "end": 5, "body": "keep"},
+                {"op": "conflict.add", "after_block_id": ids[0],
+                 "base_markdown": "Old.\n", "incoming_markdown": "New.\n",
+                 "canonical_markdown": "Alpha.\n"}
+            ]),
+        ),
+    )
+    .await;
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::PATCH,
+            "/v1/libraries/blocks/documents/meta.md/metadata",
+            serde_json::json!({"title": "Patched Title", "rank": 7}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let outcome = response_json(response).await;
+    assert_eq!(outcome["version"]["metadata"]["title"], "Patched Title");
+
+    // The projection survived: same block ids, anchored comment still open,
+    // conflict artifact intact.
+    let tree = get_block_tree(&app, "meta.md").await;
+    let ids_after: Vec<String> = tree["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|block| block["block_id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids_after, ids);
+    let review = get_block_review(&app, "meta.md", false).await;
+    assert_eq!(review["comments"][0]["status"], "open");
+    assert_eq!(review["comments"][0]["anchor"]["blockId"], ids[1].as_str());
+    assert_eq!(review["conflicts"][0]["incomingMarkdown"], "New.\n");
+    // The new frontmatter rides in the normalized content.
+    let content = get_document_markdown(&app, "meta.md").await;
+    assert!(
+        content.starts_with("---\n"),
+        "frontmatter present: {content}"
+    );
+    assert!(content.contains("title: Patched Title"));
+    assert!(content.ends_with("# Title\n\nAlpha.\n"));
+    // Rows persist in storage too.
+    let document_id = store.head_document("blocks", "meta.md").await.unwrap().id;
+    assert_eq!(store.load_block_tree(&document_id).await.unwrap().len(), 2);
 }
