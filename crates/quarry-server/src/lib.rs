@@ -17,6 +17,7 @@ mod review;
 mod search_handlers;
 mod session;
 mod sse;
+mod system_handlers;
 mod transaction_handlers;
 
 pub use session::{MSG_QUARRY_CHECKPOINT, MSG_QUARRY_CHECKPOINT_FAILED};
@@ -161,10 +162,10 @@ pub fn router_with_state(state: AppState) -> Router {
         .route("/quarry.SKILL.md", get(quarry_skill))
         .route("/agent-docs", get(agent_docs))
         .route("/.well-known/agent.json", get(agent_discovery))
-        .route("/v1/health", get(health))
-        .route("/v1/capabilities", get(capabilities))
-        .route("/v1/openapi.json", get(openapi_json))
-        .route("/v1/admin/gc", post(admin_gc));
+        .route("/v1/health", get(system_handlers::health))
+        .route("/v1/capabilities", get(system_handlers::capabilities))
+        .route("/v1/openapi.json", get(system_handlers::openapi_json))
+        .route("/v1/admin/gc", post(system_handlers::admin_gc));
     let router = install_collab_routes(router);
     let router = install_tmp_document_routes(router);
     let router = install_library_document_routes(router);
@@ -525,10 +526,10 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        health,
-        capabilities,
-        openapi_json,
-        admin_gc,
+        system_handlers::health,
+        system_handlers::capabilities,
+        system_handlers::openapi_json,
+        system_handlers::admin_gc,
         collab_websocket_openapi,
         sse::events,
         library_handlers::create_library,
@@ -602,7 +603,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
     ),
     components(schemas(
         CreateLibraryRequest,
-        Capabilities,
+        system_handlers::Capabilities,
         BeginTransactionRequest,
         ErrorResponse,
         MoveRequest,
@@ -670,62 +671,6 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
 )]
 struct ApiDoc;
 
-#[derive(Debug, Serialize, ToSchema)]
-struct Capabilities {
-    tmp_documents: bool,
-    lib_documents: bool,
-}
-
-impl Capabilities {
-    fn current() -> Self {
-        Self {
-            tmp_documents: cfg!(feature = "tmp-documents"),
-            lib_documents: cfg!(feature = "lib-documents"),
-        }
-    }
-}
-
-#[utoipa::path(get, path = "/v1/health", responses((status = 200, body = JsonValue)))]
-async fn health() -> Json<JsonValue> {
-    Json(serde_json::json!({"ok": true, "service": "quarry"}))
-}
-
-#[utoipa::path(get, path = "/v1/capabilities", responses((status = 200, body = Capabilities)))]
-async fn capabilities() -> Json<Capabilities> {
-    Json(Capabilities::current())
-}
-
-#[utoipa::path(get, path = "/v1/openapi.json", responses((status = 200, body = JsonValue)))]
-async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
-    Json(active_openapi())
-}
-
-fn active_openapi() -> utoipa::openapi::OpenApi {
-    let mut openapi = ApiDoc::openapi();
-    openapi
-        .paths
-        .paths
-        .retain(|path, _| openapi_path_enabled(path));
-    openapi
-}
-
-fn openapi_path_enabled(path: &str) -> bool {
-    if path.starts_with("/v1/tmp/documents") {
-        return cfg!(feature = "tmp-documents")
-            && (path != "/v1/tmp/documents/{secret}/promote" || cfg!(feature = "lib-documents"));
-    }
-    if path.starts_with("/v1/tmp/collab") {
-        return cfg!(feature = "tmp-documents");
-    }
-    if path.starts_with("/v1/collab") {
-        return cfg!(feature = "tmp-documents") || cfg!(feature = "lib-documents");
-    }
-    if path == "/v1/events" || path.starts_with("/v1/libraries") {
-        return cfg!(feature = "lib-documents");
-    }
-    true
-}
-
 #[utoipa::path(
     get,
     path = "/v1/collab/{document_id}",
@@ -779,19 +724,6 @@ async fn tmp_collab_websocket(
                 .await;
         })
         .into_response())
-}
-
-#[utoipa::path(post, path = "/v1/admin/gc", responses((status = 200, body = GcReport)))]
-async fn admin_gc(State(state): State<AppState>) -> Result<Json<GcReport>, ApiError> {
-    let report = state.store.gc().await?;
-    tracing::info!(
-        event = "storage.gc.completed",
-        source = "admin_api",
-        reachable_blobs = report.reachable,
-        removed_blobs = report.removed,
-        "admin GC completed"
-    );
-    Ok(Json(report))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
