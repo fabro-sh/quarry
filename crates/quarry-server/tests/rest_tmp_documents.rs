@@ -4,6 +4,7 @@
     reason = "tests use unwrap for HTTP and CRDT fixtures"
 )]
 
+use anyhow::Context as _;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
 use serde_json::Value;
@@ -52,7 +53,7 @@ fn assert_json_timestamp(value: &Value) {
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
+async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() -> anyhow::Result<()> {
     let (_root, app, _store) = document_test_app().await;
 
     let response = app
@@ -66,16 +67,21 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
                 "metadata": {"title": "Scratch"}
             }),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let etag = response.headers()[header::ETAG]
         .to_str()
-        .unwrap()
+        .context("created tmp document should expose a valid ETag")?
         .to_string();
     let created: Value = response_json(response).await;
-    let secret = created["document"]["path"].as_str().unwrap().to_string();
-    let document_id = created["document"]["id"].as_str().unwrap().to_string();
+    let secret = created["document"]["path"]
+        .as_str()
+        .context("created tmp document should expose a secret path")?
+        .to_string();
+    let document_id = created["document"]["id"]
+        .as_str()
+        .context("created tmp document should expose an id")?
+        .to_string();
     assert_eq!(secret.len(), 32);
     assert!(
         secret
@@ -92,10 +98,9 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
                 .method(Method::GET)
                 .uri("/v1/tmp/documents")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
 
     let response = app
@@ -105,10 +110,9 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
                 .method(Method::GET)
                 .uri(format!("/v1/tmp/documents/{secret}"))
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[header::ETAG], etag);
     assert_eq!(
@@ -118,11 +122,11 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
     assert!(
         response.headers()["x-quarry-expires-at"]
             .to_str()
-            .unwrap()
+            .context("tmp document should expose a valid expiry header")?
             .starts_with("20")
     );
     assert_eq!(
-        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+        to_bytes(response.into_body(), usize::MAX).await?,
         "draft one"
     );
 
@@ -133,10 +137,9 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
                 .method(Method::GET)
                 .uri("/v1/tmp/documents/scratch/note.txt")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     let response = app
@@ -146,8 +149,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
             &format!("/v1/tmp/documents/{secret}/share"),
             serde_json::json!({"role": "editor"}),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let response = app
@@ -159,13 +161,15 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
                 .header(header::IF_MATCH, etag)
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .body(Body::from("draft two"))
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let updated: Value = response_json(response).await;
-    let updated_version = updated["version"]["id"].as_str().unwrap().to_string();
+    let updated_version = updated["version"]["id"]
+        .as_str()
+        .context("updated tmp document should expose a version id")?
+        .to_string();
 
     let response = app
         .clone()
@@ -174,13 +178,21 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
                 .method(Method::GET)
                 .uri(format!("/v1/tmp/documents/{secret}/versions/raw"))
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let versions: Value = response_json(response).await;
-    assert_eq!(versions.as_array().unwrap().len(), 2);
+    assert_eq!(
+        versions
+            .as_array()
+            .context("raw versions response should be an array")?
+            .len(),
+        2
+    );
+    let created_version_id = created["version"]["id"]
+        .as_str()
+        .context("created tmp document should expose a version id")?;
 
     let response = app
         .clone()
@@ -188,14 +200,12 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
             Request::builder()
                 .method(Method::GET)
                 .uri(format!(
-                    "/v1/tmp/documents/{secret}/versions/{}",
-                    created["version"]["id"].as_str().unwrap()
+                    "/v1/tmp/documents/{secret}/versions/{created_version_id}"
                 ))
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let first: Value = response_json(response).await;
     assert_eq!(first["content"], "draft one");
@@ -207,8 +217,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
             &format!("/v1/tmp/documents/{secret}/ttl"),
             serde_json::json!({"expires_at":"2099-01-01T00:00:00Z"}),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let ttl: Value = response_json(response).await;
     assert_eq!(ttl["expires_at"], "2099-01-01T00:00:00Z");
@@ -220,8 +229,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
             &format!("/v1/tmp/documents/{secret}/ttl"),
             serde_json::json!({"expires_at": null}),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     let response = app
@@ -231,8 +239,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
             "/v1/libraries",
             serde_json::json!({"slug":"promoted"}),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::CREATED);
 
     let response = app
@@ -246,8 +253,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
                 "if_match": updated_version
             }),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -257,10 +263,9 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
                 .method(Method::GET)
                 .uri(format!("/v1/tmp/documents/{secret}"))
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let response = app
@@ -270,14 +275,13 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
                 .method(Method::GET)
                 .uri("/v1/libraries/promoted/documents/notes/promoted.txt")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["x-quarry-document-id"], document_id);
     assert_eq!(
-        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+        to_bytes(response.into_body(), usize::MAX).await?,
         "draft two\n"
     );
 
@@ -287,13 +291,19 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() {
                 .method(Method::GET)
                 .uri("/v1/libraries/promoted/documents/notes/promoted.txt/versions/raw")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let promoted_versions: Value = response_json(response).await;
-    assert_eq!(promoted_versions.as_array().unwrap().len(), 2);
+    assert_eq!(
+        promoted_versions
+            .as_array()
+            .context("promoted versions response should be an array")?
+            .len(),
+        2
+    );
+    Ok(())
 }
 
 #[cfg(feature = "tmp-documents")]
