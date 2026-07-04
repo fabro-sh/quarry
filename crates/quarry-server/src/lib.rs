@@ -27,7 +27,6 @@ use agent_events::{
     AgentEventRecord, AgentEventsAckRequest, AgentEventsAckResponse, AgentPendingEventsResponse,
 };
 use assets::{browser_asset, browser_ui_bundle_embedded};
-use axum::body::Bytes;
 use axum::extract::DefaultBodyLimit;
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{MatchedPath, Path, Query, Request, State};
@@ -193,7 +192,7 @@ fn install_tmp_document_routes(router: Router<AppState>) -> Router<AppState> {
     let tmp_document_route = get(get_tmp_document)
         .head(tmp_document_handlers::head_tmp_document)
         .post(post_tmp_document_action)
-        .put(put_tmp_document)
+        .put(tmp_document_handlers::put_tmp_document)
         .patch(patch_tmp_document_action)
         .delete(tmp_document_handlers::delete_tmp_document)
         .layer(DefaultBodyLimit::max(TMP_DOCUMENT_HTTP_BODY_LIMIT));
@@ -542,7 +541,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         tmp_collab_websocket_openapi,
         get_tmp_document,
         tmp_document_handlers::head_tmp_document,
-        put_tmp_document,
+        tmp_document_handlers::put_tmp_document,
         tmp_document_handlers::delete_tmp_document,
         tmp_document_versions_openapi,
         tmp_document_versions_raw_openapi,
@@ -943,64 +942,6 @@ async fn get_tmp_document(
         &document.version.id,
         &document.id,
         document.expires_at.as_deref(),
-    )
-}
-
-#[utoipa::path(
-    put,
-    path = "/v1/tmp/documents/{secret}",
-    params(
-        ("secret" = String, Path),
-        (
-            "If-Match" = Option<String>,
-            Header,
-            description = "Optional ETag/document clock used as the merge base for Markdown writes"
-        ),
-        (
-            "If-None-Match" = Option<String>,
-            Header,
-            description = "Use * to create a new tmp document at this capability path"
-        )
-    ),
-    request_body(
-        description = "Tmp documents are Markdown-only scratch documents. Whole-document writes require Content-Type: text/markdown (or another accepted Markdown media type) and canonical UTF-8 Markdown no larger than 1 MiB.",
-        content(
-            (String = "text/markdown")
-        )
-    ),
-    responses(
-        (status = 200, body = WriteOutcome),
-        (status = 412, body = ErrorResponse),
-        (status = 413, description = "Tmp Markdown body exceeds 1 MiB", body = ErrorResponse),
-        (status = 415, description = "Tmp writes require a Markdown Content-Type", body = ErrorResponse)
-    )
-)]
-async fn put_tmp_document(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(path): Path<String>,
-    body: Bytes,
-) -> Result<Response, ApiError> {
-    touch_agent_presence(&state, &headers, None, &path).await?;
-    let content_type = require_tmp_markdown_content_type(&headers)?;
-    let metadata = tmp_metadata_from_headers(&headers, &content_type)?;
-    let precondition = precondition_from_headers(&headers)?;
-    let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
-    let transaction = transaction_metadata_from_headers(&headers)?;
-
-    gateway::gateway_reply(
-        markdown_write::put_tmp_block_document(
-            &state,
-            &path,
-            markdown_write::PutBlockDocumentRequest {
-                body: body.to_vec(),
-                metadata,
-                precondition,
-                origin_id,
-                transaction,
-            },
-        )
-        .await,
     )
 }
 

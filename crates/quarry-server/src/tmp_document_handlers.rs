@@ -1,8 +1,12 @@
-use crate::{ApiError, AppState, ErrorResponse, insert_document_headers, json_with_etag};
+use crate::{
+    ApiError, AppState, ErrorResponse, gateway, insert_document_headers, json_with_etag,
+    markdown_write, optional_header, precondition_from_headers, require_tmp_markdown_content_type,
+    tmp_metadata_from_headers, touch_agent_presence, transaction_metadata_from_headers,
+};
 use axum::Json;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use quarry_core::{TransactionRecord, WriteOutcome};
 use serde::Deserialize;
@@ -84,6 +88,64 @@ pub(crate) async fn head_tmp_document(
         document.expires_at.as_deref(),
     )?;
     Ok(response)
+}
+
+#[utoipa::path(
+    put,
+    path = "/v1/tmp/documents/{secret}",
+    params(
+        ("secret" = String, Path),
+        (
+            "If-Match" = Option<String>,
+            Header,
+            description = "Optional ETag/document clock used as the merge base for Markdown writes"
+        ),
+        (
+            "If-None-Match" = Option<String>,
+            Header,
+            description = "Use * to create a new tmp document at this capability path"
+        )
+    ),
+    request_body(
+        description = "Tmp documents are Markdown-only scratch documents. Whole-document writes require Content-Type: text/markdown (or another accepted Markdown media type) and canonical UTF-8 Markdown no larger than 1 MiB.",
+        content(
+            (String = "text/markdown")
+        )
+    ),
+    responses(
+        (status = 200, body = WriteOutcome),
+        (status = 412, body = ErrorResponse),
+        (status = 413, description = "Tmp Markdown body exceeds 1 MiB", body = ErrorResponse),
+        (status = 415, description = "Tmp writes require a Markdown Content-Type", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn put_tmp_document(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(path): Path<String>,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    touch_agent_presence(&state, &headers, None, &path).await?;
+    let content_type = require_tmp_markdown_content_type(&headers)?;
+    let metadata = tmp_metadata_from_headers(&headers, &content_type)?;
+    let precondition = precondition_from_headers(&headers)?;
+    let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
+    let transaction = transaction_metadata_from_headers(&headers)?;
+
+    gateway::gateway_reply(
+        markdown_write::put_tmp_block_document(
+            &state,
+            &path,
+            markdown_write::PutBlockDocumentRequest {
+                body: body.to_vec(),
+                metadata,
+                precondition,
+                origin_id,
+                transaction,
+            },
+        )
+        .await,
+    )
 }
 
 #[utoipa::path(
