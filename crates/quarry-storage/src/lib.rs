@@ -30,6 +30,7 @@ use std::pin::Pin;
 use std::process;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use thiserror::Error;
 use tokio::sync::{Mutex, MutexGuard, OwnedMutexGuard, broadcast};
 use turso::{Builder, Connection, Database, Row, Rows, Value, params};
 use uuid::Uuid;
@@ -40,6 +41,28 @@ pub const TMP_DOCUMENT_MARKDOWN_MAX_BYTES: usize = 1024 * 1024;
 pub const TMP_DOCUMENT_DEFAULT_CONTENT_TYPE: &str = "text/markdown";
 
 type WriteTransactionFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
+
+#[derive(Debug, Error)]
+pub enum StorageError {
+    #[error("storage busy: {source}")]
+    Busy {
+        #[source]
+        source: turso::Error,
+    },
+    #[error("database error: {0}")]
+    Database(#[from] turso::Error),
+}
+
+impl From<StorageError> for QuarryError {
+    fn from(err: StorageError) -> Self {
+        match err {
+            StorageError::Busy { source } => Self::Busy(source.to_string()),
+            StorageError::Database(source) => Self::StorageSource {
+                source: Box::new(source),
+            },
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DocumentLookupScope<'a> {
@@ -3229,7 +3252,7 @@ impl QuarryStore {
     }
 
     fn conn(&self) -> Result<Connection> {
-        self.db.connect().map_err(map_turso_error)
+        Ok(self.db.connect().map_err(map_turso_error)?)
     }
 
     async fn library_by_slug_or_id_conn(
@@ -5013,7 +5036,7 @@ async fn begin_immediate(conn: &Connection) -> Result<()> {
                 tokio::time::sleep(delay).await;
                 delay *= 2;
             }
-            Err(err) => return Err(map_turso_error(err)),
+            Err(err) => return Err(map_turso_error(err).into()),
         }
     }
     Err(QuarryError::Busy("database remained locked".to_string()))
@@ -6218,7 +6241,7 @@ where
 }
 
 fn text(row: &Row, index: usize) -> Result<String> {
-    row.get::<String>(index).map_err(map_turso_error)
+    Ok(row.get::<String>(index).map_err(map_turso_error)?)
 }
 
 fn opt_text(row: &Row, index: usize) -> Result<Option<String>> {
@@ -6252,26 +6275,35 @@ fn opt_int(row: &Row, index: usize) -> Result<Option<i64>> {
 }
 
 fn int(row: &Row, index: usize) -> Result<i64> {
-    row.get::<i64>(index).map_err(map_turso_error)
+    Ok(row.get::<i64>(index).map_err(map_turso_error)?)
 }
 
 fn is_busy(err: &turso::Error) -> bool {
     matches!(err, turso::Error::Busy(_) | turso::Error::BusySnapshot(_))
 }
 
-fn map_turso_error(err: turso::Error) -> QuarryError {
+fn map_turso_error(err: turso::Error) -> StorageError {
     if is_busy(&err) {
-        QuarryError::Busy(err.to_string())
+        StorageError::Busy { source: err }
     } else {
-        QuarryError::StorageSource {
-            source: Box::new(err),
-        }
+        StorageError::Database(err)
     }
 }
 
 #[cfg(test)]
 mod tmp_secret_tests {
     use super::*;
+
+    #[test]
+    fn storage_busy_error_converts_to_branchable_quarry_error() {
+        let err = QuarryError::from(StorageError::Busy {
+            source: turso::Error::Busy("database is locked".to_string()),
+        });
+
+        assert!(
+            matches!(err, QuarryError::Busy(message) if message.contains("database is locked"))
+        );
+    }
 
     #[test]
     fn store_event_constructors_populate_only_relevant_fields() {

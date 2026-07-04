@@ -17,9 +17,26 @@ use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use thiserror::Error;
 use utoipa::ToSchema;
 use uuid::Uuid;
 use walkdir::WalkDir;
+
+#[derive(Debug, Error)]
+pub enum GitError {
+    #[error("git error: {0}")]
+    Git(#[from] git2::Error),
+    #[error("path is outside the git worktree: {0}")]
+    WorktreePath(#[from] std::path::StripPrefixError),
+}
+
+impl From<GitError> for QuarryError {
+    fn from(err: GitError) -> Self {
+        Self::GitSource {
+            source: Box::new(err),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct GitExportOptions {
@@ -732,13 +749,10 @@ async fn import_worktree_transaction(
         if !entry.file_type().is_file() {
             continue;
         }
-        let relative =
-            entry
-                .path()
-                .strip_prefix(repo_dir)
-                .map_err(|err| QuarryError::StorageSource {
-                    source: Box::new(err),
-                })?;
+        let relative = entry
+            .path()
+            .strip_prefix(repo_dir)
+            .map_err(GitError::from)?;
         if is_sidecar(relative) {
             continue;
         }
@@ -1221,13 +1235,11 @@ fn ensure_remote<'repo>(repo: &'repo Repository, remote_url: &str) -> Result<git
             repo.remote("origin", remote_url).map_err(map_git)?;
         }
     }
-    repo.find_remote("origin").map_err(map_git)
+    Ok(repo.find_remote("origin").map_err(map_git)?)
 }
 
-fn map_git(err: git2::Error) -> QuarryError {
-    QuarryError::GitSource {
-        source: Box::new(err),
-    }
+fn map_git(err: git2::Error) -> GitError {
+    GitError::Git(err)
 }
 
 async fn peer_config(store: &QuarryStore, library: &str, peer_id: &str) -> Result<PeerConfig> {
@@ -1330,13 +1342,10 @@ fn worktree_snapshot(repo_dir: &Path) -> Result<HashMap<String, GitFile>> {
         if !entry.file_type().is_file() {
             continue;
         }
-        let relative =
-            entry
-                .path()
-                .strip_prefix(repo_dir)
-                .map_err(|err| QuarryError::StorageSource {
-                    source: Box::new(err),
-                })?;
+        let relative = entry
+            .path()
+            .strip_prefix(repo_dir)
+            .map_err(GitError::from)?;
         if is_sidecar(relative) {
             continue;
         }
@@ -1572,6 +1581,16 @@ fn enforce_delete_safety(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn git_error_converts_through_the_crate_error_boundary() {
+        let err = QuarryError::from(GitError::Git(git2::Error::from_str("boom")));
+
+        let QuarryError::GitSource { source } = err else {
+            panic!("expected git source error");
+        };
+        assert!(source.to_string().contains("git error: boom"));
+    }
 
     #[test]
     fn redacts_url_userinfo_without_touching_plain_remotes() {
