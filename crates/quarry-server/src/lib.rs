@@ -1,6 +1,7 @@
 mod agent_events;
 mod assets;
 mod collab;
+mod collab_handlers;
 mod conflicts;
 mod discovery;
 mod document_handlers;
@@ -29,11 +30,10 @@ use agent_events::{
 use assets::{browser_asset, browser_ui_bundle_embedded};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{MatchedPath, Path, Request, State};
+use axum::extract::{MatchedPath, Request};
 use axum::http::{HeaderMap, HeaderValue};
 use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::routing::{get, post, put};
 use discovery::{agent_discovery, agent_docs, quarry_skill};
 pub use error::{ApiError, ErrorResponse};
@@ -178,7 +178,10 @@ fn install_collab_routes(router: Router<AppState>) -> Router<AppState> {
         return router;
     }
 
-    router.route("/v1/collab/{document_id}", get(collab_websocket))
+    router.route(
+        "/v1/collab/{document_id}",
+        get(collab_handlers::collab_websocket),
+    )
 }
 
 fn install_tmp_document_routes(router: Router<AppState>) -> Router<AppState> {
@@ -200,7 +203,10 @@ fn install_tmp_document_routes(router: Router<AppState>) -> Router<AppState> {
             post(tmp_document_handlers::create_tmp_document)
                 .layer(DefaultBodyLimit::max(TMP_DOCUMENT_HTTP_BODY_LIMIT)),
         )
-        .route("/v1/tmp/collab/{secret}/{room}", get(tmp_collab_websocket))
+        .route(
+            "/v1/tmp/collab/{secret}/{room}",
+            get(collab_handlers::tmp_collab_websocket),
+        )
         .route("/v1/tmp/documents/{*path}", tmp_document_route)
 }
 
@@ -528,14 +534,14 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         system_handlers::capabilities,
         system_handlers::openapi_json,
         system_handlers::admin_gc,
-        collab_websocket_openapi,
+        collab_handlers::collab_websocket_openapi,
         sse::events,
         library_handlers::create_library,
         library_handlers::list_libraries,
         library_handlers::get_library,
         document_handlers::list_documents,
         tmp_document_handlers::create_tmp_document,
-        tmp_collab_websocket_openapi,
+        collab_handlers::tmp_collab_websocket_openapi,
         tmp_document_handlers::get_tmp_document,
         tmp_document_handlers::head_tmp_document,
         tmp_document_handlers::put_tmp_document,
@@ -668,61 +674,6 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
     ))
 )]
 struct ApiDoc;
-
-#[utoipa::path(
-    get,
-    path = "/v1/collab/{document_id}",
-    params(("document_id" = String, Path)),
-    responses((status = 101, description = "Yjs collaboration websocket"))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn collab_websocket_openapi() {}
-
-async fn collab_websocket(
-    State(state): State<AppState>,
-    Path(document_id): Path<String>,
-    ws: WebSocketUpgrade,
-) -> impl IntoResponse {
-    let shutdown = state.shutdown_token();
-    ws.on_upgrade(move |socket| async move {
-        state
-            .sessions
-            .serve_socket(document_id, socket, shutdown)
-            .await;
-    })
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/tmp/collab/{secret}/{room}",
-    params(("secret" = String, Path), ("room" = String, Path)),
-    responses((status = 101, description = "Yjs collaboration websocket for tmp capability documents"))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn tmp_collab_websocket_openapi() {}
-
-async fn tmp_collab_websocket(
-    State(state): State<AppState>,
-    Path((secret, _room)): Path<(String, String)>,
-    ws: WebSocketUpgrade,
-) -> Result<Response, ApiError> {
-    let document = state.store.head_tmp_document(&secret).await?;
-    let shutdown = state.shutdown_token();
-    Ok(ws
-        .on_upgrade(move |socket| async move {
-            state
-                .sessions
-                .serve_socket(document.id, socket, shutdown)
-                .await;
-        })
-        .into_response())
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
