@@ -8,6 +8,9 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "lib-documents")]
+use anyhow::Context as _;
+
+#[cfg(feature = "lib-documents")]
 fn assert_content_hash(hash: &str) {
     assert_eq!(hash.len(), 64);
     assert!(hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
@@ -650,31 +653,27 @@ fn wait_for_tcp(addr: std::net::SocketAddr, timeout: Duration) {
 /// Content normalizes once and round-trips; raw files keep exact bytes.
 #[cfg(feature = "lib-documents")]
 #[test]
-fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() {
-    let temp = tempfile::tempdir().unwrap();
+fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir().context("create temp dir")?;
     let root = temp.path().join("root");
-    run_quarry(["init", root.to_str().unwrap()]);
+    let root_str = root.to_str().context("root path should be UTF-8")?;
+    run_quarry(["init", root_str]);
 
     let markdown = temp.path().join("doc.md");
-    std::fs::write(&markdown, "# Title\n\nAlpha.\n").unwrap();
+    let markdown_str = markdown.to_str().context("markdown path should be UTF-8")?;
+    std::fs::write(&markdown, "# Title\n\nAlpha.\n").context("write initial markdown")?;
     run_quarry([
         "--root",
-        root.to_str().unwrap(),
+        root_str,
         "put",
         "notes",
         "notes/doc.md",
-        markdown.to_str().unwrap(),
+        markdown_str,
     ]);
     let output = quarry_command()
-        .args([
-            "--root",
-            root.to_str().unwrap(),
-            "get",
-            "notes",
-            "notes/doc.md",
-        ])
+        .args(["--root", root_str, "get", "notes", "notes/doc.md"])
         .output()
-        .unwrap();
+        .context("run quarry get for initial markdown")?;
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
@@ -683,8 +682,8 @@ fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() {
 
     // A second put merges the edit (two-way) instead of replacing the
     // projection: sibling block ids survive the whole-file write.
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let block_ids = |runtime: &tokio::runtime::Runtime| {
+    let runtime = tokio::runtime::Runtime::new().context("create tokio runtime")?;
+    let block_ids = |runtime: &tokio::runtime::Runtime| -> anyhow::Result<Vec<String>> {
         runtime.block_on(async {
             let store = quarry_storage::QuarryStore::open(quarry_storage::StoreConfig {
                 db_path: root.join("quarry.db"),
@@ -692,57 +691,56 @@ fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() {
                 lock_path: None,
             })
             .await
-            .unwrap();
-            let document = store.get_document("notes", "notes/doc.md").await.unwrap();
-            store
+            .context("open store for block id read")?;
+            let document = store
+                .get_document("notes", "notes/doc.md")
+                .await
+                .context("load markdown document")?;
+            let block_ids = store
                 .load_block_tree(&document.id)
                 .await
-                .unwrap()
+                .context("load markdown block tree")?
                 .into_iter()
                 .map(|row| row.block_id)
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            Ok(block_ids)
         })
     };
-    let ids_before = block_ids(&runtime);
+    let ids_before = block_ids(&runtime)?;
     assert!(!ids_before.is_empty());
-    std::fs::write(&markdown, "# Title\n\nAlpha, edited.\n").unwrap();
+    std::fs::write(&markdown, "# Title\n\nAlpha, edited.\n").context("write edited markdown")?;
     run_quarry([
         "--root",
-        root.to_str().unwrap(),
+        root_str,
         "put",
         "notes",
         "notes/doc.md",
-        markdown.to_str().unwrap(),
+        markdown_str,
     ]);
     let output = quarry_command()
-        .args([
-            "--root",
-            root.to_str().unwrap(),
-            "get",
-            "notes",
-            "notes/doc.md",
-        ])
+        .args(["--root", root_str, "get", "notes", "notes/doc.md"])
         .output()
-        .unwrap();
+        .context("run quarry get for edited markdown")?;
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "# Title\n\nAlpha, edited.\n"
     );
 
-    let ids_after = block_ids(&runtime);
+    let ids_after = block_ids(&runtime)?;
     assert_eq!(ids_before, ids_after);
 
     // RawDocuments bypass the block model: exact bytes back.
     let blob = temp.path().join("blob.bin");
-    std::fs::write(&blob, [0u8, 159, 146, 150]).unwrap();
+    let blob_str = blob.to_str().context("blob path should be UTF-8")?;
+    std::fs::write(&blob, [0u8, 159, 146, 150]).context("write raw blob")?;
     run_quarry([
         "--root",
-        root.to_str().unwrap(),
+        root_str,
         "put",
         "notes",
         "assets/blob.bin",
-        blob.to_str().unwrap(),
+        blob_str,
     ]);
     // `get` prints lossily; verify raw byte fidelity at the store.
     runtime.block_on(async {
@@ -752,15 +750,20 @@ fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() {
             lock_path: None,
         })
         .await
-        .unwrap();
+        .context("open store for raw document check")?;
         let document = store
             .get_document("notes", "assets/blob.bin")
             .await
-            .unwrap();
+            .context("load raw document")?;
         assert_eq!(document.content, vec![0u8, 159, 146, 150]);
         assert_eq!(
-            store.load_block_tree(&document.id).await.unwrap(),
+            store
+                .load_block_tree(&document.id)
+                .await
+                .context("load raw document block tree")?,
             Vec::<quarry_storage::BlockRow>::new()
         );
-    });
+        anyhow::Ok(())
+    })?;
+    Ok(())
 }
