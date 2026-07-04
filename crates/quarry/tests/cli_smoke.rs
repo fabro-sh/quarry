@@ -343,56 +343,60 @@ fn cli_backup_restore_preserves_metadata_versions_and_cas_content() -> anyhow::R
 
 #[cfg(feature = "lib-documents")]
 #[test]
-fn cli_can_create_and_list_git_peers() {
-    let temp = tempfile::tempdir().unwrap();
+fn cli_can_create_and_list_git_peers() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir().context("create temp dir")?;
     let root = temp.path().join("root");
+    let root_str = root.to_str().context("root path should be UTF-8")?;
     let repo = temp.path().join("repo");
-    std::fs::create_dir_all(&repo).unwrap();
+    let repo_str = repo.to_str().context("repo path should be UTF-8")?;
+    std::fs::create_dir_all(&repo).context("create git repo directory")?;
 
-    run_quarry(["init", root.to_str().unwrap()]);
     let output = quarry_command()
-        .args([
-            "--root",
-            root.to_str().unwrap(),
-            "git",
-            "peer",
-            "add",
-            "notes",
-            repo.to_str().unwrap(),
-            "--branch",
-            "main",
-        ])
+        .args(["init", root_str])
         .output()
-        .unwrap();
+        .context("run quarry init")?;
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let peer: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let output = quarry_command()
+        .args([
+            "--root", root_str, "git", "peer", "add", "notes", repo_str, "--branch", "main",
+        ])
+        .output()
+        .context("run quarry git peer add")?;
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let peer: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parse git peer add JSON")?;
     assert_eq!(peer["kind"], "git");
-    assert_eq!(peer["config"]["repo"], repo.to_str().unwrap());
+    assert_eq!(peer["config"]["repo"], repo_str);
     assert_eq!(peer["config"]["branch"], "main");
 
     let output = quarry_command()
-        .args([
-            "--root",
-            root.to_str().unwrap(),
-            "git",
-            "peer",
-            "list",
-            "notes",
-        ])
+        .args(["--root", root_str, "git", "peer", "list", "notes"])
         .output()
-        .unwrap();
+        .context("run quarry git peer list")?;
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let peers: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(peers.as_array().unwrap().len(), 1);
+    let peers: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parse git peer list JSON")?;
+    assert_eq!(
+        peers
+            .as_array()
+            .context("git peer list response should be an array")?
+            .len(),
+        1
+    );
     assert_eq!(peers[0]["id"], peer["id"]);
+    Ok(())
 }
 
 #[cfg(unix)]
