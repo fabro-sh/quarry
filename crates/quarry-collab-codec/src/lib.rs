@@ -10,7 +10,7 @@ mod text_diff;
 mod trailing;
 mod yjs_builder;
 
-pub use markdown::{block_markdown_to_slate, block_markdown_to_slate_raw};
+pub use markdown::{block_markdown_to_slate, block_markdown_to_slate_raw, split_markdown_blocks};
 pub use markdown_writer::{KNOWN_BLOCK_TYPES, is_known_inline_mark, slate_to_markdown};
 pub use reconcile::{ReconcileBase, ReconcileConflict, ReconcileOp, ReconcileOutcome, reconcile};
 pub use review::{

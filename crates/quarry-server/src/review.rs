@@ -1,7 +1,7 @@
 use crate::{ApiError, gateway};
 use quarry_collab_codec::{
     ReviewMeta, ReviewMetaEntry, ReviewSuggestionKind as CodecReviewSuggestionKind, review_markers,
-    review_meta_with_inline_comment_bodies,
+    review_meta_with_inline_comment_bodies, split_markdown_blocks,
 };
 use quarry_core::QuarryError;
 use quarry_storage::QuarryStore;
@@ -513,99 +513,4 @@ fn review_entry_status(entry: &ReviewMetaEntry) -> String {
 
 fn block_hash(markdown: &str) -> String {
     blake3::hash(markdown.as_bytes()).to_hex().to_string()
-}
-
-fn split_markdown_blocks(markdown: &str) -> Vec<String> {
-    if markdown.is_empty() {
-        return Vec::new();
-    }
-
-    let mut blocks = Vec::new();
-    let mut block_start = 0usize;
-    let mut offset = 0usize;
-    let mut pending_boundary = None;
-    let mut fence = None;
-
-    for line in markdown.split_inclusive('\n') {
-        let line_start = offset;
-        let line_end = line_start + line.len();
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        let outside_fence = fence.is_none();
-        let blank_outside_fence = outside_fence && trimmed.trim().is_empty();
-
-        if outside_fence
-            && !blank_outside_fence
-            && let Some(boundary) = pending_boundary.take()
-            && block_start < boundary
-        {
-            blocks.push(markdown[block_start..boundary].to_string());
-            block_start = boundary;
-        }
-
-        update_markdown_fence(trimmed, &mut fence);
-
-        if blank_outside_fence {
-            pending_boundary = Some(line_end);
-        } else if fence.is_none() {
-            pending_boundary = None;
-        }
-
-        offset = line_end;
-    }
-
-    if offset < markdown.len() {
-        let line = &markdown[offset..];
-        let outside_fence = fence.is_none();
-        if outside_fence
-            && !line.trim().is_empty()
-            && let Some(boundary) = pending_boundary.take()
-            && block_start < boundary
-        {
-            blocks.push(markdown[block_start..boundary].to_string());
-            block_start = boundary;
-        }
-        if outside_fence && line.trim().is_empty() {
-            pending_boundary = Some(markdown.len());
-        }
-    }
-
-    if let Some(boundary) = pending_boundary
-        && boundary > block_start
-        && boundary == markdown.len()
-    {
-        blocks.push(markdown[block_start..boundary].to_string());
-        return blocks;
-    }
-    if block_start < markdown.len() {
-        blocks.push(markdown[block_start..].to_string());
-    }
-    blocks
-}
-
-fn update_markdown_fence(trimmed_line: &str, fence: &mut Option<(char, usize)>) {
-    let Some((marker, count)) = markdown_fence_marker(trimmed_line) else {
-        return;
-    };
-    match fence {
-        Some((open_marker, open_count)) if *open_marker == marker && count >= *open_count => {
-            *fence = None;
-        }
-        None => {
-            *fence = Some((marker, count));
-        }
-        _ => {}
-    }
-}
-
-fn markdown_fence_marker(line: &str) -> Option<(char, usize)> {
-    let trimmed = line.trim_start_matches(' ');
-    if line.len() - trimmed.len() > 3 {
-        return None;
-    }
-    let marker = trimmed.chars().next()?;
-    if marker != '`' && marker != '~' {
-        return None;
-    }
-    let count = trimmed.chars().take_while(|char| *char == marker).count();
-    (count >= 3).then_some((marker, count))
 }
