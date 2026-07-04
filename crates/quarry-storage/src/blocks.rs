@@ -971,9 +971,9 @@ impl QuarryStore {
             let version_ids = document_version_ids_conn(&conn, &document.id).await?;
             let replay = block_transaction_conn(&conn, &document.id, client_tx_id).await?;
             Ok(BlockMutationState {
-                document_id: document.id,
+                document_id: document.id.to_string(),
                 path: document.path,
-                head_version_id: document.version.id,
+                head_version_id: document.version.id.to_string(),
                 content_type: document.version.content_type,
                 metadata: document.version.metadata,
                 rows,
@@ -1182,7 +1182,7 @@ impl QuarryStore {
                         &commit.actor_kind,
                         commit.actor_id.clone(),
                         commit.recorded_ops.clone(),
-                        Some(version.id.clone()),
+                        Some(version.id.to_string()),
                     )
                     .await?;
                     if let ResolvedDocumentScope::Library { id, .. } = &resolved_scope {

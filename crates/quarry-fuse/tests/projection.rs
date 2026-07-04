@@ -574,7 +574,7 @@ async fn import_markdown(store: &QuarryStore, library: &str, path: &str, markdow
         )
         .await
         .unwrap();
-    outcome.document.id
+    outcome.document.id.to_string()
 }
 
 async fn overwrite_through_handle(
@@ -614,7 +614,7 @@ async fn markdown_write_preserves_sibling_block_ids_and_live_anchors() {
     let ids_before = top_level_ids(&store.load_block_tree(&document_id).await.unwrap());
     let anchor = store
         .put_block_review_item(quarry_storage::NewBlockReviewItem {
-            document_id: document_id.clone(),
+            document_id: document_id.to_string(),
             block_id: ids_before[0].clone(),
             kind: quarry_storage::BlockReviewKind::Comment,
             start_offset: 0,
@@ -702,7 +702,7 @@ async fn concurrent_canonical_edit_and_fuse_write_converge_with_conflict_items()
             metadata: serde_json::json!({"content_type": "text/markdown"}),
             base: quarry_storage::BlockWriteBase::Markdown {
                 markdown: base_export.clone(),
-                version_id: Some(head.head_version_id.clone()),
+                version_id: Some(head.head_version_id.to_string()),
             },
             source: DocumentSource::Rest,
             surface: "rest".to_string(),
@@ -893,7 +893,7 @@ async fn atomic_save_rename_preserves_target_identity_block_ids_and_anchors() {
     let ids_before = top_level_ids(&store.load_block_tree(&document_id).await.unwrap());
     let anchor = store
         .put_block_review_item(quarry_storage::NewBlockReviewItem {
-            document_id: document_id.clone(),
+            document_id: document_id.to_string(),
             block_id: ids_before[1].clone(),
             kind: quarry_storage::BlockReviewKind::Comment,
             start_offset: 0,

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::error::Error as StdError;
+use std::fmt;
+use std::ops::Deref;
 use std::str::FromStr;
 use thiserror::Error;
 #[cfg(feature = "openapi")]
@@ -10,6 +12,89 @@ pub const INLINE_CONTENT_THRESHOLD: usize = 64 * 1024;
 pub const GIT_BINARY_WARN_THRESHOLD: usize = 5 * 1024 * 1024;
 
 pub type Result<T> = std::result::Result<T, QuarryError>;
+
+macro_rules! string_newtype {
+    ($name:ident) => {
+        #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[cfg_attr(feature = "openapi", derive(ToSchema))]
+        #[serde(transparent)]
+        pub struct $name(String);
+
+        impl $name {
+            pub fn new(value: impl Into<String>) -> Self {
+                Self(value.into())
+            }
+
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+
+            pub fn into_string(self) -> String {
+                self.0
+            }
+        }
+
+        impl From<String> for $name {
+            fn from(value: String) -> Self {
+                Self(value)
+            }
+        }
+
+        impl From<&str> for $name {
+            fn from(value: &str) -> Self {
+                Self(value.to_string())
+            }
+        }
+
+        impl From<$name> for String {
+            fn from(value: $name) -> Self {
+                value.0
+            }
+        }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                self.as_str()
+            }
+        }
+
+        impl Deref for $name {
+            type Target = str;
+
+            fn deref(&self) -> &Self::Target {
+                self.as_str()
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.fmt(f)
+            }
+        }
+
+        impl PartialEq<String> for $name {
+            fn eq(&self, other: &String) -> bool {
+                self.as_str() == other.as_str()
+            }
+        }
+
+        impl PartialEq<$name> for String {
+            fn eq(&self, other: &$name) -> bool {
+                self.as_str() == other.as_str()
+            }
+        }
+
+        impl PartialEq<&str> for $name {
+            fn eq(&self, other: &&str) -> bool {
+                self.as_str() == *other
+            }
+        }
+    };
+}
+
+string_newtype!(DocumentId);
+string_newtype!(VersionId);
+string_newtype!(Timestamp);
 
 #[derive(Debug, Error)]
 pub enum QuarryError {
@@ -82,7 +167,7 @@ impl ParseEnumError {
 pub struct Library {
     pub id: String,
     pub slug: String,
-    pub created_at: String,
+    pub created_at: Timestamp,
     pub settings: JsonValue,
 }
 
@@ -232,8 +317,8 @@ pub enum WritePrecondition {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct DocumentVersion {
-    pub id: String,
-    pub document_id: String,
+    pub id: VersionId,
+    pub document_id: DocumentId,
     pub tx_id: String,
     #[serde(default)]
     pub transaction_source: Option<DocumentSource>,
@@ -249,16 +334,16 @@ pub struct DocumentVersion {
     pub metadata: JsonValue,
     pub content_type: String,
     pub byte_size: u64,
-    pub created_at: String,
+    pub created_at: Timestamp,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct DocumentHistoryEntry {
-    pub id: String,
-    pub document_id: String,
-    pub latest_version_id: String,
-    pub earliest_version_id: String,
+    pub id: VersionId,
+    pub document_id: DocumentId,
+    pub latest_version_id: VersionId,
+    pub earliest_version_id: VersionId,
     pub raw_version_count: u64,
     #[serde(default)]
     pub source: Option<DocumentSource>,
@@ -272,14 +357,14 @@ pub struct DocumentHistoryEntry {
     pub checkpoint_reason: Option<String>,
     pub content_type: String,
     pub byte_size: u64,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct Document {
-    pub id: String,
+    pub id: DocumentId,
     pub library_id: Option<String>,
     pub path: String,
     pub version: DocumentVersion,
@@ -287,37 +372,37 @@ pub struct Document {
     pub content: Vec<u8>,
     pub metadata: JsonValue,
     #[serde(default)]
-    pub expires_at: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub expires_at: Option<Timestamp>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct DocumentListEntry {
-    pub id: String,
+    pub id: DocumentId,
     #[serde(default)]
     pub library_id: Option<String>,
     pub path: String,
-    pub head_version_id: String,
+    pub head_version_id: VersionId,
     pub content_type: String,
     pub byte_size: u64,
     pub content_hash: Option<String>,
     pub metadata: JsonValue,
     #[serde(default)]
-    pub expires_at: Option<String>,
-    pub updated_at: String,
+    pub expires_at: Option<Timestamp>,
+    pub updated_at: Timestamp,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct CollabInviteToken {
     pub id: String,
-    pub document_id: String,
+    pub document_id: DocumentId,
     pub role: String,
     pub by_hint: Option<String>,
-    pub created_at: String,
-    pub revoked_at: Option<String>,
+    pub created_at: Timestamp,
+    pub revoked_at: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -338,8 +423,8 @@ pub struct TransactionRecord {
     pub source: DocumentSource,
     pub message: Option<String>,
     pub provenance: JsonValue,
-    pub created_at: String,
-    pub committed_at: Option<String>,
+    pub created_at: Timestamp,
+    pub committed_at: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -350,11 +435,11 @@ pub struct ConflictRecord {
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conflict_path: Option<String>,
-    pub ours_version_id: Option<String>,
-    pub theirs_version_id: Option<String>,
+    pub ours_version_id: Option<VersionId>,
+    pub theirs_version_id: Option<VersionId>,
     pub status: ConflictStatus,
-    pub discovered_at: String,
-    pub resolved_at: Option<String>,
+    pub discovered_at: Timestamp,
+    pub resolved_at: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -371,7 +456,7 @@ pub struct GitPeer {
 pub struct SyncStateEntry {
     pub peer_id: String,
     pub path: String,
-    pub last_synced_doc_version_id: Option<String>,
+    pub last_synced_doc_version_id: Option<VersionId>,
     pub last_synced_git_oid: Option<String>,
 }
 
@@ -392,14 +477,14 @@ pub struct SearchResponse {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct SearchResult {
-    pub document_id: String,
+    pub document_id: DocumentId,
     pub path: String,
     pub title: String,
     pub content_type: String,
     pub score: f64,
     pub snippet: Option<String>,
     pub matched_fields: Vec<String>,
-    pub head_version_id: String,
+    pub head_version_id: VersionId,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -408,7 +493,7 @@ pub struct SearchSuggestion {
     pub path: String,
     pub title: String,
     pub match_type: String,
-    pub head_version_id: String,
+    pub head_version_id: VersionId,
     pub matched_text: Option<String>,
     pub target_anchor: Option<String>,
 }
@@ -423,12 +508,12 @@ pub struct ReindexReport {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct DocumentLink {
-    pub src_doc_id: String,
-    pub src_version_id: String,
+    pub src_doc_id: DocumentId,
+    pub src_version_id: VersionId,
     pub src_path: String,
     pub target_kind: String,
     pub target_text: String,
-    pub target_doc_id: Option<String>,
+    pub target_doc_id: Option<DocumentId>,
     pub target_path: Option<String>,
     pub target_anchor: Option<String>,
     pub alias: Option<String>,
@@ -448,7 +533,7 @@ pub struct LinkCollection {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct GraphNode {
-    pub id: String,
+    pub id: DocumentId,
     pub path: String,
     pub title: String,
     pub content_type: String,
@@ -458,9 +543,9 @@ pub struct GraphNode {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct GraphEdge {
     pub id: String,
-    pub source: String,
+    pub source: DocumentId,
     pub source_path: String,
-    pub target: Option<String>,
+    pub target: Option<DocumentId>,
     pub target_path: Option<String>,
     pub target_kind: String,
     pub target_text: String,
@@ -486,8 +571,8 @@ pub struct DocumentVersionContent {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct VersionDiff {
-    pub base_version_id: String,
-    pub against_version_id: String,
+    pub base_version_id: VersionId,
+    pub against_version_id: VersionId,
     pub unified_diff: String,
 }
 
@@ -586,6 +671,23 @@ mod tests {
         assert!("unknown".parse::<TransactionState>().is_err());
         assert!("unknown".parse::<ChangeType>().is_err());
         assert!("unknown".parse::<ConflictStatus>().is_err());
+    }
+
+    #[test]
+    fn identifier_newtypes_serialize_as_plain_strings() {
+        assert_eq!(
+            serde_json::to_value(DocumentId::from("doc-1")).expect("serialize document id"),
+            JsonValue::String("doc-1".to_string())
+        );
+        assert_eq!(
+            serde_json::to_value(VersionId::from("version-1")).expect("serialize version id"),
+            JsonValue::String("version-1".to_string())
+        );
+        assert_eq!(
+            serde_json::to_value(Timestamp::from("2026-06-05T00:00:00Z"))
+                .expect("serialize timestamp"),
+            JsonValue::String("2026-06-05T00:00:00Z".to_string())
+        );
     }
 
     #[test]

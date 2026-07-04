@@ -426,7 +426,12 @@ async fn send_awareness_state(socket: &mut WsSocket, doc: &Doc, clock: u32, json
 }
 
 async fn document_id_of(store: &QuarryStore, path: &str) -> String {
-    store.head_document("blocks", path).await.unwrap().id
+    store
+        .head_document("blocks", path)
+        .await
+        .unwrap()
+        .id
+        .to_string()
 }
 
 async fn wait_for_markdown_containing(app: &axum::Router, path: &str, needle: &str) -> String {
@@ -704,7 +709,7 @@ async fn tmp_session_and_markdown_write_logs_do_not_emit_capability_secret() {
         "tmp markdown write event should still be logged:\n{output}"
     );
     assert!(
-        output.contains("scope=tmp") && output.contains(&document_id),
+        output.contains("scope=tmp") && output.contains(document_id.as_str()),
         "tmp logs should retain scope and document id diagnostics:\n{output}"
     );
 

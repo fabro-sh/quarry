@@ -52,7 +52,7 @@ pub(crate) async fn tmp_collab_websocket(
         .on_upgrade(move |socket| async move {
             state
                 .sessions
-                .serve_socket(document.id, socket, shutdown)
+                .serve_socket(document.id.to_string(), socket, shutdown)
                 .await;
         })
         .into_response())

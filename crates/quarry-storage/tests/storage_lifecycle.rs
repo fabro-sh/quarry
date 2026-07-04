@@ -31,8 +31,8 @@ fn history_version(
         serde_json::json!({"mode": "auto_commit"})
     };
     DocumentVersion {
-        id: id.to_string(),
-        document_id: document_id.to_string(),
+        id: id.to_string().into(),
+        document_id: document_id.to_string().into(),
         tx_id: format!("tx-{id}"),
         transaction_source: Some(source),
         transaction_actor: Some("browser".to_string()),
@@ -43,7 +43,7 @@ fn history_version(
         metadata: serde_json::json!({}),
         content_type: "text/markdown".to_string(),
         byte_size: 1,
-        created_at: created_at.to_string(),
+        created_at: created_at.to_string().into(),
     }
 }
 
@@ -278,7 +278,7 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
             metadata: serde_json::json!({"content_type":"text/markdown","topic":"plan"}),
             content_type: ("text/markdown").to_string(),
             source: DocumentSource::Rest,
-            precondition: WritePrecondition::IfMatch(small.version.id.clone()),
+            precondition: WritePrecondition::IfMatch(small.version.id.to_string()),
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
@@ -711,7 +711,7 @@ async fn autosave_tagged_writes_keep_raw_versions_but_group_history() {
             metadata: serde_json::json!({"content_type":"text/markdown"}),
             content_type: ("text/markdown").to_string(),
             source: DocumentSource::Rest,
-            precondition: WritePrecondition::IfMatch(first.version.id),
+            precondition: WritePrecondition::IfMatch(first.version.id.to_string()),
             origin_id: Some("browser:s1".to_string()),
             transaction: transaction(),
         })
@@ -949,7 +949,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
             metadata: serde_json::json!({"content_type":"text/markdown"}),
             content_type: ("text/markdown").to_string(),
             source: DocumentSource::Rest,
-            precondition: WritePrecondition::IfMatch(source.version.id.clone()),
+            precondition: WritePrecondition::IfMatch(source.version.id.to_string()),
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
@@ -1545,7 +1545,7 @@ async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_new
             metadata: serde_json::json!({"content_type":"text/markdown"}),
             content_type: ("text/markdown").to_string(),
             source: DocumentSource::Rest,
-            precondition: WritePrecondition::IfMatch(base.version.id),
+            precondition: WritePrecondition::IfMatch(base.version.id.to_string()),
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
@@ -1859,7 +1859,7 @@ async fn global_operation_lock_blocks_normal_writes_until_released() {
     let mut review = tokio::spawn(async move {
         review_store
             .put_block_review_item(NewBlockReviewItem {
-                document_id: review_document_id,
+                document_id: review_document_id.to_string(),
                 block_id,
                 kind: BlockReviewKind::Comment,
                 start_offset: 0,
@@ -2623,7 +2623,7 @@ async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() -> TestR
             serde_json::json!({"title":"Scratch"}),
             "text/markdown",
             TmpTtl::Unchanged,
-            WritePrecondition::IfMatch(tmp.version.id.clone()),
+            WritePrecondition::IfMatch(tmp.version.id.to_string()),
         )
         .await?;
     assert_eq!(updated.document.id, tmp.document.id);
@@ -2643,7 +2643,7 @@ async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() -> TestR
             &secret,
             &library.slug,
             "notes/scratch.md",
-            WritePrecondition::IfMatch(updated.version.id.clone()),
+            WritePrecondition::IfMatch(updated.version.id.to_string()),
         )
         .await?;
 
@@ -2904,7 +2904,7 @@ async fn tmp_documents_reject_non_markdown_media_types_on_create_and_update() {
             serde_json::json!({}),
             "text/plain",
             TmpTtl::Unchanged,
-            WritePrecondition::IfMatch(valid.version.id.clone()),
+            WritePrecondition::IfMatch(valid.version.id.to_string()),
         )
         .await
         .unwrap_err();
@@ -2919,7 +2919,7 @@ async fn tmp_documents_reject_non_markdown_media_types_on_create_and_update() {
             serde_json::json!({}),
             "application/json",
             TmpTtl::Unchanged,
-            WritePrecondition::IfMatch(valid.version.id.clone()),
+            WritePrecondition::IfMatch(valid.version.id.to_string()),
         )
         .await
         .unwrap_err();
@@ -2934,7 +2934,7 @@ async fn tmp_documents_reject_non_markdown_media_types_on_create_and_update() {
             serde_json::json!({}),
             "image/png",
             TmpTtl::Unchanged,
-            WritePrecondition::IfMatch(valid.version.id.clone()),
+            WritePrecondition::IfMatch(valid.version.id.to_string()),
         )
         .await
         .unwrap_err();
@@ -2979,7 +2979,7 @@ async fn tmp_documents_reject_invalid_utf8_on_create_and_update() {
             serde_json::json!({}),
             "text/markdown",
             TmpTtl::Unchanged,
-            WritePrecondition::IfMatch(valid.version.id.clone()),
+            WritePrecondition::IfMatch(valid.version.id.to_string()),
         )
         .await
         .unwrap_err();
@@ -3042,7 +3042,7 @@ async fn tmp_block_mutation_rejects_oversized_normalized_markdown_without_moving
             "Original.\n",
             serde_json::json!({}),
             "text/markdown",
-            WritePrecondition::IfMatch(created.version.id.clone()),
+            WritePrecondition::IfMatch(created.version.id.to_string()),
         )
         .await
         .unwrap();
@@ -3192,7 +3192,7 @@ async fn imports_block_document_and_exports_stably_across_restart() {
             serde_json::json!({}),
             "text/markdown",
             DocumentSource::Rest,
-            WritePrecondition::IfMatch(outcome.version.id.clone()),
+            WritePrecondition::IfMatch(outcome.version.id.to_string()),
         )
         .await
         .unwrap();
@@ -3316,7 +3316,7 @@ async fn block_review_anchors_validate_utf16_boundaries_and_survive_restart() {
     // "Anchor target " (14) + 👍 (2, surrogate pair) + " emoji." (7) = 23.
     assert_eq!(tree[0].text, "Anchor target 👍 emoji.");
     let item = |start, end, state| NewBlockReviewItem {
-        document_id: outcome.document.id.clone(),
+        document_id: outcome.document.id.to_string(),
         block_id: block_id.clone(),
         kind: BlockReviewKind::Comment,
         start_offset: start,
@@ -3531,7 +3531,7 @@ async fn block_shadow_bases_and_block_transactions_roundtrip() {
             "peer-1:doc.md",
             &document_id,
             "Shadow me.\n",
-            Some(outcome.version.id.clone()),
+            Some(outcome.version.id.to_string()),
         )
         .await
         .unwrap();
@@ -3606,7 +3606,7 @@ async fn legacy_put_clears_the_block_projection_fail_closed() {
         .clone();
     store
         .put_block_review_item(NewBlockReviewItem {
-            document_id: document_id.clone(),
+            document_id: document_id.to_string(),
             block_id,
             kind: BlockReviewKind::Comment,
             start_offset: 0,
@@ -3708,7 +3708,7 @@ async fn delete_document_removes_the_block_projection() {
         .clone();
     store
         .put_block_review_item(NewBlockReviewItem {
-            document_id: document_id.clone(),
+            document_id: document_id.to_string(),
             block_id,
             kind: BlockReviewKind::Suggestion,
             start_offset: 0,
@@ -3805,7 +3805,7 @@ async fn block_mutation_commit_applies_rows_version_history_and_replays_duplicat
     assert_eq!(state.head_version_id, imported.version.id);
     assert!(!state.projection_missing);
     assert!(state.replay.is_none());
-    assert!(state.version_ids.contains(&imported.version.id));
+    assert!(state.version_ids.contains(imported.version.id.as_str()));
 
     let mut rows = state.rows.clone();
     rows[0].text = "Rewritten paragraph.".to_string();
@@ -3836,7 +3836,7 @@ async fn block_mutation_commit_applies_rows_version_history_and_replays_duplicat
     };
     assert_eq!(
         record.resulting_version_id,
-        Some(outcome.version.id.clone())
+        Some(outcome.version.id.to_string())
     );
     assert_eq!(
         store
@@ -4165,7 +4165,7 @@ async fn put_block_review_item_accepts_the_conflict_shape() {
 
     let stored = store
         .put_block_review_item(NewBlockReviewItem {
-            document_id: outcome.document.id.clone(),
+            document_id: outcome.document.id.to_string(),
             block_id: String::new(),
             kind: BlockReviewKind::Conflict,
             start_offset: 0,

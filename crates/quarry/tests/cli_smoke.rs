@@ -142,7 +142,12 @@ fn cli_conflict_resolve_rejects_conflicts_from_another_library() {
                 .await
                 .unwrap();
             store
-                .record_conflict(&library.slug, "notes/a.md", Some(written.version.id), None)
+                .record_conflict(
+                    &library.slug,
+                    "notes/a.md",
+                    Some(written.version.id.to_string()),
+                    None,
+                )
                 .await
                 .unwrap()
                 .id

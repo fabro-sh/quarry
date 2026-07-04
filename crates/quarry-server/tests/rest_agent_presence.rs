@@ -88,7 +88,7 @@ async fn agent_presence_records_status_by_document() {
     assert_eq!(body["current"]["agentId"], "agent-a");
     assert_eq!(body["current"]["status"], "thinking");
     assert_eq!(body["current"]["by"], "ai:codex");
-    assert_eq!(body["current"]["documentId"], written.document.id);
+    assert_eq!(body["current"]["documentId"], written.document.id.as_str());
     assert_eq!(body["presence"].as_array().unwrap().len(), 1);
 
     let response = app

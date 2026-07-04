@@ -451,7 +451,7 @@ impl SyncPathReconciler<'_> {
                     .record_conflict(
                         &self.library.slug,
                         &path,
-                        Some(doc.head_version_id.clone()),
+                        Some(doc.head_version_id.to_string()),
                         None,
                     )
                     .await?;
@@ -487,7 +487,7 @@ impl SyncPathReconciler<'_> {
                 self.import_git_file(
                     &path,
                     git,
-                    quarry_core::WritePrecondition::IfMatch(doc.head_version_id.clone()),
+                    quarry_core::WritePrecondition::IfMatch(doc.head_version_id.to_string()),
                 )
                 .await?;
                 accumulator.imported_paths.push(path);
@@ -567,8 +567,8 @@ impl SyncPathReconciler<'_> {
             .record_conflict(
                 &self.library.slug,
                 path,
-                Some(doc.head_version_id.clone()),
-                Some(outcome.version.id.clone()),
+                Some(doc.head_version_id.to_string()),
+                Some(outcome.version.id.to_string()),
             )
             .await?;
         log_git_conflict_recorded(
@@ -609,7 +609,12 @@ impl SyncPathReconciler<'_> {
         .id;
         let conflict = self
             .store
-            .record_conflict(&self.library.slug, path, None, Some(sibling_version_id))
+            .record_conflict(
+                &self.library.slug,
+                path,
+                None,
+                Some(sibling_version_id.to_string()),
+            )
             .await?;
         log_git_conflict_recorded(
             self.library,
@@ -1294,14 +1299,19 @@ async fn record_exported_sync_state(
                             peer_id,
                             &document.id,
                             body,
-                            Some(doc.head_version_id.clone()),
+                            Some(doc.head_version_id.to_string()),
                         )
                         .await?;
                 }
             }
         }
         store
-            .upsert_sync_state(peer_id, &doc.path, Some(doc.head_version_id), git_oid)
+            .upsert_sync_state(
+                peer_id,
+                &doc.path,
+                Some(doc.head_version_id.to_string()),
+                git_oid,
+            )
             .await?;
     }
     Ok(())
@@ -1432,7 +1442,7 @@ async fn write_markdown_file(
                 peer,
                 &outcome.outcome.document.id,
                 &outcome.canonical_body,
-                Some(outcome.outcome.version.id.clone()),
+                Some(outcome.outcome.version.id.to_string()),
             )
             .await?;
     }

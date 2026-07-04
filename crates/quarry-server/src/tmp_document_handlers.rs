@@ -255,14 +255,14 @@ pub(crate) async fn get_tmp_document(
                     state.agent_presence.clone(),
                     None,
                     document_path.to_string(),
-                    document_id.clone(),
+                    document_id.to_string(),
                     agent_id,
                 )
             });
             return Ok(events_for_tmp_document(
                 &state.store,
                 document_path.to_string(),
-                document_id,
+                document_id.to_string(),
                 presence_guard,
                 state.shutdown_token(),
             )
@@ -404,7 +404,7 @@ pub(crate) async fn patch_tmp_document_action(
     json_response(
         StatusCode::OK,
         &TtlResponse {
-            expires_at: entry.expires_at,
+            expires_at: entry.expires_at.map(|value| value.to_string()),
         },
     )
 }

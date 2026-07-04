@@ -218,8 +218,8 @@ pub(crate) async fn agent_document_snapshot(
     let base_token = document.version.id;
     let blocks = snapshot_blocks(&markdown);
     Ok(AgentDocumentSnapshot {
-        document_id: document.id,
-        base_token,
+        document_id: document.id.to_string(),
+        base_token: base_token.to_string(),
         blocks,
     })
 }
@@ -255,8 +255,8 @@ async fn agent_document_review_from_document(
     if !rows.is_empty() {
         let items = store.list_block_review_items(&document.id).await?;
         return Ok(gateway::review_response_from_rows(
-            document.id,
-            document.version.id,
+            document.id.to_string(),
+            document.version.id.to_string(),
             &rows,
             &items,
             include_resolved,
@@ -264,8 +264,8 @@ async fn agent_document_review_from_document(
     }
     let markdown = document_markdown(&document)?;
     Ok(agent_review_response_from_markdown(
-        document.id,
-        document.version.id,
+        document.id.to_string(),
+        document.version.id.to_string(),
         &markdown,
         include_resolved,
     ))

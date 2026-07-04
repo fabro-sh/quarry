@@ -2090,7 +2090,7 @@ async fn document_blocks_for_scope(
                 document.version.metadata.clone(),
                 &document.version.content_type,
                 DocumentSource::Rest,
-                WritePrecondition::IfMatch(document.version.id.clone()),
+                WritePrecondition::IfMatch(document.version.id.to_string()),
                 None,
                 quarry_storage::TransactionMetadata::default(),
             )
@@ -2099,11 +2099,15 @@ async fn document_blocks_for_scope(
         rows = state.store.load_block_tree(&document.id).await?;
     }
     let payload = BlockTreeResponse {
-        document_id: document.id,
-        document_clock: document_clock.clone(),
+        document_id: document.id.to_string(),
+        document_clock: document_clock.to_string(),
         blocks: rows.into_iter().map(block_payload).collect(),
     };
-    Ok(json_with_etag(StatusCode::OK, &payload, &document_clock)?)
+    Ok(json_with_etag(
+        StatusCode::OK,
+        &payload,
+        document_clock.as_str(),
+    )?)
 }
 
 fn block_payload(row: BlockRow) -> BlockNodePayload {
@@ -2268,7 +2272,7 @@ fn transaction_reply_response(reply: TransactionReply) -> Result<Response, Gatew
         TransactionReply::Committed(committed) => {
             let ack = BlockTransactionAck {
                 status: committed.status.to_string(),
-                document_clock: committed.outcome.version.id.clone(),
+                document_clock: committed.outcome.version.id.to_string(),
                 transaction_id: committed.transaction_id,
                 changed_block_ids: committed.changed_block_ids,
             };

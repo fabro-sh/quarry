@@ -752,7 +752,7 @@ impl LiveSession {
                 .await
             {
                 Ok(BlockMutationOutcome::Applied { outcome, .. }) => {
-                    self.record_committed(awareness, seq, outcome.version.id.clone(), items);
+                    self.record_committed(awareness, seq, outcome.version.id.to_string(), items);
                     tracing::debug!(
                         event = "collab.session.checkpointed",
                         document_id = %self.document_id,
@@ -846,7 +846,7 @@ impl LiveSession {
         self.record_committed(
             awareness,
             self.update_seq.load(Ordering::SeqCst),
-            outcome.version.id.clone(),
+            outcome.version.id.to_string(),
             items,
         );
     }

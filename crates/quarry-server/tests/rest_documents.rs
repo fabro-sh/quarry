@@ -581,7 +581,7 @@ async fn collab_share_endpoints_mint_list_and_revoke_invite_tokens() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
     let token: Value = response_json(response).await;
-    assert_eq!(token["document_id"], written.document.id);
+    assert_eq!(token["document_id"], written.document.id.as_str());
     assert_eq!(token["role"], "editor");
     assert_eq!(token["by_hint"], "Avery");
     let token_id = token["id"].as_str().unwrap().to_string();
@@ -844,7 +844,7 @@ content: b"# Intro\n\nLinks to [[Daily|today]], [[Missing]], [Guide](guide.md), 
 metadata: serde_json::json!({"title":"Intro","content_type":"text/markdown"}),
 content_type: ("text/markdown").to_string(),
 source: DocumentSource::Rest,
-precondition: quarry_core::WritePrecondition::IfMatch(first_intro.version.id.clone()),
+precondition: quarry_core::WritePrecondition::IfMatch(first_intro.version.id.to_string()),
 origin_id: None,
 transaction: quarry_storage::TransactionMetadata::default(),
 })
@@ -910,7 +910,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
     assert_eq!(body["results"][0]["path"], "intro.md");
     assert_eq!(
         body["results"][0]["head_version_id"],
-        latest_intro.version.id
+        latest_intro.version.id.as_str()
     );
     assert!(
         body["results"][0]["matched_fields"]
@@ -1214,8 +1214,14 @@ transaction: quarry_storage::TransactionMetadata::default(),
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert_eq!(body[0]["latest_version_id"], latest_intro.version.id);
-    assert_eq!(body[1]["latest_version_id"], first_intro.version.id);
+    assert_eq!(
+        body[0]["latest_version_id"],
+        latest_intro.version.id.as_str()
+    );
+    assert_eq!(
+        body[1]["latest_version_id"],
+        first_intro.version.id.as_str()
+    );
 
     let response = app
         .clone()
@@ -1230,8 +1236,8 @@ transaction: quarry_storage::TransactionMetadata::default(),
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert_eq!(body[0]["id"], latest_intro.version.id);
-    assert_eq!(body[1]["id"], first_intro.version.id);
+    assert_eq!(body[0]["id"], latest_intro.version.id.as_str());
+    assert_eq!(body[1]["id"], first_intro.version.id.as_str());
 
     let response = app
         .clone()
@@ -1288,7 +1294,10 @@ transaction: quarry_storage::TransactionMetadata::default(),
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_ne!(response.headers()[header::ETAG], first_intro.version.id);
+    assert_ne!(
+        response.headers()[header::ETAG],
+        first_intro.version.id.as_str()
+    );
 
     let response = app
         .clone()
@@ -1840,8 +1849,8 @@ async fn agent_snapshot_exposes_snapshot_scoped_block_refs() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert_eq!(body["documentId"], written.document.id);
-    assert_eq!(body["baseToken"], written.version.id);
+    assert_eq!(body["documentId"], written.document.id.as_str());
+    assert_eq!(body["baseToken"], written.version.id.as_str());
     assert_eq!(body["blocks"].as_array().unwrap().len(), 3);
     assert_eq!(body["blocks"][0]["markdown"], "# Title\n\n");
     assert!(body["blocks"][0]["ref"].get("baseToken").is_none());
@@ -1904,8 +1913,8 @@ async fn agent_review_lists_open_comments_replies_and_suggestions() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert_eq!(body["documentId"], written.document.id);
-    assert_eq!(body["baseToken"], written.version.id);
+    assert_eq!(body["documentId"], written.document.id.as_str());
+    assert_eq!(body["baseToken"], written.version.id.as_str());
     assert_eq!(body["comments"].as_array().unwrap().len(), 1);
     assert_eq!(body["comments"][0]["id"], "c1");
     assert_eq!(body["comments"][0]["status"], "open");
@@ -1992,8 +2001,8 @@ async fn agent_review_reports_explicit_inline_markers_without_endmatter() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert_eq!(body["documentId"], written.document.id);
-    assert_eq!(body["baseToken"], written.version.id);
+    assert_eq!(body["documentId"], written.document.id.as_str());
+    assert_eq!(body["baseToken"], written.version.id.as_str());
     assert_eq!(body["comments"].as_array().unwrap().len(), 1);
     assert_eq!(body["comments"][0]["id"], "c_orphan");
     assert_eq!(body["comments"][0]["by"], "unknown");
@@ -2115,8 +2124,8 @@ async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() {
         .record_conflict(
             &library.slug,
             "a.md",
-            Some(written.version.id.clone()),
-            Some(sibling.version.id.clone()),
+            Some(written.version.id.to_string()),
+            Some(sibling.version.id.to_string()),
         )
         .await
         .unwrap();

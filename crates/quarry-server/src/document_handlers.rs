@@ -337,7 +337,7 @@ pub(crate) async fn get_document(
                     state.agent_presence.clone(),
                     Some(library.clone()),
                     document_path.to_string(),
-                    document.id,
+                    document.id.to_string(),
                     agent_id,
                 )
             });
@@ -666,7 +666,7 @@ pub(crate) async fn patch_document_metadata(
         return json_response(
             StatusCode::OK,
             &TtlResponse {
-                expires_at: entry.expires_at,
+                expires_at: entry.expires_at.map(|value| value.to_string()),
             },
         );
     }

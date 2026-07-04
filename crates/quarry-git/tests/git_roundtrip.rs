@@ -431,7 +431,7 @@ async fn sync_preserves_both_sides_when_quarry_and_git_change_same_path() {
             metadata: serde_json::json!({"content_type":"text/markdown"}),
             content_type: ("text/markdown").to_string(),
             source: DocumentSource::Rest,
-            precondition: WritePrecondition::IfMatch(baseline.version.id.clone()),
+            precondition: WritePrecondition::IfMatch(baseline.version.id.to_string()),
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
@@ -588,7 +588,7 @@ async fn sync_exports_quarry_only_content_change_to_git() {
             metadata: serde_json::json!({"content_type":"text/markdown"}),
             content_type: ("text/markdown").to_string(),
             source: DocumentSource::Rest,
-            precondition: WritePrecondition::IfMatch(baseline.version.id),
+            precondition: WritePrecondition::IfMatch(baseline.version.id.to_string()),
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
@@ -759,7 +759,7 @@ async fn sync_accepts_both_changed_to_same_content_without_conflict() {
             metadata: serde_json::json!({"content_type":"text/markdown"}),
             content_type: ("text/markdown").to_string(),
             source: DocumentSource::Rest,
-            precondition: WritePrecondition::IfMatch(baseline.version.id),
+            precondition: WritePrecondition::IfMatch(baseline.version.id.to_string()),
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
@@ -1027,7 +1027,7 @@ async fn sync_records_conflict_when_quarry_changes_and_git_deletes() {
             metadata: serde_json::json!({"content_type":"text/markdown"}),
             content_type: ("text/markdown").to_string(),
             source: DocumentSource::Rest,
-            precondition: WritePrecondition::IfMatch(baseline.version.id),
+            precondition: WritePrecondition::IfMatch(baseline.version.id.to_string()),
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
@@ -1493,7 +1493,7 @@ async fn git_sync_edit_preserves_sibling_block_ids_and_live_anchors() {
         .collect();
     let anchor = store
         .put_block_review_item(quarry_storage::NewBlockReviewItem {
-            document_id: document_id.clone(),
+            document_id: document_id.to_string(),
             block_id: ids_before[1].clone(),
             kind: quarry_storage::BlockReviewKind::Comment,
             start_offset: 0,
@@ -1625,7 +1625,7 @@ async fn sync_pairs_pure_git_renames_into_identity_preserving_moves() {
         .collect();
     let anchor = store
         .put_block_review_item(quarry_storage::NewBlockReviewItem {
-            document_id: document_id.clone(),
+            document_id: document_id.to_string(),
             block_id: ids_before[1].clone(),
             kind: quarry_storage::BlockReviewKind::Comment,
             start_offset: 0,

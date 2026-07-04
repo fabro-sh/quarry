@@ -592,7 +592,7 @@ impl QuarryStore {
                 let library = Library {
                     id: Uuid::new_v4().to_string(),
                     slug,
-                    created_at: now,
+                    created_at: now.into(),
                     settings: serde_json::json!({}),
                 };
                 conn.execute(
@@ -600,7 +600,7 @@ impl QuarryStore {
                     params![
                         library.id.clone(),
                         library.slug.clone(),
-                        library.created_at.clone(),
+                        library.created_at.to_string(),
                         library.settings.to_string()
                     ],
                 )
@@ -1123,8 +1123,8 @@ impl QuarryStore {
             outcome.document.path.clone(),
             outcome.transaction.source.clone(),
             outcome.transaction.id.clone(),
-            outcome.document.id.clone(),
-            outcome.version.id.clone(),
+            outcome.document.id.to_string(),
+            outcome.version.id.to_string(),
             origin_id,
         ));
         self.emit_event(StoreEvent::links_indexed(
@@ -1545,10 +1545,10 @@ impl QuarryStore {
                     .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
                 let token = CollabInviteToken {
                     id: Uuid::new_v4().to_string(),
-                    document_id,
+                    document_id: document_id.into(),
                     role,
                     by_hint: by_hint.filter(|value| !value.trim().is_empty()),
-                    created_at: now_timestamp(),
+                    created_at: now_timestamp().into(),
                     revoked_at: None,
                 };
                 conn.execute(
@@ -1557,10 +1557,10 @@ impl QuarryStore {
                  VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
                     vec![
                         Value::Text(token.id.clone()),
-                        Value::Text(token.document_id.clone()),
+                        Value::Text(token.document_id.to_string()),
                         Value::Text(token.role.clone()),
                         opt_value(token.by_hint.clone()),
-                        Value::Text(token.created_at.clone()),
+                        Value::Text(token.created_at.to_string()),
                     ],
                 )
                 .await
@@ -1940,19 +1940,19 @@ impl QuarryStore {
             .await?;
         let document_by_id: HashMap<String, &DocumentListEntry> = documents
             .iter()
-            .map(|entry| (entry.id.clone(), entry))
+            .map(|entry| (entry.id.to_string(), entry))
             .collect();
         let mut node_map: HashMap<String, GraphNode> = HashMap::new();
         let mut edges = Vec::new();
         let mut candidate_nodes = 0usize;
 
         let mut add_node = |entry: &DocumentListEntry| {
-            if node_map.contains_key(&entry.id) {
+            if node_map.contains_key(entry.id.as_str()) {
                 return;
             }
             candidate_nodes += 1;
             if node_map.len() < limit {
-                node_map.insert(entry.id.clone(), graph_node_from_entry(entry));
+                node_map.insert(entry.id.to_string(), graph_node_from_entry(entry));
             }
         };
 
@@ -1992,16 +1992,16 @@ impl QuarryStore {
         if root.is_none() {
             if has_edge_filter {
                 for link in &links {
-                    if let Some(source) = document_by_id.get(&link.src_doc_id)
+                    if let Some(source) = document_by_id.get(link.src_doc_id.as_str())
                         && document_matches_folder(source)
-                        && included_ids.insert(source.id.clone())
+                        && included_ids.insert(source.id.to_string())
                     {
                         add_node(source);
                     }
                     if let Some(target_id) = link.target_doc_id.as_deref()
                         && let Some(target) = document_by_id.get(target_id)
                         && document_matches_folder(target)
-                        && included_ids.insert(target.id.clone())
+                        && included_ids.insert(target.id.to_string())
                     {
                         add_node(target);
                     }
@@ -2009,7 +2009,7 @@ impl QuarryStore {
             } else {
                 for entry in &documents {
                     if document_matches_folder(entry) {
-                        included_ids.insert(entry.id.clone());
+                        included_ids.insert(entry.id.to_string());
                         add_node(entry);
                     }
                 }
@@ -2018,15 +2018,15 @@ impl QuarryStore {
             && let Some(root_entry) = documents.iter().find(|entry| entry.path == root_path)
             && document_matches_folder(root_entry)
         {
-            included_ids.insert(root_entry.id.clone());
+            included_ids.insert(root_entry.id.to_string());
             add_node(root_entry);
-            let mut queue = VecDeque::from([(root_entry.id.clone(), 0u64)]);
+            let mut queue = VecDeque::from([(root_entry.id.to_string(), 0u64)]);
             while let Some((document_id, distance)) = queue.pop_front() {
                 if distance >= depth {
                     continue;
                 }
                 for link in &links {
-                    let neighbor_id = if link.src_doc_id == document_id {
+                    let neighbor_id = if link.src_doc_id.as_str() == document_id {
                         link.target_doc_id.as_deref()
                     } else if link.target_doc_id.as_deref() == Some(document_id.as_str()) {
                         Some(link.src_doc_id.as_str())
@@ -2048,7 +2048,7 @@ impl QuarryStore {
 
         for link in links {
             if root.is_some() || folder.is_some() || has_edge_filter {
-                let source_included = included_ids.contains(&link.src_doc_id);
+                let source_included = included_ids.contains(link.src_doc_id.as_str());
                 let target_included = link
                     .target_doc_id
                     .as_deref()
@@ -2179,14 +2179,15 @@ impl QuarryStore {
             self.document_entry_conn(&conn, &library_record.id, &path)
                 .await?
                 .head_version_id
+                .to_string()
         };
         let (_, against_content) = self
             .version_content_conn(&conn, &document_id, &against_id)
             .await?;
 
         Ok(VersionDiff {
-            base_version_id: version_id.to_string(),
-            against_version_id: against_id,
+            base_version_id: version_id.into(),
+            against_version_id: against_id.into(),
             unified_diff: unified_line_diff(
                 &String::from_utf8_lossy(&base_content),
                 &String::from_utf8_lossy(&against_content),
@@ -2489,7 +2490,7 @@ impl QuarryStore {
             to_path_for_event.clone(),
             source_for_event,
             tx.id.clone(),
-            Some(doc_id),
+            Some(doc_id.to_string()),
             None,
         ));
         self.emit_event(StoreEvent::links_indexed(
@@ -3053,7 +3054,7 @@ impl QuarryStore {
                 Ok(SyncStateEntry {
                     peer_id,
                     path,
-                    last_synced_doc_version_id,
+                    last_synced_doc_version_id: last_synced_doc_version_id.map(Into::into),
                     last_synced_git_oid,
                 })
             })
@@ -3108,10 +3109,10 @@ impl QuarryStore {
                         library_id: library.id,
                         path,
                         conflict_path: None,
-                        ours_version_id,
-                        theirs_version_id,
+                        ours_version_id: ours_version_id.map(Into::into),
+                        theirs_version_id: theirs_version_id.map(Into::into),
                         status: ConflictStatus::Open,
-                        discovered_at: now_timestamp(),
+                        discovered_at: now_timestamp().into(),
                         resolved_at: None,
                     };
                     conn.execute(
@@ -3125,7 +3126,7 @@ impl QuarryStore {
                             opt_value(conflict.ours_version_id.clone()),
                             opt_value(conflict.theirs_version_id.clone()),
                             Value::Text(conflict.status.as_str().to_string()),
-                            Value::Text(conflict.discovered_at.clone()),
+                            Value::Text(conflict.discovered_at.to_string()),
                         ],
                     )
                     .await
@@ -3723,8 +3724,8 @@ impl QuarryStore {
             (Some(blob.hash), None)
         };
         let version = DocumentVersion {
-            id,
-            document_id: document_id.to_string(),
+            id: id.into(),
+            document_id: document_id.into(),
             tx_id: tx_id.to_string(),
             transaction_source: None,
             transaction_actor: None,
@@ -3735,15 +3736,15 @@ impl QuarryStore {
             metadata,
             content_type: content_type.to_string(),
             byte_size,
-            created_at,
+            created_at: created_at.into(),
         };
         conn.execute(
             "INSERT INTO document_versions
              (id, document_id, tx_id, content_hash, inline_content, metadata_json, content_type, byte_size, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             vec![
-                Value::Text(version.id.clone()),
-                Value::Text(version.document_id.clone()),
+                Value::Text(version.id.to_string()),
+                Value::Text(version.document_id.to_string()),
                 Value::Text(version.tx_id.clone()),
                 opt_value(version.content_hash.clone()),
                 match &version.inline_content {
@@ -3753,7 +3754,7 @@ impl QuarryStore {
                 Value::Text(version.metadata.to_string()),
                 Value::Text(version.content_type.clone()),
                 Value::Integer(version.byte_size as i64),
-                Value::Text(version.created_at.clone()),
+                Value::Text(version.created_at.to_string()),
             ],
         )
         .await
@@ -4154,8 +4155,8 @@ impl QuarryStore {
 
     fn document_from_row(&self, row: &Row) -> Result<Document> {
         let version = DocumentVersion {
-            id: text(row, 6)?,
-            document_id: text(row, 7)?,
+            id: text(row, 6)?.into(),
+            document_id: text(row, 7)?.into(),
             tx_id: text(row, 8)?,
             transaction_source: None,
             transaction_actor: None,
@@ -4166,7 +4167,7 @@ impl QuarryStore {
             metadata: serde_json::from_str(&text(row, 11)?)?,
             content_type: text(row, 12)?,
             byte_size: int(row, 13)? as u64,
-            created_at: text(row, 14)?,
+            created_at: text(row, 14)?.into(),
         };
         let content = match (&version.inline_content, &version.content_hash) {
             (Some(bytes), None) => bytes.clone(),
@@ -4179,15 +4180,15 @@ impl QuarryStore {
             }
         };
         Ok(Document {
-            id: text(row, 0)?,
+            id: text(row, 0)?.into(),
             library_id: opt_text(row, 1)?,
             path: text(row, 2)?,
             metadata: version.metadata.clone(),
             version,
             content,
-            expires_at: opt_text(row, 5)?,
-            created_at: text(row, 3)?,
-            updated_at: text(row, 4)?,
+            expires_at: opt_text(row, 5)?.map(Into::into),
+            created_at: text(row, 3)?.into(),
+            updated_at: text(row, 4)?.into(),
         })
     }
 
@@ -5047,7 +5048,7 @@ async fn insert_transaction_conn(
         source,
         message,
         provenance,
-        created_at: now_timestamp(),
+        created_at: now_timestamp().into(),
         committed_at: None,
     };
     conn.execute(
@@ -5062,7 +5063,7 @@ async fn insert_transaction_conn(
             Value::Text(tx.source.as_str().to_string()),
             opt_value(tx.message.clone()),
             Value::Text(tx.provenance.to_string()),
-            Value::Text(tx.created_at.clone()),
+            Value::Text(tx.created_at.to_string()),
         ],
     )
     .await
@@ -5105,8 +5106,8 @@ async fn insert_link_conn(conn: &Connection, library_id: &str, link: &DocumentLi
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         vec![
             Value::Text(library_id.to_string()),
-            Value::Text(link.src_doc_id.clone()),
-            Value::Text(link.src_version_id.clone()),
+            Value::Text(link.src_doc_id.to_string()),
+            Value::Text(link.src_version_id.to_string()),
             Value::Text(link.target_kind.clone()),
             Value::Text(link.target_text.clone()),
             opt_value(link.target_doc_id.clone()),
@@ -5563,7 +5564,7 @@ fn library_from_row(row: &Row) -> Result<Library> {
     Ok(Library {
         id: text(row, 0)?,
         slug: text(row, 1)?,
-        created_at: text(row, 2)?,
+        created_at: text(row, 2)?.into(),
         settings: serde_json::from_str(&text(row, 3)?)?,
     })
 }
@@ -5579,16 +5580,16 @@ fn directory_metadata_from_row(row: &Row) -> Result<DirectoryMetadata> {
 
 fn document_entry_from_row(row: &Row) -> Result<DocumentListEntry> {
     Ok(DocumentListEntry {
-        id: text(row, 0)?,
+        id: text(row, 0)?.into(),
         library_id: opt_text(row, 1)?,
         path: text(row, 2)?,
-        head_version_id: text(row, 3)?,
+        head_version_id: text(row, 3)?.into(),
         content_type: text(row, 4)?,
         byte_size: int(row, 5)? as u64,
         content_hash: opt_text(row, 6)?,
         metadata: serde_json::from_str(&text(row, 7)?)?,
-        expires_at: opt_text(row, 8)?,
-        updated_at: text(row, 9)?,
+        expires_at: opt_text(row, 8)?.map(Into::into),
+        updated_at: text(row, 9)?.into(),
     })
 }
 
@@ -5607,12 +5608,16 @@ fn link_from_row(row: &Row) -> Result<DocumentLink> {
         "unresolved".to_string()
     };
     Ok(DocumentLink {
-        src_doc_id: text(row, 0)?,
-        src_version_id: text(row, 1)?,
+        src_doc_id: text(row, 0)?.into(),
+        src_version_id: text(row, 1)?.into(),
         src_path: text(row, 2)?,
         target_kind: text(row, 3)?,
         target_text: text(row, 4)?,
-        target_doc_id: if resolved { target_doc_id } else { None },
+        target_doc_id: if resolved {
+            target_doc_id.map(Into::into)
+        } else {
+            None
+        },
         target_path,
         target_anchor: opt_text(row, 7)?,
         alias: opt_text(row, 8)?,
@@ -5751,8 +5756,8 @@ where
 
 fn version_from_row(row: &Row) -> Result<DocumentVersion> {
     let mut version = DocumentVersion {
-        id: text(row, 0)?,
-        document_id: text(row, 1)?,
+        id: text(row, 0)?.into(),
+        document_id: text(row, 1)?.into(),
         tx_id: text(row, 2)?,
         transaction_source: None,
         transaction_actor: None,
@@ -5763,7 +5768,7 @@ fn version_from_row(row: &Row) -> Result<DocumentVersion> {
         metadata: serde_json::from_str(&text(row, 5)?)?,
         content_type: text(row, 6)?,
         byte_size: int(row, 7)? as u64,
-        created_at: text(row, 8)?,
+        created_at: text(row, 8)?.into(),
     };
     if let Some(source) = opt_text(row, 9)? {
         version.transaction_source = Some(parse_storage_enum(&source)?);
@@ -5783,8 +5788,8 @@ fn transaction_from_row(row: &Row) -> Result<TransactionRecord> {
         source: parse_storage_enum(&text(row, 4)?)?,
         message: opt_text(row, 5)?,
         provenance: serde_json::from_str(&text(row, 6)?)?,
-        created_at: text(row, 7)?,
-        committed_at: opt_text(row, 8)?,
+        created_at: text(row, 7)?.into(),
+        committed_at: opt_text(row, 8)?.map(Into::into),
     })
 }
 
@@ -5794,11 +5799,11 @@ fn conflict_from_row(row: &Row) -> Result<ConflictRecord> {
         library_id: text(row, 1)?,
         path: text(row, 2)?,
         conflict_path: opt_text(row, 8)?,
-        ours_version_id: opt_text(row, 3)?,
-        theirs_version_id: opt_text(row, 4)?,
+        ours_version_id: opt_text(row, 3)?.map(Into::into),
+        theirs_version_id: opt_text(row, 4)?.map(Into::into),
         status: parse_storage_enum(&text(row, 5)?)?,
-        discovered_at: text(row, 6)?,
-        resolved_at: opt_text(row, 7)?,
+        discovered_at: text(row, 6)?.into(),
+        resolved_at: opt_text(row, 7)?.map(Into::into),
     })
 }
 
@@ -5806,7 +5811,7 @@ fn sync_state_from_row(row: &Row) -> Result<SyncStateEntry> {
     Ok(SyncStateEntry {
         peer_id: text(row, 0)?,
         path: text(row, 1)?,
-        last_synced_doc_version_id: opt_text(row, 2)?,
+        last_synced_doc_version_id: opt_text(row, 2)?.map(Into::into),
         last_synced_git_oid: opt_text(row, 3)?,
     })
 }
@@ -5814,11 +5819,11 @@ fn sync_state_from_row(row: &Row) -> Result<SyncStateEntry> {
 fn collab_invite_token_from_row(row: &Row) -> Result<CollabInviteToken> {
     Ok(CollabInviteToken {
         id: text(row, 0)?,
-        document_id: text(row, 1)?,
+        document_id: text(row, 1)?.into(),
         role: text(row, 2)?,
         by_hint: opt_text(row, 3)?,
-        created_at: text(row, 4)?,
-        revoked_at: opt_text(row, 5)?,
+        created_at: text(row, 4)?.into(),
+        revoked_at: opt_text(row, 5)?.map(Into::into),
     })
 }
 
@@ -6202,8 +6207,14 @@ fn normalize_collab_invite_role(role: &str) -> Result<String> {
     }
 }
 
-fn opt_value(value: Option<String>) -> Value {
-    value.map(Value::Text).unwrap_or(Value::Null)
+fn opt_value<T>(value: Option<T>) -> Value
+where
+    T: Into<String>,
+{
+    value
+        .map(Into::into)
+        .map(Value::Text)
+        .unwrap_or(Value::Null)
 }
 
 fn text(row: &Row, index: usize) -> Result<String> {

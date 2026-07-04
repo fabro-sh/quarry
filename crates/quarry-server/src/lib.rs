@@ -1195,7 +1195,7 @@ mod tests {
             "tmp SSE close event should still be logged:\n{output}"
         );
         assert!(
-            output.contains("scope=tmp") && output.contains(&document_id),
+            output.contains("scope=tmp") && output.contains(document_id.as_str()),
             "tmp SSE close logs should keep scope and document id diagnostics:\n{output}"
         );
     }

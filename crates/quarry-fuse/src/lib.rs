@@ -255,7 +255,7 @@ impl FuseProjection {
         self.insert_handle(OpenHandle {
             path,
             content: Vec::new(),
-            base_version_id: Some(version_id),
+            base_version_id: Some(version_id.to_string()),
             base_markdown: Some(String::new()),
             created: false,
             dirty: false,
@@ -271,7 +271,7 @@ impl FuseProjection {
         self.insert_handle(OpenHandle {
             path,
             content: document.content,
-            base_version_id: Some(document.version.id),
+            base_version_id: Some(document.version.id.to_string()),
             base_markdown,
             created: false,
             dirty: false,
@@ -289,7 +289,7 @@ impl FuseProjection {
         self.insert_handle(OpenHandle {
             path,
             content: Vec::new(),
-            base_version_id: Some(document.version.id),
+            base_version_id: Some(document.version.id.to_string()),
             base_markdown,
             created: false,
             dirty: true,
@@ -354,7 +354,7 @@ impl FuseProjection {
         let outcome = self.commit_handle(&snapshot).await?;
         let mut handles = self.handles.lock().await;
         if let Some(handle) = handles.get_mut(&handle_id) {
-            handle.base_version_id = Some(outcome.version.id);
+            handle.base_version_id = Some(outcome.version.id.to_string());
             // The next diff3 base is what this handle just wrote (its own
             // view); canonical-side divergence stays mergeable.
             handle.base_markdown = String::from_utf8(snapshot.content.clone()).ok();
@@ -616,7 +616,7 @@ impl FuseProjection {
                     &path,
                     markdown,
                     base_markdown,
-                    Some(document.version.id),
+                    Some(document.version.id.to_string()),
                 ))
                 .await
                 .map(|_| ())
@@ -629,7 +629,7 @@ impl FuseProjection {
                     metadata: document.metadata,
                     content_type: document.version.content_type,
                     source: DocumentSource::Fuse,
-                    precondition: WritePrecondition::IfMatch(document.version.id),
+                    precondition: WritePrecondition::IfMatch(document.version.id.to_string()),
                     origin_id: None,
                     transaction: TransactionMetadata::default(),
                 })
