@@ -6,7 +6,7 @@
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
-use futures_util::{SinkExt, Stream, StreamExt};
+use futures_util::SinkExt;
 use quarry_server::router;
 use quarry_storage::QuarryStore;
 use serde_json::Value;
@@ -20,31 +20,11 @@ use yrs::{Doc, Out, ReadTxn, Text, Transact, WriteTxn, XmlTextRef};
 mod common;
 
 use common::{
-    WsSocket, apply_yjs_message, capture_debug_logs, empty_yjs_doc, json_request, open_test_store,
-    response_json, sync_yjs_doc_from_socket, wait_for_yjs_sync_update, yjs_plain_text,
+    WsSocket, capture_debug_logs, empty_yjs_doc, json_request, open_test_store, response_json,
+    sync_yjs_doc_from_socket, wait_for_yjs_sync_update, yjs_plain_text,
 };
 
 const COLLAB_ROOT: &str = "content";
-
-async fn wait_for_yjs_plain_text<S>(socket: &mut S, doc: &Doc, expected: &str)
-where
-    S: Stream<Item = Result<TungsteniteMessage, tokio_tungstenite::tungstenite::Error>> + Unpin,
-{
-    timeout(Duration::from_secs(2), async {
-        loop {
-            let message = socket.next().await.unwrap().unwrap();
-            let TungsteniteMessage::Binary(bytes) = message else {
-                continue;
-            };
-            apply_yjs_message(doc, bytes.as_ref());
-            if yjs_plain_text(doc) == expected {
-                break;
-            }
-        }
-    })
-    .await
-    .unwrap();
-}
 
 // ---------------------------------------------------------------------------
 // Phase 2: semantic mutation gateway (rows-authoritative mode) + block API
@@ -248,60 +228,6 @@ async fn wait_for_markdown_containing(app: &axum::Router, path: &str, needle: &s
     })
     .await
     .unwrap_or_else(|_| panic!("persisted markdown never contained {needle:?}"))
-}
-
-/// A byte-identical PUT acks with the current head and commits nothing.
-/// CriticMarkup is a content error on API import paths (it collides with the
-/// review codec): the PUT fails typed, not silently as bytes.
-#[cfg(feature = "tmp-documents")]
-#[tokio::test]
-async fn tmp_markdown_put_lands_in_an_active_session_as_a_collaborator_edit() {
-    let (_root, addr, app, store, server) = spawn_session_server().await;
-    let response = app
-        .clone()
-        .oneshot(json_request(
-            Method::POST,
-            "/v1/tmp/documents",
-            serde_json::json!({
-                "content": "Old first.\n\nOld second.\n",
-                "content_type": "text/markdown",
-                "expires_at": "2099-01-01T00:00:00Z"
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let created = response_json(response).await;
-    let secret = created["document"]["path"].as_str().unwrap().to_string();
-    let tree = get_tmp_block_tree(&app, &secret).await;
-    let clock = tree["document_clock"].as_str().unwrap().to_string();
-    let document_id = store.head_tmp_document(&secret).await.unwrap().id;
-
-    let (mut socket, doc) = connect_session(addr, &document_id).await;
-    assert_eq!(yjs_plain_text(&doc), "Old first.Old second.");
-
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::PUT)
-                .uri(format!("/v1/tmp/documents/{secret}"))
-                .header(header::CONTENT_TYPE, "text/markdown")
-                .header(header::IF_MATCH, format!("\"{clock}\""))
-                .body(Body::from("Uploaded first.\n\nUploaded second.\n"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let after = get_tmp_block_tree(&app, &secret).await;
-    assert_eq!(after["blocks"][0]["text"], "Uploaded first.");
-    assert_eq!(after["blocks"][1]["text"], "Uploaded second.");
-    wait_for_yjs_plain_text(&mut socket, &doc, "Uploaded first.Uploaded second.").await;
-
-    socket.close(None).await.unwrap();
-    server.abort();
 }
 
 #[cfg(feature = "tmp-documents")]

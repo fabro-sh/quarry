@@ -192,6 +192,23 @@ async fn get_block_tree(app: &axum::Router, path: &str) -> Value {
     response_json(response).await
 }
 
+#[cfg(feature = "tmp-documents")]
+async fn get_tmp_block_tree(app: &axum::Router, secret: &str) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/tmp/documents/{secret}/blocks"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response_json(response).await
+}
+
 async fn post_block_transaction(
     app: &axum::Router,
     path: &str,
@@ -573,6 +590,57 @@ async fn version_restore_lands_in_a_live_session_as_a_collaborator_edit() {
     assert_eq!(after["blocks"][1]["text"], "Old text.");
     assert_eq!(after["blocks"][1]["block_id"], edited.as_str());
     wait_for_yjs_plain_text(&mut socket, &doc, "Stable block.Old text.").await;
+
+    socket.close(None).await.unwrap();
+    server.abort();
+}
+
+#[cfg(feature = "tmp-documents")]
+#[tokio::test]
+async fn tmp_markdown_put_lands_in_an_active_session_as_a_collaborator_edit() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/tmp/documents",
+            serde_json::json!({
+                "content": "Old first.\n\nOld second.\n",
+                "content_type": "text/markdown",
+                "expires_at": "2099-01-01T00:00:00Z"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created = response_json(response).await;
+    let secret = created["document"]["path"].as_str().unwrap().to_string();
+    let tree = get_tmp_block_tree(&app, &secret).await;
+    let clock = tree["document_clock"].as_str().unwrap().to_string();
+    let document_id = store.head_tmp_document(&secret).await.unwrap().id;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    assert_eq!(yjs_plain_text(&doc), "Old first.Old second.");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/tmp/documents/{secret}"))
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header(header::IF_MATCH, format!("\"{clock}\""))
+                .body(Body::from("Uploaded first.\n\nUploaded second.\n"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let after = get_tmp_block_tree(&app, &secret).await;
+    assert_eq!(after["blocks"][0]["text"], "Uploaded first.");
+    assert_eq!(after["blocks"][1]["text"], "Uploaded second.");
+    wait_for_yjs_plain_text(&mut socket, &doc, "Uploaded first.Uploaded second.").await;
 
     socket.close(None).await.unwrap();
     server.abort();
