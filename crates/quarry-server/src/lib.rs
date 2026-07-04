@@ -195,7 +195,7 @@ fn install_tmp_document_routes(router: Router<AppState>) -> Router<AppState> {
         .post(post_tmp_document_action)
         .put(put_tmp_document)
         .patch(patch_tmp_document_action)
-        .delete(delete_tmp_document)
+        .delete(tmp_document_handlers::delete_tmp_document)
         .layer(DefaultBodyLimit::max(TMP_DOCUMENT_HTTP_BODY_LIMIT));
 
     router
@@ -543,7 +543,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         get_tmp_document,
         tmp_document_handlers::head_tmp_document,
         put_tmp_document,
-        delete_tmp_document,
+        tmp_document_handlers::delete_tmp_document,
         tmp_document_versions_openapi,
         tmp_document_versions_raw_openapi,
         tmp_document_version_openapi,
@@ -1002,19 +1002,6 @@ async fn put_tmp_document(
         )
         .await,
     )
-}
-
-#[utoipa::path(
-    delete,
-    path = "/v1/tmp/documents/{secret}",
-    params(("secret" = String, Path)),
-    responses((status = 200, body = TransactionRecord))
-)]
-async fn delete_tmp_document(
-    State(state): State<AppState>,
-    Path(path): Path<String>,
-) -> Result<Json<TransactionRecord>, ApiError> {
-    Ok(Json(state.store.delete_tmp_document(&path).await?))
 }
 
 async fn patch_tmp_document_action(

@@ -4,7 +4,7 @@ use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Response;
-use quarry_core::WriteOutcome;
+use quarry_core::{TransactionRecord, WriteOutcome};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use utoipa::ToSchema;
@@ -84,4 +84,17 @@ pub(crate) async fn head_tmp_document(
         document.expires_at.as_deref(),
     )?;
     Ok(response)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/tmp/documents/{secret}",
+    params(("secret" = String, Path)),
+    responses((status = 200, body = TransactionRecord))
+)]
+pub(crate) async fn delete_tmp_document(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+) -> Result<Json<TransactionRecord>, ApiError> {
+    Ok(Json(state.store.delete_tmp_document(&path).await?))
 }
