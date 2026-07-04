@@ -119,13 +119,14 @@ fn cli_default_debug_logs_stay_on_stderr_and_stdout_stays_payload_only() -> anyh
 
 #[cfg(feature = "lib-documents")]
 #[test]
-fn cli_conflict_resolve_rejects_conflicts_from_another_library() {
-    let temp = tempfile::tempdir().unwrap();
+fn cli_conflict_resolve_rejects_conflicts_from_another_library() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir().context("create temp dir")?;
     let root = temp.path().join("root");
-    run_quarry(["init", root.to_str().unwrap()]);
+    let root_str = root.to_str().context("root path should be UTF-8")?;
+    run_quarry(["init", root_str]);
 
     let conflict_id = {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let runtime = tokio::runtime::Runtime::new().context("create tokio runtime")?;
         runtime.block_on(async {
             let store = quarry_storage::QuarryStore::open(quarry_storage::StoreConfig {
                 db_path: root.join("quarry.db"),
@@ -133,9 +134,15 @@ fn cli_conflict_resolve_rejects_conflicts_from_another_library() {
                 lock_path: None,
             })
             .await
-            .unwrap();
-            let library = store.create_library("actions").await.unwrap();
-            store.create_library("other").await.unwrap();
+            .context("open store for conflict setup")?;
+            let library = store
+                .create_library("actions")
+                .await
+                .context("create actions library")?;
+            store
+                .create_library("other")
+                .await
+                .context("create other library")?;
             let written = store
                 .put_document(quarry_storage::PutDocumentRequest {
                     library: library.slug.to_string(),
@@ -149,8 +156,8 @@ fn cli_conflict_resolve_rejects_conflicts_from_another_library() {
                     transaction: quarry_storage::TransactionMetadata::default(),
                 })
                 .await
-                .unwrap();
-            store
+                .context("write conflicted document")?;
+            let conflict = store
                 .record_conflict(
                     &library.slug,
                     "notes/a.md",
@@ -158,22 +165,22 @@ fn cli_conflict_resolve_rejects_conflicts_from_another_library() {
                     None,
                 )
                 .await
-                .unwrap()
-                .id
+                .context("record conflict")?;
+            anyhow::Ok(conflict.id)
         })
-    };
+    }?;
 
     let output = quarry_command()
         .args([
             "--root",
-            root.to_str().unwrap(),
+            root_str,
             "conflicts",
             "resolve",
             "other",
             &conflict_id,
         ])
         .output()
-        .unwrap();
+        .context("run quarry conflict resolve for wrong library")?;
 
     assert!(
         !output.status.success(),
@@ -184,21 +191,23 @@ fn cli_conflict_resolve_rejects_conflicts_from_another_library() {
     let output = quarry_command()
         .args([
             "--root",
-            root.to_str().unwrap(),
+            root_str,
             "conflicts",
             "resolve",
             "actions",
             &conflict_id,
         ])
         .output()
-        .unwrap();
+        .context("run quarry conflict resolve for owning library")?;
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let resolved: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let resolved: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parse resolved conflict JSON")?;
     assert_eq!(resolved["status"], "resolved");
+    Ok(())
 }
 
 #[cfg(feature = "lib-documents")]
