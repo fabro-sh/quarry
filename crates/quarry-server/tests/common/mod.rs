@@ -1,3 +1,8 @@
+#![allow(
+    dead_code,
+    reason = "shared integration-test helpers are used per test target"
+)]
+
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, header};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
