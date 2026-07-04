@@ -4,10 +4,11 @@
     reason = "tests use unwrap for HTTP and CRDT fixtures"
 )]
 
-use axum::body::Body;
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
-use quarry_storage::QuarryStore;
+use quarry_storage::{QuarryStore, StoreEvent, StoreEventKind};
 use serde_json::Value;
+use tokio::time::{Duration, timeout};
 use tower::ServiceExt;
 
 mod common;
@@ -79,12 +80,95 @@ async fn post_block_transaction(
     (status, response_json(response).await)
 }
 
+async fn commit_block_transaction(app: &axum::Router, path: &str, body: Value) -> Value {
+    let (status, ack) = post_block_transaction(app, path, body).await;
+    assert_eq!(status, StatusCode::OK, "transaction failed: {ack}");
+    ack
+}
+
 fn block_tx(client_tx_id: &str, ops: Value) -> Value {
     serde_json::json!({
         "client_tx_id": client_tx_id,
         "actor": {"kind": "agent", "id": "agent-1", "label": "Agent One"},
         "ops": ops
     })
+}
+
+async fn get_document_markdown(app: &axum::Router, path: &str) -> String {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/libraries/blocks/documents/{path}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    String::from_utf8(body.to_vec()).unwrap()
+}
+
+async fn raw_versions(app: &axum::Router, path: &str) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v1/libraries/blocks/documents/{path}/versions/raw"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response_json(response).await
+}
+
+async fn raw_version_count(app: &axum::Router, path: &str) -> usize {
+    raw_versions(app, path).await.as_array().unwrap().len()
+}
+
+async fn get_block_review(app: &axum::Router, path: &str, include_resolved: bool) -> Value {
+    let query = if include_resolved {
+        "?includeResolved=1"
+    } else {
+        ""
+    };
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v1/libraries/blocks/documents/{path}/review{query}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response_json(response).await
+}
+
+async fn next_document_put_event(
+    events: &mut tokio::sync::broadcast::Receiver<StoreEvent>,
+) -> StoreEvent {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if event.kind() == StoreEventKind::DocumentPut {
+                break event;
+            }
+        }
+    })
+    .await
+    .unwrap()
 }
 
 fn assert_json_uuid(value: &Value) {
@@ -167,4 +251,232 @@ async fn block_routes_reject_raw_documents_with_a_typed_error() {
     )
     .await;
     assert_typed_error(status, &body, "UNSUPPORTED_BLOCK_DOCUMENT", false);
+}
+
+#[tokio::test]
+async fn block_transaction_insert_block_commits_one_version_and_emits_events() {
+    let (_root, app, store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "First.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let versions_before = raw_version_count(&app, "doc.md").await;
+    let mut events = store.subscribe_events();
+
+    let ack = commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-insert",
+            serde_json::json!([{
+                "op": "insert_block",
+                "position": 1,
+                "block_type": "p",
+                "text": "Second."
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(ack["status"], "committed");
+    assert_eq!(ack["changed_block_ids"].as_array().unwrap().len(), 1);
+    assert_json_uuid(&ack["transaction_id"]);
+    let clock = ack["document_clock"].as_str().unwrap();
+    assert_ne!(clock, tree["document_clock"].as_str().unwrap());
+
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "First.\n\nSecond.\n"
+    );
+    assert_eq!(raw_version_count(&app, "doc.md").await, versions_before + 1);
+
+    let event = next_document_put_event(&mut events).await;
+    assert_eq!(event.version_id(), Some(clock));
+    assert_eq!(event.path(), Some("doc.md"));
+}
+
+#[tokio::test]
+async fn block_transaction_replace_block_content_preserves_block_identity() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Original text.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    let ack = commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-replace",
+            serde_json::json!([{
+                "op": "replace_block_content",
+                "block_id": block_id,
+                "text": "Rewritten text."
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(ack["changed_block_ids"], serde_json::json!([block_id]));
+
+    let after = get_block_tree(&app, "doc.md").await;
+    assert_eq!(after["blocks"][0]["block_id"], block_id.as_str());
+    assert_eq!(after["blocks"][0]["text"], "Rewritten text.");
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "Rewritten text.\n"
+    );
+}
+
+#[tokio::test]
+async fn block_transaction_move_block_is_placement_only() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Alpha.\n\nBeta.\n\nGamma.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let gamma = tree["blocks"][2]["block_id"].as_str().unwrap().to_string();
+    let alpha = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-move",
+            serde_json::json!([{
+                "op": "move_block",
+                "block_id": gamma,
+                "position": 0
+            }]),
+        ),
+    )
+    .await;
+
+    let after = get_block_tree(&app, "doc.md").await;
+    assert_eq!(after["blocks"][0]["block_id"], gamma.as_str());
+    assert_eq!(after["blocks"][0]["text"], "Gamma.");
+    assert_eq!(after["blocks"][1]["block_id"], alpha.as_str());
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "Gamma.\n\nAlpha.\n\nBeta.\n"
+    );
+}
+
+#[tokio::test]
+async fn block_transaction_set_block_type_preserves_identity_text_and_anchors() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Heading soon.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-comment",
+            serde_json::json!([{
+                "op": "comment.add",
+                "block_id": block_id,
+                "start": 0,
+                "end": 7,
+                "body": "anchored before the type change"
+            }]),
+        ),
+    )
+    .await;
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-type",
+            serde_json::json!([{
+                "op": "set_block_type",
+                "block_id": block_id,
+                "block_type": "h2"
+            }]),
+        ),
+    )
+    .await;
+
+    let after = get_block_tree(&app, "doc.md").await;
+    assert_eq!(after["blocks"][0]["block_id"], block_id.as_str());
+    assert_eq!(after["blocks"][0]["block_type"], "h2");
+    assert_eq!(after["blocks"][0]["text"], "Heading soon.");
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "## Heading soon.\n"
+    );
+    let review = get_block_review(&app, "doc.md", false).await;
+    assert_eq!(
+        review["comments"][0]["anchor"]["blockId"],
+        block_id.as_str()
+    );
+    assert_eq!(review["comments"][0]["anchor"]["startOffset"], 0);
+    assert_eq!(review["comments"][0]["anchor"]["endOffset"], 7);
+    assert_eq!(review["comments"][0]["status"], "open");
+}
+
+#[tokio::test]
+async fn block_transaction_set_block_attrs_edits_raw_markdown_blocks() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "<div>\nopaque\n</div>\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    assert_eq!(tree["blocks"][0]["block_type"], "raw_markdown");
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-attrs",
+            serde_json::json!([{
+                "op": "set_block_attrs",
+                "block_id": block_id,
+                "attrs": {"markdown": "<section>\nreplaced\n</section>"}
+            }]),
+        ),
+    )
+    .await;
+
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "<section>\nreplaced\n</section>\n"
+    );
+    let after = get_block_tree(&app, "doc.md").await;
+    assert_eq!(after["blocks"][0]["block_id"], block_id.as_str());
+}
+
+#[tokio::test]
+async fn block_transaction_marks_and_links_render_in_markdown() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Bold and linked words.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-format",
+            serde_json::json!([
+                {"op": "add_mark", "block_id": block_id, "start": 0, "end": 4, "marks": {"bold": true}},
+                {"op": "set_link", "block_id": block_id, "start": 9, "end": 15, "url": "https://example.com"}
+            ]),
+        ),
+    )
+    .await;
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "**Bold** and [linked](https://example.com) words.\n"
+    );
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-unformat",
+            serde_json::json!([
+                {"op": "remove_mark", "block_id": block_id, "start": 0, "end": 4, "marks": ["bold"]},
+                {"op": "set_link", "block_id": block_id, "start": 9, "end": 15, "url": null}
+            ]),
+        ),
+    )
+    .await;
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "Bold and linked words.\n"
+    );
 }
