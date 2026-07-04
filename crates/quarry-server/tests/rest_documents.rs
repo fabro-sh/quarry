@@ -765,9 +765,9 @@ async fn document_delete_events_echo_origin_id_and_doc_id() {
 }
 
 #[tokio::test]
-async fn rest_api_supports_browser_search_links_versions_and_events() {
+async fn rest_api_supports_browser_search_links_versions_and_events() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    let library = store.create_library("browser").await.unwrap();
+    let library = store.create_library("browser").await?;
     let first_intro = store
         .put_document(quarry_storage::PutDocumentRequest {
 library: library.slug.to_string(),
@@ -780,8 +780,7 @@ precondition: quarry_core::WritePrecondition::None,
 origin_id: None,
 transaction: quarry_storage::TransactionMetadata::default(),
 })
-        .await
-        .unwrap();
+        .await?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -794,8 +793,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
+        .await?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -812,8 +810,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
+        .await?;
     let latest_intro = store
         .put_document(quarry_storage::PutDocumentRequest {
 library: library.slug.to_string(),
@@ -826,8 +823,7 @@ precondition: quarry_core::WritePrecondition::IfMatch(first_intro.version.id.to_
 origin_id: None,
 transaction: quarry_storage::TransactionMetadata::default(),
 })
-        .await
-        .unwrap();
+        .await?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -840,8 +836,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
+        .await?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -854,8 +849,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
+        .await?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -868,8 +862,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
+        .await?;
     let app = router(store);
 
     let response = app
@@ -879,10 +872,9 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/libraries/browser/search?q=unique-search&limit=5")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body["results"][0]["path"], "intro.md");
@@ -890,19 +882,14 @@ transaction: quarry_storage::TransactionMetadata::default(),
         body["results"][0]["head_version_id"],
         latest_intro.version.id.as_str()
     );
-    assert!(
-        body["results"][0]["matched_fields"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|field| field == "body")
-    );
-    assert!(
-        body["results"][0]["snippet"]
-            .as_str()
-            .unwrap()
-            .contains("unique-search")
-    );
+    let matched_fields = body["results"][0]["matched_fields"]
+        .as_array()
+        .context("search result should expose matched fields")?;
+    assert!(matched_fields.iter().any(|field| field == "body"));
+    let snippet = body["results"][0]["snippet"]
+        .as_str()
+        .context("search result should expose a snippet")?;
+    assert!(snippet.contains("unique-search"));
 
     let response = app
         .clone()
@@ -911,19 +898,19 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/libraries/browser/search?q=%23planning&limit=5")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert!(body["results"].as_array().unwrap().iter().any(|result| {
+    let results = body["results"]
+        .as_array()
+        .context("tag search should expose results")?;
+    assert!(results.iter().any(|result| {
         result["path"] == "intro.md"
             && result["matched_fields"]
                 .as_array()
-                .unwrap()
-                .iter()
-                .any(|field| field == "tag")
+                .is_some_and(|fields| fields.iter().any(|field| field == "tag"))
     }));
 
     let response = app
@@ -933,19 +920,19 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/libraries/browser/search?q=manual%20alias&limit=5")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert!(body["results"].as_array().unwrap().iter().any(|result| {
+    let results = body["results"]
+        .as_array()
+        .context("alias search should expose results")?;
+    assert!(results.iter().any(|result| {
         result["path"] == "guide.md"
             && result["matched_fields"]
                 .as_array()
-                .unwrap()
-                .iter()
-                .any(|field| field == "alias")
+                .is_some_and(|fields| fields.iter().any(|field| field == "alias"))
     }));
 
     let response = app
@@ -955,10 +942,9 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/libraries/browser/search/suggest?q=dai&limit=5")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body[0]["path"], "daily.md");
@@ -971,8 +957,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
             "/v1/libraries/browser/reindex",
             serde_json::json!({}),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body["ok"], true);
@@ -985,13 +970,14 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/libraries/browser/documents/intro.md/outgoing-links")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    let links = body["links"].as_array().unwrap();
+    let links = body["links"]
+        .as_array()
+        .context("outgoing links response should expose links")?;
     assert!(links.iter().any(|link| link["target_kind"] == "wiki_link"
         && link["target_path"] == "daily.md"
         && link["alias"] == "today"));
@@ -1011,19 +997,15 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/libraries/browser/documents/daily.md/backlinks")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert!(
-        body["links"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|link| link["src_path"] == "intro.md")
-    );
+    let backlinks = body["links"]
+        .as_array()
+        .context("backlinks response should expose links")?;
+    assert!(backlinks.iter().any(|link| link["src_path"] == "intro.md"));
 
     let response = app
         .clone()
@@ -1032,33 +1014,24 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/libraries/browser/graph?root=intro.md&depth=1&limit=20")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
+    let nodes = body["nodes"]
+        .as_array()
+        .context("depth-1 graph should expose nodes")?;
+    let edges = body["edges"]
+        .as_array()
+        .context("depth-1 graph should expose edges")?;
+    assert!(nodes.iter().any(|node| node["path"] == "intro.md"));
     assert!(
-        body["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|node| node["path"] == "intro.md")
-    );
-    assert!(
-        body["edges"]
-            .as_array()
-            .unwrap()
+        edges
             .iter()
             .any(|edge| { edge["source_path"] == "intro.md" && edge["target_path"] == "daily.md" })
     );
-    assert!(
-        !body["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|node| node["path"] == "chain.md")
-    );
+    assert!(!nodes.iter().any(|node| node["path"] == "chain.md"));
 
     let response = app
         .clone()
@@ -1067,23 +1040,20 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/libraries/browser/graph?root=intro.md&depth=2&limit=20")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
+    let nodes = body["nodes"]
+        .as_array()
+        .context("depth-2 graph should expose nodes")?;
+    let edges = body["edges"]
+        .as_array()
+        .context("depth-2 graph should expose edges")?;
+    assert!(nodes.iter().any(|node| node["path"] == "chain.md"));
     assert!(
-        body["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|node| node["path"] == "chain.md")
-    );
-    assert!(
-        body["edges"]
-            .as_array()
-            .unwrap()
+        edges
             .iter()
             .any(|edge| { edge["source_path"] == "daily.md" && edge["target_path"] == "chain.md" })
     );
@@ -1095,13 +1065,14 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/libraries/browser/graph?root=intro.md&link_kind=tag&limit=20")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    let edges = body["edges"].as_array().unwrap();
+    let edges = body["edges"]
+        .as_array()
+        .context("tag-filtered graph should expose edges")?;
     assert_eq!(edges.len(), 1);
     assert_eq!(edges[0]["target_kind"], "tag");
     assert_eq!(edges[0]["target_text"], "planning");
@@ -1113,27 +1084,30 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/libraries/browser/graph?folder=projects&limit=20")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    let nodes = body["nodes"].as_array().unwrap();
+    let nodes = body["nodes"]
+        .as_array()
+        .context("folder graph should expose nodes")?;
+    let edges = body["edges"]
+        .as_array()
+        .context("folder graph should expose edges")?;
     assert!(!nodes.is_empty());
-    assert!(
-        nodes
-            .iter()
-            .all(|node| node["path"].as_str().unwrap().starts_with("projects/"))
-    );
-    assert!(body["edges"].as_array().unwrap().iter().any(|edge| {
+    assert!(nodes.iter().all(|node| {
+        node["path"]
+            .as_str()
+            .is_some_and(|path| path.starts_with("projects/"))
+    }));
+    assert!(edges.iter().any(|edge| {
         edge["source_path"] == "projects/brief.md" && edge["target_path"] == "projects/roadmap.md"
     }));
-    assert!(body["edges"].as_array().unwrap().iter().all(|edge| {
+    assert!(edges.iter().all(|edge| {
         edge["source_path"]
             .as_str()
-            .unwrap()
-            .starts_with("projects/")
+            .is_some_and(|path| path.starts_with("projects/"))
             && edge["target_path"]
                 .as_str()
                 .is_none_or(|path| path.starts_with("projects/"))
@@ -1146,13 +1120,14 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/libraries/browser/graph?tag=planning&limit=20")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    let edges = body["edges"].as_array().unwrap();
+    let edges = body["edges"]
+        .as_array()
+        .context("tag graph should expose edges")?;
     assert!(!edges.is_empty());
     assert!(
         edges
@@ -1167,13 +1142,14 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/libraries/browser/graph?root=intro.md&link_kind=wiki_link&resolved=false&limit=20")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    let edges = body["edges"].as_array().unwrap();
+    let edges = body["edges"]
+        .as_array()
+        .context("unresolved graph should expose edges")?;
     assert_eq!(edges.len(), 1);
     assert_eq!(edges[0]["target_kind"], "wiki_link");
     assert_eq!(edges[0]["target_text"], "Missing");
@@ -1186,10 +1162,9 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/libraries/browser/documents/intro.md/versions")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(
@@ -1208,10 +1183,9 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/libraries/browser/documents/intro.md/versions/raw")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body[0]["id"], latest_intro.version.id.as_str());
@@ -1227,18 +1201,15 @@ transaction: quarry_storage::TransactionMetadata::default(),
                     first_intro.version.id
                 ))
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert!(
-        body["content"]
-            .as_str()
-            .unwrap()
-            .contains("[[Daily|today]]")
-    );
+    let content = body["content"]
+        .as_str()
+        .context("version response should expose content")?;
+    assert!(content.contains("[[Daily|today]]"));
 
     let response = app
         .clone()
@@ -1250,13 +1221,14 @@ transaction: quarry_storage::TransactionMetadata::default(),
                     first_intro.version.id, latest_intro.version.id
                 ))
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    let diff = body["unified_diff"].as_str().unwrap();
+    let diff = body["unified_diff"]
+        .as_str()
+        .context("diff response should expose unified_diff")?;
     assert!(diff.contains("+updated browser body"));
 
     let response = app
@@ -1269,8 +1241,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
             ),
             serde_json::json!({}),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     assert_ne!(
         response.headers()[header::ETAG],
@@ -1284,16 +1255,15 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/libraries/browser/documents/intro.md")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     // The restore routes through the reconciling gateway (Phase 7), which
     // publishes the canonical normalized form: this version was written by a
     // legacy byte put with out-of-band `title` metadata, so the one-time
     // normalization renders that metadata as frontmatter.
     assert_eq!(
-        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+        to_bytes(response.into_body(), usize::MAX).await?,
         "---\ntitle: Intro\n---\n# Intro\n\nLinks to [[Daily|today]], [[Missing]], [Guide](guide.md), and #planning.\n"
     );
 
@@ -1304,15 +1274,14 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/events?library=browser")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     assert!(
         response.headers()[header::CONTENT_TYPE]
             .to_str()
-            .unwrap()
+            .context("events response should have a valid content-type")?
             .starts_with("text/event-stream")
     );
 
@@ -1323,15 +1292,14 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/libraries/browser/documents/intro.md/events/stream")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     assert!(
         response.headers()[header::CONTENT_TYPE]
             .to_str()
-            .unwrap()
+            .context("document event stream response should have a valid content-type")?
             .starts_with("text/event-stream")
     );
 
@@ -1341,10 +1309,9 @@ transaction: quarry_storage::TransactionMetadata::default(),
                 .method(Method::GET)
                 .uri("/v1/openapi.json")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     let openapi: Value = response_json(response).await;
     assert!(openapi["paths"]["/v1/libraries/{library}/search"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/documents/{path}/backlinks"].is_object());
@@ -1362,7 +1329,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
     );
     let block_ref_required = openapi["components"]["schemas"]["AgentBlockRef"]["required"]
         .as_array()
-        .expect("AgentBlockRef should expose required fields");
+        .context("AgentBlockRef should expose required fields")?;
     assert!(block_ref_required.iter().any(|value| value == "ordinal"));
     assert!(
         !block_ref_required
@@ -1408,10 +1375,11 @@ transaction: quarry_storage::TransactionMetadata::default(),
     );
     let library_presence_entry = &openapi["components"]["schemas"]["AgentPresenceEntry"];
     assert!(library_presence_entry["properties"]["path"].is_object());
+    let library_presence_required = library_presence_entry["required"]
+        .as_array()
+        .context("AgentPresenceEntry should expose required fields")?;
     assert!(
-        library_presence_entry["required"]
-            .as_array()
-            .unwrap()
+        library_presence_required
             .iter()
             .any(|field| field == "path")
     );
@@ -1419,7 +1387,9 @@ transaction: quarry_storage::TransactionMetadata::default(),
     assert!(tmp_presence_entry.is_object());
     assert!(tmp_presence_entry["properties"].get("path").is_none());
     assert!(tmp_presence_entry["properties"].get("library").is_none());
-    let tmp_presence_required = tmp_presence_entry["required"].as_array().unwrap();
+    let tmp_presence_required = tmp_presence_entry["required"]
+        .as_array()
+        .context("TmpAgentPresenceEntry should expose required fields")?;
     assert!(
         tmp_presence_required
             .iter()
@@ -1458,6 +1428,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
     let review_operation =
         &openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"]["post"];
     assert!(review_operation.is_null(), "review POST should be deleted");
+    Ok(())
 }
 
 #[tokio::test]
