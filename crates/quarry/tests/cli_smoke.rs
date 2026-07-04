@@ -18,16 +18,18 @@ fn assert_content_hash(hash: &str) {
 
 #[cfg(feature = "lib-documents")]
 #[test]
-fn cli_default_debug_logs_stay_on_stderr_and_stdout_stays_payload_only() {
-    let temp = tempfile::tempdir().unwrap();
+fn cli_default_debug_logs_stay_on_stderr_and_stdout_stays_payload_only() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir().context("create temp dir")?;
     let root = temp.path().join("root");
+    let root_str = root.to_str().context("root path should be UTF-8")?;
     let source = temp.path().join("hello.md");
-    std::fs::write(&source, "hello from cli\n").unwrap();
+    let source_str = source.to_str().context("source path should be UTF-8")?;
+    std::fs::write(&source, "hello from cli\n").context("write source markdown")?;
 
     let output = quarry_command()
-        .args(["init", root.to_str().unwrap()])
+        .args(["init", root_str])
         .output()
-        .unwrap();
+        .context("run quarry init")?;
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
@@ -38,43 +40,45 @@ fn cli_default_debug_logs_stay_on_stderr_and_stdout_stays_payload_only() {
     let output = quarry_command()
         .args([
             "--root",
-            root.to_str().unwrap(),
+            root_str,
             "put",
             "notes",
             "notes/hello.md",
-            source.to_str().unwrap(),
+            source_str,
         ])
         .output()
-        .unwrap();
+        .context("run quarry put")?;
     assert!(output.status.success());
     // Markdown puts route through the Phase 4 reconciled write path.
     assert!(String::from_utf8_lossy(&output.stderr).contains("document.block_write.started"));
-    let written: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let written: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parse put JSON")?;
     assert_eq!(written["document"]["path"], "notes/hello.md");
 
     let output = quarry_command()
-        .args(["--root", root.to_str().unwrap(), "list", "notes"])
+        .args(["--root", root_str, "list", "notes"])
         .output()
-        .unwrap();
+        .context("run quarry list")?;
     assert!(output.status.success());
-    let listed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(listed.as_array().unwrap().len(), 1);
+    let listed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parse list JSON")?;
+    assert_eq!(
+        listed
+            .as_array()
+            .context("list response should be an array")?
+            .len(),
+        1
+    );
 
     let output = quarry_command()
-        .args([
-            "--root",
-            root.to_str().unwrap(),
-            "get",
-            "notes",
-            "notes/hello.md",
-        ])
+        .args(["--root", root_str, "get", "notes", "notes/hello.md"])
         .output()
-        .unwrap();
+        .context("run quarry get")?;
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "hello from cli\n");
 
     let conflict_id = {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let runtime = tokio::runtime::Runtime::new().context("create tokio runtime")?;
         runtime.block_on(async {
             let store = quarry_storage::QuarryStore::open(quarry_storage::StoreConfig {
                 db_path: root.join("quarry.db"),
@@ -82,8 +86,8 @@ fn cli_default_debug_logs_stay_on_stderr_and_stdout_stays_payload_only() {
                 lock_path: None,
             })
             .await
-            .unwrap();
-            store
+            .context("open store for conflict seed")?;
+            let conflict = store
                 .record_conflict(
                     "notes",
                     "notes/hello.md",
@@ -91,24 +95,26 @@ fn cli_default_debug_logs_stay_on_stderr_and_stdout_stays_payload_only() {
                     None,
                 )
                 .await
-                .unwrap()
-                .id
+                .context("record conflict")?;
+            anyhow::Ok(conflict.id)
         })
-    };
+    }?;
     let output = quarry_command()
         .args([
             "--root",
-            root.to_str().unwrap(),
+            root_str,
             "conflicts",
             "resolve",
             "notes",
             &conflict_id,
         ])
         .output()
-        .unwrap();
+        .context("run quarry conflict resolve")?;
     assert!(output.status.success());
-    let resolved: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let resolved: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parse conflict resolve JSON")?;
     assert_eq!(resolved["status"], "resolved");
+    Ok(())
 }
 
 #[cfg(feature = "lib-documents")]
