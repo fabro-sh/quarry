@@ -3,6 +3,7 @@
     reason = "tests use unwrap for storage lifecycle fixtures"
 )]
 
+use anyhow::Context as _;
 use quarry_core::{
     DocumentSource, DocumentVersion, INLINE_CONTENT_THRESHOLD, QuarryError, WritePrecondition,
 };
@@ -2090,16 +2091,19 @@ transaction: quarry_storage::TransactionMetadata::default(),
 }
 
 #[tokio::test]
-async fn visible_writes_emit_in_process_store_events() {
-    let root = tempfile::tempdir().unwrap();
+async fn visible_writes_emit_in_process_store_events() -> TestResult {
+    let root = tempfile::tempdir().context("create temp dir")?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("events").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("events")
+        .await
+        .context("create events library")?;
     let mut events = store.subscribe_events();
 
     let write = store
@@ -2115,14 +2119,14 @@ async fn visible_writes_emit_in_process_store_events() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
-    let event = events.recv().await.unwrap();
+        .context("put document")?;
+    let event = events.recv().await.context("receive document put event")?;
     assert_eq!(event.kind(), StoreEventKind::DocumentPut);
     assert_eq!(event.library_id(), library.id.as_str());
     assert_eq!(event.path(), Some("notes/a.md"));
     assert_eq!(event.doc_id(), Some(write.document.id.as_str()));
     assert_eq!(event.version_id(), Some(write.version.id.as_str()));
-    let event = events.recv().await.unwrap();
+    let event = events.recv().await.context("receive put links event")?;
     assert_eq!(event.kind(), StoreEventKind::LinksIndexed);
     assert_eq!(event.library_id(), library.id.as_str());
     assert_eq!(event.path(), Some("notes/a.md"));
@@ -2135,13 +2139,13 @@ async fn visible_writes_emit_in_process_store_events() {
             DocumentSource::Rest,
         )
         .await
-        .unwrap();
-    let event = events.recv().await.unwrap();
+        .context("move document")?;
+    let event = events.recv().await.context("receive document move event")?;
     assert_eq!(event.kind(), StoreEventKind::DocumentMove);
     assert_eq!(event.path(), Some("notes/a.md"));
     assert_eq!(event.new_path(), Some("notes/b.md"));
     assert_eq!(event.doc_id(), Some(write.document.id.as_str()));
-    let event = events.recv().await.unwrap();
+    let event = events.recv().await.context("receive move links event")?;
     assert_eq!(event.kind(), StoreEventKind::LinksIndexed);
     assert_eq!(event.library_id(), library.id.as_str());
     assert_eq!(event.path(), Some("notes/b.md"));
@@ -2149,12 +2153,15 @@ async fn visible_writes_emit_in_process_store_events() {
     store
         .delete_document(&library.slug, "notes/b.md", DocumentSource::Rest)
         .await
-        .unwrap();
-    let event = events.recv().await.unwrap();
+        .context("delete document")?;
+    let event = events
+        .recv()
+        .await
+        .context("receive document delete event")?;
     assert_eq!(event.kind(), StoreEventKind::DocumentDelete);
     assert_eq!(event.path(), Some("notes/b.md"));
     assert_eq!(event.doc_id(), Some(write.document.id.as_str()));
-    let event = events.recv().await.unwrap();
+    let event = events.recv().await.context("receive delete links event")?;
     assert_eq!(event.kind(), StoreEventKind::LinksIndexed);
     assert_eq!(event.library_id(), library.id.as_str());
     assert_eq!(event.path(), Some("notes/b.md"));
@@ -2167,23 +2174,35 @@ async fn visible_writes_emit_in_process_store_events() {
             Some("theirs-version".to_string()),
         )
         .await
-        .unwrap();
-    let event = events.recv().await.unwrap();
+        .context("record conflict")?;
+    let event = events
+        .recv()
+        .await
+        .context("receive conflict created event")?;
     assert_eq!(event.kind(), StoreEventKind::ConflictCreated);
     assert_eq!(event.library_id(), library.id.as_str());
     assert_eq!(event.path(), Some("notes/conflicted.md"));
     assert_eq!(event.conflict_id(), Some(conflict.id.as_str()));
 
-    store.resolve_conflict(&conflict.id).await.unwrap();
-    let event = events.recv().await.unwrap();
+    store
+        .resolve_conflict(&conflict.id)
+        .await
+        .context("resolve conflict")?;
+    let event = events
+        .recv()
+        .await
+        .context("receive conflict resolved event")?;
     assert_eq!(event.kind(), StoreEventKind::ConflictResolved);
     assert_eq!(event.library_id(), library.id.as_str());
     assert_eq!(event.path(), Some("notes/conflicted.md"));
     assert_eq!(event.conflict_id(), Some(conflict.id.as_str()));
 
-    let report = store.reindex_library(&library.slug).await.unwrap();
+    let report = store
+        .reindex_library(&library.slug)
+        .await
+        .context("reindex library")?;
     assert!(report.ok);
-    let event = events.recv().await.unwrap();
+    let event = events.recv().await.context("receive reindex event")?;
     assert_eq!(event.kind(), StoreEventKind::LibraryReindexed);
     assert_eq!(event.library_id(), library.id.as_str());
     assert_eq!(event.path(), None);
@@ -2192,13 +2211,14 @@ async fn visible_writes_emit_in_process_store_events() {
     store
         .emit_git_sync_completed(&library.slug, "peer-1", 2, 1)
         .await
-        .unwrap();
-    let event = events.recv().await.unwrap();
+        .context("emit git sync completed")?;
+    let event = events.recv().await.context("receive git sync event")?;
     assert_eq!(event.kind(), StoreEventKind::GitSyncCompleted);
     assert_eq!(event.library_id(), library.id.as_str());
     assert_eq!(event.peer_id(), Some("peer-1"));
     assert_eq!(event.applied(), Some(2));
     assert_eq!(event.conflicts(), Some(1));
+    Ok(())
 }
 
 #[tokio::test]
