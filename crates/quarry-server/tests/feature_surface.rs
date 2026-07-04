@@ -3,6 +3,7 @@
     reason = "tests use unwrap for HTTP fixture setup"
 )]
 
+use anyhow::Context as _;
 use axum::body::{Body, to_bytes};
 #[cfg(feature = "tmp-documents")]
 use axum::http::header;
@@ -234,7 +235,8 @@ async fn document_feature_surface_matches_compiled_features() {
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_events_routes() {
+async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_events_routes()
+-> anyhow::Result<()> {
     let (_root, app, _store) = document_test_app().await;
 
     let response = app
@@ -247,12 +249,17 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
                 "content_type": "text/markdown"
             }),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let created: Value = response_json(response).await;
-    let secret = created["document"]["path"].as_str().unwrap().to_string();
-    let document_id = created["document"]["id"].as_str().unwrap().to_string();
+    let secret = created["document"]["path"]
+        .as_str()
+        .context("created tmp document should expose a secret path")?
+        .to_string();
+    let document_id = created["document"]["id"]
+        .as_str()
+        .context("created tmp document should expose an id")?
+        .to_string();
 
     let response = app
         .clone()
@@ -261,16 +268,19 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
                 .method(Method::GET)
                 .uri(format!("/v1/tmp/documents/{secret}/blocks"))
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let blocks: Value = response_json(response).await;
     assert_eq!(blocks["document_id"], document_id);
     assert_eq!(blocks["blocks"][0]["text"], "Alpha.");
-    let block_id = blocks["blocks"][0]["block_id"].as_str().unwrap();
-    let base_clock = blocks["document_clock"].as_str().unwrap();
+    let block_id = blocks["blocks"][0]["block_id"]
+        .as_str()
+        .context("tmp blocks response should expose the first block id")?;
+    let base_clock = blocks["document_clock"]
+        .as_str()
+        .context("tmp blocks response should expose the document clock")?;
 
     let event_stream = app
         .clone()
@@ -280,10 +290,9 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
                 .uri(format!("/v1/tmp/documents/{secret}/events/stream"))
                 .header("X-Agent-Id", "agent-a")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(event_stream.status(), StatusCode::OK);
     let event_stream_body = event_stream.into_body();
 
@@ -312,8 +321,7 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
                 ]
             }),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let ack: Value = response_json(response).await;
     assert_eq!(ack["status"], "committed");
@@ -335,13 +343,12 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
                 .method(Method::GET)
                 .uri(format!("/v1/tmp/documents/{secret}"))
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+        to_bytes(response.into_body(), usize::MAX).await?,
         "Alpha edited.\n"
     );
 
@@ -354,14 +361,19 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
                     "/v1/tmp/documents/{secret}/review?includeResolved=1"
                 ))
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let review: Value = response_json(response).await;
     assert_eq!(review["documentId"], document_id);
-    assert_eq!(review["comments"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        review["comments"]
+            .as_array()
+            .context("tmp review response should expose comments")?
+            .len(),
+        1
+    );
     assert_eq!(review["comments"][0]["body"], "Review alpha.");
 
     let response = app
@@ -375,10 +387,9 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
                 .body(Body::from(
                     serde_json::json!({"status":"waiting"}).to_string(),
                 ))
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let presence: Value = response_json(response).await;
     assert_eq!(presence["current"]["documentId"], document_id);
@@ -396,11 +407,11 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
             &format!("/v1/tmp/documents/{secret}/share"),
             serde_json::json!({"role":"editor","byHint":"Avery"}),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     assert!(ack["document_clock"].is_string());
+    Ok(())
 }
 
 #[cfg(feature = "tmp-documents")]
