@@ -1522,40 +1522,40 @@ async fn git_sync_edit_preserves_sibling_block_ids_and_live_anchors() -> anyhow:
 /// RawDocument bypass: binary files round-trip exactly through sync and
 /// never touch the block tables.
 #[tokio::test]
-async fn git_sync_raw_documents_bypass_the_block_model() {
-    let root = tempfile::tempdir().unwrap();
+async fn git_sync_raw_documents_bypass_the_block_model() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("gitraw").await.unwrap();
-    let repo = tempfile::tempdir().unwrap();
+    let library = store.create_library("gitraw").await?;
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
 
     let bytes: Vec<u8> = vec![0, 159, 146, 150, 13, 10, 0];
-    std::fs::write(repo.path().join("blob.bin"), &bytes).unwrap();
-    sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    std::fs::write(repo.path().join("blob.bin"), &bytes)?;
+    sync_peer(&store, &library.slug, &peer.id).await?;
 
-    let document = store.get_document(&library.slug, "blob.bin").await.unwrap();
+    let document = store.get_document(&library.slug, "blob.bin").await?;
     assert_eq!(document.content, bytes);
     assert_eq!(
-        store.load_block_tree(&document.id).await.unwrap(),
+        store.load_block_tree(&document.id).await?,
         Vec::<quarry_storage::BlockRow>::new()
     );
+    Ok(())
 }
 
 /// A pure git-side rename (identical bytes at a new path) pairs the delete
 /// and the create into an identity-preserving document move: the document
 /// id, block ids, review anchors, and the peer's shadow base all survive.
 #[tokio::test]
-async fn sync_pairs_pure_git_renames_into_identity_preserving_moves() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_pairs_pure_git_renames_into_identity_preserving_moves() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("gitrename").await.unwrap();
+    let library = store.create_library("gitrename").await?;
     let outcome = store
         .import_block_document(
             &library.slug,
@@ -1566,13 +1566,11 @@ async fn sync_pairs_pure_git_renames_into_identity_preserving_moves() {
             DocumentSource::Rest,
             WritePrecondition::None,
         )
-        .await
-        .unwrap();
+        .await?;
     let document_id = outcome.document.id.clone();
     let ids_before: Vec<String> = store
         .load_block_tree(&document_id)
-        .await
-        .unwrap()
+        .await?
         .iter()
         .map(|row| row.block_id.clone())
         .collect();
@@ -1592,31 +1590,28 @@ async fn sync_pairs_pure_git_renames_into_identity_preserving_moves() {
             context_after: None,
             parent_item_id: None,
         })
-        .await
-        .unwrap();
+        .await?;
 
-    let repo = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
 
     std::fs::rename(
         repo.path().join("notes/old.md"),
         repo.path().join("notes/new.md"),
-    )
-    .unwrap();
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    )?;
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
     assert!(result.conflicts.is_empty());
 
     let moved = store
         .get_document(&library.slug, "notes/new.md")
         .await
-        .unwrap();
+        .context("renamed document should exist")?;
     assert_eq!(
         moved.id, document_id,
         "the rename preserves the document id"
@@ -1629,21 +1624,23 @@ async fn sync_pairs_pure_git_renames_into_identity_preserving_moves() {
     );
     let ids_after: Vec<String> = store
         .load_block_tree(&document_id)
-        .await
-        .unwrap()
+        .await?
         .iter()
         .map(|row| row.block_id.clone())
         .collect();
     assert_eq!(ids_after, ids_before, "block ids survive the rename");
-    let items = store.list_block_review_items(&document_id).await.unwrap();
-    let kept = items.iter().find(|item| item.id == anchor.id).unwrap();
+    let items = store.list_block_review_items(&document_id).await?;
+    let kept = items
+        .iter()
+        .find(|item| item.id == anchor.id)
+        .context("anchor review item should survive rename")?;
     assert_eq!(kept.state, quarry_storage::BlockReviewState::Open);
     assert_eq!(kept.block_id, ids_before[1]);
     let shadow = store
         .block_shadow_base("git", &peer.id, &document_id)
         .await
-        .unwrap()
-        .expect("the peer's shadow base rides the document id");
+        .context("shadow base query should succeed")?
+        .context("the peer's shadow base rides the document id")?;
     assert_eq!(shadow.base_markdown, "# Title\n\nAlpha.\n\nBravo.\n");
 
     assert!(!repo.path().join("notes/old.md").exists());
@@ -1651,28 +1648,29 @@ async fn sync_pairs_pure_git_renames_into_identity_preserving_moves() {
     let old_state = store
         .sync_state(&peer.id, "notes/old.md")
         .await
-        .unwrap()
-        .unwrap();
+        .context("old path sync state query should succeed")?
+        .context("old path sync state should exist")?;
     assert_eq!(old_state.last_synced_doc_version_id, None);
     assert_eq!(old_state.last_synced_git_oid, None);
     let new_state = store
         .sync_state(&peer.id, "notes/new.md")
         .await
-        .unwrap()
-        .expect("the new path carries the sync state");
+        .context("new path sync state query should succeed")?
+        .context("the new path carries the sync state")?;
     assert_eq!(
         new_state.last_synced_doc_version_id.as_deref(),
         Some(moved.version.id.as_str())
     );
+    Ok(())
 }
 
 /// Rename-and-edit between syncs does not byte-match, so it stays the
 /// conservative delete + create — fresh identity, no guessed pairing.
 #[tokio::test]
-async fn sync_treats_renamed_and_edited_files_as_delete_plus_create() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_treats_renamed_and_edited_files_as_delete_plus_create() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("gitrenameedit").await.unwrap();
+    let library = store.create_library("gitrenameedit").await?;
     let outcome = store
         .import_block_document(
             &library.slug,
@@ -1683,32 +1681,29 @@ async fn sync_treats_renamed_and_edited_files_as_delete_plus_create() {
             DocumentSource::Rest,
             WritePrecondition::None,
         )
-        .await
-        .unwrap();
-    let repo = tempfile::tempdir().unwrap();
+        .await?;
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
 
-    let text = std::fs::read_to_string(repo.path().join("notes/old.md")).unwrap();
-    std::fs::remove_file(repo.path().join("notes/old.md")).unwrap();
+    let text = std::fs::read_to_string(repo.path().join("notes/old.md"))?;
+    std::fs::remove_file(repo.path().join("notes/old.md"))?;
     std::fs::write(
         repo.path().join("notes/new.md"),
         text.replace("Alpha.", "Alpha, edited."),
-    )
-    .unwrap();
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    )?;
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
     assert!(result.conflicts.is_empty());
 
     let created = store
         .get_document(&library.slug, "notes/new.md")
         .await
-        .unwrap();
+        .context("new edited document should exist")?;
     assert_ne!(
         created.id, outcome.document.id,
         "no pairing without a byte match"
@@ -1719,15 +1714,16 @@ async fn sync_treats_renamed_and_edited_files_as_delete_plus_create() {
             .await
             .is_err()
     );
+    Ok(())
 }
 
 /// Duplicate content on either side makes pairing ambiguous; the sync
 /// refuses to guess and falls back to delete + create for all of them.
 #[tokio::test]
-async fn sync_refuses_to_pair_renames_with_duplicate_content() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_refuses_to_pair_renames_with_duplicate_content() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("gitrenamedup").await.unwrap();
+    let library = store.create_library("gitrenamedup").await?;
     let first = store
         .import_block_document(
             &library.slug,
@@ -1738,8 +1734,7 @@ async fn sync_refuses_to_pair_renames_with_duplicate_content() {
             DocumentSource::Rest,
             WritePrecondition::None,
         )
-        .await
-        .unwrap();
+        .await?;
     let second = store
         .import_block_document(
             &library.slug,
@@ -1750,52 +1745,49 @@ async fn sync_refuses_to_pair_renames_with_duplicate_content() {
             DocumentSource::Rest,
             WritePrecondition::None,
         )
-        .await
-        .unwrap();
-    let repo = tempfile::tempdir().unwrap();
+        .await?;
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main", "max_delete_percent": 100}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
 
     std::fs::rename(
         repo.path().join("notes/one.md"),
         repo.path().join("notes/uno.md"),
-    )
-    .unwrap();
+    )?;
     std::fs::rename(
         repo.path().join("notes/two.md"),
         repo.path().join("notes/dos.md"),
-    )
-    .unwrap();
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    )?;
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
     assert!(result.conflicts.is_empty());
 
     let uno = store
         .get_document(&library.slug, "notes/uno.md")
         .await
-        .unwrap();
+        .context("renamed uno document should exist")?;
     let dos = store
         .get_document(&library.slug, "notes/dos.md")
         .await
-        .unwrap();
+        .context("renamed dos document should exist")?;
     assert_ne!(uno.id, first.document.id);
     assert_ne!(uno.id, second.document.id);
     assert_ne!(dos.id, first.document.id);
     assert_ne!(dos.id, second.document.id);
+    Ok(())
 }
 
 /// A bulk folder rename used to look like a mass deletion and trip the
 /// delete-safety abort; paired renames no longer count as deletions.
 #[tokio::test]
-async fn sync_bulk_renames_pass_the_delete_safety_limit() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_bulk_renames_pass_the_delete_safety_limit() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("gitrenamebulk").await.unwrap();
+    let library = store.create_library("gitrenamebulk").await?;
     let alpha = store
         .import_block_document(
             &library.slug,
@@ -1806,8 +1798,7 @@ async fn sync_bulk_renames_pass_the_delete_safety_limit() {
             DocumentSource::Rest,
             WritePrecondition::None,
         )
-        .await
-        .unwrap();
+        .await?;
     let bravo = store
         .import_block_document(
             &library.slug,
@@ -1818,39 +1809,35 @@ async fn sync_bulk_renames_pass_the_delete_safety_limit() {
             DocumentSource::Rest,
             WritePrecondition::None,
         )
-        .await
-        .unwrap();
-    let repo = tempfile::tempdir().unwrap();
+        .await?;
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main", "max_delete_percent": 50}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
 
-    std::fs::create_dir_all(repo.path().join("archive")).unwrap();
+    std::fs::create_dir_all(repo.path().join("archive"))?;
     std::fs::rename(
         repo.path().join("notes/alpha.md"),
         repo.path().join("archive/alpha.md"),
-    )
-    .unwrap();
+    )?;
     std::fs::rename(
         repo.path().join("notes/bravo.md"),
         repo.path().join("archive/bravo.md"),
-    )
-    .unwrap();
+    )?;
 
     // 2 of 2 tracked paths gone would exceed the 50% delete cap; paired
     // renames must not count as deletions.
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
     assert!(result.conflicts.is_empty());
     assert_eq!(
         store
             .get_document(&library.slug, "archive/alpha.md")
             .await
-            .unwrap()
+            .context("renamed alpha document should exist")?
             .id,
         alpha.document.id
     );
@@ -1858,8 +1845,9 @@ async fn sync_bulk_renames_pass_the_delete_safety_limit() {
         store
             .get_document(&library.slug, "archive/bravo.md")
             .await
-            .unwrap()
+            .context("renamed bravo document should exist")?
             .id,
         bravo.document.id
     );
+    Ok(())
 }
