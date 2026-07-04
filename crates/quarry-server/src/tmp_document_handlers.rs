@@ -1,7 +1,9 @@
 use crate::{
-    ApiError, AppState, ErrorResponse, gateway, insert_document_headers, json_with_etag,
-    markdown_write, optional_header, precondition_from_headers, require_tmp_markdown_content_type,
-    tmp_metadata_from_headers, touch_agent_presence, transaction_metadata_from_headers,
+    ApiError, AppState, ErrorResponse, QuarryError, TmpDocumentSubResource, TtlRequest,
+    TtlResponse, gateway, insert_document_headers, json_response, json_with_etag, markdown_write,
+    optional_header, parse_tmp_document_subresource, precondition_from_headers,
+    require_tmp_markdown_content_type, tmp_metadata_from_headers, touch_agent_presence,
+    transaction_metadata_from_headers,
 };
 use axum::Json;
 use axum::body::{Body, Bytes};
@@ -145,6 +147,27 @@ pub(crate) async fn put_tmp_document(
             },
         )
         .await,
+    )
+}
+
+pub(crate) async fn patch_tmp_document_action(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+    Json(request): Json<TtlRequest>,
+) -> Result<Response, ApiError> {
+    let (document_path, subresource) = parse_tmp_document_subresource(&path);
+    if subresource != TmpDocumentSubResource::Ttl {
+        return Err(QuarryError::NotFound(path).into());
+    }
+    let entry = state
+        .store
+        .set_tmp_document_ttl(document_path, request.expires_at)
+        .await?;
+    json_response(
+        StatusCode::OK,
+        &TtlResponse {
+            expires_at: entry.expires_at,
+        },
     )
 }
 

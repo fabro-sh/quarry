@@ -193,7 +193,7 @@ fn install_tmp_document_routes(router: Router<AppState>) -> Router<AppState> {
         .head(tmp_document_handlers::head_tmp_document)
         .post(post_tmp_document_action)
         .put(tmp_document_handlers::put_tmp_document)
-        .patch(patch_tmp_document_action)
+        .patch(tmp_document_handlers::patch_tmp_document_action)
         .delete(tmp_document_handlers::delete_tmp_document)
         .layer(DefaultBodyLimit::max(TMP_DOCUMENT_HTTP_BODY_LIMIT));
 
@@ -942,27 +942,6 @@ async fn get_tmp_document(
         &document.version.id,
         &document.id,
         document.expires_at.as_deref(),
-    )
-}
-
-async fn patch_tmp_document_action(
-    State(state): State<AppState>,
-    Path(path): Path<String>,
-    Json(request): Json<TtlRequest>,
-) -> Result<Response, ApiError> {
-    let (document_path, subresource) = parse_tmp_document_subresource(&path);
-    if subresource != TmpDocumentSubResource::Ttl {
-        return Err(QuarryError::NotFound(path).into());
-    }
-    let entry = state
-        .store
-        .set_tmp_document_ttl(document_path, request.expires_at)
-        .await?;
-    json_response(
-        StatusCode::OK,
-        &TtlResponse {
-            expires_at: entry.expires_at,
-        },
     )
 }
 
@@ -1980,7 +1959,7 @@ pub(crate) enum DocumentSubResource<'path> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TmpDocumentSubResource<'path> {
+pub(crate) enum TmpDocumentSubResource<'path> {
     Document,
     Blocks,
     Review,
@@ -2036,7 +2015,7 @@ pub(crate) fn parse_document_subresource(path: &str) -> (&str, DocumentSubResour
     (path, DocumentSubResource::Document)
 }
 
-fn parse_tmp_document_subresource(path: &str) -> (&str, TmpDocumentSubResource<'_>) {
+pub(crate) fn parse_tmp_document_subresource(path: &str) -> (&str, TmpDocumentSubResource<'_>) {
     if let Some(path) = path.strip_suffix("/versions/raw") {
         return (path, TmpDocumentSubResource::RawVersions);
     }
