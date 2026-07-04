@@ -39,6 +39,7 @@ use quarry_collab_codec::{
     markdown_to_block_rows, utf16_len,
 };
 use quarry_core::render_markdown_frontmatter;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// How a document participates in the block model. `BlockDocument`s are

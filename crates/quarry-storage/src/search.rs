@@ -1,4 +1,4 @@
-use crate::{QuarryStore, is_textual_content_type, metadata_aliases, title_for_entry};
+use crate::{QuarryStore, links::is_textual_content_type, metadata_aliases, title_for_entry};
 
 use quarry_core::{Result, SearchResponse, SearchResult, SearchSuggestion};
 
