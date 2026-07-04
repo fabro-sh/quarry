@@ -3,6 +3,7 @@
     reason = "tests use unwrap for git and filesystem fixtures"
 )]
 
+use anyhow::Context as _;
 use quarry_core::{DocumentSource, TransactionState, WritePrecondition};
 use quarry_git::{GitExportOptions, export_worktree, import_worktree, push_peer, sync_peer};
 use quarry_storage::{QuarryStore, StoreConfig};
@@ -25,47 +26,38 @@ async fn open_store(root: &Path) -> QuarryStore {
 }
 
 #[tokio::test]
-async fn import_export_roundtrip_preserves_bytes_metadata_and_marker_safety() {
-    let root = tempfile::tempdir().unwrap();
+async fn import_export_roundtrip_preserves_bytes_metadata_and_marker_safety() -> anyhow::Result<()>
+{
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("docs").await.unwrap();
+    let library = store.create_library("docs").await?;
 
-    let source = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(source.path().join("notes")).unwrap();
+    let source = tempfile::tempdir()?;
+    std::fs::create_dir_all(source.path().join("notes"))?;
     std::fs::write(
         source.path().join("notes/plan.md"),
         "---\ntitle: Plan\nrank: 1\n---\n# Plan\n",
-    )
-    .unwrap();
-    std::fs::create_dir_all(source.path().join("assets")).unwrap();
-    std::fs::write(source.path().join("assets/blob.bin"), [0, 1, 2, 3, 4]).unwrap();
+    )?;
+    std::fs::create_dir_all(source.path().join("assets"))?;
+    std::fs::write(source.path().join("assets/blob.bin"), [0, 1, 2, 3, 4])?;
     std::fs::write(
         source.path().join("assets/blob.bin.quarrymeta.yaml"),
         "content_type: application/custom\nowner: test\n",
-    )
-    .unwrap();
+    )?;
 
-    let imported = import_worktree(&store, &library.slug, source.path())
-        .await
-        .unwrap();
+    let imported = import_worktree(&store, &library.slug, source.path()).await?;
     assert_eq!(imported.imported_paths.len(), 2);
-    let plan = store
-        .get_document(&library.slug, "notes/plan.md")
-        .await
-        .unwrap();
+    let plan = store.get_document(&library.slug, "notes/plan.md").await?;
     // Markdown imports land via the Phase 4 reconciled write: the stored
     // content is the normalized text WITH frontmatter.
     assert_eq!(plan.content, b"---\nrank: 1\ntitle: Plan\n---\n# Plan\n");
     assert_eq!(plan.metadata["title"], "Plan");
     assert_eq!(plan.metadata["rank"], 1);
-    let blob = store
-        .get_document(&library.slug, "assets/blob.bin")
-        .await
-        .unwrap();
+    let blob = store.get_document(&library.slug, "assets/blob.bin").await?;
     assert_eq!(blob.content, vec![0, 1, 2, 3, 4]);
     assert_eq!(blob.metadata["owner"], "test");
 
-    let output = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir()?;
     let exported = export_worktree(
         &store,
         &library.slug,
@@ -76,30 +68,29 @@ async fn import_export_roundtrip_preserves_bytes_metadata_and_marker_safety() {
             frontmatter_markdown: true,
         },
     )
-    .await
-    .unwrap();
+    .await?;
     let commit_id = exported
         .commit_id
         .as_deref()
-        .expect("export should create a commit id");
-    git2::Oid::from_str(commit_id).expect("export commit id should parse as a Git OID");
+        .context("export should create a commit id")?;
+    git2::Oid::from_str(commit_id).context("export commit id should parse as a Git OID")?;
     assert_eq!(
-        std::fs::read_to_string(output.path().join(".quarry/marker.json")).unwrap(),
+        std::fs::read_to_string(output.path().join(".quarry/marker.json"))?,
         format!(
             "{{\n  \"library_id\": \"{}\",\n  \"library_slug\": \"docs\"\n}}",
             library.id
         )
     );
     assert_eq!(
-        std::fs::read_to_string(output.path().join("notes/plan.md")).unwrap(),
+        std::fs::read_to_string(output.path().join("notes/plan.md"))?,
         "---\nrank: 1\ntitle: Plan\n---\n# Plan\n"
     );
     assert_eq!(
-        std::fs::read(output.path().join("assets/blob.bin")).unwrap(),
+        std::fs::read(output.path().join("assets/blob.bin"))?,
         vec![0, 1, 2, 3, 4]
     );
 
-    let other = store.create_library("other").await.unwrap();
+    let other = store.create_library("other").await?;
     let error = export_worktree(
         &store,
         &other.slug,
@@ -113,6 +104,7 @@ async fn import_export_roundtrip_preserves_bytes_metadata_and_marker_safety() {
     .await
     .unwrap_err();
     assert!(error.to_string().contains("marker"));
+    Ok(())
 }
 
 #[tokio::test]
@@ -384,10 +376,10 @@ async fn export_refuses_large_git_blobs_unless_forced() {
 }
 
 #[tokio::test]
-async fn sync_preserves_both_sides_when_quarry_and_git_change_same_path() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_preserves_both_sides_when_quarry_and_git_change_same_path() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("syncdocs").await.unwrap();
+    let library = store.create_library("syncdocs").await?;
     let baseline = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -400,25 +392,23 @@ async fn sync_preserves_both_sides_when_quarry_and_git_change_same_path() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    let repo = tempfile::tempdir().unwrap();
+        .await?;
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
+        .await?;
 
-    let first = push_peer(&store, &library.slug, &peer.id).await.unwrap();
+    let first = push_peer(&store, &library.slug, &peer.id).await?;
     assert!(first.conflicts.is_empty());
     assert_eq!(
         store
             .sync_state(&peer.id, "notes/plan.md")
             .await
-            .unwrap()
-            .unwrap()
+            .context("sync state query should succeed")?
+            .context("sync state should exist")?
             .last_synced_doc_version_id,
         Some(baseline.version.id.clone())
     );
@@ -435,11 +425,10 @@ async fn sync_preserves_both_sides_when_quarry_and_git_change_same_path() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    std::fs::write(repo.path().join("notes/plan.md"), "theirs\n").unwrap();
+        .await?;
+    std::fs::write(repo.path().join("notes/plan.md"), "theirs\n")?;
 
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
     // Phase 4: markdown documents MERGE via diff3 against the peer's shadow
     // base — no sibling files, no legacy conflict records. The same block
     // changed on both sides, so the canonical side is retained and the
@@ -448,12 +437,9 @@ async fn sync_preserves_both_sides_when_quarry_and_git_change_same_path() {
     assert_eq!(result.conflicts.len(), 0);
     assert_eq!(result.conflict_paths.len(), 0);
 
-    let document = store
-        .get_document(&library.slug, "notes/plan.md")
-        .await
-        .unwrap();
+    let document = store.get_document(&library.slug, "notes/plan.md").await?;
     assert_eq!(document.content, b"ours\n");
-    let items = store.list_block_review_items(&document.id).await.unwrap();
+    let items = store.list_block_review_items(&document.id).await?;
     let conflicts: Vec<_> = items
         .iter()
         .filter(|item| item.kind == quarry_storage::BlockReviewKind::Conflict)
@@ -464,23 +450,24 @@ async fn sync_preserves_both_sides_when_quarry_and_git_change_same_path() {
     assert_eq!(conflicts[0].quote.as_deref(), Some("ours\n"));
     assert_eq!(conflicts[0].context_before.as_deref(), Some("base\n"));
     assert_eq!(
-        std::fs::read_to_string(repo.path().join("notes/plan.md")).unwrap(),
+        std::fs::read_to_string(repo.path().join("notes/plan.md"))?,
         "ours\n"
     );
     let merged_head = store
         .head_document(&library.slug, "notes/plan.md")
         .await
-        .unwrap()
+        .context("head document should exist")?
         .head_version_id;
     assert_eq!(
         store
             .sync_state(&peer.id, "notes/plan.md")
             .await
-            .unwrap()
-            .unwrap()
+            .context("sync state query should succeed")?
+            .context("sync state should exist")?
             .last_synced_doc_version_id,
         Some(merged_head)
     );
+    Ok(())
 }
 
 #[tokio::test]
@@ -1466,10 +1453,10 @@ fn filesystem_supports_case_distinct_paths(root: &Path) -> bool {
 /// live review anchors: the sync reconciles instead of replacing the
 /// projection.
 #[tokio::test]
-async fn git_sync_edit_preserves_sibling_block_ids_and_live_anchors() {
-    let root = tempfile::tempdir().unwrap();
+async fn git_sync_edit_preserves_sibling_block_ids_and_live_anchors() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("gitblocks").await.unwrap();
+    let library = store.create_library("gitblocks").await?;
     let outcome = store
         .import_block_document(
             &library.slug,
@@ -1480,13 +1467,12 @@ async fn git_sync_edit_preserves_sibling_block_ids_and_live_anchors() {
             DocumentSource::Rest,
             WritePrecondition::None,
         )
-        .await
-        .unwrap();
+        .await?;
     let document_id = outcome.document.id.clone();
     let ids_before: Vec<String> = store
         .load_block_tree(&document_id)
         .await
-        .unwrap()
+        .context("initial block tree should load")?
         .iter()
         .filter(|row| row.parent_block_id.is_none())
         .map(|row| row.block_id.clone())
@@ -1507,34 +1493,32 @@ async fn git_sync_edit_preserves_sibling_block_ids_and_live_anchors() {
             context_after: None,
             parent_item_id: None,
         })
-        .await
-        .unwrap();
+        .await?;
 
-    let repo = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
 
     // The push recorded this peer's diff3 shadow base.
     let shadow = store
         .block_shadow_base("git", &peer.id, &document_id)
         .await
-        .unwrap()
-        .expect("export records the peer's shadow base");
+        .context("shadow base query should succeed")?
+        .context("export records the peer's shadow base")?;
     assert_eq!(shadow.base_markdown, "# Title\n\nAlpha.\n\nBravo.\n");
 
     let file = repo.path().join("notes/doc.md");
-    let text = std::fs::read_to_string(&file).unwrap();
-    std::fs::write(&file, text.replace("Bravo.", "Bravo, from git.")).unwrap();
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    let text = std::fs::read_to_string(&file)?;
+    std::fs::write(&file, text.replace("Bravo.", "Bravo, from git."))?;
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
     assert!(result.conflicts.is_empty());
 
-    let rows = store.load_block_tree(&document_id).await.unwrap();
+    let rows = store.load_block_tree(&document_id).await?;
     let ids_after: Vec<String> = rows
         .iter()
         .filter(|row| row.parent_block_id.is_none())
@@ -1544,12 +1528,15 @@ async fn git_sync_edit_preserves_sibling_block_ids_and_live_anchors() {
     assert_eq!(
         rows.iter()
             .find(|row| row.block_id == ids_before[2])
-            .unwrap()
+            .context("edited block should still exist")?
             .text,
         "Bravo, from git."
     );
-    let items = store.list_block_review_items(&document_id).await.unwrap();
-    let kept = items.iter().find(|item| item.id == anchor.id).unwrap();
+    let items = store.list_block_review_items(&document_id).await?;
+    let kept = items
+        .iter()
+        .find(|item| item.id == anchor.id)
+        .context("anchor review item should survive")?;
     assert_eq!(kept.state, quarry_storage::BlockReviewState::Open);
     assert_eq!(kept.block_id, ids_before[1]);
     assert_eq!((kept.start_offset, kept.end_offset), (0, 5));
@@ -1558,12 +1545,13 @@ async fn git_sync_edit_preserves_sibling_block_ids_and_live_anchors() {
     let shadow = store
         .block_shadow_base("git", &peer.id, &document_id)
         .await
-        .unwrap()
-        .unwrap();
+        .context("shadow base query should succeed")?
+        .context("shadow base should exist")?;
     assert_eq!(
         shadow.base_markdown,
         "# Title\n\nAlpha.\n\nBravo, from git.\n"
     );
+    Ok(())
 }
 
 /// RawDocument bypass: binary files round-trip exactly through sync and

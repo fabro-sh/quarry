@@ -24,5 +24,6 @@ turso.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+anyhow.workspace = true
 tempfile.workspace = true
 tokio.workspace = true

@@ -13,7 +13,7 @@ use quarry_storage::{
 };
 use std::{io, time::Duration};
 
-type TestResult = Result<(), Box<dyn std::error::Error>>;
+type TestResult = anyhow::Result<()>;
 
 fn history_version(
     id: &str,

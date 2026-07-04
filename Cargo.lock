@@ -1962,6 +1962,7 @@ dependencies = [
 name = "quarry-git"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "git2",
  "mime_guess",
@@ -2020,6 +2021,7 @@ dependencies = [
 name = "quarry-storage"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "fs2",
  "quarry-cas",
