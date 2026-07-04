@@ -49,8 +49,8 @@ use library_handlers::CreateLibraryRequest;
 use presence::{AgentPresenceRegistry, PresenceStreamGuard};
 use quarry_core::{
     CollabInviteToken, ConflictRecord, DocumentHistoryEntry, DocumentLink, DocumentListEntry,
-    DocumentSource, DocumentVersion, DocumentVersionContent, GcReport, GitPeer, GraphEdge,
-    GraphNode, GraphResponse, Library, LinkCollection, QuarryError, ReindexReport, SearchResponse,
+    DocumentVersion, DocumentVersionContent, GcReport, GitPeer, GraphEdge, GraphNode,
+    GraphResponse, Library, LinkCollection, QuarryError, ReindexReport, SearchResponse,
     SearchResult, SearchSuggestion, TransactionRecord, VersionDiff, WriteOutcome,
     WritePrecondition,
 };
@@ -250,7 +250,7 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
             get(document_handlers::get_document)
                 .head(document_handlers::head_document)
                 .put(document_handlers::put_document)
-                .post(post_document_action)
+                .post(document_handlers::post_document_action)
                 .patch(document_handlers::patch_document_metadata)
                 .delete(document_handlers::delete_document),
         )
@@ -579,7 +579,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         document_ttl_openapi,
         document_handlers::head_document,
         document_handlers::put_document,
-        post_document_action,
+        document_handlers::post_document_action,
         document_handlers::patch_document_metadata,
         document_handlers::delete_document,
         transaction_handlers::begin_transaction,
@@ -1565,116 +1565,6 @@ pub struct MoveRequest {
 }
 
 #[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/documents/{path}/move",
-    params(("library" = String, Path), ("path" = String, Path)),
-    request_body = MoveRequest,
-    responses((status = 200, body = TransactionRecord))
-)]
-async fn post_document_action(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((library, path)): Path<(String, String)>,
-    Json(request): Json<JsonValue>,
-) -> Result<Response, ApiError> {
-    let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
-    let actor = transaction_metadata_from_headers(&headers)?.actor;
-    let (document_path, subresource) = parse_document_subresource(&path);
-    if let DocumentSubResource::VersionRestore(version) = subresource {
-        touch_agent_presence(&state, &headers, Some(&library), document_path).await?;
-        let target = state
-            .store
-            .document_version(&library, document_path, version)
-            .await?;
-        // BlockDocument restores are whole-file writes through the reconciler
-        // (gateway-dispatched: projection preserved, session-mode aware);
-        // RawDocuments keep the byte path.
-        if quarry_storage::document_kind(document_path, &target.version.content_type)
-            == quarry_storage::DocumentKind::BlockDocument
-        {
-            return gateway::gateway_reply(
-                markdown_write::restore_block_document_version(
-                    &state,
-                    &library,
-                    document_path,
-                    &target,
-                    origin_id.clone(),
-                    actor.clone(),
-                )
-                .await,
-            );
-        }
-        let outcome = state
-            .store
-            .restore_document_version_with_origin(
-                &library,
-                document_path,
-                version,
-                origin_id.clone(),
-                actor.clone(),
-            )
-            .await?;
-        return json_with_etag(StatusCode::OK, &outcome, &outcome.version.id);
-    }
-
-    if subresource == DocumentSubResource::Move {
-        let to_path = request
-            .get("to_path")
-            .and_then(JsonValue::as_str)
-            .ok_or_else(|| QuarryError::InvalidPath("move request missing to_path".to_string()))?;
-        let transaction = state
-            .store
-            .move_document_with_origin(
-                &library,
-                document_path,
-                to_path,
-                DocumentSource::Rest,
-                origin_id.clone(),
-                actor.clone(),
-            )
-            .await?;
-        return json_response(StatusCode::OK, &transaction);
-    }
-
-    if subresource == DocumentSubResource::Share {
-        let request: CreateCollabInviteRequest = serde_json::from_value(request)
-            .map_err(|error| QuarryError::InvalidPath(format!("invalid share request: {error}")))?;
-        let token = state
-            .store
-            .create_collab_invite_token(&library, document_path, &request.role, request.by_hint)
-            .await?;
-        return json_response(StatusCode::CREATED, &token);
-    }
-
-    if let DocumentSubResource::ShareRevoke(token_id) = subresource {
-        let token = state.store.revoke_collab_invite_token(token_id).await?;
-        return json_response(StatusCode::OK, &token);
-    }
-
-    // The legacy `/edit`, `/ops`, and `POST /review` mutation facades are
-    // deleted (Phase 7): they fall through to the 404 below like any unknown
-    // route. `POST .../transactions` is the single mutation contract;
-    // GET `/review` (the read projection) is unaffected.
-
-    if subresource == DocumentSubResource::Presence {
-        let request: AgentPresenceRequest = serde_json::from_value(request).map_err(|error| {
-            QuarryError::InvalidPath(format!("invalid presence request: {error}"))
-        })?;
-        let response =
-            agent_presence_document(&state, &headers, &library, document_path, request).await?;
-        return json_response(StatusCode::OK, &response);
-    }
-
-    if subresource == DocumentSubResource::Transactions {
-        touch_agent_presence(&state, &headers, Some(&library), document_path).await?;
-        return gateway::document_block_transactions(&state, &library, document_path, request)
-            .await;
-    }
-
-    Err(QuarryError::NotFound(path).into())
-}
-
-#[utoipa::path(
     get,
     path = "/v1/libraries/{library}/documents/{path}/presence",
     params(("library" = String, Path), ("path" = String, Path)),
@@ -1698,26 +1588,6 @@ async fn agent_presence_list_openapi() {}
     reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
 )]
 async fn agent_presence_openapi() {}
-
-async fn agent_presence_document(
-    state: &AppState,
-    headers: &HeaderMap,
-    library: &str,
-    path: &str,
-    request: AgentPresenceRequest,
-) -> Result<AgentPresenceResponse, ApiError> {
-    let document = state.store.head_document(library, path).await?;
-    let agent_id = agent_id_from_headers_or_body(headers, request.agent_id.as_deref())?;
-    let status = normalized_agent_status(&request.status)?;
-    Ok(state.agent_presence.update(
-        Some(library),
-        path,
-        &document.id,
-        agent_id,
-        status,
-        request.by.filter(|by| !by.trim().is_empty()),
-    ))
-}
 
 async fn agent_presence_tmp_document(
     state: &AppState,
