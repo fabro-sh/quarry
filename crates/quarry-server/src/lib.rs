@@ -18,6 +18,7 @@ mod search_handlers;
 mod session;
 mod sse;
 mod system_handlers;
+mod tmp_document_handlers;
 mod transaction_handlers;
 
 pub use session::{MSG_QUARRY_CHECKPOINT, MSG_QUARRY_CHECKPOINT_FAILED};
@@ -200,7 +201,8 @@ fn install_tmp_document_routes(router: Router<AppState>) -> Router<AppState> {
     router
         .route(
             "/v1/tmp/documents",
-            post(create_tmp_document).layer(DefaultBodyLimit::max(TMP_DOCUMENT_HTTP_BODY_LIMIT)),
+            post(tmp_document_handlers::create_tmp_document)
+                .layer(DefaultBodyLimit::max(TMP_DOCUMENT_HTTP_BODY_LIMIT)),
         )
         .route("/v1/tmp/collab/{secret}/{room}", get(tmp_collab_websocket))
         .route("/v1/tmp/documents/{*path}", tmp_document_route)
@@ -536,7 +538,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         library_handlers::list_libraries,
         library_handlers::get_library,
         document_handlers::list_documents,
-        create_tmp_document,
+        tmp_document_handlers::create_tmp_document,
         tmp_collab_websocket_openapi,
         get_tmp_document,
         head_tmp_document,
@@ -834,14 +836,6 @@ pub struct CreateCollabInviteRequest {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-pub struct CreateTmpDocumentRequest {
-    pub content: Option<String>,
-    pub metadata: Option<JsonValue>,
-    pub content_type: Option<String>,
-    pub expires_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
 pub struct TtlRequest {
     pub expires_at: Option<String>,
 }
@@ -856,52 +850,6 @@ pub struct PromoteTmpDocumentRequest {
     pub library: String,
     pub path: String,
     pub if_match: Option<String>,
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/tmp/documents",
-    request_body(
-        content = CreateTmpDocumentRequest,
-        description = "Create a Markdown-only tmp scratch document. content_type defaults to text/markdown; any supplied value must be a Markdown media type. Canonical UTF-8 Markdown is limited to 1 MiB."
-    ),
-    responses(
-        (status = 201, body = WriteOutcome),
-        (status = 413, description = "Tmp Markdown content exceeds 1 MiB", body = ErrorResponse),
-        (status = 415, description = "Tmp documents are Markdown-only", body = ErrorResponse)
-    )
-)]
-async fn create_tmp_document(
-    State(state): State<AppState>,
-    Json(request): Json<CreateTmpDocumentRequest>,
-) -> Result<Response, ApiError> {
-    let requested_content_type = request
-        .content_type
-        .as_deref()
-        .unwrap_or(quarry_storage::TMP_DOCUMENT_DEFAULT_CONTENT_TYPE);
-    let content_type =
-        quarry_storage::normalize_tmp_markdown_content_type(requested_content_type)?.to_string();
-    let mut metadata = request.metadata.unwrap_or_else(|| serde_json::json!({}));
-    if let JsonValue::Object(object) = &mut metadata {
-        object.insert(
-            "content_type".to_string(),
-            JsonValue::String(content_type.clone()),
-        );
-    }
-    let ttl = request
-        .expires_at
-        .map(quarry_storage::TmpTtl::ExpiresAt)
-        .unwrap_or(quarry_storage::TmpTtl::Default);
-    let outcome = state
-        .store
-        .create_tmp_document(
-            request.content.unwrap_or_default().into_bytes(),
-            metadata,
-            &content_type,
-            ttl,
-        )
-        .await?;
-    json_with_etag(StatusCode::CREATED, &outcome, &outcome.version.id)
 }
 
 #[utoipa::path(
