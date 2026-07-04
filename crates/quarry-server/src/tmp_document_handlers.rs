@@ -3,18 +3,21 @@ use crate::review::{DocumentReviewQuery, agent_tmp_document_review};
 use crate::sse::events_for_tmp_document;
 use crate::{
     AgentPresenceRequest, ApiError, AppState, ErrorResponse, PromoteTmpDocumentRequest,
-    QuarryError, TmpDocumentSubResource, TtlRequest, TtlResponse, agent_presence_tmp_document,
-    bytes_response_with_expiry, gateway, insert_document_headers, json_response, json_with_etag,
-    markdown_write, optional_header, parse_tmp_document_subresource, precondition_from_headers,
-    require_tmp_markdown_content_type, tmp_metadata_from_headers, touch_agent_presence,
-    transaction_metadata_from_headers,
+    QuarryError, TmpAgentPresenceListResponse, TmpAgentPresenceResponse, TmpDocumentSubResource,
+    TtlRequest, TtlResponse, agent_presence_tmp_document, bytes_response_with_expiry, gateway,
+    insert_document_headers, json_response, json_with_etag, markdown_write, optional_header,
+    parse_tmp_document_subresource, precondition_from_headers, require_tmp_markdown_content_type,
+    tmp_metadata_from_headers, touch_agent_presence, transaction_metadata_from_headers,
 };
 use axum::Json;
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use quarry_core::{TransactionRecord, WriteOutcome, WritePrecondition};
+use quarry_core::{
+    DocumentHistoryEntry, DocumentListEntry, DocumentVersion, DocumentVersionContent,
+    TransactionRecord, WriteOutcome, WritePrecondition,
+};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use utoipa::ToSchema;
@@ -72,6 +75,141 @@ pub(crate) async fn create_tmp_document(
         .await?;
     json_with_etag(StatusCode::CREATED, &outcome, &outcome.version.id)
 }
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{secret}/versions",
+    params(("secret" = String, Path)),
+    responses((status = 200, body = [DocumentHistoryEntry]))
+)]
+#[expect(
+    dead_code,
+    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
+)]
+pub(crate) async fn tmp_document_versions_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{secret}/versions/raw",
+    params(("secret" = String, Path)),
+    responses((status = 200, body = [DocumentVersion]))
+)]
+#[expect(
+    dead_code,
+    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
+)]
+pub(crate) async fn tmp_document_versions_raw_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{secret}/versions/{version}",
+    params(("secret" = String, Path), ("version" = String, Path)),
+    responses((status = 200, body = DocumentVersionContent))
+)]
+#[expect(
+    dead_code,
+    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
+)]
+pub(crate) async fn tmp_document_version_openapi() {}
+
+#[utoipa::path(
+    patch,
+    path = "/v1/tmp/documents/{secret}/ttl",
+    params(("secret" = String, Path)),
+    request_body = TtlRequest,
+    responses((status = 200, body = TtlResponse), (status = 400, body = ErrorResponse))
+)]
+#[expect(
+    dead_code,
+    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
+)]
+pub(crate) async fn tmp_document_ttl_openapi() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/tmp/documents/{secret}/promote",
+    params(("secret" = String, Path)),
+    request_body = PromoteTmpDocumentRequest,
+    responses((status = 200, body = DocumentListEntry), (status = 409, body = ErrorResponse))
+)]
+#[expect(
+    dead_code,
+    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
+)]
+pub(crate) async fn tmp_document_promote_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{secret}/blocks",
+    params(("secret" = String, Path)),
+    responses(
+        (status = 200, body = gateway::BlockTreeResponse),
+        (status = 404, body = ErrorResponse),
+        (status = 422, body = gateway::BlockTransactionError)
+    )
+)]
+#[expect(
+    dead_code,
+    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
+)]
+pub(crate) async fn tmp_document_blocks_openapi() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/tmp/documents/{secret}/transactions",
+    params(("secret" = String, Path)),
+    request_body = gateway::BlockTransactionRequest,
+    responses(
+        (status = 200, body = gateway::BlockTransactionAck),
+        (status = 400, body = gateway::BlockTransactionError),
+        (status = 404, body = gateway::BlockTransactionError),
+        (status = 412, body = gateway::BlockTransactionError),
+        (status = 413, body = gateway::BlockTransactionError),
+        (status = 422, body = gateway::BlockTransactionError)
+    )
+)]
+#[expect(
+    dead_code,
+    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
+)]
+pub(crate) async fn tmp_document_block_transactions_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{secret}/events/stream",
+    params(("secret" = String, Path)),
+    responses((status = 200, description = "Tmp document-scoped server-sent event stream"), (status = 404, body = ErrorResponse))
+)]
+#[expect(
+    dead_code,
+    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
+)]
+pub(crate) async fn tmp_document_events_stream_openapi() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{secret}/presence",
+    params(("secret" = String, Path)),
+    responses((status = 200, body = TmpAgentPresenceListResponse), (status = 404, body = ErrorResponse))
+)]
+#[expect(
+    dead_code,
+    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
+)]
+pub(crate) async fn tmp_agent_presence_list_openapi() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/tmp/documents/{secret}/presence",
+    params(("secret" = String, Path)),
+    request_body = AgentPresenceRequest,
+    responses((status = 200, body = TmpAgentPresenceResponse), (status = 404, body = ErrorResponse))
+)]
+#[expect(
+    dead_code,
+    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
+)]
+pub(crate) async fn tmp_agent_presence_openapi() {}
 
 #[utoipa::path(
     get,

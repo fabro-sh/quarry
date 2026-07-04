@@ -546,17 +546,17 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         tmp_document_handlers::head_tmp_document,
         tmp_document_handlers::put_tmp_document,
         tmp_document_handlers::delete_tmp_document,
-        tmp_document_versions_openapi,
-        tmp_document_versions_raw_openapi,
-        tmp_document_version_openapi,
-        tmp_document_ttl_openapi,
-        tmp_document_promote_openapi,
+        tmp_document_handlers::tmp_document_versions_openapi,
+        tmp_document_handlers::tmp_document_versions_raw_openapi,
+        tmp_document_handlers::tmp_document_version_openapi,
+        tmp_document_handlers::tmp_document_ttl_openapi,
+        tmp_document_handlers::tmp_document_promote_openapi,
         review::tmp_document_review_openapi,
-        tmp_document_blocks_openapi,
-        tmp_document_block_transactions_openapi,
-        tmp_document_events_stream_openapi,
-        tmp_agent_presence_list_openapi,
-        tmp_agent_presence_openapi,
+        tmp_document_handlers::tmp_document_blocks_openapi,
+        tmp_document_handlers::tmp_document_block_transactions_openapi,
+        tmp_document_handlers::tmp_document_events_stream_openapi,
+        tmp_document_handlers::tmp_agent_presence_list_openapi,
+        tmp_document_handlers::tmp_agent_presence_openapi,
         search_handlers::search_documents,
         search_handlers::suggest_documents,
         search_handlers::reindex_library,
@@ -798,141 +798,6 @@ pub struct PromoteTmpDocumentRequest {
     pub path: String,
     pub if_match: Option<String>,
 }
-
-#[utoipa::path(
-    get,
-    path = "/v1/tmp/documents/{secret}/versions",
-    params(("secret" = String, Path)),
-    responses((status = 200, body = [DocumentHistoryEntry]))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn tmp_document_versions_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/tmp/documents/{secret}/versions/raw",
-    params(("secret" = String, Path)),
-    responses((status = 200, body = [DocumentVersion]))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn tmp_document_versions_raw_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/tmp/documents/{secret}/versions/{version}",
-    params(("secret" = String, Path), ("version" = String, Path)),
-    responses((status = 200, body = DocumentVersionContent))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn tmp_document_version_openapi() {}
-
-#[utoipa::path(
-    patch,
-    path = "/v1/tmp/documents/{secret}/ttl",
-    params(("secret" = String, Path)),
-    request_body = TtlRequest,
-    responses((status = 200, body = TtlResponse), (status = 400, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn tmp_document_ttl_openapi() {}
-
-#[utoipa::path(
-    post,
-    path = "/v1/tmp/documents/{secret}/promote",
-    params(("secret" = String, Path)),
-    request_body = PromoteTmpDocumentRequest,
-    responses((status = 200, body = DocumentListEntry), (status = 409, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn tmp_document_promote_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/tmp/documents/{secret}/blocks",
-    params(("secret" = String, Path)),
-    responses(
-        (status = 200, body = gateway::BlockTreeResponse),
-        (status = 404, body = ErrorResponse),
-        (status = 422, body = gateway::BlockTransactionError)
-    )
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn tmp_document_blocks_openapi() {}
-
-#[utoipa::path(
-    post,
-    path = "/v1/tmp/documents/{secret}/transactions",
-    params(("secret" = String, Path)),
-    request_body = gateway::BlockTransactionRequest,
-    responses(
-        (status = 200, body = gateway::BlockTransactionAck),
-        (status = 400, body = gateway::BlockTransactionError),
-        (status = 404, body = gateway::BlockTransactionError),
-        (status = 412, body = gateway::BlockTransactionError),
-        (status = 413, body = gateway::BlockTransactionError),
-        (status = 422, body = gateway::BlockTransactionError)
-    )
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn tmp_document_block_transactions_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/tmp/documents/{secret}/events/stream",
-    params(("secret" = String, Path)),
-    responses((status = 200, description = "Tmp document-scoped server-sent event stream"), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn tmp_document_events_stream_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/tmp/documents/{secret}/presence",
-    params(("secret" = String, Path)),
-    responses((status = 200, body = TmpAgentPresenceListResponse), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn tmp_agent_presence_list_openapi() {}
-
-#[utoipa::path(
-    post,
-    path = "/v1/tmp/documents/{secret}/presence",
-    params(("secret" = String, Path)),
-    request_body = AgentPresenceRequest,
-    responses((status = 200, body = TmpAgentPresenceResponse), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn tmp_agent_presence_openapi() {}
 
 #[utoipa::path(
     get,
