@@ -24,8 +24,9 @@ futures-util.workspace = true
 libc = "0.2"
 
 [dev-dependencies]
+anyhow.workspace = true
 axum.workspace = true
 tempfile.workspace = true
-quarry-server.workspace = true
+quarry-server = { workspace = true, features = ["tmp-documents"] }
 tokio-tungstenite.workspace = true
 futures-util.workspace = true
