@@ -191,7 +191,7 @@ fn install_tmp_document_routes(router: Router<AppState>) -> Router<AppState> {
     }
 
     let tmp_document_route = get(get_tmp_document)
-        .head(head_tmp_document)
+        .head(tmp_document_handlers::head_tmp_document)
         .post(post_tmp_document_action)
         .put(put_tmp_document)
         .patch(patch_tmp_document_action)
@@ -541,7 +541,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         tmp_document_handlers::create_tmp_document,
         tmp_collab_websocket_openapi,
         get_tmp_document,
-        head_tmp_document,
+        tmp_document_handlers::head_tmp_document,
         put_tmp_document,
         delete_tmp_document,
         tmp_document_versions_openapi,
@@ -944,29 +944,6 @@ async fn get_tmp_document(
         &document.id,
         document.expires_at.as_deref(),
     )
-}
-
-#[utoipa::path(
-    head,
-    path = "/v1/tmp/documents/{secret}",
-    params(("secret" = String, Path)),
-    responses((status = 200), (status = 410, body = ErrorResponse))
-)]
-async fn head_tmp_document(
-    State(state): State<AppState>,
-    Path(path): Path<String>,
-) -> Result<Response, ApiError> {
-    let document = state.store.head_tmp_document(&path).await?;
-    let mut response = Response::new(axum::body::Body::empty());
-    *response.status_mut() = StatusCode::OK;
-    insert_document_headers(
-        response.headers_mut(),
-        &document.content_type,
-        &document.head_version_id,
-        &document.id,
-        document.expires_at.as_deref(),
-    )?;
-    Ok(response)
 }
 
 #[utoipa::path(

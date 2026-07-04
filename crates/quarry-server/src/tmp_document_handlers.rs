@@ -1,6 +1,7 @@
-use crate::{ApiError, AppState, ErrorResponse, json_with_etag};
+use crate::{ApiError, AppState, ErrorResponse, insert_document_headers, json_with_etag};
 use axum::Json;
-use axum::extract::State;
+use axum::body::Body;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use quarry_core::WriteOutcome;
@@ -60,4 +61,27 @@ pub(crate) async fn create_tmp_document(
         )
         .await?;
     json_with_etag(StatusCode::CREATED, &outcome, &outcome.version.id)
+}
+
+#[utoipa::path(
+    head,
+    path = "/v1/tmp/documents/{secret}",
+    params(("secret" = String, Path)),
+    responses((status = 200), (status = 410, body = ErrorResponse))
+)]
+pub(crate) async fn head_tmp_document(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+) -> Result<Response, ApiError> {
+    let document = state.store.head_tmp_document(&path).await?;
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::OK;
+    insert_document_headers(
+        response.headers_mut(),
+        &document.content_type,
+        &document.head_version_id,
+        &document.id,
+        document.expires_at.as_deref(),
+    )?;
+    Ok(response)
 }
