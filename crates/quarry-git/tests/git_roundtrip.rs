@@ -471,10 +471,10 @@ async fn sync_preserves_both_sides_when_quarry_and_git_change_same_path() -> any
 }
 
 #[tokio::test]
-async fn sync_with_both_sides_unchanged_does_not_create_new_git_commit() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_with_both_sides_unchanged_does_not_create_new_git_commit() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("unchanged").await.unwrap();
+    let library = store.create_library("unchanged").await?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -487,63 +487,62 @@ async fn sync_with_both_sides_unchanged_does_not_create_new_git_commit() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    let repo = tempfile::tempdir().unwrap();
+        .await?;
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
     let head_before = git2::Repository::open(repo.path())
-        .unwrap()
+        .context("exported git repo should open")?
         .head()
-        .unwrap()
+        .context("exported repo should have a HEAD")?
         .target()
-        .unwrap();
+        .context("exported HEAD should point to a commit")?;
     let document_id = store
         .head_document(&library.slug, "notes/stable.md")
         .await
-        .unwrap()
+        .context("stable document should exist")?
         .id;
     let base_before = store
         .block_shadow_base("git", &peer.id, &document_id)
         .await
-        .unwrap()
-        .expect("export records the peer's shadow base");
+        .context("shadow base query should succeed")?
+        .context("export records the peer's shadow base")?;
     // Let the clock tick so an (incorrect) rewrite would change updated_at.
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
     assert!(result.imported_paths.is_empty());
     assert!(result.conflicts.is_empty());
     assert_eq!(result.commit_id, None);
     let head_after = git2::Repository::open(repo.path())
-        .unwrap()
+        .context("exported git repo should still open")?
         .head()
-        .unwrap()
+        .context("exported repo should still have a HEAD")?
         .target()
-        .unwrap();
+        .context("exported HEAD should still point to a commit")?;
     assert_eq!(head_after, head_before);
     // The shadow base already named the head, so the sync skipped both the
     // document-content load and the base rewrite.
     let base_after = store
         .block_shadow_base("git", &peer.id, &document_id)
         .await
-        .unwrap()
-        .expect("shadow base survives a no-op sync");
+        .context("shadow base query should still succeed")?
+        .context("shadow base survives a no-op sync")?;
     assert_eq!(base_after, base_before);
+    Ok(())
 }
 
 #[tokio::test]
-async fn sync_exports_quarry_only_content_change_to_git() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_exports_quarry_only_content_change_to_git() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("quarrychange").await.unwrap();
+    let library = store.create_library("quarrychange").await?;
     let baseline = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -556,17 +555,15 @@ async fn sync_exports_quarry_only_content_change_to_git() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    let repo = tempfile::tempdir().unwrap();
+        .await?;
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
     let updated = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -579,34 +576,34 @@ async fn sync_exports_quarry_only_content_change_to_git() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
+        .await?;
 
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
     assert!(result.imported_paths.is_empty());
     assert!(result.conflicts.is_empty());
     assert_eq!(result.exported_paths, vec!["notes/plan.md"]);
     assert_eq!(
-        std::fs::read_to_string(repo.path().join("notes/plan.md")).unwrap(),
+        std::fs::read_to_string(repo.path().join("notes/plan.md"))?,
         "from quarry\n"
     );
     assert_eq!(
         store
             .sync_state(&peer.id, "notes/plan.md")
             .await
-            .unwrap()
-            .unwrap()
+            .context("sync state query should succeed")?
+            .context("sync state should exist")?
             .last_synced_doc_version_id,
         Some(updated.version.id)
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn sync_imports_git_only_content_change_to_quarry() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_imports_git_only_content_change_to_quarry() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("gitchange").await.unwrap();
+    let library = store.create_library("gitchange").await?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -619,20 +616,18 @@ async fn sync_imports_git_only_content_change_to_quarry() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    let repo = tempfile::tempdir().unwrap();
+        .await?;
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
-    std::fs::write(repo.path().join("notes/plan.md"), "from git\n").unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
+    std::fs::write(repo.path().join("notes/plan.md"), "from git\n")?;
 
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
     assert_eq!(result.imported_paths, vec!["notes/plan.md"]);
     assert!(result.conflicts.is_empty());
@@ -640,21 +635,22 @@ async fn sync_imports_git_only_content_change_to_quarry() {
         store
             .get_document(&library.slug, "notes/plan.md")
             .await
-            .unwrap()
+            .context("imported git document should exist")?
             .content,
         b"from git\n"
     );
     assert_eq!(
-        std::fs::read_to_string(repo.path().join("notes/plan.md")).unwrap(),
+        std::fs::read_to_string(repo.path().join("notes/plan.md"))?,
         "from git\n"
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn sync_does_not_advance_sync_state_when_export_fails() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_does_not_advance_sync_state_when_export_fails() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("failedsync").await.unwrap();
+    let library = store.create_library("failedsync").await?;
     let baseline = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -667,18 +663,16 @@ async fn sync_does_not_advance_sync_state_when_export_fails() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    let repo = tempfile::tempdir().unwrap();
+        .await?;
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
-    std::fs::write(repo.path().join("notes/plan.md"), "from git\n").unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
+    std::fs::write(repo.path().join("notes/plan.md"), "from git\n")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -691,8 +685,7 @@ async fn sync_does_not_advance_sync_state_when_export_fails() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
+        .await?;
 
     let error = sync_peer(&store, &library.slug, &peer.id)
         .await
@@ -703,18 +696,19 @@ async fn sync_does_not_advance_sync_state_when_export_fails() {
         store
             .sync_state(&peer.id, "notes/plan.md")
             .await
-            .unwrap()
-            .unwrap()
+            .context("sync state query should succeed")?
+            .context("sync state should still exist")?
             .last_synced_doc_version_id,
         Some(baseline.version.id)
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn sync_accepts_both_changed_to_same_content_without_conflict() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_accepts_both_changed_to_same_content_without_conflict() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("samechange").await.unwrap();
+    let library = store.create_library("samechange").await?;
     let baseline = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -727,17 +721,15 @@ async fn sync_accepts_both_changed_to_same_content_without_conflict() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    let repo = tempfile::tempdir().unwrap();
+        .await?;
+    let repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+        .await?;
+    push_peer(&store, &library.slug, &peer.id).await?;
     let ours = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -750,11 +742,10 @@ async fn sync_accepts_both_changed_to_same_content_without_conflict() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    std::fs::write(repo.path().join("notes/plan.md"), "same\n").unwrap();
+        .await?;
+    std::fs::write(repo.path().join("notes/plan.md"), "same\n")?;
 
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
     assert!(result.conflicts.is_empty());
     assert!(result.conflict_paths.is_empty());
@@ -762,15 +753,16 @@ async fn sync_accepts_both_changed_to_same_content_without_conflict() {
         store
             .sync_state(&peer.id, "notes/plan.md")
             .await
-            .unwrap()
-            .unwrap()
+            .context("sync state query should succeed")?
+            .context("sync state should exist")?
             .last_synced_doc_version_id,
         Some(ours.version.id)
     );
     assert_eq!(
-        std::fs::read_to_string(repo.path().join("notes/plan.md")).unwrap(),
+        std::fs::read_to_string(repo.path().join("notes/plan.md"))?,
         "same\n"
     );
+    Ok(())
 }
 
 #[tokio::test]
