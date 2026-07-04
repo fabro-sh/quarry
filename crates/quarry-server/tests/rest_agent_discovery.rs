@@ -1,6 +1,7 @@
 #![cfg(feature = "lib-documents")]
 #![allow(clippy::unwrap_used, reason = "tests use unwrap for HTTP fixtures")]
 
+use anyhow::Context as _;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
 use quarry_storage::QuarryStore;
@@ -76,7 +77,7 @@ async fn get_document_markdown(app: &axum::Router, path: &str) -> String {
 }
 
 #[tokio::test]
-async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
+async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() -> anyhow::Result<()> {
     let (_root, app, _store) = document_test_app().await;
 
     let response = app
@@ -86,10 +87,9 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
                 .method(Method::GET)
                 .uri("/quarry.SKILL.md")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -99,18 +99,12 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
                 .method(Method::GET)
                 .uri("/agent-docs")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
-    let docs = String::from_utf8(
-        to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap()
-            .to_vec(),
-    )
-    .unwrap();
+    let docs = String::from_utf8(to_bytes(response.into_body(), usize::MAX).await?.to_vec())
+        .context("agent docs should be valid UTF-8")?;
     // The docs teach the session-scoped contract: stable block ids, the
     // transaction envelope with typed retryable errors, and the rows-backed
     // review projection (incl. conflict items).
@@ -158,10 +152,9 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
                 .uri("/.well-known/agent.json")
                 .header(header::HOST, "127.0.0.1:7831")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build request")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body["api_base"], "http://127.0.0.1:7831/v1");
@@ -224,39 +217,28 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
     assert!(body["endpoints"]["review_process"].is_null());
     assert!(body["route_hints"]["edit"].is_null());
     assert!(body["route_hints"]["ops"].is_null());
+    let capabilities = body["capabilities"]
+        .as_array()
+        .context("discovery should expose capabilities")?;
     assert!(
-        body["capabilities"]
-            .as_array()
-            .unwrap()
+        capabilities
             .iter()
             .any(|capability| capability == "presence")
     );
     assert!(
-        body["capabilities"]
-            .as_array()
-            .unwrap()
+        capabilities
             .iter()
             .any(|capability| capability == "transactions")
     );
-    assert!(
-        body["capabilities"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|capability| capability == "review")
-    );
+    assert!(capabilities.iter().any(|capability| capability == "review"));
     if cfg!(feature = "tmp-documents") {
         assert!(
-            body["capabilities"]
-                .as_array()
-                .unwrap()
+            capabilities
                 .iter()
                 .any(|capability| capability == "tmp_documents")
         );
         assert!(
-            !body["capabilities"]
-                .as_array()
-                .unwrap()
+            !capabilities
                 .iter()
                 .any(|capability| capability == &removed_tmp_signal)
         );
@@ -264,55 +246,54 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() {
     assert!(
         body["auth_note"]
             .as_str()
-            .unwrap()
+            .context("discovery should expose an auth note")?
             .contains("trusted-localhost")
     );
     assert_eq!(body["auth"]["mode"], "trusted_localhost");
-    assert!(body["presence_statuses"].as_array().unwrap().len() >= 6);
     assert!(
-        body["transaction_operations"]
+        body["presence_statuses"]
             .as_array()
-            .unwrap()
+            .context("discovery should expose presence statuses")?
+            .len()
+            >= 6
+    );
+    let transaction_operations = body["transaction_operations"]
+        .as_array()
+        .context("discovery should expose transaction operations")?;
+    assert!(
+        transaction_operations
             .iter()
             .any(|operation| operation == "replace_block_content")
     );
     assert!(
-        body["transaction_operations"]
-            .as_array()
-            .unwrap()
+        transaction_operations
             .iter()
             .any(|operation| operation == "set_block_type")
     );
     assert!(
-        body["transaction_operations"]
-            .as_array()
-            .unwrap()
+        transaction_operations
             .iter()
             .any(|operation| operation == "comment.add")
     );
     assert!(
-        body["transaction_operations"]
-            .as_array()
-            .unwrap()
+        transaction_operations
             .iter()
             .any(|operation| operation == "comment.edit")
     );
     assert!(
-        body["transaction_operations"]
-            .as_array()
-            .unwrap()
+        transaction_operations
             .iter()
             .any(|operation| operation == "suggestion.accept")
     );
-    assert!(
-        !body["limitations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|limitation| limitation
-                .as_str()
-                .is_some_and(|limitation| limitation.contains("comment.reply")))
-    );
+    let limitations = body["limitations"]
+        .as_array()
+        .context("discovery should expose limitations")?;
+    assert!(!limitations.iter().any(|limitation| {
+        limitation
+            .as_str()
+            .is_some_and(|limitation| limitation.contains("comment.reply"))
+    }));
+    Ok(())
 }
 
 #[tokio::test]
