@@ -237,6 +237,14 @@ async fn presence_test_app(library: &str) -> (tempfile::TempDir, axum::Router) {
     (root, router(store))
 }
 
+fn block_tx(client_tx_id: &str, ops: Value) -> Value {
+    serde_json::json!({
+        "client_tx_id": client_tx_id,
+        "actor": {"kind": "agent", "id": "agent-1", "label": "Agent One"},
+        "ops": ops
+    })
+}
+
 async fn post_presence(app: &axum::Router, library: &str, agent_id: &str, status: &str) {
     let response = app
         .clone()
@@ -469,4 +477,58 @@ async fn tmp_document_read_with_agent_header_auto_joins_presence() {
     assert_eq!(presence["presence"].as_array().unwrap().len(), 1);
     assert_eq!(presence["presence"][0]["agentId"], "agent-tmp-reader");
     assert_eq!(presence["presence"][0]["status"], "waiting");
+}
+
+#[tokio::test]
+async fn document_write_with_agent_header_touches_presence() {
+    let (_root, app) = presence_test_app("presence-write").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/presence-write/documents/live.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header("X-Agent-Id", "agent-w")
+                .body(Body::from("hello again"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/presence-write/documents/live.md/transactions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("X-Agent-Id", "agent-t")
+                .body(Body::from(
+                    block_tx(
+                        "tx-presence",
+                        serde_json::json!([{
+                            "op": "insert_block",
+                            "position": 1,
+                            "block_type": "p",
+                            "text": "Second."
+                        }]),
+                    )
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let mut agent_ids: Vec<String> = list_presence(&app, "presence-write")
+        .await
+        .iter()
+        .map(|entry| entry["agentId"].as_str().unwrap_or_default().to_string())
+        .collect();
+    agent_ids.sort();
+    assert_eq!(agent_ids, vec!["agent-t", "agent-w"]);
 }

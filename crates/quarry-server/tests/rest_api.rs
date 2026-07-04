@@ -7,7 +7,6 @@
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
 use futures_util::{SinkExt, Stream, StreamExt};
-use quarry_core::DocumentSource;
 use quarry_server::router;
 use quarry_storage::QuarryStore;
 use serde_json::Value;
@@ -27,99 +26,6 @@ use common::{
 };
 
 const COLLAB_ROOT: &str = "content";
-
-async fn presence_test_app(library: &str) -> (tempfile::TempDir, axum::Router) {
-    let (root, store) = open_test_store().await;
-    let library = store.create_library(library).await.unwrap();
-    store
-        .put_document(quarry_storage::PutDocumentRequest {
-            library: library.slug.to_string(),
-            path: ("live.md").to_string(),
-            content: b"hello".to_vec(),
-            metadata: serde_json::json!({"content_type":"text/markdown"}),
-            content_type: ("text/markdown").to_string(),
-            source: DocumentSource::Rest,
-            precondition: quarry_core::WritePrecondition::None,
-            origin_id: None,
-            transaction: quarry_storage::TransactionMetadata::default(),
-        })
-        .await
-        .unwrap();
-    (root, router(store))
-}
-
-async fn list_presence(app: &axum::Router, library: &str) -> Vec<Value> {
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!(
-                    "/v1/libraries/{library}/documents/live.md/presence"
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body: Value = response_json(response).await;
-    body["presence"].as_array().unwrap().clone()
-}
-
-#[tokio::test]
-async fn document_write_with_agent_header_touches_presence() {
-    let (_root, app) = presence_test_app("presence-write").await;
-
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::PUT)
-                .uri("/v1/libraries/presence-write/documents/live.md")
-                .header(header::CONTENT_TYPE, "text/markdown")
-                .header("X-Agent-Id", "agent-w")
-                .body(Body::from("hello again"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri("/v1/libraries/presence-write/documents/live.md/transactions")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header("X-Agent-Id", "agent-t")
-                .body(Body::from(
-                    block_tx(
-                        "tx-presence",
-                        serde_json::json!([{
-                            "op": "insert_block",
-                            "position": 1,
-                            "block_type": "p",
-                            "text": "Second."
-                        }]),
-                    )
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let mut agent_ids: Vec<String> = list_presence(&app, "presence-write")
-        .await
-        .iter()
-        .map(|entry| entry["agentId"].as_str().unwrap_or_default().to_string())
-        .collect();
-    agent_ids.sort();
-    assert_eq!(agent_ids, vec!["agent-t", "agent-w"]);
-}
 
 async fn wait_for_yjs_plain_text<S>(socket: &mut S, doc: &Doc, expected: &str)
 where
