@@ -712,6 +712,50 @@ async fn tmp_session_and_markdown_write_logs_do_not_emit_capability_secret() {
     server.abort();
 }
 
+/// A metadata patch composes with a live session: it waits on the document
+/// mutex, flushes pending typing, and commits the typed rows under the new
+/// metadata -- typing and frontmatter both land, the session stays alive.
+#[tokio::test]
+async fn metadata_patch_composes_with_an_active_session() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "meta-live.md", "Session content.\n").await;
+    let document_id = document_id_of(&store, "meta-live.md").await;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.insert(txn, 16, " Typed.");
+    })
+    .await;
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::PATCH,
+            "/v1/libraries/blocks/documents/meta-live.md/metadata",
+            serde_json::json!({"title": "Live Patch"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Both the in-flight typing and the new frontmatter are durable.
+    let content = get_document_markdown(&app, "meta-live.md").await;
+    assert!(content.contains("title: Live Patch"), "{content}");
+    assert!(content.contains("Session content. Typed."), "{content}");
+
+    // The session is still live: further typing checkpoints normally.
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 0);
+        block.insert(txn, 0, "Still here: ");
+    })
+    .await;
+    let content = wait_for_markdown_containing(&app, "meta-live.md", "Still here:").await;
+    assert!(content.contains("title: Live Patch"), "{content}");
+    socket.close(None).await.ok();
+    server.abort();
+}
+
 /// A session-mode gateway transaction targeting the block a collaborator's
 /// cursor sits in must SPLICE (only changed spans edited): the cursor's Yjs
 /// item survives and a sticky index keeps resolving to the same character.
