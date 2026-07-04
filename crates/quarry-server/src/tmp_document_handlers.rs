@@ -1,6 +1,7 @@
 use crate::{
-    ApiError, AppState, ErrorResponse, QuarryError, TmpDocumentSubResource, TtlRequest,
-    TtlResponse, gateway, insert_document_headers, json_response, json_with_etag, markdown_write,
+    AgentPresenceRequest, ApiError, AppState, ErrorResponse, PromoteTmpDocumentRequest,
+    QuarryError, TmpDocumentSubResource, TtlRequest, TtlResponse, agent_presence_tmp_document,
+    gateway, insert_document_headers, json_response, json_with_etag, markdown_write,
     optional_header, parse_tmp_document_subresource, precondition_from_headers,
     require_tmp_markdown_content_type, tmp_metadata_from_headers, touch_agent_presence,
     transaction_metadata_from_headers,
@@ -10,7 +11,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use quarry_core::{TransactionRecord, WriteOutcome};
+use quarry_core::{TransactionRecord, WriteOutcome, WritePrecondition};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use utoipa::ToSchema;
@@ -169,6 +170,56 @@ pub(crate) async fn patch_tmp_document_action(
             expires_at: entry.expires_at,
         },
     )
+}
+
+pub(crate) async fn post_tmp_document_action(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(path): Path<String>,
+    Json(request): Json<JsonValue>,
+) -> Result<Response, ApiError> {
+    let (document_path, subresource) = parse_tmp_document_subresource(&path);
+    match subresource {
+        TmpDocumentSubResource::Transactions => {
+            touch_agent_presence(&state, &headers, None, document_path).await?;
+            gateway::tmp_document_block_transactions(&state, document_path, request).await
+        }
+        TmpDocumentSubResource::Presence => {
+            let request: AgentPresenceRequest =
+                serde_json::from_value(request).map_err(|error| {
+                    QuarryError::InvalidPath(format!("invalid presence request: {error}"))
+                })?;
+            let response =
+                agent_presence_tmp_document(&state, &headers, document_path, request).await?;
+            json_response(StatusCode::OK, &response)
+        }
+        TmpDocumentSubResource::Promote => {
+            if !cfg!(feature = "lib-documents") {
+                return Err(QuarryError::NotFound(document_path.to_string()).into());
+            }
+            let request: PromoteTmpDocumentRequest =
+                serde_json::from_value(request).map_err(|error| {
+                    QuarryError::InvalidPath(format!("invalid promote request: {error}"))
+                })?;
+            let precondition = request
+                .if_match
+                .map(WritePrecondition::IfMatch)
+                .unwrap_or(WritePrecondition::None);
+            let entry = state
+                .store
+                .promote_tmp_document(document_path, &request.library, &request.path, precondition)
+                .await?;
+            json_response(StatusCode::OK, &entry)
+        }
+        TmpDocumentSubResource::Document
+        | TmpDocumentSubResource::Blocks
+        | TmpDocumentSubResource::Review
+        | TmpDocumentSubResource::EventsStream
+        | TmpDocumentSubResource::RawVersions
+        | TmpDocumentSubResource::Versions
+        | TmpDocumentSubResource::Version(_)
+        | TmpDocumentSubResource::Ttl => Err(QuarryError::NotFound(path).into()),
+    }
 }
 
 #[utoipa::path(

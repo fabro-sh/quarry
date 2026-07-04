@@ -27,6 +27,7 @@ use agent_events::{
     AgentEventRecord, AgentEventsAckRequest, AgentEventsAckResponse, AgentPendingEventsResponse,
 };
 use assets::{browser_asset, browser_ui_bundle_embedded};
+use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{MatchedPath, Path, Query, Request, State};
@@ -34,7 +35,6 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
-use axum::{Json, Router};
 use discovery::{agent_discovery, agent_docs, quarry_skill};
 pub use error::{ApiError, ErrorResponse};
 use git_handlers::{GitExportRequest, GitImportRequest, GitPeerRequest};
@@ -53,7 +53,6 @@ use quarry_core::{
     DocumentVersion, DocumentVersionContent, GcReport, GitPeer, GraphEdge, GraphNode,
     GraphResponse, Library, LinkCollection, QuarryError, ReindexReport, SearchResponse,
     SearchResult, SearchSuggestion, TransactionRecord, VersionDiff, WriteOutcome,
-    WritePrecondition,
 };
 use quarry_git::{GitExportResult, GitImportResult, GitSyncResult};
 use quarry_storage::{DocumentScopeRef, QuarryStore};
@@ -64,7 +63,6 @@ use review::{
     agent_tmp_document_review,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 use sse::{events, events_for_tmp_document};
 use std::future::{Future, IntoFuture};
 use std::net::{IpAddr, SocketAddr};
@@ -191,7 +189,7 @@ fn install_tmp_document_routes(router: Router<AppState>) -> Router<AppState> {
 
     let tmp_document_route = get(get_tmp_document)
         .head(tmp_document_handlers::head_tmp_document)
-        .post(post_tmp_document_action)
+        .post(tmp_document_handlers::post_tmp_document_action)
         .put(tmp_document_handlers::put_tmp_document)
         .patch(tmp_document_handlers::patch_tmp_document_action)
         .delete(tmp_document_handlers::delete_tmp_document)
@@ -945,56 +943,6 @@ async fn get_tmp_document(
     )
 }
 
-async fn post_tmp_document_action(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(path): Path<String>,
-    Json(request): Json<JsonValue>,
-) -> Result<Response, ApiError> {
-    let (document_path, subresource) = parse_tmp_document_subresource(&path);
-    match subresource {
-        TmpDocumentSubResource::Transactions => {
-            touch_agent_presence(&state, &headers, None, document_path).await?;
-            gateway::tmp_document_block_transactions(&state, document_path, request).await
-        }
-        TmpDocumentSubResource::Presence => {
-            let request: AgentPresenceRequest =
-                serde_json::from_value(request).map_err(|error| {
-                    QuarryError::InvalidPath(format!("invalid presence request: {error}"))
-                })?;
-            let response =
-                agent_presence_tmp_document(&state, &headers, document_path, request).await?;
-            json_response(StatusCode::OK, &response)
-        }
-        TmpDocumentSubResource::Promote => {
-            if !cfg!(feature = "lib-documents") {
-                return Err(QuarryError::NotFound(document_path.to_string()).into());
-            }
-            let request: PromoteTmpDocumentRequest =
-                serde_json::from_value(request).map_err(|error| {
-                    QuarryError::InvalidPath(format!("invalid promote request: {error}"))
-                })?;
-            let precondition = request
-                .if_match
-                .map(WritePrecondition::IfMatch)
-                .unwrap_or(WritePrecondition::None);
-            let entry = state
-                .store
-                .promote_tmp_document(document_path, &request.library, &request.path, precondition)
-                .await?;
-            json_response(StatusCode::OK, &entry)
-        }
-        TmpDocumentSubResource::Document
-        | TmpDocumentSubResource::Blocks
-        | TmpDocumentSubResource::Review
-        | TmpDocumentSubResource::EventsStream
-        | TmpDocumentSubResource::RawVersions
-        | TmpDocumentSubResource::Versions
-        | TmpDocumentSubResource::Version(_)
-        | TmpDocumentSubResource::Ttl => Err(QuarryError::NotFound(path).into()),
-    }
-}
-
 #[utoipa::path(
     get,
     path = "/v1/tmp/documents/{secret}/versions",
@@ -1353,7 +1301,7 @@ async fn agent_presence_list_openapi() {}
 )]
 async fn agent_presence_openapi() {}
 
-async fn agent_presence_tmp_document(
+pub(crate) async fn agent_presence_tmp_document(
     state: &AppState,
     headers: &HeaderMap,
     path: &str,
