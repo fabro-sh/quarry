@@ -253,55 +253,52 @@ fn cli_backup_restore_reproduces_document_content() {
 
 #[cfg(feature = "lib-documents")]
 #[test]
-fn cli_backup_restore_preserves_metadata_versions_and_cas_content() {
-    let temp = tempfile::tempdir().unwrap();
+fn cli_backup_restore_preserves_metadata_versions_and_cas_content() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir().context("create temp dir")?;
     let root = temp.path().join("root");
     let backup = temp.path().join("backup");
     let restored = temp.path().join("restored");
     let first = temp.path().join("first.bin");
     let second = temp.path().join("second.bin");
+    let root_str = root.to_str().context("root path should be UTF-8")?;
+    let backup_str = backup.to_str().context("backup path should be UTF-8")?;
+    let restored_str = restored.to_str().context("restored path should be UTF-8")?;
+    let first_str = first.to_str().context("first blob path should be UTF-8")?;
+    let second_str = second
+        .to_str()
+        .context("second blob path should be UTF-8")?;
     std::fs::write(
         &first,
         vec![b'a'; quarry_core::INLINE_CONTENT_THRESHOLD + 1],
     )
-    .unwrap();
+    .context("write first raw blob")?;
     std::fs::write(
         &second,
         vec![b'b'; quarry_core::INLINE_CONTENT_THRESHOLD + 2],
     )
-    .unwrap();
+    .context("write second raw blob")?;
 
-    run_quarry(["init", root.to_str().unwrap()]);
+    run_quarry(["init", root_str]);
     run_quarry([
         "--root",
-        root.to_str().unwrap(),
+        root_str,
         "put",
         "assets",
         "blobs/large.bin",
-        first.to_str().unwrap(),
+        first_str,
     ]);
     run_quarry([
         "--root",
-        root.to_str().unwrap(),
+        root_str,
         "put",
         "assets",
         "blobs/large.bin",
-        second.to_str().unwrap(),
+        second_str,
     ]);
-    run_quarry([
-        "--root",
-        root.to_str().unwrap(),
-        "backup",
-        backup.to_str().unwrap(),
-    ]);
-    run_quarry([
-        "--root",
-        restored.to_str().unwrap(),
-        "restore",
-        backup.to_str().unwrap(),
-    ]);
+    run_quarry(["--root", root_str, "backup", backup_str]);
+    run_quarry(["--root", restored_str, "restore", backup_str]);
 
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let runtime = tokio::runtime::Runtime::new().context("create tokio runtime")?;
     runtime.block_on(async {
         let store = quarry_storage::QuarryStore::open(quarry_storage::StoreConfig {
             db_path: restored.join("quarry.db"),
@@ -309,11 +306,11 @@ fn cli_backup_restore_preserves_metadata_versions_and_cas_content() {
             lock_path: None,
         })
         .await
-        .unwrap();
+        .context("open restored store")?;
         let document = store
             .get_document("assets", "blobs/large.bin")
             .await
-            .unwrap();
+            .context("load restored raw document")?;
         assert_eq!(
             document.content,
             vec![b'b'; quarry_core::INLINE_CONTENT_THRESHOLD + 2]
@@ -323,25 +320,27 @@ fn cli_backup_restore_preserves_metadata_versions_and_cas_content() {
             .version
             .content_hash
             .as_deref()
-            .expect("large document should be content-addressed");
+            .context("large document should be content-addressed")?;
         assert_content_hash(content_hash);
 
         let versions = store
             .raw_version_history("assets", "blobs/large.bin")
             .await
-            .unwrap();
+            .context("load raw version history")?;
         assert_eq!(versions.len(), 2);
         let first_hash = versions[0]
             .content_hash
             .as_deref()
-            .expect("first raw version should be content-addressed");
+            .context("first raw version should be content-addressed")?;
         assert_content_hash(first_hash);
         let second_hash = versions[1]
             .content_hash
             .as_deref()
-            .expect("second raw version should be content-addressed");
+            .context("second raw version should be content-addressed")?;
         assert_content_hash(second_hash);
-    });
+        anyhow::Ok(())
+    })?;
+    Ok(())
 }
 
 #[cfg(feature = "lib-documents")]
