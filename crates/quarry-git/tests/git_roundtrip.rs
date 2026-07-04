@@ -108,10 +108,10 @@ async fn import_export_roundtrip_preserves_bytes_metadata_and_marker_safety() ->
 }
 
 #[tokio::test]
-async fn export_refuses_document_paths_reserved_for_git_sidecars() {
-    let root = tempfile::tempdir().unwrap();
+async fn export_refuses_document_paths_reserved_for_git_sidecars() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("reservedgit").await.unwrap();
+    let library = store.create_library("reservedgit").await?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -124,10 +124,9 @@ async fn export_refuses_document_paths_reserved_for_git_sidecars() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
+        .await?;
 
-    let repo = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir()?;
     let error = export_worktree(
         &store,
         &library.slug,
@@ -142,34 +141,32 @@ async fn export_refuses_document_paths_reserved_for_git_sidecars() {
     .unwrap_err();
 
     assert!(error.to_string().contains("reserved for Git metadata"));
+    Ok(())
 }
 
 #[tokio::test]
-async fn import_ignores_quarry_metadata_directory_and_orphan_sidecars() {
-    let root = tempfile::tempdir().unwrap();
+async fn import_ignores_quarry_metadata_directory_and_orphan_sidecars() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("reservedimport").await.unwrap();
+    let library = store.create_library("reservedimport").await?;
 
-    let source = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(source.path().join(".quarry")).unwrap();
-    std::fs::write(source.path().join(".quarry/marker.json"), b"reserved").unwrap();
+    let source = tempfile::tempdir()?;
+    std::fs::create_dir_all(source.path().join(".quarry"))?;
+    std::fs::write(source.path().join(".quarry/marker.json"), b"reserved")?;
     std::fs::write(
         source.path().join("unpaired.quarrymeta.yaml"),
         b"owner: ignored\n",
-    )
-    .unwrap();
-    std::fs::write(source.path().join("kept.txt"), b"kept\n").unwrap();
+    )?;
+    std::fs::write(source.path().join("kept.txt"), b"kept\n")?;
 
-    let imported = import_worktree(&store, &library.slug, source.path())
-        .await
-        .unwrap();
+    let imported = import_worktree(&store, &library.slug, source.path()).await?;
 
     assert_eq!(imported.imported_paths, vec!["kept.txt"]);
     assert_eq!(
         store
             .get_document(&library.slug, "kept.txt")
             .await
-            .unwrap()
+            .context("kept import should exist")?
             .content,
         b"kept\n"
     );
@@ -185,27 +182,27 @@ async fn import_ignores_quarry_metadata_directory_and_orphan_sidecars() {
             .await
             .is_err()
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn import_preserves_case_distinct_git_paths_when_supported_by_filesystem() {
-    let source = tempfile::tempdir().unwrap();
+async fn import_preserves_case_distinct_git_paths_when_supported_by_filesystem()
+-> anyhow::Result<()> {
+    let source = tempfile::tempdir()?;
     if !filesystem_supports_case_distinct_paths(source.path()) {
-        return;
+        return Ok(());
     }
 
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("casepaths").await.unwrap();
+    let library = store.create_library("casepaths").await?;
 
-    std::fs::create_dir_all(source.path().join("Notes")).unwrap();
-    std::fs::create_dir_all(source.path().join("notes")).unwrap();
-    std::fs::write(source.path().join("Notes/Plan.md"), b"upper\n").unwrap();
-    std::fs::write(source.path().join("notes/plan.md"), b"lower\n").unwrap();
+    std::fs::create_dir_all(source.path().join("Notes"))?;
+    std::fs::create_dir_all(source.path().join("notes"))?;
+    std::fs::write(source.path().join("Notes/Plan.md"), b"upper\n")?;
+    std::fs::write(source.path().join("notes/plan.md"), b"lower\n")?;
 
-    let imported = import_worktree(&store, &library.slug, source.path())
-        .await
-        .unwrap();
+    let imported = import_worktree(&store, &library.slug, source.path()).await?;
 
     assert_eq!(
         imported.imported_paths,
@@ -215,7 +212,7 @@ async fn import_preserves_case_distinct_git_paths_when_supported_by_filesystem()
         store
             .get_document(&library.slug, "Notes/Plan.md")
             .await
-            .unwrap()
+            .context("upper-case path import should exist")?
             .content,
         b"upper\n"
     );
@@ -223,31 +220,32 @@ async fn import_preserves_case_distinct_git_paths_when_supported_by_filesystem()
         store
             .get_document(&library.slug, "notes/plan.md")
             .await
-            .unwrap()
+            .context("lower-case path import should exist")?
             .content,
         b"lower\n"
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn failed_import_rolls_back_transaction_instead_of_leaving_it_open() {
-    let root = tempfile::tempdir().unwrap();
+async fn failed_import_rolls_back_transaction_instead_of_leaving_it_open() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("failedimport").await.unwrap();
+    let library = store.create_library("failedimport").await?;
 
-    let source = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir()?;
     // Raw files ride the staged multi-document transaction (markdown files
     // commit per document through the reconciled write and are NOT covered
     // by this rollback — a documented Phase 4 atomicity change).
-    std::fs::write(source.path().join("valid.bin"), b"valid\n").unwrap();
-    std::fs::write(source.path().join("bad\\path.bin"), b"bad\n").unwrap();
+    std::fs::write(source.path().join("valid.bin"), b"valid\n")?;
+    std::fs::write(source.path().join("bad\\path.bin"), b"bad\n")?;
 
     let error = import_worktree(&store, &library.slug, source.path())
         .await
         .unwrap_err();
 
     assert!(error.to_string().contains("bad\\path.bin"));
-    let transactions = store.list_transactions(&library.slug).await.unwrap();
+    let transactions = store.list_transactions(&library.slug).await?;
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].state, TransactionState::RolledBack);
     assert!(
@@ -256,80 +254,77 @@ async fn failed_import_rolls_back_transaction_instead_of_leaving_it_open() {
             .await
             .is_err()
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn sync_refuses_missing_or_mismatched_worktree_marker() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_refuses_missing_or_mismatched_worktree_marker() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("markers").await.unwrap();
+    let library = store.create_library("markers").await?;
 
-    let missing_marker_repo = tempfile::tempdir().unwrap();
+    let missing_marker_repo = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": missing_marker_repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
+        .await?;
     let error = sync_peer(&store, &library.slug, &peer.id)
         .await
         .unwrap_err();
     assert!(error.to_string().contains("marker is missing"));
 
-    let mismatched_marker_repo = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(mismatched_marker_repo.path().join(".quarry")).unwrap();
+    let mismatched_marker_repo = tempfile::tempdir()?;
+    std::fs::create_dir_all(mismatched_marker_repo.path().join(".quarry"))?;
     std::fs::write(
         mismatched_marker_repo.path().join(".quarry/marker.json"),
         "{\n  \"library_id\": \"different\",\n  \"library_slug\": \"other\"\n}",
-    )
-    .unwrap();
+    )?;
     let peer = store
         .create_git_peer(
             &library.slug,
             serde_json::json!({"repo": mismatched_marker_repo.path(), "branch": "main"}),
         )
-        .await
-        .unwrap();
+        .await?;
     let error = sync_peer(&store, &library.slug, &peer.id)
         .await
         .unwrap_err();
     assert!(error.to_string().contains("belongs to library different"));
+    Ok(())
 }
 
 #[tokio::test]
-async fn import_parses_bom_and_crlf_markdown_frontmatter() {
-    let root = tempfile::tempdir().unwrap();
+async fn import_parses_bom_and_crlf_markdown_frontmatter() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("windows").await.unwrap();
+    let library = store.create_library("windows").await?;
 
-    let source = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(source.path().join("notes")).unwrap();
+    let source = tempfile::tempdir()?;
+    std::fs::create_dir_all(source.path().join("notes"))?;
     std::fs::write(
         source.path().join("notes/crlf.md"),
         b"\xEF\xBB\xBF---\r\ntitle: Windows\r\n---\r\nBody\r\n",
-    )
-    .unwrap();
+    )?;
 
-    import_worktree(&store, &library.slug, source.path())
-        .await
-        .unwrap();
+    import_worktree(&store, &library.slug, source.path()).await?;
 
     let document = store
         .get_document(&library.slug, "notes/crlf.md")
         .await
-        .unwrap();
+        .context("CRLF markdown import should exist")?;
     assert_eq!(document.metadata["title"], "Windows");
     // Normalized by the reconciled write: BOM and CRLF gone, frontmatter
     // embedded in the stored text.
     assert_eq!(document.content, b"---\ntitle: Windows\n---\nBody\n");
+    Ok(())
 }
 
 #[tokio::test]
-async fn export_refuses_large_git_blobs_unless_forced() {
-    let root = tempfile::tempdir().unwrap();
+async fn export_refuses_large_git_blobs_unless_forced() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("largegit").await.unwrap();
+    let library = store.create_library("largegit").await?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -342,10 +337,9 @@ async fn export_refuses_large_git_blobs_unless_forced() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
+        .await?;
 
-    let repo = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir()?;
     let error = export_worktree(
         &store,
         &library.slug,
@@ -370,9 +364,9 @@ async fn export_refuses_large_git_blobs_unless_forced() {
             frontmatter_markdown: true,
         },
     )
-    .await
-    .unwrap();
+    .await?;
     assert_eq!(result.exported_paths, vec!["assets/large.bin"]);
+    Ok(())
 }
 
 #[tokio::test]
