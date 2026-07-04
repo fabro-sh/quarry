@@ -169,6 +169,63 @@ async fn raw_versions(app: &axum::Router, path: &str) -> Value {
 }
 
 #[tokio::test]
+async fn markdown_put_rejects_raw_downgrade_without_opt_in() {
+    let (_root, app, store) = block_test_app().await;
+    put_block_markdown(&app, "guide", "# Guide\n\nBody.\n").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/guide")
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body(Body::from("raw body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("Markdown block document")
+    );
+
+    let document = store.get_document("blocks", "guide").await.unwrap();
+    assert_eq!(document.version.content_type, "text/markdown");
+    assert_eq!(
+        String::from_utf8(document.content).unwrap(),
+        "# Guide\n\nBody.\n"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/guide")
+                .header(header::CONTENT_TYPE, "text/plain")
+                .header("x-quarry-allow-document-kind-change", "true")
+                .body(Body::from("raw body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let document = store.get_document("blocks", "guide").await.unwrap();
+    assert_eq!(document.version.content_type, "text/plain");
+    assert_eq!(document.content, b"raw body".to_vec());
+    assert_eq!(
+        store.load_block_tree(&document.id).await.unwrap(),
+        Vec::<quarry_collab_codec::BlockRow>::new()
+    );
+}
+
+#[tokio::test]
 async fn conflict_items_persist_project_and_resolve_without_mutating_the_document() {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "conf.md", "Alpha.\n\nBravo.\n").await;
