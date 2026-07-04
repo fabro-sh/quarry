@@ -1986,6 +1986,7 @@ dependencies = [
 name = "quarry-server"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
  "blake3",
  "bytes",

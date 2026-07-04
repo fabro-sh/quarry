@@ -4,6 +4,7 @@
     reason = "tests use unwrap for HTTP and CRDT fixtures"
 )]
 
+use anyhow::Context as _;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
 use quarry_core::DocumentSource;
@@ -216,7 +217,7 @@ fn assert_schema_type_contains(schema: &Value, expected: &str) {
 }
 
 #[tokio::test]
-async fn rest_api_supports_documents_transactions_etags_and_openapi() {
+async fn rest_api_supports_documents_transactions_etags_and_openapi() -> anyhow::Result<()> {
     let (_root, app, _store) = document_test_app().await;
 
     let response = app
@@ -226,8 +227,7 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
             "/v1/libraries",
             serde_json::json!({"slug":"alpha"}),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::CREATED);
 
     let response = app
@@ -238,18 +238,19 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
                 .uri("/v1/libraries/alpha/documents/notes/one.md")
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .body(Body::from("one"))
-                .unwrap(),
+                .context("build first markdown PUT")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let etag = response.headers()[header::ETAG]
         .to_str()
-        .unwrap()
+        .context("ETag header should be valid ASCII")?
         .to_string();
-    let body: Value =
-        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
-    let document_id = body["document"]["id"].as_str().unwrap().to_string();
+    let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
+    let document_id = body["document"]["id"]
+        .as_str()
+        .context("create response should include document id")?
+        .to_string();
 
     let response = app
         .clone()
@@ -259,10 +260,9 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
                 .uri("/v1/libraries/alpha/documents/notes/one.md")
                 .header(header::IF_MATCH, "\"wrong\"")
                 .body(Body::from("bad"))
-                .unwrap(),
+                .context("build stale markdown PUT")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
 
     let response = app
@@ -272,10 +272,9 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
                 .method(Method::GET)
                 .uri("/v1/libraries/alpha/documents/notes/one.md")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build document GET")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[header::ETAG], etag);
     assert_eq!(
@@ -284,10 +283,7 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
     );
     // Markdown PUTs land via the Phase 4 reconciled write: content is the
     // deterministic normalized export (trailing newline), not the raw bytes.
-    assert_eq!(
-        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
-        "one\n"
-    );
+    assert_eq!(to_bytes(response.into_body(), usize::MAX).await?, "one\n");
 
     let response = app
         .clone()
@@ -296,20 +292,16 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
                 .method(Method::HEAD)
                 .uri("/v1/libraries/alpha/documents/notes/one.md")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build document HEAD")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[header::ETAG], etag);
     assert_eq!(
         response.headers()["x-quarry-document-id"],
         document_id.as_str()
     );
-    assert_eq!(
-        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
-        ""
-    );
+    assert_eq!(to_bytes(response.into_body(), usize::MAX).await?, "");
 
     let response = app
         .clone()
@@ -318,8 +310,7 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
             "/v1/libraries/alpha/documents/notes/one.md/ttl",
             serde_json::json!({"expires_at":"2099-01-01T00:00:00Z"}),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body["expires_at"], "2099-01-01T00:00:00Z");
@@ -331,10 +322,9 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
                 .method(Method::HEAD)
                 .uri("/v1/libraries/alpha/documents/notes/one.md")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build document HEAD after TTL")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response.headers()["x-quarry-expires-at"],
@@ -348,8 +338,7 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
             "/v1/libraries/alpha/documents/notes/one.md/ttl",
             serde_json::json!({"expires_at": null}),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert!(body["expires_at"].is_null());
@@ -361,8 +350,7 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
             "/v1/libraries/alpha/documents/notes/one.md/ttl",
             serde_json::json!({"expires_at":"2000-01-01T00:00:00Z"}),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -372,10 +360,9 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
                 .method(Method::GET)
                 .uri("/v1/libraries/alpha/documents/notes/one.md")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build expired document GET")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::GONE);
 
     let response = app
@@ -385,15 +372,14 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
                 .method(Method::GET)
                 .uri("/v1/libraries/alpha/documents")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build list documents GET")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert!(
         body.as_array()
-            .unwrap()
+            .context("document list response should be an array")?
             .iter()
             .all(|document| document["path"] != "notes/one.md")
     );
@@ -406,10 +392,9 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
                 .uri("/v1/libraries/alpha/documents/notes/created.md")
                 .header(header::IF_NONE_MATCH, "*")
                 .body(Body::from("created"))
-                .unwrap(),
+                .context("build If-None-Match create PUT")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -420,10 +405,9 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
                 .uri("/v1/libraries/alpha/documents/notes/created.md")
                 .header(header::IF_NONE_MATCH, "*")
                 .body(Body::from("duplicate"))
-                .unwrap(),
+                .context("build duplicate If-None-Match PUT")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
 
     let response = app
@@ -433,11 +417,12 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
             "/v1/libraries/alpha/transactions",
             serde_json::json!({"message":"batch"}),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let body: Value = response_json(response).await;
-    let tx = body["id"].as_str().unwrap();
+    let tx = body["id"]
+        .as_str()
+        .context("transaction create response should include id")?;
 
     let response = app
         .clone()
@@ -449,10 +434,9 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
                 ))
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .body(Body::from("two"))
-                .unwrap(),
+                .context("build staged document PUT")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -462,10 +446,9 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
                 .method(Method::GET)
                 .uri("/v1/libraries/alpha/documents/notes/two.md")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build pre-commit document GET")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let response = app
@@ -475,8 +458,7 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
             &format!("/v1/libraries/alpha/transactions/{tx}/commit"),
             serde_json::json!({}),
         ))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -486,15 +468,11 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
                 .method(Method::GET)
                 .uri("/v1/libraries/alpha/documents/notes/two.md")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build committed document GET")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
-        "two"
-    );
+    assert_eq!(to_bytes(response.into_body(), usize::MAX).await?, "two");
 
     let response = app
         .clone()
@@ -503,10 +481,9 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
                 .method(Method::GET)
                 .uri("/v1/openapi.json")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build OpenAPI GET")?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let openapi: Value = response_json(response).await;
     assert!(openapi["paths"]["/v1/libraries"].is_object());
@@ -548,6 +525,7 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() {
     );
     assert!(openapi["paths"]["/v1/libraries/{library}/git/peers"]["post"].is_object());
     assert!(openapi["paths"]["/v1/libraries/{library}/git/peers"]["get"].is_object());
+    Ok(())
 }
 
 #[tokio::test]
