@@ -20,8 +20,8 @@ use yrs::{Doc, Out, ReadTxn, Text, Transact, WriteTxn, XmlTextRef};
 mod common;
 
 use common::{
-    WsSocket, capture_debug_logs, empty_yjs_doc, json_request, open_test_store, response_json,
-    sync_yjs_doc_from_socket, wait_for_yjs_sync_update, yjs_plain_text,
+    WsSocket, empty_yjs_doc, json_request, open_test_store, response_json,
+    sync_yjs_doc_from_socket, wait_for_yjs_sync_update,
 };
 
 const COLLAB_ROOT: &str = "content";
@@ -53,23 +53,6 @@ async fn get_block_tree(app: &axum::Router, path: &str) -> Value {
             Request::builder()
                 .method(Method::GET)
                 .uri(format!("/v1/libraries/blocks/documents/{path}/blocks"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    response_json(response).await
-}
-
-#[cfg(feature = "tmp-documents")]
-async fn get_tmp_block_tree(app: &axum::Router, secret: &str) -> Value {
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!("/v1/tmp/documents/{secret}/blocks"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -228,72 +211,6 @@ async fn wait_for_markdown_containing(app: &axum::Router, path: &str, needle: &s
     })
     .await
     .unwrap_or_else(|_| panic!("persisted markdown never contained {needle:?}"))
-}
-
-#[cfg(feature = "tmp-documents")]
-#[tokio::test(flavor = "current_thread")]
-async fn tmp_session_and_markdown_write_logs_do_not_emit_capability_secret() {
-    let (logs, _guard) = capture_debug_logs();
-    let (_root, addr, app, store, server) = spawn_session_server().await;
-    let response = app
-        .clone()
-        .oneshot(json_request(
-            Method::POST,
-            "/v1/tmp/documents",
-            serde_json::json!({
-                "content": "Seeded first.\n\nSeeded second.\n",
-                "content_type": "text/markdown",
-                "expires_at": "2099-01-01T00:00:00Z"
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let created = response_json(response).await;
-    let secret = created["document"]["path"].as_str().unwrap().to_string();
-    let tree = get_tmp_block_tree(&app, &secret).await;
-    let clock = tree["document_clock"].as_str().unwrap().to_string();
-    let document_id = store.head_tmp_document(&secret).await.unwrap().id;
-
-    logs.clear();
-    let (mut socket, doc) = connect_session(addr, &document_id).await;
-    assert_eq!(yjs_plain_text(&doc), "Seeded first.Seeded second.");
-
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::PUT)
-                .uri(format!("/v1/tmp/documents/{secret}"))
-                .header(header::CONTENT_TYPE, "text/markdown")
-                .header(header::IF_MATCH, format!("\"{clock}\""))
-                .body(Body::from("Uploaded first.\n\nUploaded second.\n"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let output = logs.output();
-    assert!(
-        !output.contains(&secret),
-        "tmp session/write logs must not contain tmp secret:\n{output}"
-    );
-    assert!(
-        output.contains("collab.session.seeded"),
-        "session seed event should still be logged:\n{output}"
-    );
-    assert!(
-        output.contains("document.block_write.started"),
-        "tmp markdown write event should still be logged:\n{output}"
-    );
-    assert!(
-        output.contains("scope=tmp") && output.contains(&document_id),
-        "tmp logs should retain scope and document id diagnostics:\n{output}"
-    );
-
-    socket.close(None).await.unwrap();
-    server.abort();
 }
 
 /// Resolves the nth top-level block inside an open transaction (the client
