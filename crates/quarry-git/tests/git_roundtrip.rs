@@ -1167,10 +1167,10 @@ async fn sync_aborts_when_git_delete_batch_exceeds_configured_safety_limit() {
 }
 
 #[tokio::test]
-async fn push_peer_updates_configured_remote_branch() {
-    let root = tempfile::tempdir().unwrap();
+async fn push_peer_updates_configured_remote_branch() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("pushremote").await.unwrap();
+    let library = store.create_library("pushremote").await?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -1183,11 +1183,10 @@ async fn push_peer_updates_configured_remote_branch() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    let worktree = tempfile::tempdir().unwrap();
-    let remote = tempfile::tempdir().unwrap();
-    git2::Repository::init_bare(remote.path()).unwrap();
+        .await?;
+    let worktree = tempfile::tempdir()?;
+    let remote = tempfile::tempdir()?;
+    git2::Repository::init_bare(remote.path())?;
     let peer = store
         .create_git_peer(
             &library.slug,
@@ -1197,31 +1196,29 @@ async fn push_peer_updates_configured_remote_branch() {
                 "branch": "main"
             }),
         )
-        .await
-        .unwrap();
+        .await?;
 
-    push_peer(&store, &library.slug, &peer.id).await.unwrap();
+    push_peer(&store, &library.slug, &peer.id).await?;
 
-    let bare = git2::Repository::open_bare(remote.path()).unwrap();
+    let bare = git2::Repository::open_bare(remote.path())?;
     let commit = bare
         .find_reference("refs/heads/main")
-        .unwrap()
-        .peel_to_commit()
-        .unwrap();
+        .context("pushed main ref should exist")?
+        .peel_to_commit()?;
     let entry = commit
-        .tree()
-        .unwrap()
+        .tree()?
         .get_path(Path::new("notes/pushed.md"))
-        .unwrap();
-    let blob = bare.find_blob(entry.id()).unwrap();
+        .context("pushed document should be in remote tree")?;
+    let blob = bare.find_blob(entry.id())?;
     assert_eq!(blob.content(), b"from quarry\n");
+    Ok(())
 }
 
 #[tokio::test]
-async fn push_peer_does_not_advance_sync_state_when_remote_push_fails() {
-    let root = tempfile::tempdir().unwrap();
+async fn push_peer_does_not_advance_sync_state_when_remote_push_fails() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("pushfailure").await.unwrap();
+    let library = store.create_library("pushfailure").await?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -1234,10 +1231,9 @@ async fn push_peer_does_not_advance_sync_state_when_remote_push_fails() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    let worktree = tempfile::tempdir().unwrap();
-    let invalid_remote = tempfile::tempdir().unwrap();
+        .await?;
+    let worktree = tempfile::tempdir()?;
+    let invalid_remote = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
@@ -1247,8 +1243,7 @@ async fn push_peer_does_not_advance_sync_state_when_remote_push_fails() {
                 "branch": "main"
             }),
         )
-        .await
-        .unwrap();
+        .await?;
 
     push_peer(&store, &library.slug, &peer.id)
         .await
@@ -1258,18 +1253,19 @@ async fn push_peer_does_not_advance_sync_state_when_remote_push_fails() {
         store
             .sync_state(&peer.id, "notes/pushed.md")
             .await
-            .unwrap()
+            .context("sync state query should succeed")?
             .is_none()
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn pull_peer_fetches_configured_remote_branch_before_importing() {
-    let root = tempfile::tempdir().unwrap();
+async fn pull_peer_fetches_configured_remote_branch_before_importing() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("pullremote").await.unwrap();
-    let remote = tempfile::tempdir().unwrap();
-    git2::Repository::init_bare(remote.path()).unwrap();
+    let library = store.create_library("pullremote").await?;
+    let remote = tempfile::tempdir()?;
+    git2::Repository::init_bare(remote.path())?;
     seed_remote(
         remote.path(),
         &[
@@ -1284,9 +1280,9 @@ async fn pull_peer_fetches_configured_remote_branch_before_importing() {
             ),
             ("notes/pulled.md", b"from remote\n".to_vec()),
         ],
-    );
+    )?;
 
-    let worktree = tempfile::tempdir().unwrap();
+    let worktree = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
@@ -1296,33 +1292,31 @@ async fn pull_peer_fetches_configured_remote_branch_before_importing() {
                 "branch": "main"
             }),
         )
-        .await
-        .unwrap();
+        .await?;
 
-    let result = quarry_git::pull_peer(&store, &library.slug, &peer.id)
-        .await
-        .unwrap();
+    let result = quarry_git::pull_peer(&store, &library.slug, &peer.id).await?;
 
     assert_eq!(result.imported_paths, vec!["notes/pulled.md"]);
     assert_eq!(
         store
             .get_document(&library.slug, "notes/pulled.md")
             .await
-            .unwrap()
+            .context("pulled document should exist")?
             .content,
         b"from remote\n"
     );
     assert_eq!(
-        std::fs::read_to_string(worktree.path().join("notes/pulled.md")).unwrap(),
+        std::fs::read_to_string(worktree.path().join("notes/pulled.md"))?,
         "from remote\n"
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn sync_peer_fetches_remote_branch_and_pushes_merged_tree() {
-    let root = tempfile::tempdir().unwrap();
+async fn sync_peer_fetches_remote_branch_and_pushes_merged_tree() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
     let store = open_store(root.path()).await;
-    let library = store.create_library("syncremote").await.unwrap();
+    let library = store.create_library("syncremote").await?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -1335,10 +1329,9 @@ async fn sync_peer_fetches_remote_branch_and_pushes_merged_tree() {
             origin_id: None,
             transaction: quarry_storage::TransactionMetadata::default(),
         })
-        .await
-        .unwrap();
-    let remote = tempfile::tempdir().unwrap();
-    git2::Repository::init_bare(remote.path()).unwrap();
+        .await?;
+    let remote = tempfile::tempdir()?;
+    git2::Repository::init_bare(remote.path())?;
     seed_remote(
         remote.path(),
         &[
@@ -1353,9 +1346,9 @@ async fn sync_peer_fetches_remote_branch_and_pushes_merged_tree() {
             ),
             ("notes/remote.md", b"from remote\n".to_vec()),
         ],
-    );
+    )?;
 
-    let worktree = tempfile::tempdir().unwrap();
+    let worktree = tempfile::tempdir()?;
     let peer = store
         .create_git_peer(
             &library.slug,
@@ -1365,10 +1358,9 @@ async fn sync_peer_fetches_remote_branch_and_pushes_merged_tree() {
                 "branch": "main"
             }),
         )
-        .await
-        .unwrap();
+        .await?;
 
-    let result = sync_peer(&store, &library.slug, &peer.id).await.unwrap();
+    let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
     assert!(result.conflicts.is_empty());
     assert_eq!(result.imported_paths, vec!["notes/remote.md"]);
@@ -1376,47 +1368,43 @@ async fn sync_peer_fetches_remote_branch_and_pushes_merged_tree() {
         store
             .get_document(&library.slug, "notes/remote.md")
             .await
-            .unwrap()
+            .context("remote document should be imported")?
             .content,
         b"from remote\n"
     );
 
-    let bare = git2::Repository::open_bare(remote.path()).unwrap();
+    let bare = git2::Repository::open_bare(remote.path())?;
     let commit = bare
         .find_reference("refs/heads/main")
-        .unwrap()
-        .peel_to_commit()
-        .unwrap();
-    let tree = commit.tree().unwrap();
-    let local = tree.get_path(Path::new("notes/local.md")).unwrap();
-    let remote_doc = tree.get_path(Path::new("notes/remote.md")).unwrap();
-    assert_eq!(
-        bare.find_blob(local.id()).unwrap().content(),
-        b"from quarry\n"
-    );
-    assert_eq!(
-        bare.find_blob(remote_doc.id()).unwrap().content(),
-        b"from remote\n"
-    );
+        .context("remote main ref should exist")?
+        .peel_to_commit()?;
+    let tree = commit.tree()?;
+    let local = tree
+        .get_path(Path::new("notes/local.md"))
+        .context("local document should be pushed")?;
+    let remote_doc = tree
+        .get_path(Path::new("notes/remote.md"))
+        .context("remote document should remain in merged tree")?;
+    assert_eq!(bare.find_blob(local.id())?.content(), b"from quarry\n");
+    assert_eq!(bare.find_blob(remote_doc.id())?.content(), b"from remote\n");
+    Ok(())
 }
 
-fn seed_remote(remote_path: &Path, files: &[(&str, Vec<u8>)]) {
-    let seed = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(seed.path()).unwrap();
-    repo.set_head("refs/heads/main").unwrap();
+fn seed_remote(remote_path: &Path, files: &[(&str, Vec<u8>)]) -> anyhow::Result<()> {
+    let seed = tempfile::tempdir()?;
+    let repo = git2::Repository::init(seed.path())?;
+    repo.set_head("refs/heads/main")?;
     for (path, content) in files {
         let path = seed.path().join(path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, content).unwrap();
+        std::fs::create_dir_all(path.parent().context("seed path should have a parent")?)?;
+        std::fs::write(path, content)?;
     }
-    let mut index = repo.index().unwrap();
-    index
-        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
-        .unwrap();
-    index.write().unwrap();
-    let tree_id = index.write_tree().unwrap();
-    let tree = repo.find_tree(tree_id).unwrap();
-    let signature = git2::Signature::now("Quarry Test", "quarry@test.local").unwrap();
+    let mut index = repo.index()?;
+    index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
+    index.write()?;
+    let tree_id = index.write_tree()?;
+    let tree = repo.find_tree(tree_id)?;
+    let signature = git2::Signature::now("Quarry Test", "quarry@test.local")?;
     repo.commit(
         Some("HEAD"),
         &signature,
@@ -1424,14 +1412,10 @@ fn seed_remote(remote_path: &Path, files: &[(&str, Vec<u8>)]) {
         "seed remote",
         &tree,
         &[],
-    )
-    .unwrap();
-    let mut remote = repo
-        .remote("origin", &remote_path.to_string_lossy())
-        .unwrap();
-    remote
-        .push(&["refs/heads/main:refs/heads/main"], None)
-        .unwrap();
+    )?;
+    let mut remote = repo.remote("origin", &remote_path.to_string_lossy())?;
+    remote.push(&["refs/heads/main:refs/heads/main"], None)?;
+    Ok(())
 }
 
 fn filesystem_supports_case_distinct_paths(root: &Path) -> bool {
