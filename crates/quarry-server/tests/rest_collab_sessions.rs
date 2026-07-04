@@ -532,6 +532,52 @@ async fn shutdown_closes_live_collab_socket_and_runs_final_checkpoint() {
         .unwrap();
 }
 
+/// A restore during a live session dispatches through the session mode
+/// switch: the restored content lands in the live doc as a collaborator
+/// edit, never by clearing the projection underneath the session.
+#[tokio::test]
+async fn version_restore_lands_in_a_live_session_as_a_collaborator_edit() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "Stable block.\n\nOld text.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+    let tree = get_block_tree(&app, "live.md").await;
+    let restore_to = tree["document_clock"].as_str().unwrap().to_string();
+    let edited = tree["blocks"][1]["block_id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "live.md",
+        block_tx(
+            "tx-edit",
+            serde_json::json!([{
+                "op": "replace_block_content", "block_id": edited, "text": "New text."
+            }]),
+        ),
+    )
+    .await;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            &format!("/v1/libraries/blocks/documents/live.md/versions/{restore_to}/restore"),
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Rows are durable at ack time and the live doc converged via the socket.
+    let after = get_block_tree(&app, "live.md").await;
+    assert_eq!(after["blocks"][1]["text"], "Old text.");
+    assert_eq!(after["blocks"][1]["block_id"], edited.as_str());
+    wait_for_yjs_plain_text(&mut socket, &doc, "Stable block.Old text.").await;
+
+    socket.close(None).await.unwrap();
+    server.abort();
+}
+
 /// A session-mode gateway transaction targeting the block a collaborator's
 /// cursor sits in must SPLICE (only changed spans edited): the cursor's Yjs
 /// item survives and a sticky index keeps resolving to the same character.

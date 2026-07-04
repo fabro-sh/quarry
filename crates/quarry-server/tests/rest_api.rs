@@ -99,38 +99,6 @@ async fn get_tmp_block_tree(app: &axum::Router, secret: &str) -> Value {
     response_json(response).await
 }
 
-async fn post_block_transaction(
-    app: &axum::Router,
-    path: &str,
-    body: Value,
-) -> (StatusCode, Value) {
-    let response = app
-        .clone()
-        .oneshot(json_request(
-            Method::POST,
-            &format!("/v1/libraries/blocks/documents/{path}/transactions"),
-            body,
-        ))
-        .await
-        .unwrap();
-    let status = response.status();
-    (status, response_json(response).await)
-}
-
-async fn commit_block_transaction(app: &axum::Router, path: &str, body: Value) -> Value {
-    let (status, ack) = post_block_transaction(app, path, body).await;
-    assert_eq!(status, StatusCode::OK, "transaction failed: {ack}");
-    ack
-}
-
-fn block_tx(client_tx_id: &str, ops: Value) -> Value {
-    serde_json::json!({
-        "client_tx_id": client_tx_id,
-        "actor": {"kind": "agent", "id": "agent-1", "label": "Agent One"},
-        "ops": ops
-    })
-}
-
 async fn get_document_markdown(app: &axum::Router, path: &str) -> String {
     let response = app
         .clone()
@@ -280,52 +248,6 @@ async fn wait_for_markdown_containing(app: &axum::Router, path: &str, needle: &s
     })
     .await
     .unwrap_or_else(|_| panic!("persisted markdown never contained {needle:?}"))
-}
-
-/// A restore during a live session dispatches through the session mode
-/// switch: the restored content lands in the live doc as a collaborator
-/// edit, never by clearing the projection underneath the session.
-#[tokio::test]
-async fn version_restore_lands_in_a_live_session_as_a_collaborator_edit() {
-    let (_root, addr, app, store, server) = spawn_session_server().await;
-    put_block_markdown(&app, "live.md", "Stable block.\n\nOld text.\n").await;
-    let document_id = document_id_of(&store, "live.md").await;
-    let tree = get_block_tree(&app, "live.md").await;
-    let restore_to = tree["document_clock"].as_str().unwrap().to_string();
-    let edited = tree["blocks"][1]["block_id"].as_str().unwrap().to_string();
-
-    commit_block_transaction(
-        &app,
-        "live.md",
-        block_tx(
-            "tx-edit",
-            serde_json::json!([{
-                "op": "replace_block_content", "block_id": edited, "text": "New text."
-            }]),
-        ),
-    )
-    .await;
-
-    let (mut socket, doc) = connect_session(addr, &document_id).await;
-    let response = app
-        .clone()
-        .oneshot(json_request(
-            Method::POST,
-            &format!("/v1/libraries/blocks/documents/live.md/versions/{restore_to}/restore"),
-            serde_json::json!({}),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    // Rows are durable at ack time and the live doc converged via the socket.
-    let after = get_block_tree(&app, "live.md").await;
-    assert_eq!(after["blocks"][1]["text"], "Old text.");
-    assert_eq!(after["blocks"][1]["block_id"], edited.as_str());
-    wait_for_yjs_plain_text(&mut socket, &doc, "Stable block.Old text.").await;
-
-    socket.close(None).await.unwrap();
-    server.abort();
 }
 
 /// A byte-identical PUT acks with the current head and commits nothing.
