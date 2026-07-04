@@ -1,16 +1,19 @@
+use crate::presence::PresenceStreamGuard;
+use crate::review::{DocumentReviewQuery, agent_tmp_document_review};
+use crate::sse::events_for_tmp_document;
 use crate::{
     AgentPresenceRequest, ApiError, AppState, ErrorResponse, PromoteTmpDocumentRequest,
     QuarryError, TmpDocumentSubResource, TtlRequest, TtlResponse, agent_presence_tmp_document,
-    gateway, insert_document_headers, json_response, json_with_etag, markdown_write,
-    optional_header, parse_tmp_document_subresource, precondition_from_headers,
+    bytes_response_with_expiry, gateway, insert_document_headers, json_response, json_with_etag,
+    markdown_write, optional_header, parse_tmp_document_subresource, precondition_from_headers,
     require_tmp_markdown_content_type, tmp_metadata_from_headers, touch_agent_presence,
     transaction_metadata_from_headers,
 };
 use axum::Json;
 use axum::body::{Body, Bytes};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use quarry_core::{TransactionRecord, WriteOutcome, WritePrecondition};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -68,6 +71,102 @@ pub(crate) async fn create_tmp_document(
         )
         .await?;
     json_with_etag(StatusCode::CREATED, &outcome, &outcome.version.id)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{secret}",
+    params(("secret" = String, Path)),
+    responses((status = 200, body = String), (status = 410, body = ErrorResponse))
+)]
+pub(crate) async fn get_tmp_document(
+    State(state): State<AppState>,
+    Query(query): Query<DocumentReviewQuery>,
+    Path(path): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let (document_path, subresource) = parse_tmp_document_subresource(&path);
+    match subresource {
+        TmpDocumentSubResource::Blocks => {
+            touch_agent_presence(&state, &headers, None, document_path).await?;
+            return gateway::tmp_document_blocks(&state, document_path).await;
+        }
+        TmpDocumentSubResource::Review => {
+            touch_agent_presence(&state, &headers, None, document_path).await?;
+            let include_resolved = query.include_resolved()?;
+            return json_response(
+                StatusCode::OK,
+                &agent_tmp_document_review(&state.store, document_path, include_resolved).await?,
+            );
+        }
+        TmpDocumentSubResource::Presence => {
+            touch_agent_presence(&state, &headers, None, document_path).await?;
+            state.store.head_tmp_document(document_path).await?;
+            return json_response(
+                StatusCode::OK,
+                &crate::TmpAgentPresenceListResponse::from(
+                    state.agent_presence.list(None, document_path),
+                ),
+            );
+        }
+        TmpDocumentSubResource::EventsStream => {
+            let document = state.store.head_tmp_document(document_path).await?;
+            let document_id = document.id.clone();
+            let presence_guard = optional_header(&headers, "x-agent-id")?.map(|agent_id| {
+                PresenceStreamGuard::open(
+                    state.agent_presence.clone(),
+                    None,
+                    document_path.to_string(),
+                    document_id.clone(),
+                    agent_id,
+                )
+            });
+            return Ok(events_for_tmp_document(
+                &state.store,
+                document_path.to_string(),
+                document_id,
+                presence_guard,
+                state.shutdown_token(),
+            )
+            .await?
+            .into_response());
+        }
+        TmpDocumentSubResource::RawVersions => {
+            return json_response(
+                StatusCode::OK,
+                &state.store.raw_tmp_version_history(document_path).await?,
+            );
+        }
+        TmpDocumentSubResource::Versions => {
+            return json_response(
+                StatusCode::OK,
+                &state.store.tmp_version_history(document_path).await?,
+            );
+        }
+        TmpDocumentSubResource::Version(version) => {
+            return json_response(
+                StatusCode::OK,
+                &state
+                    .store
+                    .tmp_document_version(document_path, version)
+                    .await?,
+            );
+        }
+        TmpDocumentSubResource::Document
+        | TmpDocumentSubResource::Ttl
+        | TmpDocumentSubResource::Transactions
+        | TmpDocumentSubResource::Promote => {}
+    }
+    touch_agent_presence(&state, &headers, None, &path).await?;
+    let document = state.store.get_tmp_document(&path).await?;
+    bytes_response_with_expiry(
+        StatusCode::OK,
+        document.content,
+        &document.version.content_type,
+        &document.version.id,
+        &document.id,
+        document.expires_at.as_deref(),
+    )
 }
 
 #[utoipa::path(

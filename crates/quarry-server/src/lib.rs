@@ -30,8 +30,8 @@ use assets::{browser_asset, browser_ui_bundle_embedded};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{MatchedPath, Path, Query, Request, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::extract::{MatchedPath, Path, Request, State};
+use axum::http::{HeaderMap, HeaderValue};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
@@ -47,7 +47,7 @@ pub(crate) use headers::{
 };
 use journal::AgentEventJournal;
 use library_handlers::CreateLibraryRequest;
-use presence::{AgentPresenceRegistry, PresenceStreamGuard};
+use presence::AgentPresenceRegistry;
 use quarry_core::{
     CollabInviteToken, ConflictRecord, DocumentHistoryEntry, DocumentLink, DocumentListEntry,
     DocumentVersion, DocumentVersionContent, GcReport, GitPeer, GraphEdge, GraphNode,
@@ -59,11 +59,10 @@ use quarry_storage::{DocumentScopeRef, QuarryStore};
 use review::{
     AgentBlockRef, AgentDocumentSnapshot, AgentReviewComment, AgentReviewConflict,
     AgentReviewReply, AgentReviewResponse, AgentReviewSuggestion, AgentSnapshotBlock,
-    AgentSuggestionKind, AgentSuggestionPreview, DocumentReviewQuery, DryRunValue,
-    agent_tmp_document_review,
+    AgentSuggestionKind, AgentSuggestionPreview, DryRunValue,
 };
 use serde::{Deserialize, Serialize};
-use sse::{events, events_for_tmp_document};
+use sse::events;
 use std::future::{Future, IntoFuture};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -187,7 +186,7 @@ fn install_tmp_document_routes(router: Router<AppState>) -> Router<AppState> {
         return router;
     }
 
-    let tmp_document_route = get(get_tmp_document)
+    let tmp_document_route = get(tmp_document_handlers::get_tmp_document)
         .head(tmp_document_handlers::head_tmp_document)
         .post(tmp_document_handlers::post_tmp_document_action)
         .put(tmp_document_handlers::put_tmp_document)
@@ -537,7 +536,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         document_handlers::list_documents,
         tmp_document_handlers::create_tmp_document,
         tmp_collab_websocket_openapi,
-        get_tmp_document,
+        tmp_document_handlers::get_tmp_document,
         tmp_document_handlers::head_tmp_document,
         tmp_document_handlers::put_tmp_document,
         tmp_document_handlers::delete_tmp_document,
@@ -847,100 +846,6 @@ pub struct PromoteTmpDocumentRequest {
     pub library: String,
     pub path: String,
     pub if_match: Option<String>,
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/tmp/documents/{secret}",
-    params(("secret" = String, Path)),
-    responses((status = 200, body = String), (status = 410, body = ErrorResponse))
-)]
-async fn get_tmp_document(
-    State(state): State<AppState>,
-    Query(query): Query<DocumentReviewQuery>,
-    Path(path): Path<String>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    let (document_path, subresource) = parse_tmp_document_subresource(&path);
-    match subresource {
-        TmpDocumentSubResource::Blocks => {
-            touch_agent_presence(&state, &headers, None, document_path).await?;
-            return gateway::tmp_document_blocks(&state, document_path).await;
-        }
-        TmpDocumentSubResource::Review => {
-            touch_agent_presence(&state, &headers, None, document_path).await?;
-            let include_resolved = query.include_resolved()?;
-            return json_response(
-                StatusCode::OK,
-                &agent_tmp_document_review(&state.store, document_path, include_resolved).await?,
-            );
-        }
-        TmpDocumentSubResource::Presence => {
-            touch_agent_presence(&state, &headers, None, document_path).await?;
-            state.store.head_tmp_document(document_path).await?;
-            return json_response(
-                StatusCode::OK,
-                &TmpAgentPresenceListResponse::from(state.agent_presence.list(None, document_path)),
-            );
-        }
-        TmpDocumentSubResource::EventsStream => {
-            let document = state.store.head_tmp_document(document_path).await?;
-            let document_id = document.id.clone();
-            let presence_guard = optional_header(&headers, "x-agent-id")?.map(|agent_id| {
-                PresenceStreamGuard::open(
-                    state.agent_presence.clone(),
-                    None,
-                    document_path.to_string(),
-                    document_id.clone(),
-                    agent_id,
-                )
-            });
-            return Ok(events_for_tmp_document(
-                &state.store,
-                document_path.to_string(),
-                document_id,
-                presence_guard,
-                state.shutdown_token(),
-            )
-            .await?
-            .into_response());
-        }
-        TmpDocumentSubResource::RawVersions => {
-            return json_response(
-                StatusCode::OK,
-                &state.store.raw_tmp_version_history(document_path).await?,
-            );
-        }
-        TmpDocumentSubResource::Versions => {
-            return json_response(
-                StatusCode::OK,
-                &state.store.tmp_version_history(document_path).await?,
-            );
-        }
-        TmpDocumentSubResource::Version(version) => {
-            return json_response(
-                StatusCode::OK,
-                &state
-                    .store
-                    .tmp_document_version(document_path, version)
-                    .await?,
-            );
-        }
-        TmpDocumentSubResource::Document
-        | TmpDocumentSubResource::Ttl
-        | TmpDocumentSubResource::Transactions
-        | TmpDocumentSubResource::Promote => {}
-    }
-    touch_agent_presence(&state, &headers, None, &path).await?;
-    let document = state.store.get_tmp_document(&path).await?;
-    bytes_response_with_expiry(
-        StatusCode::OK,
-        document.content,
-        &document.version.content_type,
-        &document.version.id,
-        &document.id,
-        document.expires_at.as_deref(),
-    )
 }
 
 #[utoipa::path(
@@ -1337,7 +1242,7 @@ mod tests {
     use axum::body::{Body, to_bytes};
     #[cfg(any(feature = "lib-documents", feature = "tmp-documents"))]
     use axum::http::Method;
-    use axum::http::header;
+    use axum::http::{StatusCode, header};
     use axum::response::IntoResponse;
     use quarry_core::DocumentSource;
     #[cfg(feature = "lib-documents")]
