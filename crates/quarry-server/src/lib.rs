@@ -562,26 +562,26 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         search_handlers::reindex_library,
         search_handlers::graph,
         document_handlers::get_document,
-        document_backlinks_openapi,
-        document_outgoing_links_openapi,
-        document_snapshot_openapi,
+        document_handlers::document_backlinks_openapi,
+        document_handlers::document_outgoing_links_openapi,
+        document_handlers::document_snapshot_openapi,
         review::document_review_openapi,
-        document_blocks_openapi,
-        document_block_transactions_openapi,
-        document_events_stream_openapi,
-        document_share_openapi,
-        document_share_create_openapi,
-        document_share_revoke_openapi,
-        agent_presence_list_openapi,
-        agent_presence_openapi,
+        document_handlers::document_blocks_openapi,
+        document_handlers::document_block_transactions_openapi,
+        document_handlers::document_events_stream_openapi,
+        document_handlers::document_share_openapi,
+        document_handlers::document_share_create_openapi,
+        document_handlers::document_share_revoke_openapi,
+        document_handlers::agent_presence_list_openapi,
+        document_handlers::agent_presence_openapi,
         agent_events::agent_events_pending,
         agent_events::agent_events_ack,
-        document_versions_openapi,
-        document_versions_raw_openapi,
-        document_version_openapi,
-        document_version_diff_openapi,
-        document_version_restore_openapi,
-        document_ttl_openapi,
+        document_handlers::document_versions_openapi,
+        document_handlers::document_versions_raw_openapi,
+        document_handlers::document_version_openapi,
+        document_handlers::document_version_diff_openapi,
+        document_handlers::document_version_restore_openapi,
+        document_handlers::document_ttl_openapi,
         document_handlers::head_document,
         document_handlers::put_document,
         document_handlers::post_document_action,
@@ -799,228 +799,10 @@ pub struct PromoteTmpDocumentRequest {
     pub if_match: Option<String>,
 }
 
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/documents/{path}/backlinks",
-    params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = LinkCollection), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn document_backlinks_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/documents/{path}/outgoing-links",
-    params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = LinkCollection), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn document_outgoing_links_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/documents/{path}/snapshot",
-    params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = AgentDocumentSnapshot), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn document_snapshot_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/documents/{path}/blocks",
-    params(("library" = String, Path), ("path" = String, Path)),
-    responses(
-        (status = 200, body = gateway::BlockTreeResponse),
-        (status = 404, body = ErrorResponse),
-        (status = 422, body = gateway::BlockTransactionError)
-    )
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn document_blocks_openapi() {}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/documents/{path}/transactions",
-    params(("library" = String, Path), ("path" = String, Path)),
-    request_body = gateway::BlockTransactionRequest,
-    responses(
-        (status = 200, body = gateway::BlockTransactionAck),
-        (status = 400, body = gateway::BlockTransactionError),
-        (status = 404, body = gateway::BlockTransactionError),
-        (status = 412, body = gateway::BlockTransactionError),
-        (status = 422, body = gateway::BlockTransactionError)
-    )
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn document_block_transactions_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/documents/{path}/events/stream",
-    params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, description = "Document-scoped server-sent event stream"), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn document_events_stream_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/documents/{path}/share",
-    params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = [CollabInviteToken]), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn document_share_openapi() {}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/documents/{path}/share",
-    params(("library" = String, Path), ("path" = String, Path)),
-    request_body = CreateCollabInviteRequest,
-    responses((status = 201, body = CollabInviteToken), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn document_share_create_openapi() {}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/documents/{path}/share/{token}/revoke",
-    params(("library" = String, Path), ("path" = String, Path), ("token" = String, Path)),
-    responses((status = 200, body = CollabInviteToken), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn document_share_revoke_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/documents/{path}/versions",
-    params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = [DocumentHistoryEntry]), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn document_versions_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/documents/{path}/versions/raw",
-    params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = [DocumentVersion]), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn document_versions_raw_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/documents/{path}/versions/{version}",
-    params(("library" = String, Path), ("path" = String, Path), ("version" = String, Path)),
-    responses((status = 200, body = DocumentVersionContent), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn document_version_openapi() {}
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/documents/{path}/versions/{version}/diff",
-    params(("library" = String, Path), ("path" = String, Path), ("version" = String, Path), ("against" = Option<String>, Query)),
-    responses((status = 200, body = VersionDiff), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn document_version_diff_openapi() {}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/documents/{path}/versions/{version}/restore",
-    params(("library" = String, Path), ("path" = String, Path), ("version" = String, Path)),
-    responses((status = 200, body = WriteOutcome), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn document_version_restore_openapi() {}
-
-#[utoipa::path(
-    patch,
-    path = "/v1/libraries/{library}/documents/{path}/ttl",
-    params(("library" = String, Path), ("path" = String, Path)),
-    request_body = TtlRequest,
-    responses((status = 200, body = TtlResponse), (status = 410, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn document_ttl_openapi() {}
-
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct MoveRequest {
     pub to_path: String,
 }
-
-#[utoipa::path(
-    get,
-    path = "/v1/libraries/{library}/documents/{path}/presence",
-    params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = AgentPresenceListResponse), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn agent_presence_list_openapi() {}
-
-#[utoipa::path(
-    post,
-    path = "/v1/libraries/{library}/documents/{path}/presence",
-    params(("library" = String, Path), ("path" = String, Path)),
-    request_body = AgentPresenceRequest,
-    responses((status = 200, body = AgentPresenceResponse), (status = 404, body = ErrorResponse))
-)]
-#[expect(
-    dead_code,
-    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
-)]
-async fn agent_presence_openapi() {}
 
 pub(crate) async fn agent_presence_tmp_document(
     state: &AppState,
