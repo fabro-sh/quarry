@@ -756,6 +756,78 @@ async fn metadata_patch_composes_with_an_active_session() {
     server.abort();
 }
 
+/// The reviewer's probe, pinned directly: in-flight (un-checkpointed) typing
+/// plus a concurrent whole-file write through the live session. The file
+/// write carries its base clock, so the merge is a true three-way: BOTH
+/// edits survive -- no last-writer-wins in either direction.
+#[tokio::test]
+async fn in_flight_typing_and_concurrent_file_write_both_survive_through_the_session() {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    // The separator keeps the typed region and the file-edited region apart:
+    // edits to ADJACENT blocks are conflict-absorbed by design (pinned by
+    // the codec suite), which would mask the both-edits-survive assertion.
+    put_block_markdown(
+        &app,
+        "race.md",
+        "# Title\n\nAlpha.\n\nSeparator.\n\nBravo.\n",
+    )
+    .await;
+    let tree = get_block_tree(&app, "race.md").await;
+    let base_clock = tree["document_clock"].as_str().unwrap().to_string();
+    let ids: Vec<String> = tree["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|block| block["block_id"].as_str().unwrap().to_string())
+        .collect();
+    let base_export = get_document_markdown(&app, "race.md").await;
+    let document_id = document_id_of(&store, "race.md").await;
+
+    // A browser types into Alpha; the debounce has not checkpointed yet.
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let block = nth_block_text_in(txn, 1);
+        block.insert(txn, 6, " Typed mid-flight.");
+    })
+    .await;
+
+    // An external writer edits Bravo against the pre-typing export.
+    let incoming = base_export.replace("Bravo.", "Bravo, from the file write.");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/race.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header(header::IF_MATCH, format!("\"{base_clock}\""))
+                .body(Body::from(incoming))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Both edits landed durably (the write flushed the typing, then merged).
+    let content = get_document_markdown(&app, "race.md").await;
+    assert_eq!(
+        content,
+        "# Title\n\nAlpha. Typed mid-flight.\n\nSeparator.\n\nBravo, from the file write.\n"
+    );
+    let tree = get_block_tree(&app, "race.md").await;
+    let ids_after: Vec<String> = tree["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|block| block["block_id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids_after, ids, "the merge preserved every block id");
+    let review = get_block_review(&app, "race.md", false).await;
+    assert_eq!(review["conflicts"].as_array().unwrap().len(), 0);
+    socket.close(None).await.ok();
+    server.abort();
+}
+
 /// A session-mode gateway transaction targeting the block a collaborator's
 /// cursor sits in must SPLICE (only changed spans edited): the cursor's Yjs
 /// item survives and a sticky index keeps resolving to the same character.
