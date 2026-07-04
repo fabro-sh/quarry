@@ -94,6 +94,12 @@ fn block_tx(client_tx_id: &str, ops: Value) -> Value {
     })
 }
 
+fn block_tx_with_clock(client_tx_id: &str, base_clock: &str, ops: Value) -> Value {
+    let mut tx = block_tx(client_tx_id, ops);
+    tx["base_clock"] = Value::String(base_clock.to_string());
+    tx
+}
+
 async fn get_document_markdown(app: &axum::Router, path: &str) -> String {
     let response = app
         .clone()
@@ -1147,4 +1153,571 @@ async fn delete_block_orphans_comments_and_invalidates_suggestions() {
     let review = get_block_review(&app, "doc.md", false).await;
     assert_eq!(review["comments"][0]["status"], "orphaned");
     assert_eq!(review["suggestions"][0]["status"], "invalidated");
+}
+#[tokio::test]
+async fn block_transaction_duplicate_client_tx_id_replays_the_original_ack() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Idempotent.\n").await;
+    get_block_tree(&app, "doc.md").await;
+    let request = block_tx(
+        "tx-same",
+        serde_json::json!([{
+            "op": "insert_block",
+            "position": 1,
+            "block_type": "p",
+            "text": "Appended."
+        }]),
+    );
+
+    let first = commit_block_transaction(&app, "doc.md", request.clone()).await;
+    let versions_after_first = raw_version_count(&app, "doc.md").await;
+    let second = commit_block_transaction(&app, "doc.md", request).await;
+
+    assert_eq!(second, first);
+    assert_eq!(
+        raw_version_count(&app, "doc.md").await,
+        versions_after_first
+    );
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "Idempotent.\n\nAppended.\n"
+    );
+}
+
+#[tokio::test]
+async fn block_transaction_clock_handling_commits_rebases_and_rejects() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Clocked.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+    let clock_one = tree["document_clock"].as_str().unwrap().to_string();
+
+    // Matching clock (ETag-quoted) applies as `committed`.
+    let ack = commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx_with_clock(
+            "tx-matching",
+            &format!("\"{clock_one}\""),
+            serde_json::json!([{
+                "op": "replace_block_content",
+                "block_id": block_id,
+                "text": "Clocked once."
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(ack["status"], "committed");
+
+    // A stale-but-valid clock (clock_one is now one version behind) applies
+    // as `committed_rebased` because the referenced block still validates.
+    let ack = commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx_with_clock(
+            "tx-stale-valid",
+            &clock_one,
+            serde_json::json!([{
+                "op": "replace_block_content",
+                "block_id": block_id,
+                "text": "Clocked twice."
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(ack["status"], "committed_rebased");
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "Clocked twice.\n"
+    );
+
+    // An unknown clock is retryable STALE_BASE.
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx_with_clock(
+            "tx-unknown-clock",
+            "no-such-version",
+            serde_json::json!([{
+                "op": "replace_block_content",
+                "block_id": block_id,
+                "text": "Never lands."
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "STALE_BASE", true);
+}
+
+#[tokio::test]
+async fn block_transaction_typed_reference_errors() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Reference target.\n").await;
+    get_block_tree(&app, "doc.md").await;
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-missing-block",
+            serde_json::json!([{
+                "op": "replace_block_content",
+                "block_id": "no-such-block",
+                "text": "nope"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "BLOCK_DELETED", false);
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-missing-anchor",
+            serde_json::json!([{ "op": "comment.resolve", "item_id": "no-such-item" }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "ANCHOR_NOT_FOUND", false);
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-reply-missing-parent",
+            serde_json::json!([{
+                "op": "comment.reply",
+                "item_id": "no-such-parent",
+                "body": "orphan reply"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "ANCHOR_NOT_FOUND", false);
+
+    let tree = get_block_tree(&app, "doc.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-bad-move",
+            serde_json::json!([{
+                "op": "move_block",
+                "block_id": block_id,
+                "parent_block_id": "no-such-parent",
+                "position": 0
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "BLOCK_MOVE_CONFLICT", true);
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-bad-op",
+            serde_json::json!([{ "op": "explode_block", "block_id": "x" }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+}
+
+#[tokio::test]
+async fn block_transaction_unsupported_markdown_rolls_back() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "A text paragraph.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    // Nesting a block under a text-bearing leaf produces an unexportable
+    // tree (containers carry no inline content).
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-nest",
+            serde_json::json!([{
+                "op": "insert_block",
+                "parent_block_id": block_id,
+                "position": 0,
+                "block_type": "p",
+                "text": "nested"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "UNSUPPORTED_MARKDOWN", false);
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "A text paragraph.\n"
+    );
+}
+
+#[tokio::test]
+async fn block_transaction_multi_op_failure_rolls_back_the_whole_transaction() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Atomic.\n").await;
+    let before = get_block_tree(&app, "doc.md").await;
+    let versions_before = raw_version_count(&app, "doc.md").await;
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-atomic",
+            serde_json::json!([
+                {"op": "insert_block", "position": 1, "block_type": "p", "text": "Would apply."},
+                {"op": "delete_block", "block_id": "no-such-block"}
+            ]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "BLOCK_DELETED", false);
+    assert_eq!(get_document_markdown(&app, "doc.md").await, "Atomic.\n");
+    assert_eq!(get_block_tree(&app, "doc.md").await, before);
+    assert_eq!(raw_version_count(&app, "doc.md").await, versions_before);
+}
+
+#[tokio::test]
+async fn block_transaction_multi_op_success_commits_one_version() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Start.\n").await;
+    get_block_tree(&app, "doc.md").await;
+    let versions_before = raw_version_count(&app, "doc.md").await;
+
+    let ack = commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-two-inserts",
+            serde_json::json!([
+                {"op": "insert_block", "position": 1, "block_type": "p", "text": "Middle."},
+                {"op": "insert_block", "position": 2, "block_type": "p", "text": "End."}
+            ]),
+        ),
+    )
+    .await;
+    assert_eq!(ack["changed_block_ids"].as_array().unwrap().len(), 2);
+    assert_eq!(raw_version_count(&app, "doc.md").await, versions_before + 1);
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "Start.\n\nMiddle.\n\nEnd.\n"
+    );
+}
+
+#[tokio::test]
+async fn orphaned_anchor_survives_a_later_insertion_at_the_orphan_seam() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "prefix MIDDLE suffix\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-comment",
+            serde_json::json!([{
+                "op": "comment.add",
+                "block_id": block_id,
+                "start": 7,
+                "end": 13,
+                "body": "doomed"
+            }]),
+        ),
+    )
+    .await;
+    // Rewriting the middle orphans the comment, collapsed at offset 7.
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-orphan",
+            serde_json::json!([{
+                "op": "replace_block_content",
+                "block_id": block_id,
+                "text": "prefix CHANGED suffix"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "doc.md", false).await;
+    assert_eq!(review["comments"][0]["status"], "orphaned");
+    assert_eq!(review["comments"][0]["anchor"]["startOffset"], 7);
+    assert_eq!(review["comments"][0]["anchor"]["endOffset"], 7);
+
+    // Regression: a pure insertion exactly at the orphan seam used to invert
+    // the collapsed anchor to [8, 7) and poison the document with an untyped
+    // 400. It must commit, and the dead anchor must stay a point.
+    let ack = commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-insert-at-seam",
+            serde_json::json!([{
+                "op": "replace_block_content",
+                "block_id": block_id,
+                "text": "prefix XCHANGED suffix"
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(ack["status"], "committed");
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "prefix XCHANGED suffix\n"
+    );
+    let review = get_block_review(&app, "doc.md", false).await;
+    assert_eq!(review["comments"][0]["status"], "orphaned");
+    assert_eq!(review["comments"][0]["anchor"]["startOffset"], 7);
+    assert_eq!(review["comments"][0]["anchor"]["endOffset"], 7);
+}
+
+#[tokio::test]
+async fn raw_markdown_attrs_must_keep_the_markdown_key() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "<div>\nopaque\n</div>\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    // Wholesale attrs replacement without the markdown key would silently
+    // erase the block's content; it must be rejected instead.
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-erase",
+            serde_json::json!([{
+                "op": "set_block_attrs",
+                "block_id": block_id,
+                "attrs": {"note": "markdown key missing"}
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "<div>\nopaque\n</div>\n"
+    );
+
+    // Inserting a raw block without (or with a blank) markdown attribute is
+    // rejected the same way; a valid raw insert commits with its content.
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-empty-raw",
+            serde_json::json!([{
+                "op": "insert_block",
+                "position": 1,
+                "block_type": "raw_markdown",
+                "attrs": {}
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-valid-raw",
+            serde_json::json!([{
+                "op": "insert_block",
+                "position": 1,
+                "block_type": "raw_markdown",
+                "attrs": {"markdown": "<span>kept</span>"}
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "<div>\nopaque\n</div>\n\n<span>kept</span>\n"
+    );
+}
+
+#[tokio::test]
+async fn ops_against_raw_markdown_blocks_are_invalid_transactions() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Para.\n\n<div>\nopaque\n</div>\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    assert_eq!(tree["blocks"][1]["block_type"], "raw_markdown");
+    let para = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+    let raw = tree["blocks"][1]["block_id"].as_str().unwrap().to_string();
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-raw-text",
+            serde_json::json!([{ "op": "replace_block_content", "block_id": raw, "text": "x" }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-raw-add-mark",
+            serde_json::json!([{
+                "op": "add_mark", "block_id": raw, "start": 0, "end": 1, "marks": {"bold": true}
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-raw-remove-mark",
+            serde_json::json!([{
+                "op": "remove_mark", "block_id": raw, "start": 0, "end": 1, "marks": ["bold"]
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-raw-link",
+            serde_json::json!([{
+                "op": "set_link", "block_id": raw, "start": 0, "end": 1, "url": "https://example.com"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-raw-comment",
+            serde_json::json!([{
+                "op": "comment.add", "block_id": raw, "start": 0, "end": 1, "body": "?"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-raw-suggest",
+            serde_json::json!([{
+                "op": "suggestion.add", "block_id": raw, "start": 0, "end": 1, "replacement": "y"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    // Type changes to or from raw_markdown lose the content model; both
+    // directions are rejected.
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-from-raw",
+            serde_json::json!([{ "op": "set_block_type", "block_id": raw, "block_type": "p" }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-to-raw",
+            serde_json::json!([{
+                "op": "set_block_type", "block_id": para, "block_type": "raw_markdown"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "Para.\n\n<div>\nopaque\n</div>\n"
+    );
+}
+
+#[tokio::test]
+async fn move_block_preserves_children_and_review_anchors() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "```rust\nline one\n```\n\nAfter.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    assert_eq!(tree["blocks"][0]["block_type"], "code_block");
+    assert_eq!(tree["blocks"][1]["block_type"], "code_line");
+    let code_block = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+    let code_line = tree["blocks"][1]["block_id"].as_str().unwrap().to_string();
+    assert_eq!(tree["blocks"][1]["parent_block_id"], code_block.as_str());
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-anchor",
+            serde_json::json!([{
+                "op": "comment.add",
+                "block_id": code_line,
+                "start": 0,
+                "end": 4,
+                "body": "on the moved subtree"
+            }]),
+        ),
+    )
+    .await;
+    let ack = commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-move",
+            serde_json::json!([{
+                "op": "move_block",
+                "block_id": code_block,
+                "position": 1
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(
+        ack["changed_block_ids"],
+        serde_json::json!([code_block.as_str()])
+    );
+
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "After.\n\n```rust\nline one\n```\n"
+    );
+    let after = get_block_tree(&app, "doc.md").await;
+    assert_eq!(after["blocks"][1]["block_id"], code_block.as_str());
+    assert_eq!(after["blocks"][2]["block_id"], code_line.as_str());
+    assert_eq!(after["blocks"][2]["parent_block_id"], code_block.as_str());
+    assert_eq!(after["blocks"][2]["text"], "line one");
+
+    let review = get_block_review(&app, "doc.md", false).await;
+    let comment = &review["comments"][0];
+    assert_eq!(comment["status"], "open");
+    assert_eq!(comment["quote"], "line");
+    assert_eq!(comment["anchor"]["blockId"], code_line.as_str());
+    assert_eq!(comment["anchor"]["startOffset"], 0);
+    assert_eq!(comment["anchor"]["endOffset"], 4);
 }
