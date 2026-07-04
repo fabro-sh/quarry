@@ -212,52 +212,41 @@ fn cli_conflict_resolve_rejects_conflicts_from_another_library() -> anyhow::Resu
 
 #[cfg(feature = "lib-documents")]
 #[test]
-fn cli_backup_restore_reproduces_document_content() {
-    let temp = tempfile::tempdir().unwrap();
+fn cli_backup_restore_reproduces_document_content() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir().context("create temp dir")?;
     let root = temp.path().join("root");
     let backup = temp.path().join("backup");
     let restored = temp.path().join("restored");
     let source = temp.path().join("hello.md");
-    std::fs::write(&source, "hello from cli\n").unwrap();
+    let root_str = root.to_str().context("root path should be UTF-8")?;
+    let backup_str = backup.to_str().context("backup path should be UTF-8")?;
+    let restored_str = restored.to_str().context("restored path should be UTF-8")?;
+    let source_str = source.to_str().context("source path should be UTF-8")?;
+    std::fs::write(&source, "hello from cli\n").context("write source markdown")?;
 
-    run_quarry(["init", root.to_str().unwrap()]);
+    run_quarry(["init", root_str]);
     run_quarry([
         "--root",
-        root.to_str().unwrap(),
+        root_str,
         "put",
         "notes",
         "notes/hello.md",
-        source.to_str().unwrap(),
+        source_str,
     ]);
-    run_quarry([
-        "--root",
-        root.to_str().unwrap(),
-        "backup",
-        backup.to_str().unwrap(),
-    ]);
-    run_quarry([
-        "--root",
-        restored.to_str().unwrap(),
-        "restore",
-        backup.to_str().unwrap(),
-    ]);
+    run_quarry(["--root", root_str, "backup", backup_str]);
+    run_quarry(["--root", restored_str, "restore", backup_str]);
 
     let output = quarry_command()
-        .args([
-            "--root",
-            restored.to_str().unwrap(),
-            "get",
-            "notes",
-            "notes/hello.md",
-        ])
+        .args(["--root", restored_str, "get", "notes", "notes/hello.md"])
         .output()
-        .unwrap();
+        .context("run quarry get from restored backup")?;
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "hello from cli\n");
+    Ok(())
 }
 
 #[cfg(feature = "lib-documents")]
