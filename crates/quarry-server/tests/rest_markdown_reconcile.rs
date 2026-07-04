@@ -401,6 +401,43 @@ async fn comment_edit_on_conflict_id_returns_anchor_not_found() {
     assert_typed_error(status, &body, "ANCHOR_NOT_FOUND", false);
 }
 
+/// Replies stay comment-only: `comment.reply` on a conflict item is
+/// `ANCHOR_NOT_FOUND` (conflicts resolve/delete with the comment vocabulary
+/// but cannot host threads).
+#[tokio::test]
+async fn comment_reply_on_a_conflict_item_is_anchor_not_found() {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "conf-reply.md", "Alpha.\n").await;
+    let _ = get_block_tree(&app, "conf-reply.md").await;
+    commit_block_transaction(
+        &app,
+        "conf-reply.md",
+        block_tx(
+            "tx-conflict-for-reply",
+            serde_json::json!([{
+                "op": "conflict.add",
+                "incoming_markdown": "Hunk.\n"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "conf-reply.md", false).await;
+    let conflict_id = review["conflicts"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "conf-reply.md",
+        block_tx(
+            "tx-reply-to-conflict",
+            serde_json::json!([{
+                "op": "comment.reply", "item_id": conflict_id, "body": "no threads here"
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &body, "ANCHOR_NOT_FOUND", false);
+}
+
 #[tokio::test]
 async fn document_start_conflicts_anchor_null_and_delete_dismisses_them() {
     let (_root, app, _store) = block_test_app().await;

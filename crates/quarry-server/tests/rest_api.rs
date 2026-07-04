@@ -20,9 +20,8 @@ use yrs::{Doc, Out, ReadTxn, Text, Transact, WriteTxn, XmlTextRef};
 mod common;
 
 use common::{
-    WsSocket, apply_yjs_message, capture_debug_logs, document_test_app, empty_yjs_doc,
-    json_request, open_test_store, response_json, sync_yjs_doc_from_socket,
-    wait_for_yjs_sync_update, yjs_plain_text,
+    WsSocket, apply_yjs_message, capture_debug_logs, empty_yjs_doc, json_request, open_test_store,
+    response_json, sync_yjs_doc_from_socket, wait_for_yjs_sync_update, yjs_plain_text,
 };
 
 const COLLAB_ROOT: &str = "content";
@@ -50,21 +49,6 @@ where
 // ---------------------------------------------------------------------------
 // Phase 2: semantic mutation gateway (rows-authoritative mode) + block API
 // ---------------------------------------------------------------------------
-
-async fn block_test_app() -> (tempfile::TempDir, axum::Router, QuarryStore) {
-    let (root, app, store) = document_test_app().await;
-    let response = app
-        .clone()
-        .oneshot(json_request(
-            Method::POST,
-            "/v1/libraries",
-            serde_json::json!({"slug": "blocks"}),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
-    (root, app, store)
-}
 
 async fn put_block_markdown(app: &axum::Router, path: &str, body: &str) {
     let response = app
@@ -185,19 +169,6 @@ async fn get_block_review(app: &axum::Router, path: &str, include_resolved: bool
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     response_json(response).await
-}
-
-fn assert_typed_error(status: StatusCode, body: &Value, code: &str, retryable: bool) {
-    assert_eq!(body["code"], code, "unexpected error body: {body}");
-    assert_eq!(body["retryable"], retryable);
-    assert!(body["message"].as_str().is_some_and(|m| !m.is_empty()));
-    let expected = match code {
-        "STALE_BASE" | "BLOCK_MOVE_CONFLICT" => StatusCode::PRECONDITION_FAILED,
-        "BLOCK_DELETED" | "ANCHOR_NOT_FOUND" => StatusCode::NOT_FOUND,
-        "INVALID_TRANSACTION" => StatusCode::BAD_REQUEST,
-        _ => StatusCode::UNPROCESSABLE_ENTITY,
-    };
-    assert_eq!(status, expected);
 }
 
 // ---------------------------------------------------------------------------
@@ -618,41 +589,4 @@ async fn in_flight_typing_and_concurrent_file_write_both_survive_through_the_ses
     assert_eq!(review["conflicts"].as_array().unwrap().len(), 0);
     socket.close(None).await.ok();
     server.abort();
-}
-
-/// Replies stay comment-only: `comment.reply` on a conflict item is
-/// `ANCHOR_NOT_FOUND` (conflicts resolve/delete with the comment vocabulary
-/// but cannot host threads).
-#[tokio::test]
-async fn comment_reply_on_a_conflict_item_is_anchor_not_found() {
-    let (_root, app, _store) = block_test_app().await;
-    put_block_markdown(&app, "conf-reply.md", "Alpha.\n").await;
-    let _ = get_block_tree(&app, "conf-reply.md").await;
-    commit_block_transaction(
-        &app,
-        "conf-reply.md",
-        block_tx(
-            "tx-conflict-for-reply",
-            serde_json::json!([{
-                "op": "conflict.add",
-                "incoming_markdown": "Hunk.\n"
-            }]),
-        ),
-    )
-    .await;
-    let review = get_block_review(&app, "conf-reply.md", false).await;
-    let conflict_id = review["conflicts"][0]["id"].as_str().unwrap().to_string();
-
-    let (status, body) = post_block_transaction(
-        &app,
-        "conf-reply.md",
-        block_tx(
-            "tx-reply-to-conflict",
-            serde_json::json!([{
-                "op": "comment.reply", "item_id": conflict_id, "body": "no threads here"
-            }]),
-        ),
-    )
-    .await;
-    assert_typed_error(status, &body, "ANCHOR_NOT_FOUND", false);
 }
