@@ -1353,3 +1353,337 @@ transaction: quarry_storage::TransactionMetadata::default(),
         &openapi["paths"]["/v1/libraries/{library}/documents/{path}/review"]["post"];
     assert!(review_operation.is_null(), "review POST should be deleted");
 }
+
+#[tokio::test]
+async fn version_history_includes_transaction_metadata() {
+    let (_root, store) = open_test_store().await;
+    let app = router(store);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries",
+            serde_json::json!({"slug":"versionmeta"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/libraries/versionmeta/transactions",
+            serde_json::json!({
+                "actor": "Avery",
+                "message": "Imported from Git",
+                "provenance": {"remote": "origin/main"}
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value = response_json(response).await;
+    let tx = body["id"].as_str().unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!(
+                    "/v1/libraries/versionmeta/transactions/{tx}/documents/meta.md"
+                ))
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .body(Body::from("# Meta\n"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            &format!("/v1/libraries/versionmeta/transactions/{tx}/commit"),
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/versionmeta/documents/meta.md/versions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body[0]["source"], "rest");
+    assert_eq!(body[0]["actor"], "Avery");
+    assert_eq!(body[0]["message"], "Imported from Git");
+    assert_eq!(body[0]["provenance"]["remote"], "origin/main");
+}
+
+#[tokio::test]
+async fn put_document_rejects_invalid_transaction_provenance_header() {
+    let (_root, store) = open_test_store().await;
+    store.create_library("badprovenance").await.unwrap();
+    let app = router(store);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/badprovenance/documents/a.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header("x-quarry-transaction-provenance", "{bad json")
+                .body(Body::from("body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn put_document_decodes_percent_encoded_transaction_actor_header() {
+    let (_root, store) = open_test_store().await;
+    store.create_library("actorheader").await.unwrap();
+    let app = router(store);
+
+    // Each document is created first so the actor-carrying write exercises
+    // the update path (first-import attribution is covered separately by
+    // first_import_records_transaction_actor_header).
+    put_markdown(&app, "actorheader", "a.md", "# A\n", None).await;
+    put_markdown(&app, "actorheader", "b.md", "# B\n", None).await;
+    put_markdown(&app, "actorheader", "c.md", "# C\n", None).await;
+
+    // Percent-encoded UTF-8 name decodes before storage.
+    let version = put_markdown(
+        &app,
+        "actorheader",
+        "a.md",
+        "# A updated\n",
+        Some("Jos%C3%A9"),
+    )
+    .await;
+    assert_eq!(
+        version_actor(&app, "actorheader", "a.md", &version).await,
+        "José"
+    );
+
+    // Plain ASCII passes through unchanged.
+    let version = put_markdown(&app, "actorheader", "b.md", "# B updated\n", Some("Avery")).await;
+    assert_eq!(
+        version_actor(&app, "actorheader", "b.md", &version).await,
+        "Avery"
+    );
+
+    // No header falls back to the gateway's surface label.
+    let version = put_markdown(&app, "actorheader", "c.md", "# C updated\n", None).await;
+    assert_eq!(
+        version_actor(&app, "actorheader", "c.md", &version).await,
+        "rest"
+    );
+}
+
+#[tokio::test]
+async fn first_import_records_transaction_actor_header() {
+    let (_root, store) = open_test_store().await;
+    store.create_library("actorcreate").await.unwrap();
+    let app = router(store);
+
+    let version = put_markdown(&app, "actorcreate", "fresh.md", "# Fresh\n", Some("Avery")).await;
+
+    assert_eq!(
+        version_actor(&app, "actorcreate", "fresh.md", &version).await,
+        "Avery"
+    );
+}
+
+#[tokio::test]
+async fn delete_move_and_restore_record_transaction_actor_header() {
+    let (_root, store) = open_test_store().await;
+    store.create_library("actorops").await.unwrap();
+    let app = router(store);
+
+    let v1 = put_markdown(&app, "actorops", "keep.md", "# Doc one\n", None).await;
+    let _v2 = put_markdown(&app, "actorops", "keep.md", "# Doc two\n", None).await;
+    put_markdown(&app, "actorops", "doomed.md", "# Doomed\n", None).await;
+
+    // Move records the actor on its transaction.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/libraries/actorops/documents/keep.md/move")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-quarry-transaction-actor", "Avery")
+                .body(Body::from(r#"{"to_path":"kept.md"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["actor"], "Avery");
+
+    // Delete records the actor on its transaction.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri("/v1/libraries/actorops/documents/doomed.md")
+                .header("x-quarry-transaction-actor", "Avery")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    assert_eq!(body["actor"], "Avery");
+
+    // Restore (markdown/BlockDocument path) records the actor on the
+    // restored version.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!(
+                    "/v1/libraries/actorops/documents/kept.md/versions/{v1}/restore"
+                ))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-quarry-transaction-actor", "Avery")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let restored: Value = response_json(response).await;
+    let restored_version = restored["version"]["id"].as_str().unwrap();
+    assert_eq!(
+        version_actor(&app, "actorops", "kept.md", restored_version).await,
+        "Avery"
+    );
+}
+
+#[tokio::test]
+async fn raw_document_restore_records_transaction_actor_header() {
+    let (_root, store) = open_test_store().await;
+    store.create_library("actorraw").await.unwrap();
+    let app = router(store);
+
+    // A plain-text document routes as a RawDocument (not `.md`, not a
+    // markdown content type), so its restore takes the legacy byte path
+    // (`restore_document_version_with_origin`) rather than the markdown
+    // gateway. Restoring the current head short-circuits, so write two
+    // versions and restore the first.
+    let v1 = put_plain_text(&app, "actorraw", "notes.txt", "raw one\n").await;
+    let _v2 = put_plain_text(&app, "actorraw", "notes.txt", "raw two\n").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!(
+                    "/v1/libraries/actorraw/documents/notes.txt/versions/{v1}/restore"
+                ))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-quarry-transaction-actor", "Avery")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let restored: Value = response_json(response).await;
+    let restored_version = restored["version"]["id"].as_str().unwrap();
+    assert_eq!(
+        version_actor(&app, "actorraw", "notes.txt", restored_version).await,
+        "Avery"
+    );
+}
+
+/// PUTs plain text (a RawDocument) into `library`, returning the written
+/// version id.
+async fn put_plain_text(app: &axum::Router, library: &str, path: &str, body: &str) -> String {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/libraries/{library}/documents/{path}"))
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let outcome: Value = response_json(response).await;
+    outcome["version"]["id"].as_str().unwrap().to_string()
+}
+
+/// PUTs markdown into `library`, optionally with an
+/// `x-quarry-transaction-actor` header, returning the written version id.
+async fn put_markdown(
+    app: &axum::Router,
+    library: &str,
+    path: &str,
+    body: &str,
+    actor_header: Option<&str>,
+) -> String {
+    let mut request = Request::builder()
+        .method(Method::PUT)
+        .uri(format!("/v1/libraries/{library}/documents/{path}"))
+        .header(header::CONTENT_TYPE, "text/markdown");
+    if let Some(actor) = actor_header {
+        request = request.header("x-quarry-transaction-actor", actor);
+    }
+    let response = app
+        .clone()
+        .oneshot(request.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let outcome: Value = response_json(response).await;
+    outcome["version"]["id"].as_str().unwrap().to_string()
+}
+
+/// The `"actor"` recorded for `version_id` of `path`, via GET `/versions`.
+async fn version_actor(app: &axum::Router, library: &str, path: &str, version_id: &str) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/libraries/{library}/documents/{path}/versions"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response_json(response).await;
+    body.as_array()
+        .unwrap()
+        .iter()
+        .find(|version| version["id"] == version_id)
+        .unwrap()["actor"]
+        .clone()
+}
