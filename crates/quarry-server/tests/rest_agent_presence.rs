@@ -273,7 +273,12 @@ fn block_tx(client_tx_id: &str, ops: Value) -> Value {
     })
 }
 
-async fn post_presence(app: &axum::Router, library: &str, agent_id: &str, status: &str) {
+async fn post_presence(
+    app: &axum::Router,
+    library: &str,
+    agent_id: &str,
+    status: &str,
+) -> anyhow::Result<()> {
     let response = app
         .clone()
         .oneshot(
@@ -287,14 +292,15 @@ async fn post_presence(app: &axum::Router, library: &str, agent_id: &str, status
                 .body(Body::from(
                     serde_json::json!({"status": status}).to_string(),
                 ))
-                .unwrap(),
+                .context("build presence POST request")?,
         )
         .await
-        .unwrap();
+        .context("send presence POST request")?;
     assert_eq!(response.status(), StatusCode::OK);
+    Ok(())
 }
 
-async fn list_presence(app: &axum::Router, library: &str) -> Vec<Value> {
+async fn list_presence(app: &axum::Router, library: &str) -> anyhow::Result<Vec<Value>> {
     let response = app
         .clone()
         .oneshot(
@@ -304,42 +310,47 @@ async fn list_presence(app: &axum::Router, library: &str) -> Vec<Value> {
                     "/v1/libraries/{library}/documents/live.md/presence"
                 ))
                 .body(Body::empty())
-                .unwrap(),
+                .context("build presence list request")?,
         )
         .await
-        .unwrap();
+        .context("send presence list request")?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    body["presence"].as_array().unwrap().clone()
+    Ok(body["presence"]
+        .as_array()
+        .context("presence list response should include an array")?
+        .clone())
 }
 
 #[tokio::test(start_paused = true)]
-async fn agent_presence_expires_after_ttl() {
+async fn agent_presence_expires_after_ttl() -> anyhow::Result<()> {
     let (_root, app) = presence_test_app("presence-ttl").await;
 
-    post_presence(&app, "presence-ttl", "agent-a", "thinking").await;
-    assert_eq!(list_presence(&app, "presence-ttl").await.len(), 1);
+    post_presence(&app, "presence-ttl", "agent-a", "thinking").await?;
+    assert_eq!(list_presence(&app, "presence-ttl").await?.len(), 1);
 
     tokio::time::advance(Duration::from_secs(61)).await;
-    assert_eq!(list_presence(&app, "presence-ttl").await.len(), 0);
+    assert_eq!(list_presence(&app, "presence-ttl").await?.len(), 0);
+    Ok(())
 }
 
 #[tokio::test(start_paused = true)]
-async fn agent_presence_repost_resets_ttl() {
+async fn agent_presence_repost_resets_ttl() -> anyhow::Result<()> {
     let (_root, app) = presence_test_app("presence-refresh").await;
 
-    post_presence(&app, "presence-refresh", "agent-a", "thinking").await;
+    post_presence(&app, "presence-refresh", "agent-a", "thinking").await?;
     tokio::time::advance(Duration::from_secs(40)).await;
-    post_presence(&app, "presence-refresh", "agent-a", "acting").await;
+    post_presence(&app, "presence-refresh", "agent-a", "acting").await?;
     tokio::time::advance(Duration::from_secs(40)).await;
 
-    let presence = list_presence(&app, "presence-refresh").await;
+    let presence = list_presence(&app, "presence-refresh").await?;
     assert_eq!(presence.len(), 1);
     assert_eq!(presence[0]["status"], "acting");
+    Ok(())
 }
 
 #[tokio::test(start_paused = true)]
-async fn event_stream_presence_survives_disconnect_until_ttl() {
+async fn event_stream_presence_survives_disconnect_until_ttl() -> anyhow::Result<()> {
     let (_root, app) = presence_test_app("presence-stream").await;
 
     let stream = app
@@ -350,13 +361,13 @@ async fn event_stream_presence_survives_disconnect_until_ttl() {
                 .uri("/v1/libraries/presence-stream/documents/live.md/events/stream")
                 .header("X-Agent-Id", "agent-s")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build presence event stream request")?,
         )
         .await
-        .unwrap();
+        .context("open presence event stream")?;
     assert_eq!(stream.status(), StatusCode::OK);
 
-    let presence = list_presence(&app, "presence-stream").await;
+    let presence = list_presence(&app, "presence-stream").await?;
     assert_eq!(presence.len(), 1);
     assert_eq!(presence[0]["agentId"], "agent-s");
     assert_eq!(presence[0]["status"], "waiting");
@@ -371,18 +382,19 @@ async fn event_stream_presence_survives_disconnect_until_ttl() {
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(40)).await;
     tokio::task::yield_now().await;
-    assert_eq!(list_presence(&app, "presence-stream").await.len(), 1);
+    assert_eq!(list_presence(&app, "presence-stream").await?.len(), 1);
 
     // Disconnecting only stops the heartbeat: burst readers and stream
     // reconnects must not flap presence. Expiry is TTL-only.
     drop(stream);
-    assert_eq!(list_presence(&app, "presence-stream").await.len(), 1);
+    assert_eq!(list_presence(&app, "presence-stream").await?.len(), 1);
 
     // Let the runtime process the heartbeat abort so advancing the paused
     // clock cannot fire one more touch.
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(61)).await;
-    assert_eq!(list_presence(&app, "presence-stream").await.len(), 0);
+    assert_eq!(list_presence(&app, "presence-stream").await?.len(), 0);
+    Ok(())
 }
 
 #[tokio::test]
@@ -401,7 +413,7 @@ async fn document_read_with_agent_header_auto_joins_presence() -> anyhow::Result
         .await
         .context("send anonymous block tree read")?;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(list_presence(&app, "presence-auto-join").await.len(), 0);
+    assert_eq!(list_presence(&app, "presence-auto-join").await?.len(), 0);
 
     let response = app
         .clone()
@@ -416,7 +428,7 @@ async fn document_read_with_agent_header_auto_joins_presence() -> anyhow::Result
         .await
         .context("send agent block tree read")?;
     assert_eq!(response.status(), StatusCode::OK);
-    let presence = list_presence(&app, "presence-auto-join").await;
+    let presence = list_presence(&app, "presence-auto-join").await?;
     assert_eq!(presence.len(), 1);
     assert_eq!(presence[0]["agentId"], "agent-r");
     assert_eq!(presence[0]["status"], "waiting");
@@ -424,10 +436,11 @@ async fn document_read_with_agent_header_auto_joins_presence() -> anyhow::Result
 }
 
 #[tokio::test(start_paused = true)]
-async fn document_read_with_agent_header_refreshes_ttl_without_clobbering_status() {
+async fn document_read_with_agent_header_refreshes_ttl_without_clobbering_status()
+-> anyhow::Result<()> {
     let (_root, app) = presence_test_app("presence-implicit").await;
 
-    post_presence(&app, "presence-implicit", "agent-a", "acting").await;
+    post_presence(&app, "presence-implicit", "agent-a", "acting").await?;
     tokio::time::advance(Duration::from_secs(40)).await;
 
     let response = app
@@ -438,26 +451,27 @@ async fn document_read_with_agent_header_refreshes_ttl_without_clobbering_status
                 .uri("/v1/libraries/presence-implicit/documents/live.md/blocks")
                 .header("X-Agent-Id", "agent-a")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build agent block tree refresh read")?,
         )
         .await
-        .unwrap();
+        .context("send agent block tree refresh read")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     // The read refreshed the TTL (40s + 40s > 60s) without touching the
     // declared status.
     tokio::time::advance(Duration::from_secs(40)).await;
-    let presence = list_presence(&app, "presence-implicit").await;
+    let presence = list_presence(&app, "presence-implicit").await?;
     assert_eq!(presence.len(), 1);
     assert_eq!(presence[0]["status"], "acting");
 
     tokio::time::advance(Duration::from_secs(61)).await;
-    assert_eq!(list_presence(&app, "presence-implicit").await.len(), 0);
+    assert_eq!(list_presence(&app, "presence-implicit").await?.len(), 0);
+    Ok(())
 }
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn tmp_document_read_with_agent_header_auto_joins_presence() {
+async fn tmp_document_read_with_agent_header_auto_joins_presence() -> anyhow::Result<()> {
     let (_root, app, _store) = document_test_app().await;
 
     let response = app
@@ -471,10 +485,13 @@ async fn tmp_document_read_with_agent_header_auto_joins_presence() {
             }),
         ))
         .await
-        .unwrap();
+        .context("create tmp document for auto-join presence test")?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let created: Value = response_json(response).await;
-    let secret = created["document"]["path"].as_str().unwrap().to_string();
+    let secret = created["document"]["path"]
+        .as_str()
+        .context("tmp create response should include secret path")?
+        .to_string();
 
     let response = app
         .clone()
@@ -484,10 +501,10 @@ async fn tmp_document_read_with_agent_header_auto_joins_presence() {
                 .uri(format!("/v1/tmp/documents/{secret}"))
                 .header("X-Agent-Id", "agent-tmp-reader")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build tmp document read")?,
         )
         .await
-        .unwrap();
+        .context("send tmp document read")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -497,19 +514,23 @@ async fn tmp_document_read_with_agent_header_auto_joins_presence() {
                 .method(Method::GET)
                 .uri(format!("/v1/tmp/documents/{secret}/presence"))
                 .body(Body::empty())
-                .unwrap(),
+                .context("build tmp presence list request")?,
         )
         .await
-        .unwrap();
+        .context("send tmp presence list request")?;
     assert_eq!(response.status(), StatusCode::OK);
     let presence: Value = response_json(response).await;
-    assert_eq!(presence["presence"].as_array().unwrap().len(), 1);
+    let entries = presence["presence"]
+        .as_array()
+        .context("tmp presence response should include an array")?;
+    assert_eq!(entries.len(), 1);
     assert_eq!(presence["presence"][0]["agentId"], "agent-tmp-reader");
     assert_eq!(presence["presence"][0]["status"], "waiting");
+    Ok(())
 }
 
 #[tokio::test]
-async fn document_write_with_agent_header_touches_presence() {
+async fn document_write_with_agent_header_touches_presence() -> anyhow::Result<()> {
     let (_root, app) = presence_test_app("presence-write").await;
 
     let response = app
@@ -521,10 +542,10 @@ async fn document_write_with_agent_header_touches_presence() {
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .header("X-Agent-Id", "agent-w")
                 .body(Body::from("hello again"))
-                .unwrap(),
+                .context("build document write request")?,
         )
         .await
-        .unwrap();
+        .context("send document write request")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -547,17 +568,18 @@ async fn document_write_with_agent_header_touches_presence() {
                     )
                     .to_string(),
                 ))
-                .unwrap(),
+                .context("build transaction write request")?,
         )
         .await
-        .unwrap();
+        .context("send transaction write request")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let mut agent_ids: Vec<String> = list_presence(&app, "presence-write")
-        .await
+        .await?
         .iter()
         .map(|entry| entry["agentId"].as_str().unwrap_or_default().to_string())
         .collect();
     agent_ids.sort();
     assert_eq!(agent_ids, vec!["agent-t", "agent-w"]);
+    Ok(())
 }
