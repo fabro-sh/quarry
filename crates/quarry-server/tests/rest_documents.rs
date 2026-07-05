@@ -2412,9 +2412,12 @@ async fn rest_api_marks_external_links() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn rest_api_supports_transaction_metadata_patch_and_move() {
+async fn rest_api_supports_transaction_metadata_patch_and_move() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    let library = store.create_library("txactions").await.unwrap();
+    let library = store
+        .create_library("txactions")
+        .await
+        .context("create txactions library")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -2428,7 +2431,7 @@ async fn rest_api_supports_transaction_metadata_patch_and_move() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write transaction metadata source document")?;
     let app = router(store);
 
     let response = app
@@ -2439,10 +2442,12 @@ async fn rest_api_supports_transaction_metadata_patch_and_move() {
             serde_json::json!({}),
         ))
         .await
-        .unwrap();
+        .context("begin txactions transaction")?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let body: Value = response_json(response).await;
-    let tx = body["id"].as_str().unwrap();
+    let tx = body["id"]
+        .as_str()
+        .context("transaction create response should include id")?;
 
     let response = app
         .clone()
@@ -2452,7 +2457,7 @@ async fn rest_api_supports_transaction_metadata_patch_and_move() {
             serde_json::json!({"wrong":true}),
         ))
         .await
-        .unwrap();
+        .context("send invalid transaction document patch")?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     let response = app
@@ -2463,7 +2468,7 @@ async fn rest_api_supports_transaction_metadata_patch_and_move() {
             serde_json::json!({"reviewed":true}),
         ))
         .await
-        .unwrap();
+        .context("patch transaction document metadata")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -2474,7 +2479,7 @@ async fn rest_api_supports_transaction_metadata_patch_and_move() {
             serde_json::json!({"to_path":"published/a.md"}),
         ))
         .await
-        .unwrap();
+        .context("move transaction document")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -2485,34 +2490,29 @@ async fn rest_api_supports_transaction_metadata_patch_and_move() {
             serde_json::json!({}),
         ))
         .await
-        .unwrap();
+        .context("commit txactions transaction")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/txactions/documents/published/a.md")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(
+            Method::GET,
+            "/v1/libraries/txactions/documents/published/a.md",
+        )?)
         .await
-        .unwrap();
+        .context("read committed moved document")?;
     assert_eq!(response.status(), StatusCode::OK);
     let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/txactions/documents?prefix=published/")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(
+            Method::GET,
+            "/v1/libraries/txactions/documents?prefix=published/",
+        )?)
         .await
-        .unwrap();
+        .context("list committed moved documents")?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body[0]["metadata"]["reviewed"], true);
+    Ok(())
 }
 
 #[tokio::test]
