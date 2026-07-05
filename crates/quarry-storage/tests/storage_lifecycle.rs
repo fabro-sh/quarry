@@ -1043,16 +1043,19 @@ transaction: quarry_storage::TransactionMetadata::default(),
 }
 
 #[tokio::test]
-async fn suggestions_include_aliases_and_headings_for_wikilink_completion() {
-    let root = tempfile::tempdir().unwrap();
+async fn suggestions_include_aliases_and_headings_for_wikilink_completion() -> TestResult {
+    let root = tempfile::tempdir()?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("suggestions").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("suggestions")
+        .await
+        .context("create library")?;
 
     store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -1071,46 +1074,41 @@ async fn suggestions_include_aliases_and_headings_for_wikilink_completion() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("create guide document")?;
 
     let alias_suggestions = serde_json::to_value(
         store
             .suggest_documents(&library.slug, "shortcut", Some(10))
             .await
-            .unwrap(),
+            .context("load alias suggestions")?,
     )
-    .unwrap();
-    assert!(
-        alias_suggestions
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|suggestion| {
-                suggestion["path"] == "guide.md"
-                    && suggestion["match_type"] == "alias"
-                    && suggestion["matched_text"] == "Shortcut"
-            })
-    );
+    .context("serialize alias suggestions")?;
+    let alias_suggestions = alias_suggestions
+        .as_array()
+        .context("alias suggestions should serialize as an array")?;
+    assert!(alias_suggestions.iter().any(|suggestion| {
+        suggestion["path"] == "guide.md"
+            && suggestion["match_type"] == "alias"
+            && suggestion["matched_text"] == "Shortcut"
+    }));
 
     let heading_suggestions = serde_json::to_value(
         store
             .suggest_documents(&library.slug, "deep", Some(10))
             .await
-            .unwrap(),
+            .context("load heading suggestions")?,
     )
-    .unwrap();
-    assert!(
-        heading_suggestions
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|suggestion| {
-                suggestion["path"] == "guide.md"
-                    && suggestion["match_type"] == "heading"
-                    && suggestion["matched_text"] == "Deep Section"
-                    && suggestion["target_anchor"] == "Deep Section"
-            })
-    );
+    .context("serialize heading suggestions")?;
+    let heading_suggestions = heading_suggestions
+        .as_array()
+        .context("heading suggestions should serialize as an array")?;
+    assert!(heading_suggestions.iter().any(|suggestion| {
+        suggestion["path"] == "guide.md"
+            && suggestion["match_type"] == "heading"
+            && suggestion["matched_text"] == "Deep Section"
+            && suggestion["target_anchor"] == "Deep Section"
+    }));
+    Ok(())
 }
 
 #[tokio::test]
