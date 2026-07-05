@@ -743,16 +743,19 @@ async fn autosave_tagged_writes_keep_raw_versions_but_group_history() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn concurrent_staged_creates_same_path_publish_by_staged_document_id() {
-    let root = tempfile::tempdir().unwrap();
+async fn concurrent_staged_creates_same_path_publish_by_staged_document_id() -> TestResult {
+    let root = tempfile::tempdir()?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("stagedcreates").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("stagedcreates")
+        .await
+        .context("create library")?;
 
     let tx1 = store
         .begin_transaction(
@@ -763,7 +766,7 @@ async fn concurrent_staged_creates_same_path_publish_by_staged_document_id() {
             serde_json::json!({}),
         )
         .await
-        .unwrap();
+        .context("begin first staged create transaction")?;
     let tx2 = store
         .begin_transaction(
             &library.slug,
@@ -773,7 +776,7 @@ async fn concurrent_staged_creates_same_path_publish_by_staged_document_id() {
             serde_json::json!({}),
         )
         .await
-        .unwrap();
+        .context("begin second staged create transaction")?;
     let staged1 = store
         .stage_put(
             &tx1.id,
@@ -783,7 +786,7 @@ async fn concurrent_staged_creates_same_path_publish_by_staged_document_id() {
             "text/markdown",
         )
         .await
-        .unwrap();
+        .context("stage first create")?;
     let staged2 = store
         .stage_put(
             &tx2.id,
@@ -793,20 +796,24 @@ async fn concurrent_staged_creates_same_path_publish_by_staged_document_id() {
             "text/markdown",
         )
         .await
-        .unwrap();
+        .context("stage second create")?;
 
     assert_ne!(staged1.document_id, staged2.document_id);
-    store.commit_transaction(&tx2.id).await.unwrap();
+    store
+        .commit_transaction(&tx2.id)
+        .await
+        .context("commit second staged create")?;
     let visible = store
         .get_document(&library.slug, "notes/race.md")
         .await
-        .unwrap();
+        .context("load visible raced document")?;
     assert_eq!(visible.id, staged2.document_id);
     assert_eq!(visible.version.id, staged2.id);
     assert_eq!(visible.content, b"two");
 
     let error = store.commit_transaction(&tx1.id).await.unwrap_err();
     assert!(error.to_string().contains("precondition failed"));
+    Ok(())
 }
 
 #[tokio::test]
