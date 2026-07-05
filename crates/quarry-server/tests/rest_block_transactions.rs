@@ -808,7 +808,7 @@ async fn block_transaction_comment_reply_targets_open_suggestion_and_edit_update
 }
 
 #[tokio::test]
-async fn block_transaction_comment_edit_rejects_non_open_comments() {
+async fn block_transaction_comment_edit_rejects_non_open_comments() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Discuss this sentence.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -859,6 +859,8 @@ async fn block_transaction_comment_edit_rejects_non_open_comments() {
 
     let review = get_block_review(&app, "doc.md", true).await;
     assert_eq!(review["comments"][0]["body"], "root note");
+
+    Ok(())
 }
 
 #[tokio::test]
