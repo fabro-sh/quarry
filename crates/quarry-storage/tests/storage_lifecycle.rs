@@ -2784,7 +2784,7 @@ async fn opening_old_schema_migrates_documents_to_active_path_uniqueness() -> Te
     })?;
     let db = turso::Builder::new_local(db_path).build().await?;
     let conn = db.connect()?;
-    let document_indexes = index_names(&conn, "documents").await;
+    let document_indexes = index_names(&conn, "documents").await?;
     assert!(document_indexes.contains("idx_documents_active_library_path"));
     Ok(())
 }
@@ -2962,8 +2962,8 @@ async fn expired_documents_are_gone_and_excluded_from_live_queries() -> TestResu
 }
 
 #[tokio::test]
-async fn schema_indexes_metadata_hot_fields() {
-    let root = tempfile::tempdir().unwrap();
+async fn schema_indexes_metadata_hot_fields() -> TestResult {
+    let root = tempfile::tempdir().context("create schema-index tempdir")?;
     let db_path = root.path().join("quarry.db");
     let store = QuarryStore::open(StoreConfig {
         db_path: db_path.clone(),
@@ -2971,34 +2971,49 @@ async fn schema_indexes_metadata_hot_fields() {
         lock_path: None,
     })
     .await
-    .unwrap();
+    .context("open store to run schema migrations")?;
     drop(store);
 
-    let db = turso::Builder::new_local(db_path.to_str().unwrap())
-        .build()
-        .await
-        .unwrap();
-    let conn = db.connect().unwrap();
-    let document_indexes = index_names(&conn, "documents").await;
-    let version_indexes = index_names(&conn, "document_versions").await;
+    let db = turso::Builder::new_local(
+        db_path
+            .to_str()
+            .context("schema-index database path should be UTF-8")?,
+    )
+    .build()
+    .await
+    .context("open raw schema-index database")?;
+    let conn = db.connect().context("connect raw schema-index database")?;
+    let document_indexes = index_names(&conn, "documents").await?;
+    let version_indexes = index_names(&conn, "document_versions").await?;
 
     assert!(document_indexes.contains("idx_documents_active_library_path"));
     assert!(document_indexes.contains("idx_documents_created_at"));
     assert!(document_indexes.contains("idx_documents_updated_at"));
     assert!(version_indexes.contains("idx_versions_content_type"));
     assert!(version_indexes.contains("idx_versions_created_at"));
+    Ok(())
 }
 
-async fn index_names(conn: &turso::Connection, table: &str) -> std::collections::HashSet<String> {
+async fn index_names(
+    conn: &turso::Connection,
+    table: &str,
+) -> anyhow::Result<std::collections::HashSet<String>> {
     let mut rows = conn
         .query(format!("PRAGMA index_list('{table}')"), ())
         .await
-        .unwrap();
+        .with_context(|| format!("query index list for {table}"))?;
     let mut names = std::collections::HashSet::new();
-    while let Some(row) = rows.next().await.unwrap() {
-        names.insert(row.get::<String>(1).unwrap());
+    while let Some(row) = rows
+        .next()
+        .await
+        .with_context(|| format!("read index list row for {table}"))?
+    {
+        names.insert(
+            row.get::<String>(1)
+                .with_context(|| format!("read index name for {table}"))?,
+        );
     }
-    names
+    Ok(names)
 }
 
 // ---------------------------------------------------------------------------
