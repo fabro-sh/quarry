@@ -2176,8 +2176,8 @@ async fn paths_are_normalized_reserved_paths_rejected_and_keys_case_sensitive() 
 }
 
 #[tokio::test]
-async fn stores_lists_and_reopens_one_thousand_mixed_size_documents() {
-    let root = tempfile::tempdir().unwrap();
+async fn stores_lists_and_reopens_one_thousand_mixed_size_documents() -> TestResult {
+    let root = tempfile::tempdir().context("create bulk-document tempdir")?;
     let db_path = root.path().join("quarry.db");
     let cas_path = root.path().join("cas");
     let store = QuarryStore::open(StoreConfig {
@@ -2186,8 +2186,11 @@ async fn stores_lists_and_reopens_one_thousand_mixed_size_documents() {
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("bulk").await.unwrap();
+    .context("open bulk-document store")?;
+    let library = store
+        .create_library("bulk")
+        .await
+        .context("create bulk library")?;
 
     for index in 0..1000 {
         let content = if index % 100 == 0 {
@@ -2197,24 +2200,24 @@ async fn stores_lists_and_reopens_one_thousand_mixed_size_documents() {
         };
         store
             .put_document(quarry_storage::PutDocumentRequest {
-library: library.slug.to_string(),
-path: format!("docs/{index:04}.bin").to_string(),
-content,
-metadata: serde_json::json!({"content_type":"application/octet-stream","index":index}),
-content_type: ("application/octet-stream").to_string(),
-source: DocumentSource::Rest,
-precondition: WritePrecondition::None,
-origin_id: None,
-transaction: quarry_storage::TransactionMetadata::default(),
-})
+                library: library.slug.to_string(),
+                path: format!("docs/{index:04}.bin").to_string(),
+                content,
+                metadata: serde_json::json!({"content_type":"application/octet-stream","index":index}),
+                content_type: ("application/octet-stream").to_string(),
+                source: DocumentSource::Rest,
+                precondition: WritePrecondition::None,
+                origin_id: None,
+                transaction: quarry_storage::TransactionMetadata::default(),
+            })
             .await
-            .unwrap();
+            .with_context(|| format!("write bulk document {index:04}"))?;
     }
 
     let listed = store
         .list_documents(&library.slug, Some("docs/"), Some(10_000))
         .await
-        .unwrap();
+        .context("list bulk documents")?;
     assert_eq!(listed.len(), 1000);
     assert!(listed[0].path < listed[999].path);
     drop(store);
@@ -2225,12 +2228,12 @@ transaction: quarry_storage::TransactionMetadata::default(),
         lock_path: None,
     })
     .await
-    .unwrap();
+    .context("reopen bulk-document store")?;
     assert_eq!(
         reopened
             .get_document(&library.slug, "docs/0001.bin")
             .await
-            .unwrap()
+            .context("load small bulk document after reopen")?
             .content,
         b"doc 1\n"
     );
@@ -2238,11 +2241,12 @@ transaction: quarry_storage::TransactionMetadata::default(),
         reopened
             .get_document(&library.slug, "docs/0900.bin")
             .await
-            .unwrap()
+            .context("load large bulk document after reopen")?
             .content
             .len(),
         INLINE_CONTENT_THRESHOLD + 901
     );
+    Ok(())
 }
 
 #[tokio::test]
