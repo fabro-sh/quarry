@@ -574,7 +574,7 @@ async fn tmp_create_and_put_reject_oversized_markdown() -> anyhow::Result<()> {
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn tmp_markdown_put_rejects_non_markdown_content_type() {
+async fn tmp_markdown_put_rejects_non_markdown_content_type() -> anyhow::Result<()> {
     let (_root, app, store) = block_test_app().await;
     let response = app
         .clone()
@@ -588,14 +588,17 @@ async fn tmp_markdown_put_rejects_non_markdown_content_type() {
             }),
         ))
         .await
-        .unwrap();
+        .context("create tmp markdown document before non-markdown PUT")?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let etag = response.headers()[header::ETAG]
         .to_str()
-        .unwrap()
+        .context("tmp create response ETag should be valid header text")?
         .to_string();
     let created = response_json(response).await;
-    let secret = created["document"]["path"].as_str().unwrap().to_string();
+    let secret = created["document"]["path"]
+        .as_str()
+        .context("tmp create response should include document path")?
+        .to_string();
 
     let response = app
         .clone()
@@ -606,10 +609,10 @@ async fn tmp_markdown_put_rejects_non_markdown_content_type() {
                 .header(header::CONTENT_TYPE, "text/plain")
                 .header(header::IF_MATCH, etag.clone())
                 .body(Body::from("raw body"))
-                .unwrap(),
+                .context("build non-markdown tmp PUT request")?,
         )
         .await
-        .unwrap();
+        .context("send non-markdown tmp PUT request")?;
     let status = response.status();
     let body = response_json(response).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
@@ -618,10 +621,13 @@ async fn tmp_markdown_put_rejects_non_markdown_content_type() {
         "unsupported media type: tmp documents are Markdown-only; unsupported content type text/plain"
     );
 
-    let document = store.get_tmp_document(&secret).await.unwrap();
+    let document = store
+        .get_tmp_document(&secret)
+        .await
+        .context("read tmp document after rejected non-markdown PUT")?;
     assert_eq!(document.version.content_type, "text/markdown");
     assert_eq!(
-        String::from_utf8(document.content).unwrap(),
+        String::from_utf8(document.content).context("tmp document content should remain UTF-8")?,
         "# Draft\n\nBody.\n"
     );
     let blocks = get_tmp_block_tree(&app, &secret).await;
@@ -631,7 +637,7 @@ async fn tmp_markdown_put_rejects_non_markdown_content_type() {
         store
             .head_tmp_document(&secret)
             .await
-            .unwrap()
+            .context("read tmp document head after rejected non-markdown PUT")?
             .head_version_id
     );
 
@@ -645,10 +651,10 @@ async fn tmp_markdown_put_rejects_non_markdown_content_type() {
                 .header(header::IF_MATCH, latest_etag)
                 .header("x-quarry-allow-document-kind-change", "true")
                 .body(Body::from("raw body"))
-                .unwrap(),
+                .context("build non-markdown tmp PUT request with kind-change opt-in")?,
         )
         .await
-        .unwrap();
+        .context("send non-markdown tmp PUT request with kind-change opt-in")?;
     let status = response.status();
     let body = response_json(response).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
@@ -656,12 +662,16 @@ async fn tmp_markdown_put_rejects_non_markdown_content_type() {
         body["error"],
         "unsupported media type: tmp documents are Markdown-only; unsupported content type text/plain"
     );
-    let document = store.get_tmp_document(&secret).await.unwrap();
+    let document = store
+        .get_tmp_document(&secret)
+        .await
+        .context("read tmp document after rejected kind-change opt-in PUT")?;
     assert_eq!(document.version.content_type, "text/markdown");
     assert_eq!(
-        String::from_utf8(document.content).unwrap(),
+        String::from_utf8(document.content).context("tmp document content should remain UTF-8")?,
         "# Draft\n\nBody.\n"
     );
+    Ok(())
 }
 
 #[cfg(feature = "tmp-documents")]
