@@ -761,9 +761,13 @@ async fn projection_preserves_empty_directory_inode_across_rename_and_reopen() -
 }
 
 #[tokio::test]
-async fn projection_preserves_tree_inodes_across_directory_rename_and_reopen() {
+async fn projection_preserves_tree_inodes_across_directory_rename_and_reopen() -> anyhow::Result<()>
+{
     let store = test_store().await;
-    let library = store.create_library("notes").await.unwrap();
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -777,33 +781,70 @@ async fn projection_preserves_tree_inodes_across_directory_rename_and_reopen() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write drafts/one.md document")?;
     let projection = FuseProjection::open(store.clone(), &library.slug, false)
         .await
-        .unwrap();
-    let dir_inode = projection.attr("drafts").await.unwrap().inode;
-    let file_inode = projection.attr("drafts/one.md").await.unwrap().inode;
+        .context("open writable projection")?;
+    let dir_inode = projection
+        .attr("drafts")
+        .await
+        .context("read drafts directory inode")?
+        .inode;
+    let file_inode = projection
+        .attr("drafts/one.md")
+        .await
+        .context("read drafts/one.md inode")?
+        .inode;
 
-    projection.rename("drafts", "archive").await.unwrap();
+    projection
+        .rename("drafts", "archive")
+        .await
+        .context("rename drafts directory to archive")?;
 
-    assert_eq!(projection.attr("archive").await.unwrap().inode, dir_inode);
     assert_eq!(
-        projection.attr("archive/one.md").await.unwrap().inode,
+        projection
+            .attr("archive")
+            .await
+            .context("read archive directory inode")?
+            .inode,
+        dir_inode
+    );
+    assert_eq!(
+        projection
+            .attr("archive/one.md")
+            .await
+            .context("read archive/one.md inode")?
+            .inode,
         file_inode
     );
     assert_eq!(
-        projection.read_file("archive/one.md", 0, 16).await.unwrap(),
+        projection
+            .read_file("archive/one.md", 0, 16)
+            .await
+            .context("read archive/one.md content")?,
         b"one\n"
     );
 
     let reopened = FuseProjection::open(store, &library.slug, false)
         .await
-        .unwrap();
-    assert_eq!(reopened.attr("archive").await.unwrap().inode, dir_inode);
+        .context("reopen writable projection")?;
     assert_eq!(
-        reopened.attr("archive/one.md").await.unwrap().inode,
+        reopened
+            .attr("archive")
+            .await
+            .context("read reopened archive directory inode")?
+            .inode,
+        dir_inode
+    );
+    assert_eq!(
+        reopened
+            .attr("archive/one.md")
+            .await
+            .context("read reopened archive/one.md inode")?
+            .inode,
         file_inode
     );
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
