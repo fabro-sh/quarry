@@ -335,7 +335,7 @@ async fn block_transaction_replace_block_content_preserves_block_identity() -> a
 }
 
 #[tokio::test]
-async fn block_transaction_move_block_is_placement_only() {
+async fn block_transaction_move_block_is_placement_only() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Alpha.\n\nBeta.\n\nGamma.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -364,6 +364,8 @@ async fn block_transaction_move_block_is_placement_only() {
         get_document_markdown(&app, "doc.md").await,
         "Gamma.\n\nAlpha.\n\nBeta.\n"
     );
+
+    Ok(())
 }
 
 #[tokio::test]
