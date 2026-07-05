@@ -1828,16 +1828,19 @@ async fn open_transaction_survives_restart_without_publishing_staged_cas() -> Te
 }
 
 #[tokio::test]
-async fn global_operation_lock_blocks_normal_writes_until_released() {
-    let root = tempfile::tempdir().unwrap();
+async fn global_operation_lock_blocks_normal_writes_until_released() -> TestResult {
+    let root = tempfile::tempdir().context("create global-operation lock tempdir")?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("locked").await.unwrap();
+    .context("open global-operation lock store")?;
+    let library = store
+        .create_library("locked")
+        .await
+        .context("create locked library")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -1851,7 +1854,7 @@ async fn global_operation_lock_blocks_normal_writes_until_released() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("create share document before lock checks")?;
     let block_document = store
         .import_block_document(
             &library.slug,
@@ -1863,11 +1866,13 @@ async fn global_operation_lock_blocks_normal_writes_until_released() {
             WritePrecondition::None,
         )
         .await
-        .unwrap();
+        .context("import block document before lock checks")?;
     let block_id = store
         .load_block_tree(&block_document.document.id)
         .await
-        .unwrap()[0]
+        .context("load imported block tree")?
+        .first()
+        .context("imported block tree should contain a root block")?
         .block_id
         .clone();
 
@@ -1900,9 +1905,9 @@ async fn global_operation_lock_blocks_normal_writes_until_released() {
     drop(guard);
     let outcome = tokio::time::timeout(Duration::from_secs(1), write)
         .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+        .context("blocked document write should finish after releasing lock")?
+        .context("blocked document write task should join")?
+        .context("blocked document write should succeed")?;
     assert_eq!(outcome.document.path, "notes/blocked.md");
 
     let guard = store.acquire_global_operation_lock().await;
@@ -1924,9 +1929,9 @@ async fn global_operation_lock_blocks_normal_writes_until_released() {
     drop(guard);
     let token = tokio::time::timeout(Duration::from_secs(1), invite)
         .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+        .context("blocked invite write should finish after releasing lock")?
+        .context("blocked invite write task should join")?
+        .context("blocked invite write should succeed")?;
     assert_eq!(token.role, "editor");
 
     let guard = store.acquire_global_operation_lock().await;
@@ -1954,9 +1959,9 @@ async fn global_operation_lock_blocks_normal_writes_until_released() {
     drop(guard);
     let shadow_base = tokio::time::timeout(Duration::from_secs(1), shadow)
         .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+        .context("blocked shadow-base write should finish after releasing lock")?
+        .context("blocked shadow-base write task should join")?
+        .context("blocked shadow-base write should succeed")?;
     assert_eq!(shadow_base.base_markdown, "Review me.\n");
 
     let guard = store.acquire_global_operation_lock().await;
@@ -1985,9 +1990,9 @@ async fn global_operation_lock_blocks_normal_writes_until_released() {
     drop(guard);
     let recorded = tokio::time::timeout(Duration::from_secs(1), block_tx)
         .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+        .context("blocked transaction write should finish after releasing lock")?
+        .context("blocked transaction write task should join")?
+        .context("blocked transaction write should succeed")?;
     assert_eq!(recorded.client_tx_id, "lock-test");
 
     let guard = store.acquire_global_operation_lock().await;
@@ -2023,10 +2028,11 @@ async fn global_operation_lock_blocks_normal_writes_until_released() {
     drop(guard);
     let review_item = tokio::time::timeout(Duration::from_secs(1), review)
         .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+        .context("blocked review write should finish after releasing lock")?
+        .context("blocked review write task should join")?
+        .context("blocked review write should succeed")?;
     assert_eq!(review_item.body.as_deref(), Some("note"));
+    Ok(())
 }
 
 #[tokio::test]
