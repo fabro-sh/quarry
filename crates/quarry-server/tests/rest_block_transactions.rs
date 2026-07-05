@@ -1158,7 +1158,7 @@ async fn suggestion_invalidated_by_a_content_change_cannot_be_accepted() -> anyh
 }
 
 #[tokio::test]
-async fn delete_block_orphans_comments_and_invalidates_suggestions() {
+async fn delete_block_orphans_comments_and_invalidates_suggestions() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Doomed block.\n\nSurvivor.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -1190,6 +1190,8 @@ async fn delete_block_orphans_comments_and_invalidates_suggestions() {
     let review = get_block_review(&app, "doc.md", false).await;
     assert_eq!(review["comments"][0]["status"], "orphaned");
     assert_eq!(review["suggestions"][0]["status"], "invalidated");
+
+    Ok(())
 }
 #[tokio::test]
 async fn block_transaction_duplicate_client_tx_id_replays_the_original_ack() {
