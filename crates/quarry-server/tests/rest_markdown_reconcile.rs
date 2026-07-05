@@ -861,7 +861,7 @@ async fn unchanged_conflict_markers_do_not_stack_flags() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn dismissed_conflict_marker_flags_stay_dismissed() {
+async fn dismissed_conflict_marker_flags_stay_dismissed() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "soup-dismissed.md", "Alpha.\n").await;
     put_block_markdown(
@@ -871,7 +871,10 @@ async fn dismissed_conflict_marker_flags_stay_dismissed() {
     )
     .await;
     let review = get_block_review(&app, "soup-dismissed.md", false).await;
-    let conflict_id = review["conflicts"][0]["id"].as_str().unwrap().to_string();
+    let conflict_id = review["conflicts"][0]["id"]
+        .as_str()
+        .context("conflict should include an id")?
+        .to_string();
     commit_block_transaction(
         &app,
         "soup-dismissed.md",
@@ -890,10 +893,23 @@ async fn dismissed_conflict_marker_flags_stay_dismissed() {
     .await;
 
     let open_review = get_block_review(&app, "soup-dismissed.md", false).await;
-    assert_eq!(open_review["conflicts"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        open_review["conflicts"]
+            .as_array()
+            .context("open review should include conflicts array")?
+            .len(),
+        0
+    );
     let full_review = get_block_review(&app, "soup-dismissed.md", true).await;
-    assert_eq!(full_review["conflicts"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        full_review["conflicts"]
+            .as_array()
+            .context("full review should include conflicts array")?
+            .len(),
+        1
+    );
     assert_eq!(full_review["conflicts"][0]["status"], "resolved");
+    Ok(())
 }
 
 #[tokio::test]
