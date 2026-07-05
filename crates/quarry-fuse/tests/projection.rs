@@ -663,9 +663,12 @@ async fn projection_uses_storage_backed_stable_inodes() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn projection_preserves_file_inode_across_rename() {
+async fn projection_preserves_file_inode_across_rename() -> anyhow::Result<()> {
     let store = test_store().await;
-    let library = store.create_library("notes").await.unwrap();
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -679,19 +682,31 @@ async fn projection_preserves_file_inode_across_rename() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write plans/one.md document")?;
     let projection = FuseProjection::open(store, &library.slug, false)
         .await
-        .unwrap();
-    let inode = projection.attr("plans/one.md").await.unwrap().inode;
+        .context("open writable projection")?;
+    let inode = projection
+        .attr("plans/one.md")
+        .await
+        .context("read plans/one.md inode")?
+        .inode;
 
     projection
         .rename("plans/one.md", "plans/two.md")
         .await
-        .unwrap();
+        .context("rename plans/one.md to plans/two.md")?;
 
-    assert_eq!(projection.attr("plans/two.md").await.unwrap().inode, inode);
+    assert_eq!(
+        projection
+            .attr("plans/two.md")
+            .await
+            .context("read renamed plans/two.md inode")?
+            .inode,
+        inode
+    );
     assert!(projection.attr("plans/one.md").await.is_err());
+    Ok(())
 }
 
 #[tokio::test]
