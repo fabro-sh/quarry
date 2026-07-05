@@ -830,7 +830,7 @@ async fn first_import_with_conflict_markers_flags_a_review_item() -> anyhow::Res
 }
 
 #[tokio::test]
-async fn unchanged_conflict_markers_do_not_stack_flags() {
+async fn unchanged_conflict_markers_do_not_stack_flags() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "soup-again.md", "Alpha.\n").await;
     put_block_markdown(
@@ -848,7 +848,14 @@ async fn unchanged_conflict_markers_do_not_stack_flags() {
     .await;
 
     let review = get_block_review(&app, "soup-again.md", true).await;
-    assert_eq!(review["conflicts"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        review["conflicts"]
+            .as_array()
+            .context("review should include conflicts array")?
+            .len(),
+        1
+    );
+    Ok(())
 }
 
 #[tokio::test]
