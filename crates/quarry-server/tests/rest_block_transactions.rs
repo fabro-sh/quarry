@@ -196,7 +196,7 @@ fn assert_typed_error(status: StatusCode, body: &Value, code: &str, retryable: b
 }
 
 #[tokio::test]
-async fn blocks_route_materializes_rows_with_stable_ids() {
+async fn blocks_route_materializes_rows_with_stable_ids() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "# Title\n\nBody one.\n").await;
 
@@ -213,6 +213,8 @@ async fn blocks_route_materializes_rows_with_stable_ids() {
     // materialization happened exactly once.
     let second = get_block_tree(&app, "doc.md").await;
     assert_eq!(second, first);
+
+    Ok(())
 }
 
 #[tokio::test]
