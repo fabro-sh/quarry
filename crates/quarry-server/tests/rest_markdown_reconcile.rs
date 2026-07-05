@@ -239,17 +239,26 @@ async fn markdown_put_rejects_raw_downgrade_without_opt_in() -> anyhow::Result<(
 /// put -- the block projection survives (ids stable, anchors live) and the
 /// content equals the restored version exactly.
 #[tokio::test]
-async fn version_restore_merges_through_the_gateway_preserving_ids_and_anchors() {
+async fn version_restore_merges_through_the_gateway_preserving_ids_and_anchors()
+-> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "undo.md", "# Title\n\nAlpha.\n\nBravo.\n").await;
     let tree = get_block_tree(&app, "undo.md").await;
-    let restore_to = tree["document_clock"].as_str().unwrap().to_string();
+    let restore_to = tree["document_clock"]
+        .as_str()
+        .context("block tree should include document clock")?
+        .to_string();
     let ids: Vec<String> = tree["blocks"]
         .as_array()
-        .unwrap()
+        .context("block tree should include block array")?
         .iter()
-        .map(|block| block["block_id"].as_str().unwrap().to_string())
-        .collect();
+        .map(|block| {
+            block["block_id"]
+                .as_str()
+                .context("block should include block_id")
+                .map(ToString::to_string)
+        })
+        .collect::<anyhow::Result<_>>()?;
     let original = get_document_markdown(&app, "undo.md").await;
 
     // A live anchor on the Title block and a later content edit to Alpha.
@@ -284,7 +293,7 @@ async fn version_restore_merges_through_the_gateway_preserving_ids_and_anchors()
             serde_json::json!({}),
         ))
         .await
-        .unwrap();
+        .context("restore document version")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     // The content is the restored version, as a NEW head.
@@ -293,10 +302,15 @@ async fn version_restore_merges_through_the_gateway_preserving_ids_and_anchors()
     assert_ne!(restored["document_clock"], serde_json::json!(restore_to));
     let restored_ids: Vec<String> = restored["blocks"]
         .as_array()
-        .unwrap()
+        .context("restored block tree should include block array")?
         .iter()
-        .map(|block| block["block_id"].as_str().unwrap().to_string())
-        .collect();
+        .map(|block| {
+            block["block_id"]
+                .as_str()
+                .context("restored block should include block_id")
+                .map(ToString::to_string)
+        })
+        .collect::<anyhow::Result<_>>()?;
     assert_eq!(
         restored_ids, ids,
         "the restore merges through the reconciler instead of clearing the projection"
@@ -305,6 +319,7 @@ async fn version_restore_merges_through_the_gateway_preserving_ids_and_anchors()
     assert_eq!(review["comments"][0]["status"], "open");
     assert_eq!(review["comments"][0]["anchor"]["blockId"], ids[0].as_str());
     assert_eq!(review["conflicts"], serde_json::json!([]));
+    Ok(())
 }
 
 #[tokio::test]
