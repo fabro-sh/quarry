@@ -710,25 +710,54 @@ async fn projection_preserves_file_inode_across_rename() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn projection_preserves_empty_directory_inode_across_rename_and_reopen() {
+async fn projection_preserves_empty_directory_inode_across_rename_and_reopen() -> anyhow::Result<()>
+{
     let store = test_store().await;
-    let library = store.create_library("notes").await.unwrap();
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     let projection = FuseProjection::open(store.clone(), &library.slug, false)
         .await
-        .unwrap();
+        .context("open writable projection")?;
 
-    projection.mkdir("drafts").await.unwrap();
-    let inode = projection.attr("drafts").await.unwrap().inode;
-    projection.rename("drafts", "archive").await.unwrap();
+    projection
+        .mkdir("drafts")
+        .await
+        .context("create drafts directory")?;
+    let inode = projection
+        .attr("drafts")
+        .await
+        .context("read drafts directory inode")?
+        .inode;
+    projection
+        .rename("drafts", "archive")
+        .await
+        .context("rename drafts directory to archive")?;
 
-    assert_eq!(projection.attr("archive").await.unwrap().inode, inode);
+    assert_eq!(
+        projection
+            .attr("archive")
+            .await
+            .context("read archive directory inode")?
+            .inode,
+        inode
+    );
     assert!(projection.attr("drafts").await.is_err());
 
     let reopened = FuseProjection::open(store, &library.slug, false)
         .await
-        .unwrap();
-    assert_eq!(reopened.attr("archive").await.unwrap().inode, inode);
+        .context("reopen writable projection")?;
+    assert_eq!(
+        reopened
+            .attr("archive")
+            .await
+            .context("read reopened archive directory inode")?
+            .inode,
+        inode
+    );
     assert!(reopened.attr("drafts").await.is_err());
+    Ok(())
 }
 
 #[tokio::test]
