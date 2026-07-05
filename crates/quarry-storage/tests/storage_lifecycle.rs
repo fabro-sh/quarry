@@ -3246,9 +3246,15 @@ async fn tmp_documents_reject_invalid_utf8_on_create_and_update() -> TestResult 
 }
 
 #[tokio::test]
-async fn tmp_documents_enforce_one_mib_canonical_markdown_limit() {
-    let root = tempfile::tempdir().unwrap();
-    let store = open_block_store(root.path()).await;
+async fn tmp_documents_enforce_one_mib_canonical_markdown_limit() -> TestResult {
+    let root = tempfile::tempdir().context("create tmp size-limit tempdir")?;
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .context("open tmp size-limit store")?;
 
     let exact = vec![b'a'; quarry_storage::TMP_DOCUMENT_MARKDOWN_MAX_BYTES];
     let outcome = store
@@ -3259,7 +3265,7 @@ async fn tmp_documents_enforce_one_mib_canonical_markdown_limit() {
             TmpTtl::Default,
         )
         .await
-        .unwrap();
+        .context("create tmp document at exact Markdown size limit")?;
     assert_eq!(
         outcome.version.byte_size,
         quarry_storage::TMP_DOCUMENT_MARKDOWN_MAX_BYTES as u64
@@ -3274,8 +3280,9 @@ async fn tmp_documents_enforce_one_mib_canonical_markdown_limit() {
             TmpTtl::Default,
         )
         .await
-        .unwrap_err();
+        .expect_err("oversized tmp Markdown create should be rejected");
     assert!(matches!(error, QuarryError::PayloadTooLarge(_)));
+    Ok(())
 }
 
 #[tokio::test]
