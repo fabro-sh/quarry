@@ -1226,7 +1226,7 @@ async fn block_transaction_duplicate_client_tx_id_replays_the_original_ack() -> 
 }
 
 #[tokio::test]
-async fn block_transaction_clock_handling_commits_rebases_and_rejects() {
+async fn block_transaction_clock_handling_commits_rebases_and_rejects() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Clocked.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -1288,6 +1288,8 @@ async fn block_transaction_clock_handling_commits_rebases_and_rejects() {
     )
     .await;
     assert_typed_error(status, &body, "STALE_BASE", true);
+
+    Ok(())
 }
 
 #[tokio::test]
