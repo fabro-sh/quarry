@@ -1293,7 +1293,7 @@ async fn block_transaction_clock_handling_commits_rebases_and_rejects() -> anyho
 }
 
 #[tokio::test]
-async fn block_transaction_typed_reference_errors() {
+async fn block_transaction_typed_reference_errors() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Reference target.\n").await;
     get_block_tree(&app, "doc.md").await;
@@ -1367,6 +1367,8 @@ async fn block_transaction_typed_reference_errors() {
     )
     .await;
     assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    Ok(())
 }
 
 #[tokio::test]
