@@ -386,7 +386,7 @@ async fn event_stream_presence_survives_disconnect_until_ttl() {
 }
 
 #[tokio::test]
-async fn document_read_with_agent_header_auto_joins_presence() {
+async fn document_read_with_agent_header_auto_joins_presence() -> anyhow::Result<()> {
     let (_root, app) = presence_test_app("presence-auto-join").await;
 
     let response = app
@@ -396,10 +396,10 @@ async fn document_read_with_agent_header_auto_joins_presence() {
                 .method(Method::GET)
                 .uri("/v1/libraries/presence-auto-join/documents/live.md/blocks")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build anonymous block tree read")?,
         )
         .await
-        .unwrap();
+        .context("send anonymous block tree read")?;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(list_presence(&app, "presence-auto-join").await.len(), 0);
 
@@ -411,15 +411,16 @@ async fn document_read_with_agent_header_auto_joins_presence() {
                 .uri("/v1/libraries/presence-auto-join/documents/live.md/blocks")
                 .header("X-Agent-Id", "agent-r")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build agent block tree read")?,
         )
         .await
-        .unwrap();
+        .context("send agent block tree read")?;
     assert_eq!(response.status(), StatusCode::OK);
     let presence = list_presence(&app, "presence-auto-join").await;
     assert_eq!(presence.len(), 1);
     assert_eq!(presence[0]["agentId"], "agent-r");
     assert_eq!(presence[0]["status"], "waiting");
+    Ok(())
 }
 
 #[tokio::test(start_paused = true)]
