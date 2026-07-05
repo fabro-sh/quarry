@@ -718,7 +718,8 @@ async fn block_transaction_comment_edit_updates_reply_without_changing_root() ->
 }
 
 #[tokio::test]
-async fn block_transaction_comment_reply_targets_open_suggestion_and_edit_updates_reply() {
+async fn block_transaction_comment_reply_targets_open_suggestion_and_edit_updates_reply()
+-> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Make this better.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -802,6 +803,8 @@ async fn block_transaction_comment_reply_targets_open_suggestion_and_edit_update
     assert_eq!(reply["at"], reply_at);
     assert_ne!(reply["editedAt"], Value::Null);
     assert_ne!(reply["editedAt"], reply["at"]);
+
+    Ok(())
 }
 
 #[tokio::test]
