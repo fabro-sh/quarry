@@ -2871,15 +2871,15 @@ async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() -> TestR
 }
 
 #[tokio::test]
-async fn expired_documents_are_gone_and_excluded_from_live_queries() {
-    let root = tempfile::tempdir().unwrap();
+async fn expired_documents_are_gone_and_excluded_from_live_queries() -> TestResult {
+    let root = tempfile::tempdir().context("create expiry tempdir")?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
+    .context("open expiry store")?;
 
     let expired = store
         .create_tmp_document(
@@ -2889,16 +2889,22 @@ async fn expired_documents_are_gone_and_excluded_from_live_queries() {
             TmpTtl::Default,
         )
         .await
-        .unwrap();
+        .context("create expiring tmp document")?;
     let expired_secret = expired.document.path.clone();
     store
         .set_tmp_document_ttl(&expired_secret, Some("2000-01-01T00:00:00Z".to_string()))
         .await
-        .unwrap();
-    let err = store.get_tmp_document(&expired_secret).await.unwrap_err();
+        .context("backdate tmp document TTL")?;
+    let err = store
+        .get_tmp_document(&expired_secret)
+        .await
+        .expect_err("expired tmp document should be gone");
     assert!(matches!(err, QuarryError::Gone(_)));
 
-    let library = store.create_library("ttl").await.unwrap();
+    let library = store
+        .create_library("ttl")
+        .await
+        .context("create TTL library")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -2912,7 +2918,7 @@ async fn expired_documents_are_gone_and_excluded_from_live_queries() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write document before expiring it")?;
     store
         .set_document_ttl(
             &library.slug,
@@ -2920,29 +2926,29 @@ async fn expired_documents_are_gone_and_excluded_from_live_queries() {
             Some("2000-01-01T00:00:00Z".to_string()),
         )
         .await
-        .unwrap();
+        .context("backdate library document TTL")?;
     let err = store
         .get_document(&library.slug, "gone.md")
         .await
-        .unwrap_err();
+        .expect_err("expired library document should be gone");
     assert!(matches!(err, QuarryError::Gone(_)));
     assert!(
         store
             .list_documents(&library.slug, None, None)
             .await
-            .unwrap()
+            .context("list documents after expiry")?
             .is_empty()
     );
 
     store
         .set_document_ttl(&library.slug, "gone.md", None)
         .await
-        .unwrap();
+        .context("clear expired library document TTL")?;
     assert_eq!(
         store
             .get_document(&library.slug, "gone.md")
             .await
-            .unwrap()
+            .context("load library document after clearing TTL")?
             .content,
         b"old"
     );
@@ -2950,8 +2956,9 @@ async fn expired_documents_are_gone_and_excluded_from_live_queries() {
     let err = store
         .set_tmp_document_ttl("expired.md", None)
         .await
-        .unwrap_err();
+        .expect_err("path-like tmp secret should be invalid");
     assert!(matches!(err, QuarryError::InvalidInput(_)));
+    Ok(())
 }
 
 #[tokio::test]
