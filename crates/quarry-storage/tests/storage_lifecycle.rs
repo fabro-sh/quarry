@@ -3079,9 +3079,15 @@ async fn tmp_documents_accept_markdown_media_types_and_normalize_parameters() ->
 }
 
 #[tokio::test]
-async fn tmp_documents_reject_non_markdown_media_types_on_create_and_update() {
-    let root = tempfile::tempdir().unwrap();
-    let store = open_block_store(root.path()).await;
+async fn tmp_documents_reject_non_markdown_media_types_on_create_and_update() -> TestResult {
+    let root = tempfile::tempdir().context("create tmp non-Markdown rejection tempdir")?;
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .context("open tmp non-Markdown rejection store")?;
 
     let error = store
         .create_tmp_document(
@@ -3091,7 +3097,7 @@ async fn tmp_documents_reject_non_markdown_media_types_on_create_and_update() {
             TmpTtl::Default,
         )
         .await
-        .unwrap_err();
+        .expect_err("text/plain tmp create should be rejected");
     assert!(
         matches!(error, QuarryError::UnsupportedMediaType(_)),
         "text/plain should be rejected, got {error:?}"
@@ -3104,7 +3110,7 @@ async fn tmp_documents_reject_non_markdown_media_types_on_create_and_update() {
             TmpTtl::Default,
         )
         .await
-        .unwrap_err();
+        .expect_err("application/json tmp create should be rejected");
     assert!(
         matches!(error, QuarryError::UnsupportedMediaType(_)),
         "application/json should be rejected, got {error:?}"
@@ -3117,7 +3123,7 @@ async fn tmp_documents_reject_non_markdown_media_types_on_create_and_update() {
             TmpTtl::Default,
         )
         .await
-        .unwrap_err();
+        .expect_err("image/png tmp create should be rejected");
     assert!(
         matches!(error, QuarryError::UnsupportedMediaType(_)),
         "image/png should be rejected, got {error:?}"
@@ -3131,7 +3137,7 @@ async fn tmp_documents_reject_non_markdown_media_types_on_create_and_update() {
             TmpTtl::Default,
         )
         .await
-        .unwrap();
+        .context("create valid tmp Markdown document")?;
 
     let error = store
         .put_tmp_document(
@@ -3143,7 +3149,7 @@ async fn tmp_documents_reject_non_markdown_media_types_on_create_and_update() {
             WritePrecondition::IfMatch(valid.version.id.to_string()),
         )
         .await
-        .unwrap_err();
+        .expect_err("text/plain tmp update should be rejected");
     assert!(
         matches!(error, QuarryError::UnsupportedMediaType(_)),
         "text/plain should be rejected, got {error:?}"
@@ -3158,7 +3164,7 @@ async fn tmp_documents_reject_non_markdown_media_types_on_create_and_update() {
             WritePrecondition::IfMatch(valid.version.id.to_string()),
         )
         .await
-        .unwrap_err();
+        .expect_err("application/json tmp update should be rejected");
     assert!(
         matches!(error, QuarryError::UnsupportedMediaType(_)),
         "application/json should be rejected, got {error:?}"
@@ -3173,14 +3179,18 @@ async fn tmp_documents_reject_non_markdown_media_types_on_create_and_update() {
             WritePrecondition::IfMatch(valid.version.id.to_string()),
         )
         .await
-        .unwrap_err();
+        .expect_err("image/png tmp update should be rejected");
     assert!(
         matches!(error, QuarryError::UnsupportedMediaType(_)),
         "image/png should be rejected, got {error:?}"
     );
 
-    let head = store.head_tmp_document(&valid.document.path).await.unwrap();
+    let head = store
+        .head_tmp_document(&valid.document.path)
+        .await
+        .context("load tmp document head after rejected updates")?;
     assert_eq!(head.head_version_id, valid.version.id);
+    Ok(())
 }
 
 #[tokio::test]
