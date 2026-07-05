@@ -3031,9 +3031,15 @@ async fn open_block_store(root: &std::path::Path) -> QuarryStore {
 }
 
 #[tokio::test]
-async fn tmp_documents_accept_markdown_media_types_and_normalize_parameters() {
-    let root = tempfile::tempdir().unwrap();
-    let store = open_block_store(root.path()).await;
+async fn tmp_documents_accept_markdown_media_types_and_normalize_parameters() -> TestResult {
+    let root = tempfile::tempdir().context("create tmp media-type tempdir")?;
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .context("open tmp media-type store")?;
 
     let outcome = store
         .create_tmp_document(
@@ -3043,7 +3049,7 @@ async fn tmp_documents_accept_markdown_media_types_and_normalize_parameters() {
             TmpTtl::Default,
         )
         .await
-        .unwrap();
+        .context("create tmp Markdown document with parameters")?;
 
     assert_eq!(outcome.version.content_type, "text/x-markdown");
     assert_eq!(outcome.version.metadata["content_type"], "text/x-markdown");
@@ -3051,7 +3057,7 @@ async fn tmp_documents_accept_markdown_media_types_and_normalize_parameters() {
         store
             .get_tmp_document(&outcome.document.path)
             .await
-            .unwrap()
+            .context("load tmp Markdown document")?
             .content,
         b"# Scratch\n"
     );
@@ -3064,11 +3070,12 @@ async fn tmp_documents_accept_markdown_media_types_and_normalize_parameters() {
             TmpTtl::Default,
         )
         .await
-        .unwrap();
+        .context("create tmp Markdown document with scalar metadata")?;
     assert_eq!(
         scalar_metadata.version.metadata,
         serde_json::json!({"content_type": "application/markdown"})
     );
+    Ok(())
 }
 
 #[tokio::test]
