@@ -4,6 +4,7 @@
     reason = "tests use unwrap for HTTP and CRDT fixtures"
 )]
 
+use anyhow::Context as _;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
 use quarry_storage::QuarryStore;
@@ -169,60 +170,68 @@ async fn raw_versions(app: &axum::Router, path: &str) -> Value {
 }
 
 #[tokio::test]
-async fn markdown_put_rejects_raw_downgrade_without_opt_in() {
+async fn markdown_put_rejects_raw_downgrade_without_opt_in() -> anyhow::Result<()> {
     let (_root, app, store) = block_test_app().await;
     put_block_markdown(&app, "guide", "# Guide\n\nBody.\n").await;
 
+    let request = Request::builder()
+        .method(Method::PUT)
+        .uri("/v1/libraries/blocks/documents/guide")
+        .header(header::CONTENT_TYPE, "text/plain")
+        .body(Body::from("raw body"))
+        .context("build raw downgrade request")?;
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::PUT)
-                .uri("/v1/libraries/blocks/documents/guide")
-                .header(header::CONTENT_TYPE, "text/plain")
-                .body(Body::from("raw body"))
-                .unwrap(),
-        )
+        .oneshot(request)
         .await
-        .unwrap();
+        .context("send raw downgrade request")?;
     let status = response.status();
     let body = response_json(response).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert!(
         body["error"]
             .as_str()
-            .unwrap()
+            .context("raw downgrade error should be a string")?
             .contains("Markdown block document")
     );
 
-    let document = store.get_document("blocks", "guide").await.unwrap();
+    let document = store
+        .get_document("blocks", "guide")
+        .await
+        .context("load document after rejected raw downgrade")?;
     assert_eq!(document.version.content_type, "text/markdown");
     assert_eq!(
-        String::from_utf8(document.content).unwrap(),
+        String::from_utf8(document.content).context("decode preserved markdown content")?,
         "# Guide\n\nBody.\n"
     );
 
+    let request = Request::builder()
+        .method(Method::PUT)
+        .uri("/v1/libraries/blocks/documents/guide")
+        .header(header::CONTENT_TYPE, "text/plain")
+        .header("x-quarry-allow-document-kind-change", "true")
+        .body(Body::from("raw body"))
+        .context("build explicit raw downgrade request")?;
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::PUT)
-                .uri("/v1/libraries/blocks/documents/guide")
-                .header(header::CONTENT_TYPE, "text/plain")
-                .header("x-quarry-allow-document-kind-change", "true")
-                .body(Body::from("raw body"))
-                .unwrap(),
-        )
+        .oneshot(request)
         .await
-        .unwrap();
+        .context("send explicit raw downgrade request")?;
     assert_eq!(response.status(), StatusCode::OK);
-    let document = store.get_document("blocks", "guide").await.unwrap();
+    let document = store
+        .get_document("blocks", "guide")
+        .await
+        .context("load document after explicit raw downgrade")?;
     assert_eq!(document.version.content_type, "text/plain");
     assert_eq!(document.content, b"raw body".to_vec());
     assert_eq!(
-        store.load_block_tree(&document.id).await.unwrap(),
+        store
+            .load_block_tree(&document.id)
+            .await
+            .context("load block tree after explicit raw downgrade")?,
         Vec::<quarry_collab_codec::BlockRow>::new()
     );
+    Ok(())
 }
 
 /// Phase 7: a version restore on a BlockDocument is a whole-file write
