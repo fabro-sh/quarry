@@ -2299,9 +2299,12 @@ async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() {
 }
 
 #[tokio::test]
-async fn rest_api_marks_ambiguous_links() {
+async fn rest_api_marks_ambiguous_links() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    let library = store.create_library("ambiguous").await.unwrap();
+    let library = store
+        .create_library("ambiguous")
+        .await
+        .context("create ambiguous library")?;
 
     store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -2316,7 +2319,7 @@ async fn rest_api_marks_ambiguous_links() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write first ambiguous link target")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -2330,7 +2333,7 @@ async fn rest_api_marks_ambiguous_links() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write second ambiguous link target")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -2344,36 +2347,37 @@ async fn rest_api_marks_ambiguous_links() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write ambiguous wikilink source")?;
     let app = router(store);
 
     let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/ambiguous/documents/source.md/outgoing-links")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(
+            Method::GET,
+            "/v1/libraries/ambiguous/documents/source.md/outgoing-links",
+        )?)
         .await
-        .unwrap();
+        .context("read ambiguous outgoing links")?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     let link = body["links"]
         .as_array()
-        .unwrap()
+        .context("outgoing links response should include links")?
         .iter()
         .find(|link| link["target_kind"] == "wiki_link" && link["target_text"] == "target")
-        .unwrap();
+        .context("outgoing links should include ambiguous wiki link")?;
     assert_eq!(link["target_path"], Value::Null);
     assert_eq!(link["resolved"], false);
     assert_eq!(link["resolution_status"], "ambiguous");
+    Ok(())
 }
 
 #[tokio::test]
-async fn rest_api_marks_external_links() {
+async fn rest_api_marks_external_links() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    let library = store.create_library("external").await.unwrap();
+    let library = store
+        .create_library("external")
+        .await
+        .context("create external library")?;
 
     store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -2388,31 +2392,29 @@ async fn rest_api_marks_external_links() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write external markdown link source")?;
     let app = router(store);
 
     let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/external/documents/source.md/outgoing-links")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(
+            Method::GET,
+            "/v1/libraries/external/documents/source.md/outgoing-links",
+        )?)
         .await
-        .unwrap();
+        .context("read external outgoing links")?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     let link = body["links"]
         .as_array()
-        .unwrap()
+        .context("outgoing links response should include links")?
         .iter()
         .find(|link| {
             link["target_kind"] == "markdown_link" && link["target_text"] == "https://example.com"
         })
-        .unwrap();
+        .context("outgoing links should include external markdown link")?;
     assert_eq!(link["resolved"], false);
     assert_eq!(link["resolution_status"], "external");
+    Ok(())
 }
 
 #[tokio::test]
