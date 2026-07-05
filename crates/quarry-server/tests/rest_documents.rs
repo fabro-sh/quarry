@@ -1466,7 +1466,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
 }
 
 #[tokio::test]
-async fn version_history_includes_transaction_metadata() {
+async fn version_history_includes_transaction_metadata() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
     let app = router(store);
 
@@ -1478,7 +1478,7 @@ async fn version_history_includes_transaction_metadata() {
             serde_json::json!({"slug":"versionmeta"}),
         ))
         .await
-        .unwrap();
+        .context("create versionmeta library")?;
     assert_eq!(response.status(), StatusCode::CREATED);
 
     let response = app
@@ -1493,10 +1493,12 @@ async fn version_history_includes_transaction_metadata() {
             }),
         ))
         .await
-        .unwrap();
+        .context("create transaction with metadata")?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let body: Value = response_json(response).await;
-    let tx = body["id"].as_str().unwrap();
+    let tx = body["id"]
+        .as_str()
+        .context("transaction create response should include string id")?;
 
     let response = app
         .clone()
@@ -1508,10 +1510,10 @@ async fn version_history_includes_transaction_metadata() {
                 ))
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .body(Body::from("# Meta\n"))
-                .unwrap(),
+                .context("build transaction document PUT request")?,
         )
         .await
-        .unwrap();
+        .context("write document inside transaction")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -1522,7 +1524,7 @@ async fn version_history_includes_transaction_metadata() {
             serde_json::json!({}),
         ))
         .await
-        .unwrap();
+        .context("commit transaction with metadata")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -1531,16 +1533,17 @@ async fn version_history_includes_transaction_metadata() {
                 .method(Method::GET)
                 .uri("/v1/libraries/versionmeta/documents/meta.md/versions")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build version history request")?,
         )
         .await
-        .unwrap();
+        .context("read document version history")?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body[0]["source"], "rest");
     assert_eq!(body[0]["actor"], "Avery");
     assert_eq!(body[0]["message"], "Imported from Git");
     assert_eq!(body[0]["provenance"]["remote"], "origin/main");
+    Ok(())
 }
 
 #[tokio::test]
