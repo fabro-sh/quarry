@@ -604,9 +604,12 @@ async fn projection_observes_store_events_for_cache_invalidation() -> anyhow::Re
 }
 
 #[tokio::test]
-async fn projection_uses_storage_backed_stable_inodes() {
+async fn projection_uses_storage_backed_stable_inodes() -> anyhow::Result<()> {
     let store = test_store().await;
-    let library = store.create_library("notes").await.unwrap();
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -620,23 +623,43 @@ async fn projection_uses_storage_backed_stable_inodes() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write plans/one.md document")?;
     let projection = FuseProjection::open(store.clone(), &library.slug, true)
         .await
-        .unwrap();
-    let dir_inode = projection.attr("plans").await.unwrap().inode;
-    let file_inode = projection.attr("plans/one.md").await.unwrap().inode;
+        .context("open watching projection")?;
+    let dir_inode = projection
+        .attr("plans")
+        .await
+        .context("read plans directory inode")?
+        .inode;
+    let file_inode = projection
+        .attr("plans/one.md")
+        .await
+        .context("read plans/one.md inode")?
+        .inode;
 
     let reopened = FuseProjection::open(store, &library.slug, true)
         .await
-        .unwrap();
+        .context("reopen watching projection")?;
 
     assert_ne!(dir_inode, file_inode);
-    assert_eq!(reopened.attr("plans").await.unwrap().inode, dir_inode);
     assert_eq!(
-        reopened.attr("plans/one.md").await.unwrap().inode,
+        reopened
+            .attr("plans")
+            .await
+            .context("read reopened plans directory inode")?
+            .inode,
+        dir_inode
+    );
+    assert_eq!(
+        reopened
+            .attr("plans/one.md")
+            .await
+            .context("read reopened plans/one.md inode")?
+            .inode,
         file_inode
     );
+    Ok(())
 }
 
 #[tokio::test]
