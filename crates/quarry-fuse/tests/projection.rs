@@ -214,9 +214,12 @@ async fn projection_unlink_then_create_same_path_allocates_new_file_inode() -> a
 }
 
 #[tokio::test]
-async fn projection_truncate_open_replaces_existing_content_on_release() {
+async fn projection_truncate_open_replaces_existing_content_on_release() -> anyhow::Result<()> {
     let store = test_store().await;
-    let library = store.create_library("notes").await.unwrap();
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -230,25 +233,32 @@ async fn projection_truncate_open_replaces_existing_content_on_release() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("seed existing draft")?;
     let projection = FuseProjection::open(store.clone(), &library.slug, false)
         .await
-        .unwrap();
+        .context("open writable projection")?;
 
     let handle = projection
         .open_file_for_write_truncating("drafts/existing.md")
         .await
-        .unwrap();
-    projection.write_handle(handle, 0, b"new").await.unwrap();
-    projection.release_handle(handle).await.unwrap();
+        .context("open existing draft for truncating write")?;
+    projection
+        .write_handle(handle, 0, b"new")
+        .await
+        .context("write replacement content")?;
+    projection
+        .release_handle(handle)
+        .await
+        .context("release truncating write handle")?;
 
     let document = store
         .get_document(&library.slug, "drafts/existing.md")
         .await
-        .unwrap();
+        .context("load rewritten draft")?;
     // Markdown lands via the Phase 4 reconciled write: deterministic
     // normalized export (trailing newline), not raw bytes.
     assert_eq!(document.content, b"new\n");
+    Ok(())
 }
 
 #[tokio::test]
