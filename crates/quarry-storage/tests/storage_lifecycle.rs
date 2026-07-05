@@ -4345,10 +4345,13 @@ async fn block_mutation_state_materializes_rows_for_legacy_written_documents() -
 }
 
 #[tokio::test]
-async fn block_mutation_commit_rejects_open_review_items_with_dead_anchors() {
-    let root = tempfile::tempdir().unwrap();
+async fn block_mutation_commit_rejects_open_review_items_with_dead_anchors() -> TestResult {
+    let root = tempfile::tempdir().context("create dead-anchor mutation tempdir")?;
     let store = open_block_store(root.path()).await;
-    let library = store.create_library("anchors-guard").await.unwrap();
+    let library = store
+        .create_library("anchors-guard")
+        .await
+        .context("create dead-anchor library")?;
     store
         .import_block_document(
             &library.slug,
@@ -4360,11 +4363,11 @@ async fn block_mutation_commit_rejects_open_review_items_with_dead_anchors() {
             WritePrecondition::None,
         )
         .await
-        .unwrap();
+        .context("import anchored block document")?;
     let state = store
         .block_mutation_state(&library.slug, "doc.md", "ctx-1")
         .await
-        .unwrap();
+        .context("load initial dead-anchor state")?;
     store
         .put_block_review_item(NewBlockReviewItem {
             document_id: state.document_id.clone(),
@@ -4382,11 +4385,11 @@ async fn block_mutation_commit_rejects_open_review_items_with_dead_anchors() {
             parent_item_id: None,
         })
         .await
-        .unwrap();
+        .context("put anchored review item")?;
     let state = store
         .block_mutation_state(&library.slug, "doc.md", "ctx-1")
         .await
-        .unwrap();
+        .context("reload dead-anchor state")?;
 
     // Shrinking the text below the anchor without adjusting the open anchor
     // must be rejected: the commit validates the final review set.
@@ -4415,8 +4418,9 @@ async fn block_mutation_commit_rejects_open_review_items_with_dead_anchors() {
             },
         )
         .await
-        .unwrap_err();
+        .expect_err("dead review anchor commit should fail validation");
     assert!(matches!(error, QuarryError::InvalidInput(_)));
+    Ok(())
 }
 
 #[tokio::test]
