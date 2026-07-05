@@ -275,19 +275,41 @@ async fn projection_rejects_writes_when_read_only() {
 }
 
 #[tokio::test]
-async fn projection_tolerates_duplicate_flush_and_release_cleanup() {
+async fn projection_tolerates_duplicate_flush_and_release_cleanup() -> anyhow::Result<()> {
     let store = test_store().await;
-    let library = store.create_library("notes").await.unwrap();
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     let projection = FuseProjection::open(store, &library.slug, false)
         .await
-        .unwrap();
+        .context("open writable projection")?;
 
-    projection.mkdir("drafts").await.unwrap();
-    let handle = projection.create_file("drafts/new.md").await.unwrap();
-    projection.flush_handle(handle).await.unwrap();
-    projection.release_handle(handle).await.unwrap();
-    projection.flush_handle(handle).await.unwrap();
-    projection.release_handle(handle).await.unwrap();
+    projection
+        .mkdir("drafts")
+        .await
+        .context("create drafts directory")?;
+    let handle = projection
+        .create_file("drafts/new.md")
+        .await
+        .context("create new draft")?;
+    projection
+        .flush_handle(handle)
+        .await
+        .context("flush new draft handle")?;
+    projection
+        .release_handle(handle)
+        .await
+        .context("release new draft handle")?;
+    projection
+        .flush_handle(handle)
+        .await
+        .context("flush already released handle")?;
+    projection
+        .release_handle(handle)
+        .await
+        .context("release already released handle")?;
+    Ok(())
 }
 
 #[tokio::test]
