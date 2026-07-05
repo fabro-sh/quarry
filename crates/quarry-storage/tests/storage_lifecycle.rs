@@ -2379,16 +2379,19 @@ async fn inode_paths_are_lookupable_and_moves_keep_inode_identity() -> TestResul
 }
 
 #[tokio::test]
-async fn move_document_can_reuse_deleted_target_path() {
-    let root = tempfile::tempdir().unwrap();
+async fn move_document_can_reuse_deleted_target_path() -> TestResult {
+    let root = tempfile::tempdir().context("create temp dir")?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("notes").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -2402,7 +2405,7 @@ async fn move_document_can_reuse_deleted_target_path() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("put source document")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -2416,21 +2419,21 @@ async fn move_document_can_reuse_deleted_target_path() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("put target document")?;
     let source_inode = store
         .inode_for_path(&library.slug, "drafts/source.md")
         .await
-        .unwrap();
+        .context("load source inode")?;
     let source_document_id = store
         .get_document(&library.slug, "drafts/source.md")
         .await
-        .unwrap()
+        .context("load source document")?
         .id;
 
     store
         .delete_document(&library.slug, "drafts/target.md", DocumentSource::Rest)
         .await
-        .unwrap();
+        .context("delete target document")?;
     store
         .move_document(
             &library.slug,
@@ -2439,19 +2442,19 @@ async fn move_document_can_reuse_deleted_target_path() {
             DocumentSource::Rest,
         )
         .await
-        .unwrap();
+        .context("move source over deleted target path")?;
 
     let document = store
         .get_document(&library.slug, "drafts/target.md")
         .await
-        .unwrap();
+        .context("load moved document")?;
     assert_eq!(document.content, b"source\n");
     assert_eq!(document.id, source_document_id);
     assert_eq!(
         store
             .inode_for_path(&library.slug, "drafts/target.md")
             .await
-            .unwrap(),
+            .context("load moved document inode")?,
         source_inode
     );
     assert!(
@@ -2460,6 +2463,7 @@ async fn move_document_can_reuse_deleted_target_path() {
             .await
             .is_err()
     );
+    Ok(())
 }
 
 #[tokio::test]
