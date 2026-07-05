@@ -502,7 +502,7 @@ async fn block_transaction_marks_and_links_render_in_markdown() -> anyhow::Resul
 }
 
 #[tokio::test]
-async fn block_transaction_comment_lifecycle_projects_from_rows() {
+async fn block_transaction_comment_lifecycle_projects_from_rows() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Discuss this sentence.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -577,6 +577,8 @@ async fn block_transaction_comment_lifecycle_projects_from_rows() {
     .await;
     let review = get_block_review(&app, "doc.md", true).await;
     assert!(review["comments"].as_array().unwrap().is_empty());
+
+    Ok(())
 }
 
 #[tokio::test]
