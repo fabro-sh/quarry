@@ -408,7 +408,7 @@ async fn tmp_markdown_put_replaces_materialized_blocks_and_preserves_ttl() -> an
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn tmp_put_requires_markdown_content_type() {
+async fn tmp_put_requires_markdown_content_type() -> anyhow::Result<()> {
     let (_root, app, store) = block_test_app().await;
     let secret = "0123456789abcdef0123456789abcdef";
 
@@ -420,10 +420,10 @@ async fn tmp_put_requires_markdown_content_type() {
                 .uri(format!("/v1/tmp/documents/{secret}"))
                 .header(header::IF_NONE_MATCH, "*")
                 .body(Body::from("# Draft\n"))
-                .unwrap(),
+                .context("build tmp PUT request without content type")?,
         )
         .await
-        .unwrap();
+        .context("send tmp PUT request without content type")?;
     let status = response.status();
     let body = response_json(response).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
@@ -441,10 +441,10 @@ async fn tmp_put_requires_markdown_content_type() {
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(header::IF_NONE_MATCH, "*")
                 .body(Body::from("# Draft\n"))
-                .unwrap(),
+                .context("build tmp PUT request with form content type")?,
         )
         .await
-        .unwrap();
+        .context("send tmp PUT request with form content type")?;
     let status = response.status();
     let body = response_json(response).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
@@ -462,10 +462,10 @@ async fn tmp_put_requires_markdown_content_type() {
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::IF_NONE_MATCH, "*")
                 .body(Body::from("# Draft\n"))
-                .unwrap(),
+                .context("build tmp PUT request with json content type")?,
         )
         .await
-        .unwrap();
+        .context("send tmp PUT request with json content type")?;
     let status = response.status();
     let body = response_json(response).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
@@ -487,12 +487,15 @@ async fn tmp_put_requires_markdown_content_type() {
                     r#"{"content_type":"text/plain","title":"kept"}"#,
                 )
                 .body(Body::from("# Draft\n"))
-                .unwrap(),
+                .context("build tmp PUT request with markdown content type")?,
         )
         .await
-        .unwrap();
+        .context("send tmp PUT request with markdown content type")?;
     assert_eq!(response.status(), StatusCode::OK);
-    let document = store.get_tmp_document(secret).await.unwrap();
+    let document = store
+        .get_tmp_document(secret)
+        .await
+        .context("read tmp document created by markdown PUT")?;
     assert_eq!(document.version.content_type, "application/markdown");
     assert_eq!(
         document.version.metadata,
@@ -500,6 +503,7 @@ async fn tmp_put_requires_markdown_content_type() {
     );
     let blocks = get_tmp_block_tree(&app, secret).await;
     assert_eq!(blocks["blocks"][0]["text"], "Draft");
+    Ok(())
 }
 
 #[cfg(feature = "tmp-documents")]
