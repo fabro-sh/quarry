@@ -490,22 +490,32 @@ async fn projection_rename_file_over_existing_file_replaces_target() -> anyhow::
 }
 
 #[tokio::test]
-async fn projection_empty_directories_survive_reopening() {
+async fn projection_empty_directories_survive_reopening() -> anyhow::Result<()> {
     let store = test_store().await;
-    let library = store.create_library("notes").await.unwrap();
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     let projection = FuseProjection::open(store.clone(), &library.slug, false)
         .await
-        .unwrap();
+        .context("open writable projection")?;
 
-    projection.mkdir("drafts").await.unwrap();
+    projection
+        .mkdir("drafts")
+        .await
+        .context("create empty drafts directory")?;
 
     let reopened = FuseProjection::open(store, &library.slug, false)
         .await
-        .unwrap();
-    let root_entries = reopened.list_dir("").await.unwrap();
+        .context("reopen writable projection")?;
+    let root_entries = reopened
+        .list_dir("")
+        .await
+        .context("list reopened projection root")?;
     assert_eq!(root_entries.len(), 1);
     assert_eq!(root_entries[0].name, "drafts");
     assert_eq!(root_entries[0].kind, FuseNodeKind::Directory);
+    Ok(())
 }
 
 #[tokio::test]
