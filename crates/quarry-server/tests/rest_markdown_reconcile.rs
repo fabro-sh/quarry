@@ -666,17 +666,25 @@ async fn markdown_put_merges_against_the_if_match_base_preserving_ids_and_anchor
 }
 
 #[tokio::test]
-async fn markdown_put_overlapping_edits_become_conflict_review_items() {
+async fn markdown_put_overlapping_edits_become_conflict_review_items() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "clash.md", "# Title\n\nAlpha.\n\nBravo.\n").await;
     let tree = get_block_tree(&app, "clash.md").await;
-    let base_clock = tree["document_clock"].as_str().unwrap().to_string();
+    let base_clock = tree["document_clock"]
+        .as_str()
+        .context("block tree should include document clock")?
+        .to_string();
     let ids: Vec<String> = tree["blocks"]
         .as_array()
-        .unwrap()
+        .context("block tree should include block array")?
         .iter()
-        .map(|block| block["block_id"].as_str().unwrap().to_string())
-        .collect();
+        .map(|block| {
+            block["block_id"]
+                .as_str()
+                .context("block should include block_id")
+                .map(ToString::to_string)
+        })
+        .collect::<anyhow::Result<_>>()?;
     let base_export = get_document_markdown(&app, "clash.md").await;
 
     commit_block_transaction(
@@ -704,7 +712,7 @@ async fn markdown_put_overlapping_edits_become_conflict_review_items() {
                 .unwrap(),
         )
         .await
-        .unwrap();
+        .context("put overlapping stale markdown merge")?;
     assert_eq!(
         response.status(),
         StatusCode::OK,
@@ -718,12 +726,15 @@ async fn markdown_put_overlapping_edits_become_conflict_review_items() {
     );
     // …and the losing hunk rides in a conflict review item.
     let review = get_block_review(&app, "clash.md", false).await;
-    let conflicts = review["conflicts"].as_array().unwrap();
+    let conflicts = review["conflicts"]
+        .as_array()
+        .context("review should include conflicts array")?;
     assert_eq!(conflicts.len(), 1);
     assert_eq!(conflicts[0]["afterBlockId"].as_str(), Some(ids[1].as_str()));
     assert_eq!(conflicts[0]["incomingMarkdown"], "Bravo, external.\n");
     assert_eq!(conflicts[0]["baseMarkdown"], "Bravo.\n");
     assert_eq!(conflicts[0]["canonicalMarkdown"], "Bravo, canonical.\n");
+    Ok(())
 }
 
 #[tokio::test(flavor = "current_thread")]
