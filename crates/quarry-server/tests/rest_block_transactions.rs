@@ -864,7 +864,8 @@ async fn block_transaction_comment_edit_rejects_non_open_comments() -> anyhow::R
 }
 
 #[tokio::test]
-async fn block_transaction_suggestion_accept_applies_replacement_and_resolves() {
+async fn block_transaction_suggestion_accept_applies_replacement_and_resolves() -> anyhow::Result<()>
+{
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Make this better.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -951,6 +952,8 @@ async fn block_transaction_suggestion_accept_applies_replacement_and_resolves() 
     )
     .await;
     assert_typed_error(status, &body, "SUGGESTION_ALREADY_RESOLVED", false);
+
+    Ok(())
 }
 
 #[tokio::test]
