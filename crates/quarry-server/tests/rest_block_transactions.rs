@@ -1194,7 +1194,7 @@ async fn delete_block_orphans_comments_and_invalidates_suggestions() -> anyhow::
     Ok(())
 }
 #[tokio::test]
-async fn block_transaction_duplicate_client_tx_id_replays_the_original_ack() {
+async fn block_transaction_duplicate_client_tx_id_replays_the_original_ack() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Idempotent.\n").await;
     get_block_tree(&app, "doc.md").await;
@@ -1221,6 +1221,8 @@ async fn block_transaction_duplicate_client_tx_id_replays_the_original_ack() {
         get_document_markdown(&app, "doc.md").await,
         "Idempotent.\n\nAppended.\n"
     );
+
+    Ok(())
 }
 
 #[tokio::test]
