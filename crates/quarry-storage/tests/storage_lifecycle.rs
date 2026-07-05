@@ -2098,16 +2098,19 @@ async fn dropped_store_removes_lock_file() -> TestResult {
 }
 
 #[tokio::test]
-async fn paths_are_normalized_reserved_paths_rejected_and_keys_case_sensitive() {
-    let root = tempfile::tempdir().unwrap();
+async fn paths_are_normalized_reserved_paths_rejected_and_keys_case_sensitive() -> TestResult {
+    let root = tempfile::tempdir().context("create path-normalization tempdir")?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("paths").await.unwrap();
+    .context("open path-normalization store")?;
+    let library = store
+        .create_library("paths")
+        .await
+        .context("create paths library")?;
 
     store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -2122,7 +2125,7 @@ async fn paths_are_normalized_reserved_paths_rejected_and_keys_case_sensitive() 
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write uppercase-path document")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -2136,13 +2139,13 @@ async fn paths_are_normalized_reserved_paths_rejected_and_keys_case_sensitive() 
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write lowercase-path document")?;
 
     assert_eq!(
         store
             .get_document(&library.slug, "Notes/Plan.md")
             .await
-            .unwrap()
+            .context("load uppercase-path document")?
             .content,
         b"upper"
     );
@@ -2150,7 +2153,7 @@ async fn paths_are_normalized_reserved_paths_rejected_and_keys_case_sensitive() 
         store
             .get_document(&library.slug, "notes/plan.md")
             .await
-            .unwrap()
+            .context("load lowercase-path document")?
             .content,
         b"lower"
     );
@@ -2167,8 +2170,9 @@ async fn paths_are_normalized_reserved_paths_rejected_and_keys_case_sensitive() 
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap_err();
+        .expect_err("reserved path should be rejected");
     assert!(error.to_string().contains("reserved"));
+    Ok(())
 }
 
 #[tokio::test]
