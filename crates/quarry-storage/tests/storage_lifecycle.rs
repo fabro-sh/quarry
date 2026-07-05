@@ -1533,16 +1533,20 @@ async fn explicit_transactions_publish_atomically_and_rollback_staged_cas() -> T
 }
 
 #[tokio::test]
-async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_newer_writes() {
-    let root = tempfile::tempdir().unwrap();
+async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_newer_writes()
+-> TestResult {
+    let root = tempfile::tempdir()?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("txraces").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("txraces")
+        .await
+        .context("create library")?;
 
     let base = store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -1557,7 +1561,7 @@ async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_new
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write base document")?;
     let tx = store
         .begin_transaction(
             &library.slug,
@@ -1567,7 +1571,7 @@ async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_new
             serde_json::json!({}),
         )
         .await
-        .unwrap();
+        .context("begin stale put transaction")?;
     store
         .stage_put(
             &tx.id,
@@ -1577,7 +1581,7 @@ async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_new
             "text/markdown",
         )
         .await
-        .unwrap();
+        .context("stage stale put")?;
     let newer = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -1591,7 +1595,7 @@ async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_new
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write newer document")?;
 
     let error = store.commit_transaction(&tx.id).await.unwrap_err();
 
@@ -1599,11 +1603,14 @@ async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_new
     let visible = store
         .get_document(&library.slug, "docs/a.md")
         .await
-        .unwrap();
+        .context("load visible document after rejected stale put")?;
     assert_eq!(visible.content, b"newer");
     assert_eq!(visible.version.id, newer.version.id);
 
-    store.rollback_transaction(&tx.id).await.unwrap();
+    store
+        .rollback_transaction(&tx.id)
+        .await
+        .context("rollback rejected stale put transaction")?;
 
     store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -1618,7 +1625,7 @@ async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_new
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write source document")?;
     let move_tx = store
         .begin_transaction(
             &library.slug,
@@ -1628,11 +1635,11 @@ async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_new
             serde_json::json!({}),
         )
         .await
-        .unwrap();
+        .context("begin stale move transaction")?;
     store
         .stage_move(&move_tx.id, "docs/source.md", "docs/target.md")
         .await
-        .unwrap();
+        .context("stage stale move")?;
     let target = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -1646,7 +1653,7 @@ async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_new
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write competing target document")?;
 
     let error = store.commit_transaction(&move_tx.id).await.unwrap_err();
 
@@ -1655,16 +1662,17 @@ async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_new
         store
             .get_document(&library.slug, "docs/source.md")
             .await
-            .unwrap()
+            .context("load source document after rejected stale move")?
             .content,
         b"source"
     );
     let visible_target = store
         .get_document(&library.slug, "docs/target.md")
         .await
-        .unwrap();
+        .context("load target document after rejected stale move")?;
     assert_eq!(visible_target.content, b"target winner");
     assert_eq!(visible_target.version.id, target.version.id);
+    Ok(())
 }
 
 #[tokio::test]
