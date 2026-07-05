@@ -738,7 +738,7 @@ async fn markdown_put_overlapping_edits_become_conflict_review_items() -> anyhow
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn whole_file_writes_log_a_reconcile_outcome() {
+async fn whole_file_writes_log_a_reconcile_outcome() -> anyhow::Result<()> {
     let (logs, _guard) = capture_debug_logs();
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "obs.md", "Alpha.\n").await;
@@ -755,6 +755,7 @@ async fn whole_file_writes_log_a_reconcile_outcome() {
         output.contains("result=merged"),
         "the outcome log should classify the merge:\n{output}"
     );
+    Ok(())
 }
 
 #[tokio::test(flavor = "current_thread")]
