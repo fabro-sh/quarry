@@ -941,7 +941,7 @@ async fn byte_identical_markdown_put_commits_no_new_version() -> anyhow::Result<
 }
 
 #[tokio::test]
-async fn markdown_put_with_critic_markup_fails_typed_unsupported() {
+async fn markdown_put_with_critic_markup_fails_typed_unsupported() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     let response = app
         .clone()
@@ -951,11 +951,12 @@ async fn markdown_put_with_critic_markup_fails_typed_unsupported() {
                 .uri("/v1/libraries/blocks/documents/critic.md")
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .body(Body::from("Some {++inserted++} text.\n"))
-                .unwrap(),
+                .context("build critic markup markdown put request")?,
         )
         .await
-        .unwrap();
+        .context("send critic markup markdown put request")?;
     let status = response.status();
     let body = response_json(response).await;
     assert_typed_error(status, &body, "UNSUPPORTED_MARKDOWN", false);
+    Ok(())
 }
