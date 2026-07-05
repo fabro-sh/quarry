@@ -1408,7 +1408,8 @@ async fn block_transaction_unsupported_markdown_rolls_back() -> anyhow::Result<(
 }
 
 #[tokio::test]
-async fn block_transaction_multi_op_failure_rolls_back_the_whole_transaction() {
+async fn block_transaction_multi_op_failure_rolls_back_the_whole_transaction() -> anyhow::Result<()>
+{
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Atomic.\n").await;
     let before = get_block_tree(&app, "doc.md").await;
@@ -1430,6 +1431,8 @@ async fn block_transaction_multi_op_failure_rolls_back_the_whole_transaction() {
     assert_eq!(get_document_markdown(&app, "doc.md").await, "Atomic.\n");
     assert_eq!(get_block_tree(&app, "doc.md").await, before);
     assert_eq!(raw_version_count(&app, "doc.md").await, versions_before);
+
+    Ok(())
 }
 
 #[tokio::test]
