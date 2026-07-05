@@ -529,9 +529,12 @@ async fn rest_api_supports_documents_transactions_etags_and_openapi() -> anyhow:
 }
 
 #[tokio::test]
-async fn collab_share_endpoints_mint_list_and_revoke_invite_tokens() {
+async fn collab_share_endpoints_mint_list_and_revoke_invite_tokens() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    let library = store.create_library("shares").await.unwrap();
+    let library = store
+        .create_library("shares")
+        .await
+        .context("create shares library")?;
     let written = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -545,7 +548,7 @@ async fn collab_share_endpoints_mint_list_and_revoke_invite_tokens() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write share target document")?;
     let app = router(store);
 
     let response = app
@@ -556,13 +559,16 @@ async fn collab_share_endpoints_mint_list_and_revoke_invite_tokens() {
             serde_json::json!({"role":"editor","byHint":"Avery"}),
         ))
         .await
-        .unwrap();
+        .context("mint share token request")?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let token: Value = response_json(response).await;
     assert_eq!(token["document_id"], written.document.id.as_str());
     assert_eq!(token["role"], "editor");
     assert_eq!(token["by_hint"], "Avery");
-    let token_id = token["id"].as_str().unwrap().to_string();
+    let token_id = token["id"]
+        .as_str()
+        .context("minted token response should include string id")?
+        .to_string();
 
     let response = app
         .clone()
@@ -571,13 +577,16 @@ async fn collab_share_endpoints_mint_list_and_revoke_invite_tokens() {
                 .method(Method::GET)
                 .uri("/v1/libraries/shares/documents/live.md/share")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build list share tokens request")?,
         )
         .await
-        .unwrap();
+        .context("list share tokens request")?;
     assert_eq!(response.status(), StatusCode::OK);
     let tokens: Value = response_json(response).await;
-    assert_eq!(tokens.as_array().unwrap().len(), 1);
+    let tokens = tokens
+        .as_array()
+        .context("list share tokens response should be an array")?;
+    assert_eq!(tokens.len(), 1);
     assert_eq!(tokens[0]["id"], token_id);
 
     let response = app
@@ -587,11 +596,12 @@ async fn collab_share_endpoints_mint_list_and_revoke_invite_tokens() {
             serde_json::json!({}),
         ))
         .await
-        .unwrap();
+        .context("revoke share token request")?;
     assert_eq!(response.status(), StatusCode::OK);
     let token: Value = response_json(response).await;
     assert_eq!(token["id"], token_id);
     assert_json_timestamp(&token["revoked_at"]);
+    Ok(())
 }
 
 #[tokio::test]
