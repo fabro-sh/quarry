@@ -690,16 +690,19 @@ async fn explicit_transaction_recreate_same_path_uses_new_document_identity() ->
 }
 
 #[tokio::test]
-async fn autosave_tagged_writes_keep_raw_versions_but_group_history() {
-    let root = tempfile::tempdir().unwrap();
+async fn autosave_tagged_writes_keep_raw_versions_but_group_history() -> TestResult {
+    let root = tempfile::tempdir()?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("autosavehistory").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("autosavehistory")
+        .await
+        .context("create library")?;
     let transaction = || TransactionMetadata {
         actor: Some("browser".to_string()),
         message: Some("Autosaved edits".to_string()),
@@ -721,7 +724,7 @@ async fn autosave_tagged_writes_keep_raw_versions_but_group_history() {
             transaction: transaction(),
         })
         .await
-        .unwrap();
+        .context("create first autosave version")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -735,22 +738,23 @@ async fn autosave_tagged_writes_keep_raw_versions_but_group_history() {
             transaction: transaction(),
         })
         .await
-        .unwrap();
+        .context("create second autosave version")?;
 
     let raw = store
         .raw_version_history(&library.slug, "notes/daily.md")
         .await
-        .unwrap();
+        .context("load raw version history")?;
     let grouped = store
         .version_history(&library.slug, "notes/daily.md")
         .await
-        .unwrap();
+        .context("load grouped version history")?;
 
     assert_eq!(raw.len(), 2);
     assert_eq!(grouped.len(), 1);
     assert_eq!(grouped[0].raw_version_count, 2);
     assert_eq!(grouped[0].latest_version_id, raw[0].id);
     assert_eq!(grouped[0].earliest_version_id, raw[1].id);
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
