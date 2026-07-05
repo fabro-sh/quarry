@@ -913,7 +913,7 @@ async fn dismissed_conflict_marker_flags_stay_dismissed() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn byte_identical_markdown_put_commits_no_new_version() {
+async fn byte_identical_markdown_put_commits_no_new_version() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "noop.md", "Alpha.\n").await;
     let _ = get_block_tree(&app, "noop.md").await; // materialize + normalize
@@ -928,15 +928,16 @@ async fn byte_identical_markdown_put_commits_no_new_version() {
                 .uri("/v1/libraries/blocks/documents/noop.md")
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .body(Body::from(content.clone()))
-                .unwrap(),
+                .context("build byte-identical markdown put request")?,
         )
         .await
-        .unwrap();
+        .context("send byte-identical markdown put request")?;
     assert_eq!(response.status(), StatusCode::OK);
     let outcome = response_json(response).await;
     assert!(outcome["version"]["id"].is_string());
     assert_eq!(raw_version_count(&app, "noop.md").await, versions_before);
     assert_eq!(get_document_markdown(&app, "noop.md").await, content);
+    Ok(())
 }
 
 #[tokio::test]
