@@ -810,7 +810,7 @@ async fn markdown_put_with_conflict_markers_flags_a_review_item() -> anyhow::Res
 }
 
 #[tokio::test]
-async fn first_import_with_conflict_markers_flags_a_review_item() {
+async fn first_import_with_conflict_markers_flags_a_review_item() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
 
     put_block_markdown(
@@ -821,9 +821,12 @@ async fn first_import_with_conflict_markers_flags_a_review_item() {
     .await;
 
     let review = get_block_review(&app, "soup-new.md", false).await;
-    let conflicts = review["conflicts"].as_array().unwrap();
+    let conflicts = review["conflicts"]
+        .as_array()
+        .context("review should include conflicts array")?;
     assert_eq!(conflicts.len(), 1);
     assert_eq!(conflicts[0]["incomingMarkdown"], CONFLICT_MARKER_SOUP);
+    Ok(())
 }
 
 #[tokio::test]
