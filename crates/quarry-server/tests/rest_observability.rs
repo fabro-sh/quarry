@@ -153,7 +153,7 @@ async fn request_tracing_redacts_tmp_capability_paths_without_redacting_library_
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test(flavor = "current_thread")]
-async fn tmp_sse_logging_redacts_capability_path() {
+async fn tmp_sse_logging_redacts_capability_path() -> anyhow::Result<()> {
     let (logs, _guard) = capture_debug_logs();
     let (_root, app, _store) = document_test_app().await;
 
@@ -168,11 +168,17 @@ async fn tmp_sse_logging_redacts_capability_path() {
             }),
         ))
         .await
-        .unwrap();
+        .context("create tmp document for SSE log redaction test")?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let created: Value = response_json(response).await;
-    let secret = created["document"]["path"].as_str().unwrap().to_string();
-    let document_id = created["document"]["id"].as_str().unwrap().to_string();
+    let secret = created["document"]["path"]
+        .as_str()
+        .context("tmp create response should include document path")?
+        .to_string();
+    let document_id = created["document"]["id"]
+        .as_str()
+        .context("tmp create response should include document id")?
+        .to_string();
 
     logs.clear();
     let response = app
@@ -182,10 +188,10 @@ async fn tmp_sse_logging_redacts_capability_path() {
                 .method(Method::GET)
                 .uri(format!("/v1/tmp/documents/{secret}/events/stream"))
                 .body(Body::empty())
-                .unwrap(),
+                .context("build tmp SSE stream request for log redaction test")?,
         )
         .await
-        .unwrap();
+        .context("send tmp SSE stream request for log redaction test")?;
     assert_eq!(response.status(), StatusCode::OK);
     let output = logs.output();
     assert!(
@@ -200,4 +206,5 @@ async fn tmp_sse_logging_redacts_capability_path() {
         output.contains("scope=tmp") && output.contains(&document_id),
         "tmp SSE logs should keep scope and document id diagnostics:\n{output}"
     );
+    Ok(())
 }
