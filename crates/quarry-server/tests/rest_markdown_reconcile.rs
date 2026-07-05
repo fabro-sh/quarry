@@ -487,7 +487,7 @@ async fn comment_reply_on_a_conflict_item_is_anchor_not_found() -> anyhow::Resul
 }
 
 #[tokio::test]
-async fn document_start_conflicts_anchor_null_and_delete_dismisses_them() {
+async fn document_start_conflicts_anchor_null_and_delete_dismisses_them() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "conf-start.md", "Alpha.\n").await;
     let _ = get_block_tree(&app, "conf-start.md").await;
@@ -510,7 +510,10 @@ async fn document_start_conflicts_anchor_null_and_delete_dismisses_them() {
     let conflict = &review["conflicts"][0];
     assert!(conflict["afterBlockId"].is_null());
     assert_eq!(conflict["canonicalMarkdown"], "");
-    let conflict_id = conflict["id"].as_str().unwrap().to_string();
+    let conflict_id = conflict["id"]
+        .as_str()
+        .context("conflict should include id")?
+        .to_string();
 
     // comment.delete removes the conflict row outright.
     commit_block_transaction(
@@ -523,7 +526,14 @@ async fn document_start_conflicts_anchor_null_and_delete_dismisses_them() {
     )
     .await;
     let review = get_block_review(&app, "conf-start.md", true).await;
-    assert_eq!(review["conflicts"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        review["conflicts"]
+            .as_array()
+            .context("review should include conflicts array")?
+            .len(),
+        0
+    );
+    Ok(())
 }
 
 #[tokio::test]
