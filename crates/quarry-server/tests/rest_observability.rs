@@ -4,6 +4,7 @@
     reason = "tests use unwrap for HTTP and CRDT fixtures"
 )]
 
+use anyhow::Context as _;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use serde_json::Value;
@@ -14,7 +15,7 @@ mod common;
 use common::{capture_debug_logs, document_test_app, json_request, response_json};
 
 #[tokio::test]
-async fn rest_api_attaches_and_preserves_request_ids() {
+async fn rest_api_attaches_and_preserves_request_ids() -> anyhow::Result<()> {
     let (_root, app, _store) = document_test_app().await;
 
     let first = app
@@ -24,19 +25,19 @@ async fn rest_api_attaches_and_preserves_request_ids() {
                 .method(Method::GET)
                 .uri("/v1/health")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build first health check request")?,
         )
         .await
-        .unwrap();
+        .context("send first health check request")?;
     assert_eq!(first.status(), StatusCode::OK);
     let first_id = first
         .headers()
         .get("x-quarry-request-id")
-        .expect("response should include a generated request id")
+        .context("response should include a generated request id")?
         .to_str()
-        .unwrap()
+        .context("generated request id should be valid header text")?
         .to_string();
-    uuid::Uuid::parse_str(&first_id).expect("generated request id should be a UUID");
+    uuid::Uuid::parse_str(&first_id).context("generated request id should be a UUID")?;
 
     let second = app
         .clone()
@@ -45,18 +46,18 @@ async fn rest_api_attaches_and_preserves_request_ids() {
                 .method(Method::GET)
                 .uri("/v1/health")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build second health check request")?,
         )
         .await
-        .unwrap();
+        .context("send second health check request")?;
     let second_id = second
         .headers()
         .get("x-quarry-request-id")
-        .expect("response should include a generated request id")
+        .context("response should include a generated request id")?
         .to_str()
-        .unwrap()
+        .context("generated request id should be valid header text")?
         .to_string();
-    uuid::Uuid::parse_str(&second_id).expect("generated request id should be a UUID");
+    uuid::Uuid::parse_str(&second_id).context("generated request id should be a UUID")?;
     assert_ne!(first_id, second_id);
 
     let supplied = "req-from-client";
@@ -67,11 +68,12 @@ async fn rest_api_attaches_and_preserves_request_ids() {
                 .uri("/v1/health")
                 .header("x-quarry-request-id", supplied)
                 .body(Body::empty())
-                .unwrap(),
+                .context("build health check request with supplied request id")?,
         )
         .await
-        .unwrap();
+        .context("send health check request with supplied request id")?;
     assert_eq!(response.headers()["x-quarry-request-id"], supplied);
+    Ok(())
 }
 
 #[cfg(feature = "tmp-documents")]
