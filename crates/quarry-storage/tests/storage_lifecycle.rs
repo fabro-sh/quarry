@@ -2222,16 +2222,19 @@ async fn visible_writes_emit_in_process_store_events() -> TestResult {
 }
 
 #[tokio::test]
-async fn document_mutation_events_include_origin_and_document_identity() {
-    let root = tempfile::tempdir().unwrap();
+async fn document_mutation_events_include_origin_and_document_identity() -> TestResult {
+    let root = tempfile::tempdir().context("create temp dir")?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("origin-events").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("origin-events")
+        .await
+        .context("create origin-events library")?;
     let mut events = store.subscribe_events();
 
     let write = store
@@ -2247,12 +2250,12 @@ async fn document_mutation_events_include_origin_and_document_identity() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
-    let event = events.recv().await.unwrap();
+        .context("put document with origin")?;
+    let event = events.recv().await.context("receive document put event")?;
     assert_eq!(event.kind(), StoreEventKind::DocumentPut);
     assert_eq!(event.doc_id(), Some(write.document.id.as_str()));
     assert_eq!(event.origin_id(), Some("browser:origin-1"));
-    let _links = events.recv().await.unwrap();
+    let _links = events.recv().await.context("receive put links event")?;
 
     store
         .move_document_with_origin(
@@ -2264,12 +2267,12 @@ async fn document_mutation_events_include_origin_and_document_identity() {
             None,
         )
         .await
-        .unwrap();
-    let event = events.recv().await.unwrap();
+        .context("move document with origin")?;
+    let event = events.recv().await.context("receive document move event")?;
     assert_eq!(event.kind(), StoreEventKind::DocumentMove);
     assert_eq!(event.doc_id(), Some(write.document.id.as_str()));
     assert_eq!(event.origin_id(), Some("browser:origin-1"));
-    let _links = events.recv().await.unwrap();
+    let _links = events.recv().await.context("receive move links event")?;
 
     store
         .delete_document_with_origin(
@@ -2280,11 +2283,15 @@ async fn document_mutation_events_include_origin_and_document_identity() {
             None,
         )
         .await
-        .unwrap();
-    let event = events.recv().await.unwrap();
+        .context("delete document with origin")?;
+    let event = events
+        .recv()
+        .await
+        .context("receive document delete event")?;
     assert_eq!(event.kind(), StoreEventKind::DocumentDelete);
     assert_eq!(event.doc_id(), Some(write.document.id.as_str()));
     assert_eq!(event.origin_id(), Some("browser:origin-1"));
+    Ok(())
 }
 
 #[tokio::test]
