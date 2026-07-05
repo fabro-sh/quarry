@@ -1023,24 +1023,43 @@ async fn concurrent_canonical_edit_and_fuse_write_converge_with_conflict_items()
 /// RawDocument bypass: bytes round-trip exactly and no block tables are
 /// touched.
 #[tokio::test]
-async fn raw_document_writes_bypass_the_block_model() {
+async fn raw_document_writes_bypass_the_block_model() -> anyhow::Result<()> {
     let store = test_store().await;
-    let library = store.create_library("notes").await.unwrap();
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     let projection = FuseProjection::open(store.clone(), &library.slug, false)
         .await
-        .unwrap();
+        .context("open writable projection")?;
 
     let bytes: Vec<u8> = vec![0, 159, 146, 150, 13, 10, 0];
-    let handle = projection.create_file("data.bin").await.unwrap();
-    projection.write_handle(handle, 0, &bytes).await.unwrap();
-    projection.release_handle(handle).await.unwrap();
+    let handle = projection
+        .create_file("data.bin")
+        .await
+        .context("create raw data.bin file")?;
+    projection
+        .write_handle(handle, 0, &bytes)
+        .await
+        .context("write raw bytes to data.bin handle")?;
+    projection
+        .release_handle(handle)
+        .await
+        .context("release data.bin handle")?;
 
-    let document = store.get_document(&library.slug, "data.bin").await.unwrap();
+    let document = store
+        .get_document(&library.slug, "data.bin")
+        .await
+        .context("load raw data.bin document")?;
     assert_eq!(document.content, bytes);
     assert_eq!(
-        store.load_block_tree(&document.id).await.unwrap(),
+        store
+            .load_block_tree(&document.id)
+            .await
+            .context("load raw data.bin block tree")?,
         Vec::<quarry_storage::BlockRow>::new()
     );
+    Ok(())
 }
 
 /// CriticMarkup is a CONTENT error (the codec rejects it outright), not a
