@@ -607,16 +607,19 @@ async fn put_after_delete_same_path_creates_new_document_identity_and_history() 
 }
 
 #[tokio::test]
-async fn explicit_transaction_recreate_same_path_uses_new_document_identity() {
-    let root = tempfile::tempdir().unwrap();
+async fn explicit_transaction_recreate_same_path_uses_new_document_identity() -> TestResult {
+    let root = tempfile::tempdir()?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("txrecreate").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("txrecreate")
+        .await
+        .context("create library")?;
 
     let first = store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -631,11 +634,11 @@ async fn explicit_transaction_recreate_same_path_uses_new_document_identity() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("create initial document")?;
     store
         .delete_document(&library.slug, "notes/daily.md", DocumentSource::Rest)
         .await
-        .unwrap();
+        .context("delete initial document")?;
 
     let tx = store
         .begin_transaction(
@@ -646,7 +649,7 @@ async fn explicit_transaction_recreate_same_path_uses_new_document_identity() {
             serde_json::json!({}),
         )
         .await
-        .unwrap();
+        .context("begin recreate transaction")?;
     let staged = store
         .stage_put(
             &tx.id,
@@ -656,26 +659,30 @@ async fn explicit_transaction_recreate_same_path_uses_new_document_identity() {
             "text/markdown",
         )
         .await
-        .unwrap();
+        .context("stage recreated document")?;
 
     assert_ne!(staged.document_id, first.document.id);
-    store.commit_transaction(&tx.id).await.unwrap();
+    store
+        .commit_transaction(&tx.id)
+        .await
+        .context("commit recreate transaction")?;
     let recreated = store
         .get_document(&library.slug, "notes/daily.md")
         .await
-        .unwrap();
+        .context("load recreated document")?;
     assert_eq!(recreated.id, staged.document_id);
     assert_eq!(recreated.content, b"new");
     assert_eq!(
         store
             .version_history(&library.slug, "notes/daily.md")
             .await
-            .unwrap()
+            .context("load recreated document history")?
             .iter()
             .map(|version| version.latest_version_id.as_str())
             .collect::<Vec<_>>(),
         vec![staged.id.as_str()]
     );
+    Ok(())
 }
 
 #[tokio::test]
