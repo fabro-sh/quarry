@@ -1,0 +1,70 @@
+name: Docker Multi-Arch Prebuilt Test
+
+on:
+  push:
+    branches:
+      - "codex/test-quarry-docker-multiarch-20260705232101"
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build release artifacts
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-build.yml
+
+  tag:
+    name: Create temporary release tag
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Push temporary tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v0.1.0-gha-docker-test.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git tag "$tag" "$GITHUB_SHA"
+          git push origin "refs/tags/$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  docker:
+    name: Publish test Docker image
+    needs: tag
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release-docker.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
+      prerelease: true
+    secrets: inherit
+
+  cleanup-tag:
+    name: Delete temporary release tag
+    if: always() && needs.tag.outputs.tag != ''
+    needs: [tag, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete temporary tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.tag.outputs.tag }}
+        run: gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}"
