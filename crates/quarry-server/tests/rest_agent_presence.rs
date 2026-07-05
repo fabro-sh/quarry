@@ -1,6 +1,7 @@
 #![cfg(feature = "lib-documents")]
 #![allow(clippy::unwrap_used, reason = "tests use unwrap for HTTP fixtures")]
 
+use anyhow::Context;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
 use quarry_core::DocumentSource;
@@ -19,9 +20,12 @@ fn assert_json_timestamp(value: &Value) {
 }
 
 #[tokio::test]
-async fn agent_presence_records_status_by_document() {
+async fn agent_presence_records_status_by_document() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    let library = store.create_library("presence").await.unwrap();
+    let library = store
+        .create_library("presence")
+        .await
+        .context("create presence library")?;
     let written = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -35,7 +39,7 @@ async fn agent_presence_records_status_by_document() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write live presence document")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -49,8 +53,11 @@ async fn agent_presence_records_status_by_document() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
-    let other_library = store.create_library("presence-other").await.unwrap();
+        .context("write other presence document")?;
+    let other_library = store
+        .create_library("presence-other")
+        .await
+        .context("create second presence library")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: other_library.slug.to_string(),
@@ -64,7 +71,7 @@ async fn agent_presence_records_status_by_document() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write live document in second library")?;
     let app = router(store);
 
     let response = app
@@ -78,10 +85,10 @@ async fn agent_presence_records_status_by_document() {
                 .body(Body::from(
                     serde_json::json!({"status":"thinking","by":"ai:codex"}).to_string(),
                 ))
-                .unwrap(),
+                .context("build first presence POST")?,
         )
         .await
-        .unwrap();
+        .context("send first presence POST")?;
 
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
@@ -102,10 +109,10 @@ async fn agent_presence_records_status_by_document() {
                 .body(Body::from(
                     serde_json::json!({"status":"reading","by":"ai:claude"}).to_string(),
                 ))
-                .unwrap(),
+                .context("build second document presence POST")?,
         )
         .await
-        .unwrap();
+        .context("send second document presence POST")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -119,10 +126,10 @@ async fn agent_presence_records_status_by_document() {
                 .body(Body::from(
                     serde_json::json!({"status":"waiting","by":"ai:codex"}).to_string(),
                 ))
-                .unwrap(),
+                .context("build second library presence POST")?,
         )
         .await
-        .unwrap();
+        .context("send second library presence POST")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -132,16 +139,19 @@ async fn agent_presence_records_status_by_document() {
                 .method(Method::GET)
                 .uri("/v1/libraries/presence/documents/live.md/presence")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build scoped presence GET")?,
         )
         .await
-        .unwrap();
+        .context("send scoped presence GET")?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    let presence = body["presence"].as_array().unwrap();
+    let presence = body["presence"]
+        .as_array()
+        .context("presence response should include an array")?;
     assert_eq!(presence.len(), 1);
     assert_eq!(presence[0]["agentId"], "agent-a");
     assert_eq!(presence[0]["path"], "live.md");
+    Ok(())
 }
 
 #[tokio::test]
