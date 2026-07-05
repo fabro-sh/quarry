@@ -31,9 +31,9 @@ async fn bare_store() -> QuarryStore {
 
 #[cfg(not(target_os = "linux"))]
 #[tokio::test]
-async fn mount_library_with_shutdown_reports_unsupported_on_non_linux() {
+async fn mount_library_with_shutdown_reports_unsupported_on_non_linux() -> anyhow::Result<()> {
     let store = test_store().await;
-    let error = quarry_fuse::mount_library_with_shutdown(
+    let error = match quarry_fuse::mount_library_with_shutdown(
         store,
         "notes",
         std::path::Path::new("/tmp/quarry-mount"),
@@ -41,9 +41,13 @@ async fn mount_library_with_shutdown_reports_unsupported_on_non_linux() {
         async {},
     )
     .await
-    .unwrap_err();
+    {
+        Ok(_) => anyhow::bail!("mounting should be unsupported on non-Linux"),
+        Err(error) => error,
+    };
 
     assert!(matches!(error, quarry_core::QuarryError::Unsupported(_)));
+    Ok(())
 }
 
 #[tokio::test]
