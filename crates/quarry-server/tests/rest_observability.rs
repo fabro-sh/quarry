@@ -78,7 +78,8 @@ async fn rest_api_attaches_and_preserves_request_ids() -> anyhow::Result<()> {
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test(flavor = "current_thread")]
-async fn request_tracing_redacts_tmp_capability_paths_without_redacting_library_paths() {
+async fn request_tracing_redacts_tmp_capability_paths_without_redacting_library_paths()
+-> anyhow::Result<()> {
     let (logs, _guard) = capture_debug_logs();
     let (_root, app, _store) = document_test_app().await;
 
@@ -93,10 +94,13 @@ async fn request_tracing_redacts_tmp_capability_paths_without_redacting_library_
             }),
         ))
         .await
-        .unwrap();
+        .context("create tmp document for request log redaction test")?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let created: Value = response_json(response).await;
-    let secret = created["document"]["path"].as_str().unwrap().to_string();
+    let secret = created["document"]["path"]
+        .as_str()
+        .context("tmp create response should include document path")?
+        .to_string();
 
     logs.clear();
     let response = app
@@ -106,10 +110,10 @@ async fn request_tracing_redacts_tmp_capability_paths_without_redacting_library_
                 .method(Method::GET)
                 .uri(format!("/v1/tmp/documents/{secret}/presence"))
                 .body(Body::empty())
-                .unwrap(),
+                .context("build tmp presence request for request log redaction test")?,
         )
         .await
-        .unwrap();
+        .context("send tmp presence request for request log redaction test")?;
     assert_eq!(response.status(), StatusCode::OK);
     let output = logs.output();
     assert!(
@@ -132,10 +136,10 @@ async fn request_tracing_redacts_tmp_capability_paths_without_redacting_library_
                     "/v1/libraries/missing/documents/{library_secret_like_path}"
                 ))
                 .body(Body::empty())
-                .unwrap(),
+                .context("build library missing-document request for request log test")?,
         )
         .await
-        .unwrap();
+        .context("send library missing-document request for request log test")?;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let output = logs.output();
     assert!(
@@ -144,6 +148,7 @@ async fn request_tracing_redacts_tmp_capability_paths_without_redacting_library_
         )),
         "ordinary library paths should remain visible in request logs:\n{output}"
     );
+    Ok(())
 }
 
 #[cfg(feature = "tmp-documents")]
