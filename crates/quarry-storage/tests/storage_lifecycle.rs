@@ -4424,13 +4424,13 @@ async fn block_mutation_commit_rejects_open_review_items_with_dead_anchors() -> 
 }
 
 #[tokio::test]
-async fn block_mutation_commit_accepts_replies_to_collapsed_insertion_suggestions() {
-    let root = tempfile::tempdir().unwrap();
+async fn block_mutation_commit_accepts_replies_to_collapsed_insertion_suggestions() -> TestResult {
+    let root = tempfile::tempdir().context("create collapsed insertion tempdir")?;
     let store = open_block_store(root.path()).await;
     let library = store
         .create_library("insertion-reply-anchor")
         .await
-        .unwrap();
+        .context("create collapsed insertion library")?;
     store
         .import_block_document(
             &library.slug,
@@ -4442,11 +4442,11 @@ async fn block_mutation_commit_accepts_replies_to_collapsed_insertion_suggestion
             WritePrecondition::None,
         )
         .await
-        .unwrap();
+        .context("import collapsed insertion document")?;
     let state = store
         .block_mutation_state(&library.slug, "doc.md", "ctx-1")
         .await
-        .unwrap();
+        .context("load collapsed insertion mutation state")?;
     let block_id = state.rows[0].block_id.clone();
     let now = "2026-06-16T00:00:00.000Z".to_string();
     let insertion_suggestion = BlockReviewItem {
@@ -4509,14 +4509,15 @@ async fn block_mutation_commit_accepts_replies_to_collapsed_insertion_suggestion
             },
         )
         .await
-        .unwrap();
+        .context("commit collapsed insertion reply mutation")?;
     assert!(matches!(outcome, BlockMutationOutcome::Applied { .. }));
 
     let items = store
         .list_block_review_items(&state.document_id)
         .await
-        .unwrap();
+        .context("list collapsed insertion review items")?;
     assert!(items.iter().any(|item| item.id == "r1"));
+    Ok(())
 }
 
 /// `put_block_review_item` accepts the gateway's conflict shape (Phase 4):
