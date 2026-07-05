@@ -2155,10 +2155,16 @@ async fn agent_review_matches_snapshot_errors_for_missing_and_non_markdown() -> 
 }
 
 #[tokio::test]
-async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() {
+async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    let library = store.create_library("actions").await.unwrap();
-    store.create_library("other").await.unwrap();
+    let library = store
+        .create_library("actions")
+        .await
+        .context("create actions library")?;
+    store
+        .create_library("other")
+        .await
+        .context("create other library")?;
     let written = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -2172,7 +2178,7 @@ async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write source action document")?;
     let sibling = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -2186,7 +2192,7 @@ async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write conflict sibling document")?;
     let conflict = store
         .record_conflict(
             &library.slug,
@@ -2195,7 +2201,7 @@ async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() {
             Some(sibling.version.id.to_string()),
         )
         .await
-        .unwrap();
+        .context("record action document conflict")?;
     let app = router(store);
 
     let response = app
@@ -2206,7 +2212,7 @@ async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() {
             serde_json::json!({"to_path":"b.md"}),
         ))
         .await
-        .unwrap();
+        .context("move action document")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -2217,7 +2223,7 @@ async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() {
             serde_json::json!({"reviewed":true}),
         ))
         .await
-        .unwrap();
+        .context("patch moved document metadata")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -2228,49 +2234,36 @@ async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() {
             serde_json::json!({"wrong":true}),
         ))
         .await
-        .unwrap();
+        .context("send invalid direct document patch")?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/actions/documents/b.md")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(
+            Method::GET,
+            "/v1/libraries/actions/documents/b.md",
+        )?)
         .await
-        .unwrap();
+        .context("read moved action document")?;
     assert_eq!(response.status(), StatusCode::OK);
 
+    let actions_conflict_uri = format!("/v1/libraries/actions/conflicts/{}", conflict.id);
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!("/v1/libraries/actions/conflicts/{}", conflict.id))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(Method::GET, &actions_conflict_uri)?)
         .await
-        .unwrap();
+        .context("read action conflict by id")?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body["id"], conflict.id);
     assert_eq!(body["conflict_path"], "a.conflict.md");
 
+    let other_conflict_uri = format!("/v1/libraries/other/conflicts/{}", conflict.id);
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!("/v1/libraries/other/conflicts/{}", conflict.id))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(Method::GET, &other_conflict_uri)?)
         .await
-        .unwrap();
+        .context("read action conflict through wrong library")?;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let response = app
@@ -2281,7 +2274,7 @@ async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() {
             serde_json::json!({}),
         ))
         .await
-        .unwrap();
+        .context("resolve action conflict through wrong library")?;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let response = app
@@ -2291,11 +2284,12 @@ async fn rest_api_supports_move_metadata_and_conflict_lookup_endpoints() {
             serde_json::json!({}),
         ))
         .await
-        .unwrap();
+        .context("resolve action conflict")?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body["status"], "resolved");
     assert_json_timestamp(&body["resolved_at"]);
+    Ok(())
 }
 
 #[tokio::test]
