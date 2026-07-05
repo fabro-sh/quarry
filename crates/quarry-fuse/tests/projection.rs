@@ -415,9 +415,12 @@ async fn projection_renames_unlinks_and_removes_empty_directories() -> anyhow::R
 }
 
 #[tokio::test]
-async fn projection_rename_file_over_existing_file_replaces_target() {
+async fn projection_rename_file_over_existing_file_replaces_target() -> anyhow::Result<()> {
     let store = test_store().await;
-    let library = store.create_library("notes").await.unwrap();
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -431,7 +434,7 @@ async fn projection_rename_file_over_existing_file_replaces_target() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("seed current draft")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -445,21 +448,25 @@ async fn projection_rename_file_over_existing_file_replaces_target() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("seed temporary draft")?;
     let projection = FuseProjection::open(store.clone(), &library.slug, false)
         .await
-        .unwrap();
+        .context("open writable projection")?;
     let target_id = store
         .head_document(&library.slug, "drafts/current.md")
         .await
-        .unwrap()
+        .context("load target document head")?
         .id;
-    let target_inode = projection.attr("drafts/current.md").await.unwrap().inode;
+    let target_inode = projection
+        .attr("drafts/current.md")
+        .await
+        .context("stat current draft before rename")?
+        .inode;
 
     projection
         .rename("drafts/.current.md.tmp", "drafts/current.md")
         .await
-        .unwrap();
+        .context("rename temporary draft over current draft")?;
 
     // Phase 4: renaming over a markdown document is a whole-file write to
     // the TARGET — its identity (document id, inode) survives and the temp
@@ -467,14 +474,19 @@ async fn projection_rename_file_over_existing_file_replaces_target() {
     let document = store
         .get_document(&library.slug, "drafts/current.md")
         .await
-        .unwrap();
+        .context("load current draft after rename")?;
     assert_eq!(document.content, b"new\n");
     assert_eq!(document.id, target_id);
     assert_eq!(
-        projection.attr("drafts/current.md").await.unwrap().inode,
+        projection
+            .attr("drafts/current.md")
+            .await
+            .context("stat current draft after rename")?
+            .inode,
         target_inode
     );
     assert!(projection.attr("drafts/.current.md.tmp").await.is_err());
+    Ok(())
 }
 
 #[tokio::test]
