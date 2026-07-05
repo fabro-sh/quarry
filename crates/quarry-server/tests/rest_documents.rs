@@ -2516,7 +2516,8 @@ async fn rest_api_supports_transaction_metadata_patch_and_move() -> anyhow::Resu
 }
 
 #[tokio::test]
-async fn rest_api_rejects_stale_transaction_commit_with_precondition_failed() {
+async fn rest_api_rejects_stale_transaction_commit_with_precondition_failed() -> anyhow::Result<()>
+{
     let (_root, store) = open_test_store().await;
     let app = router(store);
 
@@ -2528,7 +2529,7 @@ async fn rest_api_rejects_stale_transaction_commit_with_precondition_failed() {
             serde_json::json!({"slug":"txpreconditions"}),
         ))
         .await
-        .unwrap();
+        .context("create txpreconditions library through REST")?;
     assert_eq!(response.status(), StatusCode::CREATED);
 
     let response = app
@@ -2539,10 +2540,10 @@ async fn rest_api_rejects_stale_transaction_commit_with_precondition_failed() {
                 .uri("/v1/libraries/txpreconditions/documents/docs/a.md")
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .body(Body::from("base"))
-                .unwrap(),
+                .context("build base document PUT request")?,
         )
         .await
-        .unwrap();
+        .context("write base txpreconditions document")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -2553,25 +2554,26 @@ async fn rest_api_rejects_stale_transaction_commit_with_precondition_failed() {
             serde_json::json!({}),
         ))
         .await
-        .unwrap();
+        .context("begin txpreconditions transaction")?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let body: Value = response_json(response).await;
-    let tx = body["id"].as_str().unwrap();
+    let tx = body["id"]
+        .as_str()
+        .context("transaction create response should include id")?;
 
+    let staged_uri = format!("/v1/libraries/txpreconditions/transactions/{tx}/documents/docs/a.md");
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method(Method::PUT)
-                .uri(format!(
-                    "/v1/libraries/txpreconditions/transactions/{tx}/documents/docs/a.md"
-                ))
+                .uri(staged_uri)
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .body(Body::from("staged"))
-                .unwrap(),
+                .context("build staged transaction document PUT request")?,
         )
         .await
-        .unwrap();
+        .context("stage txpreconditions document update")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -2582,10 +2584,10 @@ async fn rest_api_rejects_stale_transaction_commit_with_precondition_failed() {
                 .uri("/v1/libraries/txpreconditions/documents/docs/a.md")
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .body(Body::from("newer"))
-                .unwrap(),
+                .context("build newer document PUT request")?,
         )
         .await
-        .unwrap();
+        .context("write newer txpreconditions document outside transaction")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -2596,24 +2598,23 @@ async fn rest_api_rejects_stale_transaction_commit_with_precondition_failed() {
             serde_json::json!({}),
         ))
         .await
-        .unwrap();
+        .context("commit stale txpreconditions transaction")?;
     assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
 
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/txpreconditions/documents/docs/a.md")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(
+            Method::GET,
+            "/v1/libraries/txpreconditions/documents/docs/a.md",
+        )?)
         .await
-        .unwrap();
+        .context("read txpreconditions document after stale commit")?;
     assert_eq!(response.status(), StatusCode::OK);
     // Normalized by the Phase 4 reconciled markdown write.
     assert_eq!(
-        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .context("read txpreconditions response body")?,
         "newer\n"
     );
 
@@ -2624,8 +2625,9 @@ async fn rest_api_rejects_stale_transaction_commit_with_precondition_failed() {
             serde_json::json!({}),
         ))
         .await
-        .unwrap();
+        .context("rollback stale txpreconditions transaction")?;
     assert_eq!(response.status(), StatusCode::OK);
+    Ok(())
 }
 
 #[tokio::test]
