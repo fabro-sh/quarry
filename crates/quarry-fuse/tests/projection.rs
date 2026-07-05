@@ -361,9 +361,12 @@ async fn projection_keeps_handle_truncate_and_later_writes_in_one_publication() 
 }
 
 #[tokio::test]
-async fn projection_renames_unlinks_and_removes_empty_directories() {
+async fn projection_renames_unlinks_and_removes_empty_directories() -> anyhow::Result<()> {
     let store = test_store().await;
-    let library = store.create_library("notes").await.unwrap();
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -377,17 +380,23 @@ async fn projection_renames_unlinks_and_removes_empty_directories() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("seed old draft")?;
     let projection = FuseProjection::open(store.clone(), &library.slug, false)
         .await
-        .unwrap();
+        .context("open writable projection")?;
 
     projection
         .rename("drafts/old.md", "drafts/new.md")
         .await
-        .unwrap();
-    projection.unlink("drafts/new.md").await.unwrap();
-    projection.rmdir("drafts").await.unwrap();
+        .context("rename draft through projection")?;
+    projection
+        .unlink("drafts/new.md")
+        .await
+        .context("unlink renamed draft")?;
+    projection
+        .rmdir("drafts")
+        .await
+        .context("remove empty drafts directory")?;
 
     assert!(
         store
@@ -395,7 +404,14 @@ async fn projection_renames_unlinks_and_removes_empty_directories() {
             .await
             .is_err()
     );
-    assert!(projection.list_dir("").await.unwrap().is_empty());
+    assert!(
+        projection
+            .list_dir("")
+            .await
+            .context("list projection root")?
+            .is_empty()
+    );
+    Ok(())
 }
 
 #[tokio::test]
