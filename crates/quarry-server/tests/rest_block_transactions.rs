@@ -1042,7 +1042,8 @@ async fn block_transaction_suggestion_reject_resolves_without_changing_text() ->
 }
 
 #[tokio::test]
-async fn replace_block_content_orphans_overlapping_comments_and_shifts_suffix_anchors() {
+async fn replace_block_content_orphans_overlapping_comments_and_shifts_suffix_anchors()
+-> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "prefix MIDDLE suffix\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -1096,6 +1097,8 @@ async fn replace_block_content_orphans_overlapping_comments_and_shifts_suffix_an
     assert_eq!(on_suffix["status"], "open");
     assert_eq!(on_suffix["anchor"]["startOffset"], 24);
     assert_eq!(on_suffix["anchor"]["endOffset"], 30);
+
+    Ok(())
 }
 
 #[tokio::test]
