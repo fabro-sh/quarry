@@ -1541,11 +1541,14 @@ async fn orphaned_anchor_survives_a_later_insertion_at_the_orphan_seam() -> anyh
 }
 
 #[tokio::test]
-async fn raw_markdown_attrs_must_keep_the_markdown_key() {
+async fn raw_markdown_attrs_must_keep_the_markdown_key() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "<div>\nopaque\n</div>\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
-    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+    let block_id = tree["blocks"][0]["block_id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("block tree is missing the first block id"))?
+        .to_string();
 
     // Wholesale attrs replacement without the markdown key would silently
     // erase the block's content; it must be rejected instead.
@@ -1603,6 +1606,8 @@ async fn raw_markdown_attrs_must_keep_the_markdown_key() {
         get_document_markdown(&app, "doc.md").await,
         "<div>\nopaque\n</div>\n\n<span>kept</span>\n"
     );
+
+    Ok(())
 }
 
 #[tokio::test]
