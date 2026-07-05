@@ -120,25 +120,44 @@ async fn projection_lists_virtual_directories_and_reads_committed_documents() ->
 }
 
 #[tokio::test]
-async fn projection_coalesces_writes_and_auto_commits_on_release() {
+async fn projection_coalesces_writes_and_auto_commits_on_release() -> anyhow::Result<()> {
     let store = test_store().await;
-    let library = store.create_library("notes").await.unwrap();
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     let projection = FuseProjection::open(store.clone(), &library.slug, false)
         .await
-        .unwrap();
+        .context("open writable projection")?;
 
-    projection.mkdir("drafts").await.unwrap();
-    let handle = projection.create_file("drafts/new.md").await.unwrap();
-    projection.write_handle(handle, 0, b"hello").await.unwrap();
-    projection.write_handle(handle, 5, b"\n").await.unwrap();
-    projection.release_handle(handle).await.unwrap();
+    projection
+        .mkdir("drafts")
+        .await
+        .context("create drafts directory")?;
+    let handle = projection
+        .create_file("drafts/new.md")
+        .await
+        .context("create draft file")?;
+    projection
+        .write_handle(handle, 0, b"hello")
+        .await
+        .context("write draft body")?;
+    projection
+        .write_handle(handle, 5, b"\n")
+        .await
+        .context("append draft newline")?;
+    projection
+        .release_handle(handle)
+        .await
+        .context("release draft file handle")?;
 
     let document = store
         .get_document(&library.slug, "drafts/new.md")
         .await
-        .unwrap();
+        .context("load committed draft document")?;
     assert_eq!(document.content, b"hello\n");
     assert_eq!(document.version.content_type, "text/markdown");
+    Ok(())
 }
 
 #[tokio::test]
