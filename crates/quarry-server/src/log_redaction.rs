@@ -22,6 +22,29 @@ pub(crate) fn redact_tmp_document_identifier(identifier: &str) -> Cow<'_, str> {
     }
 }
 
+/// Replaces any whitespace-delimited token that is a tmp document secret with
+/// [`TMP_SECRET_PLACEHOLDER`]. Storage error `Display` text such as
+/// `not found: <secret>` or `gone: <secret>` embeds the raw capability; this
+/// strips it before the message reaches a log field or an HTTP error body.
+/// Returns the input borrowed and unchanged when it carries no secret.
+pub(crate) fn redact_secret_tokens(message: &str) -> Cow<'_, str> {
+    if !message.split(' ').any(is_tmp_document_secret) {
+        return Cow::Borrowed(message);
+    }
+    let redacted = message
+        .split(' ')
+        .map(|token| {
+            if is_tmp_document_secret(token) {
+                TMP_SECRET_PLACEHOLDER
+            } else {
+                token
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    Cow::Owned(redacted)
+}
+
 fn redact_segment_after_prefix(path: &str, prefix: &str) -> Option<String> {
     let suffix = path.strip_prefix(prefix)?;
     let secret = suffix.get(..TMP_DOCUMENT_SECRET_LEN)?;
@@ -127,5 +150,25 @@ mod tests {
             redact_tmp_document_identifier("scratch/note.txt"),
             "scratch/note.txt"
         );
+    }
+
+    #[test]
+    fn redacts_secret_tokens_in_storage_error_messages() {
+        assert_eq!(
+            redact_secret_tokens(&format!("not found: {SECRET}")),
+            "not found: <tmp-secret>"
+        );
+        assert_eq!(
+            redact_secret_tokens(&format!("gone: {SECRET}")),
+            "gone: <tmp-secret>"
+        );
+    }
+
+    #[test]
+    fn leaves_secret_free_messages_borrowed_and_unchanged() {
+        assert!(matches!(
+            redact_secret_tokens("unsupported media type: text/plain"),
+            Cow::Borrowed("unsupported media type: text/plain")
+        ));
     }
 }

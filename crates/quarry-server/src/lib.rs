@@ -7,6 +7,7 @@ mod discovery;
 mod document_handlers;
 mod error;
 mod gateway;
+#[cfg(feature = "lib-documents")]
 mod git_handlers;
 mod headers;
 mod journal;
@@ -31,13 +32,12 @@ use assets::{browser_asset, browser_ui_bundle_embedded};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::extract::{MatchedPath, Request};
-use axum::http::{HeaderMap, HeaderValue};
+use axum::http::{HeaderMap, HeaderValue, header};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::{get, post, put};
 use discovery::{agent_discovery, agent_docs, quarry_skill};
 pub use error::{ApiError, ErrorResponse};
-use git_handlers::{GitExportRequest, GitImportRequest, GitPeerRequest};
 pub(crate) use headers::{
     agent_id_from_headers_or_body, bytes_response_with_expiry, content_type,
     insert_document_headers, json_response, json_with_etag, metadata_from_headers,
@@ -50,11 +50,10 @@ use library_handlers::CreateLibraryRequest;
 use presence::AgentPresenceRegistry;
 use quarry_core::{
     CollabInviteToken, ConflictRecord, DocumentHistoryEntry, DocumentLink, DocumentListEntry,
-    DocumentVersion, DocumentVersionContent, GcReport, GitPeer, GraphEdge, GraphNode,
-    GraphResponse, Library, LinkCollection, QuarryError, ReindexReport, SearchResponse,
-    SearchResult, SearchSuggestion, TransactionRecord, VersionDiff, WriteOutcome,
+    DocumentVersion, DocumentVersionContent, GraphEdge, GraphNode, GraphResponse, Library,
+    LinkCollection, QuarryError, ReindexReport, SearchResponse, SearchResult, SearchSuggestion,
+    TransactionRecord, VersionDiff, WriteOutcome,
 };
-use quarry_git::{GitExportResult, GitImportResult, GitSyncResult};
 use quarry_storage::{DocumentScopeRef, QuarryStore};
 use review::{
     AgentBlockRef, AgentDocumentSnapshot, AgentReviewComment, AgentReviewConflict,
@@ -161,20 +160,73 @@ pub fn router_with_state(state: AppState) -> Router {
         .route("/.well-known/agent.json", get(agent_discovery))
         .route("/v1/health", get(system_handlers::health))
         .route("/v1/capabilities", get(system_handlers::capabilities))
-        .route("/v1/openapi.json", get(system_handlers::openapi_json))
-        .route("/v1/admin/gc", post(system_handlers::admin_gc));
+        .route("/v1/openapi.json", get(system_handlers::openapi_json));
+    let router = install_admin_routes(router);
     let router = install_collab_routes(router);
     let router = install_tmp_document_routes(router);
     let router = install_library_document_routes(router);
     let router = router.fallback(get(browser_asset));
 
     let router = router.layer(middleware::from_fn(request_tracing_middleware));
+    let router = router.layer(middleware::from_fn(security_headers_middleware));
 
     router.with_state(state)
 }
 
+/// Strict Content-Security-Policy for the tmp-only public build. `'unsafe-inline'`
+/// is required for the editor's runtime styles; `connect-src 'self'` covers the
+/// same-origin collab WebSocket and SSE; the strict `frame-src`/`default-src`
+/// deliberately block external media embeds.
+const CONTENT_SECURITY_POLICY: HeaderValue = HeaderValue::from_static(
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+     img-src 'self' data: blob:; connect-src 'self'; frame-src 'none'; \
+     frame-ancestors 'none'; base-uri 'self'",
+);
+
+/// Sets response-hardening headers on every response (handler, fallback, and
+/// error alike) and marks secret-bearing tmp responses uncacheable. Runs as an
+/// outer layer so it also covers the asset fallback and error bodies.
+async fn security_headers_middleware(request: Request, next: Next) -> Response {
+    // A tmp path carries the document secret in the URL, so its responses must
+    // never be cached by shared proxies. `/tmp/` is the SPA shell; `/v1/tmp/`
+    // is the API surface (including inline and error responses).
+    let path = request.uri().path();
+    let is_tmp_path = path.starts_with("/v1/tmp/") || path.starts_with("/tmp/");
+
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(header::CONTENT_SECURITY_POLICY, CONTENT_SECURITY_POLICY);
+    if is_tmp_path {
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    response
+}
+
+/// Installs the `/v1/admin/*` namespace, gated behind the compile-time
+/// `admin-api` feature. The default (public tmp-documents) build omits every
+/// admin route entirely; the whole namespace is unreachable and undocumented.
+/// New admin routes belong here so a single feature gates the group.
+fn install_admin_routes(router: Router<AppState>) -> Router<AppState> {
+    #[cfg(feature = "admin-api")]
+    let router = router.route("/v1/admin/gc", post(system_handlers::admin_gc));
+    router
+}
+
 fn install_collab_routes(router: Router<AppState>) -> Router<AppState> {
-    if !(cfg!(feature = "tmp-documents") || cfg!(feature = "lib-documents")) {
+    // The raw `/v1/collab/{document_id}` route takes an internal id and no
+    // secret, so it serves only library documents. Tmp documents use the
+    // secret-authenticated `/v1/tmp/collab/{secret}/{room}` route instead, and
+    // this route is omitted entirely from the tmp-only build.
+    if !cfg!(feature = "lib-documents") {
         return router;
     }
 
@@ -215,7 +267,7 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
         return router;
     }
 
-    router
+    let router = router
         .route("/v1/events", get(events))
         .route(
             "/v1/libraries",
@@ -277,7 +329,29 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
         .route(
             "/v1/libraries/{library}/transactions/{tx}/rollback",
             post(transaction_handlers::rollback_transaction),
+        );
+    let router = install_git_routes(router);
+    router
+        .route(
+            "/v1/libraries/{library}/conflicts",
+            get(conflicts::list_conflicts),
         )
+        .route(
+            "/v1/libraries/{library}/conflicts/{conflict}",
+            get(conflicts::get_conflict),
+        )
+        .route(
+            "/v1/libraries/{library}/conflicts/{conflict}/resolve",
+            post(conflicts::resolve_conflict),
+        )
+}
+
+/// Installs the `/v1/libraries/{library}/git/*` routes. Git peering pulls in
+/// `quarry-git` (and libgit2), so the whole group compiles only under the
+/// `lib-documents` feature and is absent from the tmp-only build's binary.
+fn install_git_routes(router: Router<AppState>) -> Router<AppState> {
+    #[cfg(feature = "lib-documents")]
+    let router = router
         .route(
             "/v1/libraries/{library}/git/peers",
             get(git_handlers::list_git_peers).post(git_handlers::create_git_peer),
@@ -301,19 +375,8 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
         .route(
             "/v1/libraries/{library}/git/peers/{peer}/sync",
             post(git_handlers::git_sync),
-        )
-        .route(
-            "/v1/libraries/{library}/conflicts",
-            get(conflicts::list_conflicts),
-        )
-        .route(
-            "/v1/libraries/{library}/conflicts/{conflict}",
-            get(conflicts::get_conflict),
-        )
-        .route(
-            "/v1/libraries/{library}/conflicts/{conflict}/resolve",
-            post(conflicts::resolve_conflict),
-        )
+        );
+    router
 }
 
 async fn request_tracing_middleware(request: Request, next: Next) -> Response {
@@ -533,7 +596,6 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         system_handlers::health,
         system_handlers::capabilities,
         system_handlers::openapi_json,
-        system_handlers::admin_gc,
         collab_handlers::collab_websocket_openapi,
         sse::events,
         library_handlers::create_library,
@@ -594,13 +656,6 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         transaction_handlers::stage_delete_document,
         transaction_handlers::commit_transaction,
         transaction_handlers::rollback_transaction,
-        git_handlers::create_git_peer,
-        git_handlers::list_git_peers,
-        git_handlers::git_import,
-        git_handlers::git_export,
-        git_handlers::git_pull,
-        git_handlers::git_push,
-        git_handlers::git_sync,
         conflicts::list_conflicts,
         conflicts::get_conflict,
         conflicts::resolve_conflict
@@ -662,15 +717,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         GraphNode,
         GraphEdge,
         GraphResponse,
-        VersionDiff,
-        GitPeerRequest,
-        GitPeer,
-        GitImportRequest,
-        GitExportRequest,
-        GitImportResult,
-        GitExportResult,
-        GitSyncResult,
-        GcReport
+        VersionDiff
     ))
 )]
 struct ApiDoc;

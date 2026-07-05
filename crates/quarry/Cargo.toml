@@ -12,6 +12,7 @@ workspace = true
 default = ["tmp-documents"]
 tmp-documents = ["quarry-cli/tmp-documents"]
 lib-documents = ["quarry-cli/lib-documents"]
+admin-api = ["quarry-cli/admin-api"]
 
 [[bin]]
 name = "quarry"

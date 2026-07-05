@@ -1,3 +1,4 @@
+use crate::log_redaction::redact_secret_tokens;
 use axum::Json;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -52,12 +53,16 @@ impl IntoResponse for ApiError {
         let status = self.status;
         let message = self.message;
         let reason_code = api_error_reason_code(status);
+        // Logs and 4xx bodies may echo the message, which for tmp documents can
+        // contain the secret (e.g. `not found: <secret>`); redact it everywhere
+        // it crosses the server boundary.
+        let reason = redact_secret_tokens(&message);
         tracing::debug!(
             event = "api.error.returned",
             status = status.as_u16(),
             outcome = "error",
             reason_code,
-            reason = %message,
+            reason = %reason,
             "API error returned"
         );
         if status == StatusCode::PRECONDITION_FAILED {
@@ -66,7 +71,7 @@ impl IntoResponse for ApiError {
                 status = status.as_u16(),
                 outcome = "rejected",
                 reason_code,
-                reason = %message,
+                reason = %reason,
                 "API precondition failed"
             );
         }
@@ -76,11 +81,19 @@ impl IntoResponse for ApiError {
                 status = status.as_u16(),
                 outcome = "busy",
                 reason_code,
-                reason = %message,
+                reason = %reason,
                 "API busy response returned"
             );
         }
-        let mut response = (status, Json(ErrorResponse { error: message })).into_response();
+        // 5xx bodies drop the internal io/storage/git detail entirely and expose
+        // only the reason_code via a generic message; 4xx bodies keep their
+        // client-actionable text with any secret redacted.
+        let body_error = if status.is_server_error() {
+            "internal error".to_string()
+        } else {
+            reason.into_owned()
+        };
+        let mut response = (status, Json(ErrorResponse { error: body_error })).into_response();
         if status == StatusCode::SERVICE_UNAVAILABLE {
             response
                 .headers_mut()

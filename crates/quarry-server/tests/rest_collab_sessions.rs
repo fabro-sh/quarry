@@ -362,6 +362,20 @@ async fn connect_session(addr: std::net::SocketAddr, document_id: &str) -> (WsSo
     (socket, doc)
 }
 
+/// Connects to a tmp document over the secret-authenticated collab route. Tmp
+/// documents are reachable only this way; the raw `/v1/collab/{id}` route
+/// refuses them regardless of the internal id.
+#[cfg(feature = "tmp-documents")]
+async fn connect_tmp_session(addr: std::net::SocketAddr, secret: &str) -> (WsSocket, Doc) {
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/tmp/collab/{secret}/content"))
+            .await
+            .unwrap();
+    let doc = empty_yjs_doc();
+    sync_yjs_doc_from_socket(&mut socket, &doc).await;
+    (socket, doc)
+}
+
 async fn send_local_edit(
     socket: &mut WsSocket,
     doc: &Doc,
@@ -612,7 +626,7 @@ async fn version_restore_lands_in_a_live_session_as_a_collaborator_edit() -> any
 #[tokio::test]
 async fn tmp_markdown_put_lands_in_an_active_session_as_a_collaborator_edit() -> anyhow::Result<()>
 {
-    let (_root, addr, app, store, server) = spawn_session_server().await;
+    let (_root, addr, app, _store, server) = spawn_session_server().await;
     let response = app
         .clone()
         .oneshot(json_request(
@@ -631,9 +645,8 @@ async fn tmp_markdown_put_lands_in_an_active_session_as_a_collaborator_edit() ->
     let secret = created["document"]["path"].as_str().unwrap().to_string();
     let tree = get_tmp_block_tree(&app, &secret).await;
     let clock = tree["document_clock"].as_str().unwrap().to_string();
-    let document_id = store.head_tmp_document(&secret).await.unwrap().id;
 
-    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    let (mut socket, doc) = connect_tmp_session(addr, &secret).await;
     assert_eq!(yjs_plain_text(&doc), "Old first.Old second.");
 
     let response = app
@@ -688,7 +701,7 @@ async fn tmp_session_and_markdown_write_logs_do_not_emit_capability_secret() -> 
     let document_id = store.head_tmp_document(&secret).await.unwrap().id;
 
     logs.clear();
-    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    let (mut socket, doc) = connect_tmp_session(addr, &secret).await;
     assert_eq!(yjs_plain_text(&doc), "Seeded first.Seeded second.");
 
     let response = app

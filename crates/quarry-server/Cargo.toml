@@ -11,7 +11,8 @@ workspace = true
 [features]
 default = ["tmp-documents"]
 tmp-documents = []
-lib-documents = []
+lib-documents = ["dep:quarry-git"]
+admin-api = []
 
 [dependencies]
 axum.workspace = true
@@ -25,7 +26,7 @@ percent-encoding.workspace = true
 pulldown-cmark.workspace = true
 quarry-core = { workspace = true, features = ["openapi"] }
 quarry-collab-codec.workspace = true
-quarry-git.workspace = true
+quarry-git = { workspace = true, optional = true }
 quarry-storage.workspace = true
 regex.workspace = true
 rust-embed = { workspace = true }

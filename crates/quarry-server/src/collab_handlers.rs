@@ -1,3 +1,4 @@
+use crate::session::CollabAccess;
 use crate::{ApiError, AppState};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path, State};
@@ -24,7 +25,7 @@ pub(crate) async fn collab_websocket(
     ws.on_upgrade(move |socket| async move {
         state
             .sessions
-            .serve_socket(document_id, socket, shutdown)
+            .serve_socket(document_id, CollabAccess::LibraryOnly, socket, shutdown)
             .await;
     })
 }
@@ -52,7 +53,12 @@ pub(crate) async fn tmp_collab_websocket(
         .on_upgrade(move |socket| async move {
             state
                 .sessions
-                .serve_socket(document.id.to_string(), socket, shutdown)
+                .serve_socket(
+                    document.id.to_string(),
+                    CollabAccess::TmpAuthorized,
+                    socket,
+                    shutdown,
+                )
                 .await;
         })
         .into_response())

@@ -10,7 +10,33 @@ use quarry_git::{
 use quarry_storage::QuarryStore;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
-use utoipa::ToSchema;
+use utoipa::{OpenApi, ToSchema};
+
+/// OpenAPI fragment for the `lib-documents`-gated `/v1/libraries/{library}/git/*`
+/// namespace. Merged into the served document only when the feature is enabled,
+/// so the tmp-only build neither compiles nor documents these routes.
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        create_git_peer,
+        list_git_peers,
+        git_import,
+        git_export,
+        git_pull,
+        git_push,
+        git_sync
+    ),
+    components(schemas(
+        GitPeer,
+        GitPeerRequest,
+        GitImportRequest,
+        GitExportRequest,
+        GitImportResult,
+        GitExportResult,
+        GitSyncResult
+    ))
+)]
+pub(crate) struct GitApiDoc;
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct GitPeerRequest {

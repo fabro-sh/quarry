@@ -11,15 +11,16 @@ workspace = true
 [features]
 default = ["tmp-documents"]
 tmp-documents = ["quarry-server/tmp-documents"]
-lib-documents = ["quarry-server/lib-documents"]
+lib-documents = ["quarry-server/lib-documents", "dep:quarry-fuse", "dep:quarry-git"]
+admin-api = ["quarry-server/admin-api"]
 
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
 mime_guess.workspace = true
 quarry-core.workspace = true
-quarry-fuse.workspace = true
-quarry-git.workspace = true
+quarry-fuse = { workspace = true, optional = true }
+quarry-git = { workspace = true, optional = true }
 quarry-server = { workspace = true, default-features = false }
 quarry-storage.workspace = true
 serde_json.workspace = true

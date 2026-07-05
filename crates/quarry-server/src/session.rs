@@ -162,6 +162,28 @@ fn awareness_actor(awareness: &Awareness) -> Option<String> {
 // Hub and per-document entries
 // ---------------------------------------------------------------------------
 
+/// Whether a collab socket has proven the capability needed to open a
+/// tmp-scoped document. Tmp documents are secret-in-URL capabilities: only the
+/// secret-authenticated `/v1/tmp/collab/{secret}/{room}` route may seed one.
+/// The raw `/v1/collab/{document_id}` route takes an internal id and carries no
+/// secret, so it must never seed a tmp document — otherwise a leaked or guessed
+/// id would bypass the secret.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CollabAccess {
+    /// Raw-id route: library documents only; a tmp-scoped seed is refused.
+    LibraryOnly,
+    /// Secret-authenticated tmp route: the caller resolved the secret already.
+    TmpAuthorized,
+}
+
+impl CollabAccess {
+    /// Whether a document of `scope` may not be reached at this access level.
+    /// `LibraryOnly` (the secret-less raw route) is refused a tmp document.
+    fn refuses(self, scope: &DocumentScopeRef) -> bool {
+        matches!(self, CollabAccess::LibraryOnly) && matches!(scope, DocumentScopeRef::Tmp)
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct SessionHub {
     entries: Arc<Mutex<HashMap<String, Arc<DocEntry>>>>,
@@ -243,6 +265,7 @@ impl SessionHub {
     pub(crate) async fn serve_socket(
         &self,
         document_id: String,
+        access: CollabAccess,
         socket: WebSocket,
         shutdown: CancellationToken,
     ) {
@@ -251,20 +274,33 @@ impl SessionHub {
         let session = {
             let mut state = entry.state.clone().lock_owned().await;
             let session = match &state.session {
-                Some(session) => session.clone(),
+                Some(session) => {
+                    // Enforce the capability against the cached session too: a
+                    // tmp document seeded via the secret route stays reachable
+                    // by its internal id, and that id is not itself a secret.
+                    if access.refuses(&session.scope) {
+                        tracing::debug!(
+                            event = "collab.session.refused",
+                            %document_id,
+                            reason_code = "tmp_requires_secret",
+                            "collab session refused: tmp document requires the secret-authenticated route"
+                        );
+                        return;
+                    }
+                    session.clone()
+                }
                 None => {
-                    match LiveSession::seed(&self.store, &document_id, entry.state.clone()).await {
+                    match LiveSession::seed(&self.store, &document_id, access, entry.state.clone())
+                        .await
+                    {
                         Ok(Some(session)) => {
                             state.session = Some(session.clone());
                             session
                         }
                         Ok(None) => {
-                            tracing::debug!(
-                                event = "collab.session.refused",
-                                %document_id,
-                                reason_code = "not_a_block_document",
-                                "collab session refused: missing, deleted, or raw document"
-                            );
+                            // `seed` logs the specific refusal reason
+                            // (not a block document, or a tmp document reached
+                            // without the secret).
                             return;
                         }
                         Err(error) => {
@@ -415,11 +451,27 @@ impl LiveSession {
     async fn seed(
         store: &QuarryStore,
         document_id: &str,
+        access: CollabAccess,
         entry_state: Arc<Mutex<DocState>>,
     ) -> Result<Option<Arc<LiveSession>>, QuarryError> {
         let Some(seed) = store.session_seed_state(document_id).await? else {
+            tracing::debug!(
+                event = "collab.session.refused",
+                %document_id,
+                reason_code = "not_a_block_document",
+                "collab session refused: missing, deleted, or raw document"
+            );
             return Ok(None);
         };
+        if access.refuses(&seed.scope) {
+            tracing::debug!(
+                event = "collab.session.refused",
+                %document_id,
+                reason_code = "tmp_requires_secret",
+                "collab session refused: tmp document requires the secret-authenticated route"
+            );
+            return Ok(None);
+        }
         let items: HashMap<String, BlockReviewItem> = seed
             .review_items
             .iter()
