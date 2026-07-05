@@ -2757,7 +2757,7 @@ async fn rest_api_scopes_transaction_routes_to_the_url_library() -> anyhow::Resu
 /// RawDocuments keep the untouched byte path: bytes round-trip exactly and
 /// no block tables are touched.
 #[tokio::test]
-async fn raw_document_put_bypasses_the_block_model_entirely() {
+async fn raw_document_put_bypasses_the_block_model_entirely() -> anyhow::Result<()> {
     let (_root, app, store) = block_test_app().await;
     let bytes: Vec<u8> = vec![0u8, 159, 146, 150, 13, 10, 0];
     let response = app
@@ -2768,17 +2768,24 @@ async fn raw_document_put_bypasses_the_block_model_entirely() {
                 .uri("/v1/libraries/blocks/documents/data.bin")
                 .header(header::CONTENT_TYPE, "application/octet-stream")
                 .body(Body::from(bytes.clone()))
-                .unwrap(),
+                .context("build raw document PUT request")?,
         )
         .await
-        .unwrap();
+        .context("write raw document through REST")?;
     assert_eq!(response.status(), StatusCode::OK);
-    let document = store.get_document("blocks", "data.bin").await.unwrap();
+    let document = store
+        .get_document("blocks", "data.bin")
+        .await
+        .context("read stored raw document")?;
     assert_eq!(document.content, bytes);
     assert_eq!(
-        store.load_block_tree(&document.id).await.unwrap(),
+        store
+            .load_block_tree(&document.id)
+            .await
+            .context("load raw document block projection")?,
         Vec::<quarry_collab_codec::BlockRow>::new()
     );
+    Ok(())
 }
 
 /// A metadata patch is frontmatter-only: it must NOT destroy the block
