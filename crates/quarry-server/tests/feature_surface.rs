@@ -412,7 +412,7 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn tmp_collab_websocket_final_checkpoint_persists_typing() {
+async fn tmp_collab_websocket_final_checkpoint_persists_typing() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
     let state = app_state(store.clone());
     let app = router_with_state(state.clone());
@@ -428,13 +428,18 @@ async fn tmp_collab_websocket_final_checkpoint_persists_typing() {
             }),
         ))
         .await
-        .unwrap();
+        .context("create tmp document for collab checkpoint")?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let created: Value = response_json(response).await;
-    let secret = created["document"]["path"].as_str().unwrap().to_string();
+    let secret = created["document"]["path"]
+        .as_str()
+        .context("tmp create response should include document path")?
+        .to_string();
 
-    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = probe.local_addr().unwrap();
+    let probe = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("bind temporary server probe")?;
+    let addr = probe.local_addr().context("read probe local address")?;
     drop(probe);
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(serve_state_with_shutdown(state, addr, async {
@@ -442,19 +447,25 @@ async fn tmp_collab_websocket_final_checkpoint_persists_typing() {
     }));
     wait_for_server(addr).await;
 
-    let (mut socket, doc) = connect_tmp_session(addr, &secret).await;
+    let (mut socket, doc) = connect_tmp_session(addr, &secret).await?;
     assert_eq!(yjs_plain_text(&doc), "Hello tmp.");
     send_local_edit(&mut socket, &doc, |txn, _root| {
         let block = nth_block_text_in(txn, 0);
         block.insert(txn, 9, " edited");
     })
-    .await;
-    socket.close(None).await.unwrap();
+    .await?;
+    socket
+        .close(None)
+        .await
+        .context("close tmp collab socket")?;
 
-    let markdown = wait_for_tmp_markdown_containing(&app, &secret, "edited").await;
+    let markdown = wait_for_tmp_markdown_containing(&app, &secret, "edited").await?;
     assert_eq!(markdown, "Hello tmp edited.\n");
-    shutdown_tx.send(()).unwrap();
-    server.await.unwrap().unwrap();
+    shutdown_tx
+        .send(())
+        .map_err(|()| anyhow::anyhow!("tmp collab server shutdown receiver dropped"))?;
+    server.await.context("join tmp collab server task")??;
+    Ok(())
 }
 
 #[cfg(feature = "tmp-documents")]
@@ -583,14 +594,17 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() -> a
 }
 
 #[cfg(feature = "tmp-documents")]
-async fn connect_tmp_session(addr: std::net::SocketAddr, secret: &str) -> (WsSocket, Doc) {
+async fn connect_tmp_session(
+    addr: std::net::SocketAddr,
+    secret: &str,
+) -> anyhow::Result<(WsSocket, Doc)> {
     let (mut socket, _) =
         tokio_tungstenite::connect_async(format!("ws://{addr}/v1/tmp/collab/{secret}/content"))
             .await
-            .unwrap();
+            .context("connect tmp collab websocket")?;
     let doc = empty_yjs_doc();
     sync_yjs_doc_from_socket(&mut socket, &doc).await;
-    (socket, doc)
+    Ok((socket, doc))
 }
 
 #[cfg(feature = "tmp-documents")]
@@ -598,7 +612,7 @@ async fn send_local_edit(
     socket: &mut WsSocket,
     doc: &Doc,
     edit: impl FnOnce(&mut yrs::TransactionMut<'_>, &XmlTextRef),
-) {
+) -> anyhow::Result<()> {
     let before = doc.transact().state_vector();
     {
         let mut txn = doc.transact_mut();
@@ -615,8 +629,9 @@ async fn send_local_edit(
                 .into(),
         ))
         .await
-        .unwrap();
+        .context("send local Yjs update")?;
     wait_for_yjs_sync_update(socket, doc).await;
+    Ok(())
 }
 
 #[cfg(feature = "tmp-documents")]
@@ -645,31 +660,33 @@ async fn wait_for_tmp_markdown_containing(
     app: &axum::Router,
     secret: &str,
     needle: &str,
-) -> String {
-    timeout(Duration::from_secs(5), async {
+) -> anyhow::Result<String> {
+    let markdown = timeout(Duration::from_secs(5), async {
         loop {
+            let request = Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/tmp/documents/{secret}"))
+                .body(Body::empty())
+                .context("build tmp markdown polling request")?;
             let response = app
                 .clone()
-                .oneshot(
-                    Request::builder()
-                        .method(Method::GET)
-                        .uri(format!("/v1/tmp/documents/{secret}"))
-                        .body(Body::empty())
-                        .unwrap(),
-                )
+                .oneshot(request)
                 .await
-                .unwrap();
+                .context("poll tmp markdown")?;
             assert_eq!(response.status(), StatusCode::OK);
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            let markdown = String::from_utf8(body.to_vec()).unwrap();
+            let body = to_bytes(response.into_body(), usize::MAX)
+                .await
+                .context("read tmp markdown poll body")?;
+            let markdown = String::from_utf8(body.to_vec()).context("decode tmp markdown body")?;
             if markdown.contains(needle) {
-                break markdown;
+                break Ok::<String, anyhow::Error>(markdown);
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("persisted tmp markdown never contained {needle:?}"))
+    .with_context(|| format!("persisted tmp markdown never contained {needle:?}"))??;
+    Ok(markdown)
 }
 
 #[cfg(feature = "tmp-documents")]
