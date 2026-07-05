@@ -1255,16 +1255,19 @@ async fn ambiguous_short_wikilinks_remain_unresolved() -> TestResult {
 }
 
 #[tokio::test]
-async fn markdown_links_without_document_targets_are_external() {
-    let root = tempfile::tempdir().unwrap();
+async fn markdown_links_without_document_targets_are_external() -> TestResult {
+    let root = tempfile::tempdir()?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("externallinks").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("externallinks")
+        .await
+        .context("create library")?;
 
     store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -1280,12 +1283,12 @@ async fn markdown_links_without_document_targets_are_external() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("create source document with external and broken links")?;
 
     let outgoing = store
         .outgoing_links(&library.slug, "source.md")
         .await
-        .unwrap();
+        .context("load source outgoing links")?;
 
     let external_url = outgoing
         .links
@@ -1293,10 +1296,10 @@ async fn markdown_links_without_document_targets_are_external() {
         .find(|link| {
             link.target_kind == "markdown_link" && link.target_text == "https://example.com"
         })
-        .unwrap();
+        .context("find external URL link")?;
     assert!(!external_url.resolved);
     assert_eq!(
-        serde_json::to_value(external_url).unwrap()["resolution_status"],
+        serde_json::to_value(external_url).context("serialize external URL link")?["resolution_status"],
         "external"
     );
 
@@ -1306,10 +1309,10 @@ async fn markdown_links_without_document_targets_are_external() {
         .find(|link| {
             link.target_kind == "markdown_link" && link.target_anchor.as_deref() == Some("section")
         })
-        .unwrap();
+        .context("find fragment link")?;
     assert!(!fragment.resolved);
     assert_eq!(
-        serde_json::to_value(fragment).unwrap()["resolution_status"],
+        serde_json::to_value(fragment).context("serialize fragment link")?["resolution_status"],
         "external"
     );
 
@@ -1318,12 +1321,13 @@ async fn markdown_links_without_document_targets_are_external() {
         .links
         .iter()
         .find(|link| link.target_kind == "markdown_link" && link.target_text == "gone.md")
-        .unwrap();
+        .context("find broken document link")?;
     assert!(!broken.resolved);
     assert_eq!(
-        serde_json::to_value(broken).unwrap()["resolution_status"],
+        serde_json::to_value(broken).context("serialize broken document link")?["resolution_status"],
         "unresolved"
     );
+    Ok(())
 }
 
 #[tokio::test]
