@@ -1468,11 +1468,14 @@ async fn block_transaction_multi_op_success_commits_one_version() -> anyhow::Res
 }
 
 #[tokio::test]
-async fn orphaned_anchor_survives_a_later_insertion_at_the_orphan_seam() {
+async fn orphaned_anchor_survives_a_later_insertion_at_the_orphan_seam() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "prefix MIDDLE suffix\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
-    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+    let block_id = tree["blocks"][0]["block_id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("block tree is missing the first block id"))?
+        .to_string();
 
     commit_block_transaction(
         &app,
@@ -1533,6 +1536,8 @@ async fn orphaned_anchor_survives_a_later_insertion_at_the_orphan_seam() {
     assert_eq!(review["comments"][0]["status"], "orphaned");
     assert_eq!(review["comments"][0]["anchor"]["startOffset"], 7);
     assert_eq!(review["comments"][0]["anchor"]["endOffset"], 7);
+
+    Ok(())
 }
 
 #[tokio::test]
