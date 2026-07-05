@@ -459,7 +459,7 @@ async fn tmp_collab_websocket_final_checkpoint_persists_typing() {
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
+async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() -> anyhow::Result<()> {
     let (_root, app, _store) = document_test_app().await;
 
     let response = app
@@ -474,14 +474,17 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
             }),
         ))
         .await
-        .unwrap();
+        .context("create tmp document")?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let etag = response.headers()[header::ETAG]
         .to_str()
-        .unwrap()
+        .context("tmp create ETag should be valid header text")?
         .to_string();
     let created: Value = response_json(response).await;
-    let secret = created["document"]["path"].as_str().unwrap().to_string();
+    let secret = created["document"]["path"]
+        .as_str()
+        .context("tmp create response should include document path")?
+        .to_string();
     assert_eq!(secret.len(), 32);
     assert!(
         secret
@@ -491,66 +494,70 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
     assert_eq!(created["document"]["library_id"], Value::Null);
     assert_json_timestamp(&created["document"]["expires_at"]);
 
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri(format!("/v1/tmp/documents/{secret}"))
+        .body(Body::empty())
+        .context("build tmp document read request")?;
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!("/v1/tmp/documents/{secret}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(request)
         .await
-        .unwrap();
+        .context("read tmp document")?;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[header::ETAG], etag);
     assert_eq!(
-        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .context("read tmp document body")?,
         "draft one"
     );
 
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/v1/tmp/documents/scratch/note.txt")
+        .body(Body::empty())
+        .context("build path-like tmp document read request")?;
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/tmp/documents/scratch/note.txt")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(request)
         .await
-        .unwrap();
+        .context("read path-like tmp document")?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
+    let request = Request::builder()
+        .method(Method::PUT)
+        .uri(format!("/v1/tmp/documents/{secret}"))
+        .header(header::IF_MATCH, etag)
+        .header(header::CONTENT_TYPE, "text/markdown")
+        .body(Body::from("draft two"))
+        .context("build tmp document update request")?;
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::PUT)
-                .uri(format!("/v1/tmp/documents/{secret}"))
-                .header(header::IF_MATCH, etag)
-                .header(header::CONTENT_TYPE, "text/markdown")
-                .body(Body::from("draft two"))
-                .unwrap(),
-        )
+        .oneshot(request)
         .await
-        .unwrap();
+        .context("update tmp document")?;
     assert_eq!(response.status(), StatusCode::OK);
 
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri(format!("/v1/tmp/documents/{secret}/versions"))
+        .body(Body::empty())
+        .context("build tmp document versions request")?;
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!("/v1/tmp/documents/{secret}/versions"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(request)
         .await
-        .unwrap();
+        .context("list tmp document versions")?;
     assert_eq!(response.status(), StatusCode::OK);
     let versions = response_json(response).await;
-    assert_eq!(versions.as_array().unwrap().len(), 2);
+    assert_eq!(
+        versions
+            .as_array()
+            .context("tmp versions response should be an array")?
+            .len(),
+        2
+    );
 
     let response = app
         .clone()
@@ -560,22 +567,19 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() {
             serde_json::json!({"expires_at":"2099-01-01T00:00:00Z"}),
         ))
         .await
-        .unwrap();
+        .context("patch tmp document TTL")?;
     assert_eq!(response.status(), StatusCode::OK);
     let ttl = response_json(response).await;
     assert_eq!(ttl["expires_at"], "2099-01-01T00:00:00Z");
 
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::DELETE)
-                .uri(format!("/v1/tmp/documents/{secret}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let request = Request::builder()
+        .method(Method::DELETE)
+        .uri(format!("/v1/tmp/documents/{secret}"))
+        .body(Body::empty())
+        .context("build tmp document delete request")?;
+    let response = app.oneshot(request).await.context("delete tmp document")?;
     assert_eq!(response.status(), StatusCode::OK);
+    Ok(())
 }
 
 #[cfg(feature = "tmp-documents")]
