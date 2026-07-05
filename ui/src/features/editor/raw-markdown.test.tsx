@@ -2,7 +2,8 @@ import { render, screen } from '@testing-library/react';
 import { ParagraphPlugin, Plate, PlateContent, usePlateEditor } from 'platejs/react';
 import { describe, expect, it } from 'vitest';
 
-import { RawMarkdownPlugin, rawMarkdownMdRules, RAW_MARKDOWN_KEY } from './raw-markdown';
+import { rawMarkdownMdRules, RAW_MARKDOWN_KEY } from './raw-markdown';
+import { RawMarkdownPlugin } from './raw-markdown-block';
 
 function Harness() {
   const editor = usePlateEditor({

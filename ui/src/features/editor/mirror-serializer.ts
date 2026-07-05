@@ -28,6 +28,29 @@ export interface MirrorSerializerOptions {
   createRemote?: () => MirrorSerializeRemote | null;
 }
 
+/**
+ * A worker that fails to load (or crashes) never answers Comlink calls, so
+ * the remote's promises would stay pending forever. Racing every call against
+ * the worker's `error` event turns that hang into a rejection, which
+ * `createMirrorSerializer` catches to downgrade to synchronous serialization.
+ */
+export function rejectOnWorkerError(
+  worker: { addEventListener(type: 'error', listener: (event: ErrorEvent) => void): void },
+  remote: MirrorSerializeRemote
+): MirrorSerializeRemote {
+  const failure = new Promise<never>((_, reject) => {
+    worker.addEventListener('error', (event) => {
+      reject(new Error(`mirror serializer worker failed: ${event.message}`));
+    });
+  });
+  // The failure promise outlives individual calls; without a handler of its
+  // own it would surface as an unhandled rejection.
+  failure.catch(() => {});
+  return {
+    serialize: (value, meta) => Promise.race([remote.serialize(value, meta), failure]),
+  };
+}
+
 function createWorkerRemote(): MirrorSerializeRemote | null {
   // jsdom (tests) and any environment without workers use the synchronous
   // fallback; the editor behaves identically, just on the main thread.
@@ -37,9 +60,9 @@ function createWorkerRemote(): MirrorSerializeRemote | null {
       type: 'module',
     });
     const remote = Comlink.wrap<MirrorSerializerWorkerApi>(worker);
-    return {
+    return rejectOnWorkerError(worker, {
       serialize: (value, meta) => remote.serialize(value, meta),
-    };
+    });
   } catch {
     return null;
   }

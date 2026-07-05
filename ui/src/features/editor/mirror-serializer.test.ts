@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { Descendant } from 'platejs';
 
 import { emptyReviewMeta } from '../review/rfm-types';
-import { createMirrorSerializer, type MirrorSerializeRemote } from './mirror-serializer';
+import {
+  createMirrorSerializer,
+  rejectOnWorkerError,
+  type MirrorSerializeRemote,
+} from './mirror-serializer';
 import { serializeMirror } from './mirror-serialize';
 
 const VALUE: Descendant[] = [{ type: 'p', children: [{ text: 'hello mirror' }] }];
@@ -35,6 +39,32 @@ describe('createMirrorSerializer', () => {
 
     expect(await first).toBeNull();
     expect(await second).toContain('hello mirror');
+    serializer.dispose();
+  });
+
+  it('falls back to synchronous serialization when the worker dies before responding', async () => {
+    // A worker that fails to load never answers Comlink calls: the remote
+    // promise stays pending forever, and only the worker's `error` event
+    // reports the failure.
+    const errorListeners: Array<(event: ErrorEvent) => void> = [];
+    const deadWorker = {
+      addEventListener: (_type: 'error', listener: (event: ErrorEvent) => void) => {
+        errorListeners.push(listener);
+      },
+    };
+    const neverSettles: MirrorSerializeRemote = {
+      serialize: () => new Promise(() => {}),
+    };
+    const serializer = createMirrorSerializer({
+      createRemote: () => rejectOnWorkerError(deadWorker, neverSettles),
+    });
+
+    const markdown = serializer.serialize(VALUE, emptyReviewMeta());
+    errorListeners.forEach((listener) =>
+      listener(new ErrorEvent('error', { message: 'document is not defined' }))
+    );
+
+    expect(await markdown).toContain('hello mirror');
     serializer.dispose();
   });
 

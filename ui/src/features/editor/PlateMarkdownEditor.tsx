@@ -174,7 +174,8 @@ import {
 } from '../collab/save-state';
 import { collabDebug } from '../collab/collab-debug';
 import { registerUnloadGuard } from '../collab/unload-guard';
-import { RawMarkdownPlugin, rawMarkdownMdRules } from './raw-markdown';
+import { rawMarkdownMdRules } from './raw-markdown';
+import { RawMarkdownPlugin } from './raw-markdown-block';
 import { serializeMirror } from './mirror-serialize';
 import { getMirrorSerializer } from './mirror-serializer';
 

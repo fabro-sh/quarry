@@ -27,7 +27,7 @@ import { remarkBreakSemantics } from './remark-break-semantics';
 import { remarkInlineMarks } from './remark-inline-marks';
 import { stripPlaceholders } from './image';
 import { applyMermaid, BaseMermaidPlugin, mermaidMdRules } from './mermaid';
-import { RawMarkdownPlugin, rawMarkdownMdRules } from './raw-markdown';
+import { BaseRawMarkdownPlugin, rawMarkdownMdRules } from './raw-markdown';
 import {
   BaseTableCellHeaderPlugin,
   BaseTableCellPlugin,
@@ -73,7 +73,7 @@ export const baseMarkdownPlugins = [
   // Without this plugin + its serialize rule, raw_markdown blocks (the
   // canonical fallback for unrepresentable content) silently vanish from
   // the download/diff mirror.
-  RawMarkdownPlugin,
+  BaseRawMarkdownPlugin,
 ];
 
 export function markdownToPlateValue(markdown: string): PlateValue {
