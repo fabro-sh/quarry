@@ -297,11 +297,14 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() -> anyhow::R
 }
 
 #[tokio::test]
-async fn agent_docs_insert_block_example_commits_as_documented() {
+async fn agent_docs_insert_block_example_commits_as_documented() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "# Title\n\nAlpha.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
-    let clock = tree["document_clock"].as_str().unwrap().to_string();
+    let clock = tree["document_clock"]
+        .as_str()
+        .context("block tree should include document clock")?
+        .to_string();
 
     let response = app
         .clone()
@@ -310,28 +313,31 @@ async fn agent_docs_insert_block_example_commits_as_documented() {
                 .method(Method::GET)
                 .uri("/agent-docs")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build agent docs request")?,
         )
         .await
-        .unwrap();
-    let docs = String::from_utf8(
-        to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap()
-            .to_vec(),
-    )
-    .unwrap();
+        .context("send agent docs request")?;
+    let docs = String::from_utf8(to_bytes(response.into_body(), usize::MAX).await?.to_vec())
+        .context("agent docs should be valid UTF-8")?;
 
     // The example is the curl payload after "Insert a paragraph…": the JSON
     // between `-d '` and the closing `}'` (no single quotes inside JSON).
     let anchor = docs
         .find("Insert a paragraph after the current second block")
-        .expect("docs keep the insert example");
-    let body_start = docs[anchor..].find("-d '").expect("curl -d payload") + anchor + 4;
-    let body_end = docs[body_start..].find("}'").expect("payload terminator") + body_start + 1;
+        .context("docs should keep the insert example")?;
+    let body_start = docs[anchor..]
+        .find("-d '")
+        .context("insert example should include curl -d payload")?
+        + anchor
+        + 4;
+    let body_end = docs[body_start..]
+        .find("}'")
+        .context("insert example should include payload terminator")?
+        + body_start
+        + 1;
     let documented = docs[body_start..body_end].replace("version_124", &clock);
-    let payload: Value = serde_json::from_str(&documented)
-        .unwrap_or_else(|error| panic!("documented example must be valid JSON: {error}"));
+    let payload: Value =
+        serde_json::from_str(&documented).context("documented example must be valid JSON")?;
 
     let response = app
         .clone()
@@ -341,7 +347,7 @@ async fn agent_docs_insert_block_example_commits_as_documented() {
             payload,
         ))
         .await
-        .unwrap();
+        .context("commit documented insert block example")?;
     let status = response.status();
     let ack = response_json(response).await;
     assert_eq!(
@@ -358,4 +364,5 @@ async fn agent_docs_insert_block_example_commits_as_documented() {
         get_document_markdown(&app, "doc.md").await,
         "# Title\n\nAlpha.\n\nA new paragraph.\n"
     );
+    Ok(())
 }
