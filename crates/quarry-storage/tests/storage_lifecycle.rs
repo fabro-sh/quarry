@@ -1179,16 +1179,19 @@ async fn markdown_frontmatter_aliases_participate_in_link_resolution() -> TestRe
 }
 
 #[tokio::test]
-async fn ambiguous_short_wikilinks_remain_unresolved() {
-    let root = tempfile::tempdir().unwrap();
+async fn ambiguous_short_wikilinks_remain_unresolved() -> TestResult {
+    let root = tempfile::tempdir()?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("ambiguouslinks").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("ambiguouslinks")
+        .await
+        .context("create library")?;
 
     store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -1203,7 +1206,7 @@ async fn ambiguous_short_wikilinks_remain_unresolved() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("create alpha target document")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -1217,7 +1220,7 @@ async fn ambiguous_short_wikilinks_remain_unresolved() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("create omega target document")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -1231,23 +1234,24 @@ async fn ambiguous_short_wikilinks_remain_unresolved() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("create source document with ambiguous wikilink")?;
 
     let outgoing = store
         .outgoing_links(&library.slug, "source.md")
         .await
-        .unwrap();
+        .context("load source outgoing links")?;
     let link = outgoing
         .links
         .iter()
         .find(|link| link.target_kind == "wiki_link" && link.target_text == "target")
-        .unwrap();
+        .context("find target wikilink")?;
     assert_eq!(link.target_path, None);
     assert!(!link.resolved);
     assert_eq!(
-        serde_json::to_value(link).unwrap()["resolution_status"],
+        serde_json::to_value(link).context("serialize target wikilink")?["resolution_status"],
         "ambiguous"
     );
+    Ok(())
 }
 
 #[tokio::test]
