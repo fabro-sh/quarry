@@ -458,7 +458,7 @@ async fn block_transaction_set_block_attrs_edits_raw_markdown_blocks() -> anyhow
 }
 
 #[tokio::test]
-async fn block_transaction_marks_and_links_render_in_markdown() {
+async fn block_transaction_marks_and_links_render_in_markdown() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Bold and linked words.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -497,6 +497,8 @@ async fn block_transaction_marks_and_links_render_in_markdown() {
         get_document_markdown(&app, "doc.md").await,
         "Bold and linked words.\n"
     );
+
+    Ok(())
 }
 
 #[tokio::test]
