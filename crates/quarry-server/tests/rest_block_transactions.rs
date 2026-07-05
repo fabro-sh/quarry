@@ -1372,11 +1372,14 @@ async fn block_transaction_typed_reference_errors() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn block_transaction_unsupported_markdown_rolls_back() {
+async fn block_transaction_unsupported_markdown_rolls_back() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "A text paragraph.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
-    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+    let block_id = tree["blocks"][0]["block_id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("block tree is missing the first block id"))?
+        .to_string();
 
     // Nesting a block under a text-bearing leaf produces an unexportable
     // tree (containers carry no inline content).
@@ -1400,6 +1403,8 @@ async fn block_transaction_unsupported_markdown_rolls_back() {
         get_document_markdown(&app, "doc.md").await,
         "A text paragraph.\n"
     );
+
+    Ok(())
 }
 
 #[tokio::test]
