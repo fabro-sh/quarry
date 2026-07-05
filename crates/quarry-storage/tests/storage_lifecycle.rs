@@ -3704,10 +3704,13 @@ async fn block_review_anchors_validate_utf16_boundaries_and_survive_restart() ->
 }
 
 #[tokio::test]
-async fn raw_documents_keep_the_byte_path_untouched() {
-    let root = tempfile::tempdir().unwrap();
+async fn raw_documents_keep_the_byte_path_untouched() -> TestResult {
+    let root = tempfile::tempdir().context("create raw document tempdir")?;
     let store = open_block_store(root.path()).await;
-    let library = store.create_library("raw").await.unwrap();
+    let library = store
+        .create_library("raw")
+        .await
+        .context("create raw document library")?;
     let bytes = vec![0u8, 159, 146, 150, 255, 0, 13, 10];
     let outcome = store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -3722,7 +3725,7 @@ async fn raw_documents_keep_the_byte_path_untouched() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write raw document bytes")?;
 
     assert_eq!(
         quarry_storage::document_kind("assets/data.bin", "application/octet-stream"),
@@ -3748,19 +3751,19 @@ async fn raw_documents_keep_the_byte_path_untouched() {
             WritePrecondition::None,
         )
         .await
-        .unwrap_err();
+        .expect_err("raw document import through block API should fail");
     assert!(matches!(refused, QuarryError::Unsupported(_)));
     let export_refused = store
         .export_block_document(&outcome.document.id)
         .await
-        .unwrap_err();
+        .expect_err("raw document export through block API should fail");
     assert!(matches!(export_refused, QuarryError::Unsupported(_)));
 
     assert!(
         store
             .load_block_tree(&outcome.document.id)
             .await
-            .unwrap()
+            .context("load block tree for raw document before restart")?
             .is_empty()
     );
 
@@ -3771,7 +3774,7 @@ async fn raw_documents_keep_the_byte_path_untouched() {
         reopened
             .get_document(&library.slug, "assets/data.bin")
             .await
-            .unwrap()
+            .context("read raw document bytes after restart")?
             .content,
         bytes
     );
@@ -3779,9 +3782,10 @@ async fn raw_documents_keep_the_byte_path_untouched() {
         reopened
             .load_block_tree(&outcome.document.id)
             .await
-            .unwrap()
+            .context("load block tree for raw document after restart")?
             .is_empty()
     );
+    Ok(())
 }
 
 #[tokio::test]
