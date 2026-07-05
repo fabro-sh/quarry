@@ -3410,10 +3410,13 @@ opaque html
 ";
 
 #[tokio::test]
-async fn imports_block_document_and_exports_stably_across_restart() {
-    let root = tempfile::tempdir().unwrap();
+async fn imports_block_document_and_exports_stably_across_restart() -> TestResult {
+    let root = tempfile::tempdir().context("create block import/export tempdir")?;
     let store = open_block_store(root.path()).await;
-    let library = store.create_library("blocks").await.unwrap();
+    let library = store
+        .create_library("blocks")
+        .await
+        .context("create block import/export library")?;
 
     let outcome = store
         .import_block_document(
@@ -3426,7 +3429,7 @@ async fn imports_block_document_and_exports_stably_across_restart() {
             WritePrecondition::None,
         )
         .await
-        .unwrap();
+        .context("import block document fixture")?;
 
     // Frontmatter lands in document metadata (the existing mechanism)...
     assert_eq!(
@@ -3434,15 +3437,25 @@ async fn imports_block_document_and_exports_stably_across_restart() {
         serde_json::json!({"title": "Plan", "tags": ["alpha", "beta"]})
     );
     // ...and the normalized export is the stored version content.
-    let stored = String::from_utf8(outcome.version.inline_content.clone().unwrap()).unwrap();
+    let stored = String::from_utf8(
+        outcome
+            .version
+            .inline_content
+            .clone()
+            .context("imported block document should store inline content")?,
+    )
+    .context("decode imported block document inline content")?;
     assert_eq!(stored, NORMALIZED_BLOCK_FIXTURE);
     let exported = store
         .export_block_document(&outcome.document.id)
         .await
-        .unwrap();
+        .context("export imported block document")?;
     assert_eq!(exported, NORMALIZED_BLOCK_FIXTURE);
 
-    let tree = store.load_block_tree(&outcome.document.id).await.unwrap();
+    let tree = store
+        .load_block_tree(&outcome.document.id)
+        .await
+        .context("load imported block tree")?;
     let shape: Vec<(&str, bool)> = tree
         .iter()
         .map(|row| (row.block_type.as_str(), row.parent_block_id.is_some()))
@@ -3472,9 +3485,16 @@ async fn imports_block_document_and_exports_stably_across_restart() {
             WritePrecondition::IfMatch(outcome.version.id.to_string()),
         )
         .await
-        .unwrap();
+        .context("reimport normalized block document")?;
     assert_eq!(
-        String::from_utf8(reimported.version.inline_content.clone().unwrap()).unwrap(),
+        String::from_utf8(
+            reimported
+                .version
+                .inline_content
+                .clone()
+                .context("reimported block document should store inline content")?,
+        )
+        .context("decode reimported block document inline content")?,
         NORMALIZED_BLOCK_FIXTURE
     );
 
@@ -3484,23 +3504,24 @@ async fn imports_block_document_and_exports_stably_across_restart() {
     let restarted_tree = reopened
         .load_block_tree(&outcome.document.id)
         .await
-        .unwrap();
+        .context("load block tree after reopening store")?;
     assert_eq!(restarted_tree.len(), tree.len());
     assert_eq!(
         reopened
             .export_block_document(&outcome.document.id)
             .await
-            .unwrap(),
+            .context("export block document after reopening store")?,
         NORMALIZED_BLOCK_FIXTURE
     );
     assert_eq!(
         reopened
             .get_document(&library.slug, "notes/plan.md")
             .await
-            .unwrap()
+            .context("read block document after reopening store")?
             .content,
         NORMALIZED_BLOCK_FIXTURE.as_bytes()
     );
+    Ok(())
 }
 
 #[tokio::test]
