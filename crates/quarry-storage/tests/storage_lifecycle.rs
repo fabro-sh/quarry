@@ -360,16 +360,20 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() -> TestResult {
 }
 
 #[tokio::test]
-async fn legacy_database_with_collab_recovery_states_reopens_cleanly() {
-    let root = tempfile::tempdir().unwrap();
+async fn legacy_database_with_collab_recovery_states_reopens_cleanly() -> TestResult {
+    let root = tempfile::tempdir().context("create legacy schema tempdir")?;
     let db_path = root.path().join("quarry.db");
 
     // A database from before Phase 7 carries the recovery-state table.
-    let db = turso::Builder::new_local(db_path.to_str().unwrap())
-        .build()
-        .await
-        .unwrap();
-    let conn = db.connect().unwrap();
+    let db = turso::Builder::new_local(
+        db_path
+            .to_str()
+            .context("legacy database path should be UTF-8")?,
+    )
+    .build()
+    .await
+    .context("open raw legacy database")?;
+    let conn = db.connect().context("connect raw legacy database")?;
     conn.execute(
         "CREATE TABLE collab_recovery_states(
            document_id TEXT PRIMARY KEY,
@@ -381,13 +385,13 @@ async fn legacy_database_with_collab_recovery_states_reopens_cleanly() {
         (),
     )
     .await
-    .unwrap();
+    .context("create legacy recovery-state table")?;
     conn.execute(
         "INSERT INTO collab_recovery_states VALUES ('doc-1', NULL, x'01', 1, 'now')",
         (),
     )
     .await
-    .unwrap();
+    .context("insert legacy recovery-state row")?;
     drop(conn);
     drop(db);
 
@@ -398,26 +402,37 @@ async fn legacy_database_with_collab_recovery_states_reopens_cleanly() {
         lock_path: None,
     })
     .await
-    .unwrap();
-    store.create_library("legacy").await.unwrap();
+    .context("open store against legacy database")?;
+    store
+        .create_library("legacy")
+        .await
+        .context("create library after legacy migration")?;
     drop(store);
 
-    let db = turso::Builder::new_local(db_path.to_str().unwrap())
-        .build()
-        .await
-        .unwrap();
-    let conn = db.connect().unwrap();
+    let db = turso::Builder::new_local(
+        db_path
+            .to_str()
+            .context("legacy database path should still be UTF-8")?,
+    )
+    .build()
+    .await
+    .context("reopen raw migrated database")?;
+    let conn = db.connect().context("connect migrated database")?;
     let mut rows = conn
         .query(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'collab_recovery_states'",
             (),
         )
         .await
-        .unwrap();
+        .context("query for dropped recovery-state table")?;
     assert!(
-        rows.next().await.unwrap().is_none(),
+        rows.next()
+            .await
+            .context("read recovery-state table query row")?
+            .is_none(),
         "table dropped at open"
     );
+    Ok(())
 }
 
 #[tokio::test]
@@ -491,16 +506,19 @@ async fn manages_stateful_collab_invite_tokens_by_document_id() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn concurrent_auto_commit_writes_publish_without_lost_documents() {
-    let root = tempfile::tempdir().unwrap();
+async fn concurrent_auto_commit_writes_publish_without_lost_documents() -> TestResult {
+    let root = tempfile::tempdir().context("create concurrent write tempdir")?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("concurrent").await.unwrap();
+    .context("open concurrent write store")?;
+    let library = store
+        .create_library("concurrent")
+        .await
+        .context("create concurrent write library")?;
 
     let mut handles = Vec::new();
     for index in 0..32 {
@@ -520,29 +538,33 @@ async fn concurrent_auto_commit_writes_publish_without_lost_documents() {
                     transaction: quarry_storage::TransactionMetadata::default(),
                 })
                 .await
-                .unwrap();
+                .with_context(|| format!("write concurrent document {index}"))?;
+            Ok::<(), anyhow::Error>(())
         }));
     }
 
     for handle in handles {
-        handle.await.unwrap();
+        handle
+            .await
+            .context("concurrent write task should join")??;
     }
 
     let documents = store
         .list_documents(&library.slug, Some("notes/"), Some(100))
         .await
-        .unwrap();
+        .context("list concurrent documents")?;
     assert_eq!(documents.len(), 32);
     for index in 0..32 {
         assert_eq!(
             store
                 .get_document(&library.slug, &format!("notes/{index}.md"))
                 .await
-                .unwrap()
+                .with_context(|| format!("load concurrent document {index}"))?
                 .content,
             format!("document {index}\n").as_bytes()
         );
     }
+    Ok(())
 }
 
 #[tokio::test]
