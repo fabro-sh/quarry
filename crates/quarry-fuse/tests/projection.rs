@@ -567,12 +567,15 @@ async fn projection_updates_directory_metadata_and_preserves_it_on_reopen() -> a
 }
 
 #[tokio::test]
-async fn projection_observes_store_events_for_cache_invalidation() {
+async fn projection_observes_store_events_for_cache_invalidation() -> anyhow::Result<()> {
     let store = test_store().await;
-    let library = store.create_library("notes").await.unwrap();
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     let projection = FuseProjection::open(store.clone(), &library.slug, true)
         .await
-        .unwrap();
+        .context("open watching projection")?;
     let before = projection.invalidation_generation();
 
     store
@@ -588,15 +591,16 @@ async fn projection_observes_store_events_for_cache_invalidation() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write document that should invalidate projection cache")?;
 
     tokio::time::timeout(
         std::time::Duration::from_secs(1),
         projection.wait_for_invalidation_after(before),
     )
     .await
-    .unwrap();
+    .context("wait for projection invalidation")?;
     assert!(projection.invalidation_generation() > before);
+    Ok(())
 }
 
 #[tokio::test]
