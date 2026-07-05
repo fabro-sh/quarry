@@ -3286,9 +3286,16 @@ async fn tmp_documents_enforce_one_mib_canonical_markdown_limit() -> TestResult 
 }
 
 #[tokio::test]
-async fn tmp_block_mutation_rejects_oversized_normalized_markdown_without_moving_head() {
-    let root = tempfile::tempdir().unwrap();
-    let store = open_block_store(root.path()).await;
+async fn tmp_block_mutation_rejects_oversized_normalized_markdown_without_moving_head() -> TestResult
+{
+    let root = tempfile::tempdir().context("create tmp oversized block mutation tempdir")?;
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .context("open tmp oversized block mutation store")?;
     let created = store
         .create_tmp_document(
             b"Original.\n".to_vec(),
@@ -3297,7 +3304,7 @@ async fn tmp_block_mutation_rejects_oversized_normalized_markdown_without_moving
             TmpTtl::Default,
         )
         .await
-        .unwrap();
+        .context("create tmp document before oversized block mutation")?;
     let secret = created.document.path.clone();
     let imported = store
         .import_tmp_block_document(
@@ -3308,11 +3315,11 @@ async fn tmp_block_mutation_rejects_oversized_normalized_markdown_without_moving
             WritePrecondition::IfMatch(created.version.id.to_string()),
         )
         .await
-        .unwrap();
+        .context("import tmp block document before oversized block mutation")?;
     let state = store
         .block_mutation_state_for_scope(&DocumentScopeRef::Tmp, &secret, "oversized-tx")
         .await
-        .unwrap();
+        .context("load tmp block mutation state before oversized commit")?;
     let oversized = "a".repeat(quarry_storage::TMP_DOCUMENT_MARKDOWN_MAX_BYTES + 1);
 
     let error = store
@@ -3338,15 +3345,22 @@ async fn tmp_block_mutation_rejects_oversized_normalized_markdown_without_moving
             },
         )
         .await
-        .unwrap_err();
+        .expect_err("oversized normalized tmp block mutation should be rejected");
 
     assert!(matches!(error, QuarryError::PayloadTooLarge(_)));
-    let head = store.head_tmp_document(&secret).await.unwrap();
+    let head = store
+        .head_tmp_document(&secret)
+        .await
+        .context("load tmp document head after oversized block mutation rejection")?;
     assert_eq!(head.head_version_id, imported.version.id);
     assert_eq!(
-        store.load_block_tree(&state.document_id).await.unwrap(),
+        store
+            .load_block_tree(&state.document_id)
+            .await
+            .context("load block tree after oversized block mutation rejection")?,
         state.rows
     );
+    Ok(())
 }
 
 const BLOCK_FIXTURE: &str = "\
