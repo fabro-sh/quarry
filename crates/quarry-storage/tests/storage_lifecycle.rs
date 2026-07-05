@@ -3909,10 +3909,13 @@ async fn block_shadow_bases_and_block_transactions_roundtrip() -> TestResult {
 }
 
 #[tokio::test]
-async fn legacy_put_clears_the_block_projection_fail_closed() {
-    let root = tempfile::tempdir().unwrap();
+async fn legacy_put_clears_the_block_projection_fail_closed() -> TestResult {
+    let root = tempfile::tempdir().context("create legacy projection tempdir")?;
     let store = open_block_store(root.path()).await;
-    let library = store.create_library("legacy").await.unwrap();
+    let library = store
+        .create_library("legacy")
+        .await
+        .context("create legacy projection library")?;
     let outcome = store
         .import_block_document(
             &library.slug,
@@ -3924,9 +3927,12 @@ async fn legacy_put_clears_the_block_projection_fail_closed() {
             WritePrecondition::None,
         )
         .await
-        .unwrap();
+        .context("import initial block document")?;
     let document_id = outcome.document.id.clone();
-    let block_id = store.load_block_tree(&document_id).await.unwrap()[0]
+    let block_id = store
+        .load_block_tree(&document_id)
+        .await
+        .context("load initial block tree")?[0]
         .block_id
         .clone();
     store
@@ -3946,7 +3952,7 @@ async fn legacy_put_clears_the_block_projection_fail_closed() {
             parent_item_id: None,
         })
         .await
-        .unwrap();
+        .context("put review item before legacy write")?;
 
     // A legacy put bypasses the import path...
     store
@@ -3962,31 +3968,34 @@ async fn legacy_put_clears_the_block_projection_fail_closed() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("put legacy document")?;
 
     // ...so the block projection is dropped rather than serving stale rows.
     assert!(
         store
             .load_block_tree(&document_id)
             .await
-            .unwrap()
+            .context("load dropped block projection")?
             .is_empty()
     );
     assert!(
         store
             .list_block_review_items(&document_id)
             .await
-            .unwrap()
+            .context("list review items after dropped projection")?
             .is_empty()
     );
-    let stale = store.export_block_document(&document_id).await.unwrap_err();
+    let stale = store
+        .export_block_document(&document_id)
+        .await
+        .expect_err("dropped block projection should not export");
     assert!(matches!(stale, QuarryError::NotFound(_)));
     // The byte path still serves the legacy write.
     assert_eq!(
         store
             .get_document(&library.slug, "doc.md")
             .await
-            .unwrap()
+            .context("read legacy byte document")?
             .content,
         b"Rewritten outside the block path.\n"
     );
@@ -4003,11 +4012,15 @@ async fn legacy_put_clears_the_block_projection_fail_closed() {
             WritePrecondition::None,
         )
         .await
-        .unwrap();
+        .context("re-import block document")?;
     assert_eq!(
-        store.export_block_document(&document_id).await.unwrap(),
+        store
+            .export_block_document(&document_id)
+            .await
+            .context("export re-imported block document")?,
         "Imported again.\n"
     );
+    Ok(())
 }
 
 #[tokio::test]
