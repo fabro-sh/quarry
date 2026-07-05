@@ -291,27 +291,44 @@ async fn projection_tolerates_duplicate_flush_and_release_cleanup() {
 }
 
 #[tokio::test]
-async fn projection_keeps_handle_truncate_and_later_writes_in_one_publication() {
+async fn projection_keeps_handle_truncate_and_later_writes_in_one_publication() -> anyhow::Result<()>
+{
     let store = test_store().await;
-    let library = store.create_library("notes").await.unwrap();
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     let projection = FuseProjection::open(store.clone(), &library.slug, false)
         .await
-        .unwrap();
+        .context("open writable projection")?;
 
-    projection.mkdir("drafts").await.unwrap();
-    let handle = projection.create_file("drafts/vim.md").await.unwrap();
-    projection.set_handle_len(handle, 0).await.unwrap();
+    projection
+        .mkdir("drafts")
+        .await
+        .context("create drafts directory")?;
+    let handle = projection
+        .create_file("drafts/vim.md")
+        .await
+        .context("create vim draft")?;
+    projection
+        .set_handle_len(handle, 0)
+        .await
+        .context("truncate vim draft handle")?;
     projection
         .write_handle(handle, 0, b"from-vim\n")
         .await
-        .unwrap();
-    projection.release_handle(handle).await.unwrap();
+        .context("write vim draft content")?;
+    projection
+        .release_handle(handle)
+        .await
+        .context("release vim draft handle")?;
 
     let document = store
         .get_document(&library.slug, "drafts/vim.md")
         .await
-        .unwrap();
+        .context("load published vim draft")?;
     assert_eq!(document.content, b"from-vim\n");
+    Ok(())
 }
 
 #[tokio::test]
