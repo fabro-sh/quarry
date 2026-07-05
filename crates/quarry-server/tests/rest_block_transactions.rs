@@ -1102,7 +1102,7 @@ async fn replace_block_content_orphans_overlapping_comments_and_shifts_suffix_an
 }
 
 #[tokio::test]
-async fn suggestion_invalidated_by_a_content_change_cannot_be_accepted() {
+async fn suggestion_invalidated_by_a_content_change_cannot_be_accepted() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Suggest on this span.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -1153,6 +1153,8 @@ async fn suggestion_invalidated_by_a_content_change_cannot_be_accepted() {
     )
     .await;
     assert_typed_error(status, &body, "SUGGESTION_INVALIDATED", false);
+
+    Ok(())
 }
 
 #[tokio::test]
