@@ -1381,17 +1381,20 @@ async fn link_index_tracks_moves_and_deletes() -> TestResult {
 }
 
 #[tokio::test]
-async fn explicit_transactions_publish_atomically_and_rollback_staged_cas() {
-    let root = tempfile::tempdir().unwrap();
+async fn explicit_transactions_publish_atomically_and_rollback_staged_cas() -> TestResult {
+    let root = tempfile::tempdir()?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
+    .context("open store")?;
 
-    let library = store.create_library("txlib").await.unwrap();
+    let library = store
+        .create_library("txlib")
+        .await
+        .context("create library")?;
     let base = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -1405,7 +1408,7 @@ async fn explicit_transactions_publish_atomically_and_rollback_staged_cas() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write base document")?;
 
     let tx = store
         .begin_transaction(
@@ -1416,7 +1419,7 @@ async fn explicit_transactions_publish_atomically_and_rollback_staged_cas() {
             serde_json::json!({"test": true}),
         )
         .await
-        .unwrap();
+        .context("begin multi-file transaction")?;
     store
         .stage_put(
             &tx.id,
@@ -1426,15 +1429,15 @@ async fn explicit_transactions_publish_atomically_and_rollback_staged_cas() {
             "text/markdown",
         )
         .await
-        .unwrap();
+        .context("stage new document")?;
     store
         .stage_metadata(&tx.id, "docs/a.md", serde_json::json!({"topic":"new"}))
         .await
-        .unwrap();
+        .context("stage metadata update")?;
     store
         .stage_move(&tx.id, "docs/a.md", "docs/b.md")
         .await
-        .unwrap();
+        .context("stage document move")?;
 
     assert!(
         store
@@ -1445,16 +1448,19 @@ async fn explicit_transactions_publish_atomically_and_rollback_staged_cas() {
     let still_visible = store
         .get_document(&library.slug, "docs/a.md")
         .await
-        .unwrap();
+        .context("load base document before commit")?;
     assert_eq!(still_visible.version.id, base.version.id);
     assert_eq!(still_visible.metadata["topic"], "old");
 
-    store.commit_transaction(&tx.id).await.unwrap();
+    store
+        .commit_transaction(&tx.id)
+        .await
+        .context("commit multi-file transaction")?;
     assert_eq!(
         store
             .get_document(&library.slug, "docs/new.md")
             .await
-            .unwrap()
+            .context("load committed new document")?
             .content,
         b"new"
     );
@@ -1467,7 +1473,7 @@ async fn explicit_transactions_publish_atomically_and_rollback_staged_cas() {
     let moved = store
         .get_document(&library.slug, "docs/b.md")
         .await
-        .unwrap();
+        .context("load committed moved document")?;
     assert_eq!(moved.content, b"base");
     assert_eq!(moved.metadata["topic"], "new");
 
@@ -1480,7 +1486,7 @@ async fn explicit_transactions_publish_atomically_and_rollback_staged_cas() {
             serde_json::json!({}),
         )
         .await
-        .unwrap();
+        .context("begin rollback transaction")?;
     store
         .stage_put(
             &rollback_tx.id,
@@ -1490,16 +1496,26 @@ async fn explicit_transactions_publish_atomically_and_rollback_staged_cas() {
             "application/octet-stream",
         )
         .await
-        .unwrap();
-    assert_eq!(store.gc().await.unwrap().removed, 0);
-    store.rollback_transaction(&rollback_tx.id).await.unwrap();
+        .context("stage large document for rollback")?;
+    assert_eq!(
+        store.gc().await.context("run gc before rollback")?.removed,
+        0
+    );
+    store
+        .rollback_transaction(&rollback_tx.id)
+        .await
+        .context("rollback staged transaction")?;
     assert!(
         store
             .get_document(&library.slug, "docs/rolled.bin")
             .await
             .is_err()
     );
-    assert_eq!(store.gc().await.unwrap().removed, 1);
+    assert_eq!(
+        store.gc().await.context("run gc after rollback")?.removed,
+        1
+    );
+    Ok(())
 }
 
 #[tokio::test]
