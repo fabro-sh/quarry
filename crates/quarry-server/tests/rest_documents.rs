@@ -605,9 +605,12 @@ async fn collab_share_endpoints_mint_list_and_revoke_invite_tokens() -> anyhow::
 }
 
 #[tokio::test]
-async fn agent_events_pending_and_ack_expose_sparse_event_signals() {
+async fn agent_events_pending_and_ack_expose_sparse_event_signals() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    store.create_library("eventfallback").await.unwrap();
+    store
+        .create_library("eventfallback")
+        .await
+        .context("create eventfallback library")?;
     let app = router(store);
 
     let response = app
@@ -618,10 +621,10 @@ async fn agent_events_pending_and_ack_expose_sparse_event_signals() {
                 .uri("/v1/libraries/eventfallback/documents/live.md")
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .body(Body::from("hello"))
-                .unwrap(),
+                .context("build document write request")?,
         )
         .await
-        .unwrap();
+        .context("write document before reading pending events")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let pending = timeout(Duration::from_secs(1), async {
@@ -633,27 +636,34 @@ async fn agent_events_pending_and_ack_expose_sparse_event_signals() {
                         .method(Method::GET)
                         .uri("/v1/libraries/eventfallback/events/pending?after=0")
                         .body(Body::empty())
-                        .unwrap(),
+                        .context("build pending events request")?,
                 )
                 .await
-                .unwrap();
+                .context("read pending events")?;
             assert_eq!(response.status(), StatusCode::OK);
             let body: Value = response_json(response).await;
-            if body["events"].as_array().unwrap().iter().any(|event| {
-                event["event"] == "doc.changed"
-                    && event["data"]["path"] == "live.md"
-                    && event["data"]["version_id"]
-                        .as_str()
-                        .is_some_and(|version_id| uuid::Uuid::parse_str(version_id).is_ok())
-            }) {
-                break body;
+            if body["events"]
+                .as_array()
+                .context("pending events response should include events array")?
+                .iter()
+                .any(|event| {
+                    event["event"] == "doc.changed"
+                        && event["data"]["path"] == "live.md"
+                        && event["data"]["version_id"]
+                            .as_str()
+                            .is_some_and(|version_id| uuid::Uuid::parse_str(version_id).is_ok())
+                })
+            {
+                break Ok::<_, anyhow::Error>(body);
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .unwrap();
-    let event_id = pending["nextAfter"].as_u64().unwrap();
+    .context("wait for pending doc.changed event")??;
+    let event_id = pending["nextAfter"]
+        .as_u64()
+        .context("pending events response should include numeric nextAfter")?;
 
     let response = app
         .clone()
@@ -666,10 +676,10 @@ async fn agent_events_pending_and_ack_expose_sparse_event_signals() {
                 .body(Body::from(
                     serde_json::json!({"eventId": event_id}).to_string(),
                 ))
-                .unwrap(),
+                .context("build pending event ack request")?,
         )
         .await
-        .unwrap();
+        .context("ack pending event")?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body["agentId"], "agent-a");
@@ -683,13 +693,19 @@ async fn agent_events_pending_and_ack_expose_sparse_event_signals() {
                     "/v1/libraries/eventfallback/events/pending?after={event_id}"
                 ))
                 .body(Body::empty())
-                .unwrap(),
+                .context("build post-ack pending events request")?,
         )
         .await
-        .unwrap();
+        .context("read pending events after ack")?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert!(body["events"].as_array().unwrap().is_empty());
+    assert!(
+        body["events"]
+            .as_array()
+            .context("post-ack pending events response should include events array")?
+            .is_empty()
+    );
+    Ok(())
 }
 
 #[tokio::test]
