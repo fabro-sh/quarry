@@ -4024,10 +4024,13 @@ async fn legacy_put_clears_the_block_projection_fail_closed() -> TestResult {
 }
 
 #[tokio::test]
-async fn delete_document_removes_the_block_projection() {
-    let root = tempfile::tempdir().unwrap();
+async fn delete_document_removes_the_block_projection() -> TestResult {
+    let root = tempfile::tempdir().context("create delete projection tempdir")?;
     let store = open_block_store(root.path()).await;
-    let library = store.create_library("deleting").await.unwrap();
+    let library = store
+        .create_library("deleting")
+        .await
+        .context("create delete projection library")?;
     let outcome = store
         .import_block_document(
             &library.slug,
@@ -4039,9 +4042,12 @@ async fn delete_document_removes_the_block_projection() {
             WritePrecondition::None,
         )
         .await
-        .unwrap();
+        .context("import doomed block document")?;
     let document_id = outcome.document.id.clone();
-    let block_id = store.load_block_tree(&document_id).await.unwrap()[0]
+    let block_id = store
+        .load_block_tree(&document_id)
+        .await
+        .context("load doomed block tree")?[0]
         .block_id
         .clone();
     store
@@ -4061,29 +4067,33 @@ async fn delete_document_removes_the_block_projection() {
             parent_item_id: None,
         })
         .await
-        .unwrap();
+        .context("put review item before delete")?;
 
     store
         .delete_document(&library.slug, "gone.md", DocumentSource::Rest)
         .await
-        .unwrap();
+        .context("delete document")?;
 
     assert!(
         store
             .load_block_tree(&document_id)
             .await
-            .unwrap()
+            .context("load deleted block projection")?
             .is_empty()
     );
     assert!(
         store
             .list_block_review_items(&document_id)
             .await
-            .unwrap()
+            .context("list review items after delete")?
             .is_empty()
     );
-    let exported = store.export_block_document(&document_id).await.unwrap_err();
+    let exported = store
+        .export_block_document(&document_id)
+        .await
+        .expect_err("deleted block projection should not export");
     assert!(matches!(exported, QuarryError::NotFound(_)));
+    Ok(())
 }
 
 #[tokio::test]
