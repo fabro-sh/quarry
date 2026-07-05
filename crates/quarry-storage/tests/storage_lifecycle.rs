@@ -4524,10 +4524,13 @@ async fn block_mutation_commit_accepts_replies_to_collapsed_insertion_suggestion
 /// `block_id` holds the attachment point ("" = document start), the range is
 /// a collapsed open placement, and no text anchor exists to validate.
 #[tokio::test]
-async fn put_block_review_item_accepts_the_conflict_shape() {
-    let root = tempfile::tempdir().unwrap();
+async fn put_block_review_item_accepts_the_conflict_shape() -> TestResult {
+    let root = tempfile::tempdir().context("create conflict shape tempdir")?;
     let store = open_block_store(root.path()).await;
-    store.create_library("conflicts").await.unwrap();
+    store
+        .create_library("conflicts")
+        .await
+        .context("create conflict shape library")?;
     let outcome = store
         .import_block_document(
             "conflicts",
@@ -4539,7 +4542,7 @@ async fn put_block_review_item_accepts_the_conflict_shape() {
             WritePrecondition::None,
         )
         .await
-        .unwrap();
+        .context("import conflict shape block document")?;
 
     let stored = store
         .put_block_review_item(NewBlockReviewItem {
@@ -4558,15 +4561,19 @@ async fn put_block_review_item_accepts_the_conflict_shape() {
             parent_item_id: None,
         })
         .await
-        .unwrap();
+        .context("store conflict shape review item")?;
 
     let items = store
         .list_block_review_items(&outcome.document.id)
         .await
-        .unwrap();
-    let kept = items.iter().find(|item| item.id == stored.id).unwrap();
+        .context("list conflict shape review items")?;
+    let kept = items
+        .iter()
+        .find(|item| item.id == stored.id)
+        .context("find stored conflict shape review item")?;
     assert_eq!(kept.kind, BlockReviewKind::Conflict);
     assert_eq!(kept.block_id, "");
     assert_eq!(kept.state, BlockReviewState::Open);
     assert_eq!(kept.body.as_deref(), Some("Incoming hunk.\n"));
+    Ok(())
 }
