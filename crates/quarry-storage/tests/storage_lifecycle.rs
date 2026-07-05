@@ -421,16 +421,19 @@ async fn legacy_database_with_collab_recovery_states_reopens_cleanly() {
 }
 
 #[tokio::test]
-async fn manages_stateful_collab_invite_tokens_by_document_id() {
-    let root = tempfile::tempdir().unwrap();
+async fn manages_stateful_collab_invite_tokens_by_document_id() -> TestResult {
+    let root = tempfile::tempdir()?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("shares").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("shares")
+        .await
+        .context("create library")?;
     let written = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -444,7 +447,7 @@ async fn manages_stateful_collab_invite_tokens_by_document_id() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("create live document")?;
 
     let token = store
         .create_collab_invite_token(
@@ -454,7 +457,7 @@ async fn manages_stateful_collab_invite_tokens_by_document_id() {
             Some("Avery".to_string()),
         )
         .await
-        .unwrap();
+        .context("create collab invite token")?;
     assert_eq!(token.document_id, written.document.id);
     assert_eq!(token.role, "editor");
     assert_eq!(token.by_hint.as_deref(), Some("Avery"));
@@ -463,11 +466,14 @@ async fn manages_stateful_collab_invite_tokens_by_document_id() {
     let tokens = store
         .collab_invite_tokens(&library.slug, "live.md")
         .await
-        .unwrap();
+        .context("list collab invite tokens")?;
     assert_eq!(tokens.len(), 1);
     assert_eq!(tokens[0].id, token.id);
 
-    let revoked = store.revoke_collab_invite_token(&token.id).await.unwrap();
+    let revoked = store
+        .revoke_collab_invite_token(&token.id)
+        .await
+        .context("revoke collab invite token")?;
     assert_eq!(revoked.id, token.id);
     let revoked_at = revoked
         .revoked_at
@@ -479,8 +485,9 @@ async fn manages_stateful_collab_invite_tokens_by_document_id() {
     let error = store
         .create_collab_invite_token(&library.slug, "live.md", "owner", None)
         .await
-        .unwrap_err();
+        .expect_err("invalid invite role should be rejected");
     assert!(matches!(error, QuarryError::InvalidPath(_)));
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
