@@ -1282,16 +1282,19 @@ async fn markdown_links_without_document_targets_are_external() {
 }
 
 #[tokio::test]
-async fn link_index_tracks_moves_and_deletes() {
-    let root = tempfile::tempdir().unwrap();
+async fn link_index_tracks_moves_and_deletes() -> TestResult {
+    let root = tempfile::tempdir().context("create temp dir")?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("links").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("links")
+        .await
+        .context("create links library")?;
 
     store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -1309,7 +1312,7 @@ async fn link_index_tracks_moves_and_deletes() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("put target document")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -1323,7 +1326,7 @@ async fn link_index_tracks_moves_and_deletes() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("put source document")?;
 
     store
         .move_document(
@@ -1333,8 +1336,11 @@ async fn link_index_tracks_moves_and_deletes() {
             DocumentSource::Rest,
         )
         .await
-        .unwrap();
-    let backlinks = store.backlinks(&library.slug, "renamed.md").await.unwrap();
+        .context("move target document")?;
+    let backlinks = store
+        .backlinks(&library.slug, "renamed.md")
+        .await
+        .context("load backlinks after target move")?;
     assert!(backlinks.links.iter().any(|link| {
         link.src_path == "source.md" && link.target_path.as_deref() == Some("renamed.md")
     }));
@@ -1347,8 +1353,11 @@ async fn link_index_tracks_moves_and_deletes() {
             DocumentSource::Rest,
         )
         .await
-        .unwrap();
-    let backlinks = store.backlinks(&library.slug, "renamed.md").await.unwrap();
+        .context("move source document")?;
+    let backlinks = store
+        .backlinks(&library.slug, "renamed.md")
+        .await
+        .context("load backlinks after source move")?;
     assert!(
         backlinks
             .links
@@ -1359,15 +1368,16 @@ async fn link_index_tracks_moves_and_deletes() {
     store
         .delete_document(&library.slug, "folder/source.md", DocumentSource::Rest)
         .await
-        .unwrap();
+        .context("delete moved source document")?;
     assert!(
         store
             .backlinks(&library.slug, "renamed.md")
             .await
-            .unwrap()
+            .context("load backlinks after source delete")?
             .links
             .is_empty()
     );
+    Ok(())
 }
 
 #[tokio::test]
