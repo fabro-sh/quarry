@@ -709,9 +709,12 @@ async fn agent_events_pending_and_ack_expose_sparse_event_signals() -> anyhow::R
 }
 
 #[tokio::test]
-async fn document_put_events_echo_origin_id() {
+async fn document_put_events_echo_origin_id() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    store.create_library("collab-events").await.unwrap();
+    store
+        .create_library("collab-events")
+        .await
+        .context("create collab-events library")?;
     let mut events = store.subscribe_events();
     let app = router(store);
 
@@ -723,23 +726,24 @@ async fn document_put_events_echo_origin_id() {
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .header("X-Quarry-Origin-Id", "browser:session-1")
                 .body(Body::from("live"))
-                .unwrap(),
+                .context("build document PUT request")?,
         )
         .await
-        .unwrap();
+        .context("write document with origin id")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let event = timeout(Duration::from_secs(2), async {
         loop {
-            let event = events.recv().await.unwrap();
+            let event = events.recv().await.context("receive store event")?;
             if event.kind() == StoreEventKind::DocumentPut {
-                break event;
+                break Ok::<_, anyhow::Error>(event);
             }
         }
     })
     .await
-    .unwrap();
+    .context("wait for document put event")??;
     assert_eq!(event.origin_id(), Some("browser:session-1"));
+    Ok(())
 }
 
 #[tokio::test]
