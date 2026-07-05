@@ -4135,10 +4135,13 @@ async fn empty_body_import_canonicalizes_to_one_empty_paragraph_row() -> TestRes
 }
 
 #[tokio::test]
-async fn block_mutation_commit_applies_rows_version_history_and_replays_duplicates() {
-    let root = tempfile::tempdir().unwrap();
+async fn block_mutation_commit_applies_rows_version_history_and_replays_duplicates() -> TestResult {
+    let root = tempfile::tempdir().context("create block mutation commit tempdir")?;
     let store = open_block_store(root.path()).await;
-    let library = store.create_library("mutate").await.unwrap();
+    let library = store
+        .create_library("mutate")
+        .await
+        .context("create block mutation library")?;
     let imported = store
         .import_block_document(
             &library.slug,
@@ -4150,12 +4153,12 @@ async fn block_mutation_commit_applies_rows_version_history_and_replays_duplicat
             WritePrecondition::None,
         )
         .await
-        .unwrap();
+        .context("import block mutation document")?;
 
     let state = store
         .block_mutation_state(&library.slug, "doc.md", "ctx-1")
         .await
-        .unwrap();
+        .context("load block mutation state")?;
     assert_eq!(state.document_id, imported.document.id);
     assert_eq!(state.head_version_id, imported.version.id);
     assert!(!state.projection_missing);
@@ -4185,7 +4188,7 @@ async fn block_mutation_commit_applies_rows_version_history_and_replays_duplicat
     let BlockMutationOutcome::Applied { outcome, record } = store
         .commit_block_mutation(&library.slug, commit.clone())
         .await
-        .unwrap()
+        .context("commit block mutation")?
     else {
         panic!("first commit must apply");
     };
@@ -4197,13 +4200,16 @@ async fn block_mutation_commit_applies_rows_version_history_and_replays_duplicat
         store
             .export_block_document(&state.document_id)
             .await
-            .unwrap(),
+            .context("export committed block document")?,
         "Rewritten paragraph.\n"
     );
-    let document = store.get_document(&library.slug, "doc.md").await.unwrap();
+    let document = store
+        .get_document(&library.slug, "doc.md")
+        .await
+        .context("read committed document")?;
     assert_eq!(document.version.id, outcome.version.id);
     assert_eq!(
-        String::from_utf8(document.content).unwrap(),
+        String::from_utf8(document.content).context("committed document should be utf8")?,
         "Rewritten paragraph.\n"
     );
 
@@ -4211,13 +4217,17 @@ async fn block_mutation_commit_applies_rows_version_history_and_replays_duplicat
     let BlockMutationOutcome::Replayed(replayed) = store
         .commit_block_mutation(&library.slug, commit)
         .await
-        .unwrap()
+        .context("replay duplicate block mutation")?
     else {
         panic!("duplicate commit must replay");
     };
     assert_eq!(replayed, record);
-    let after_replay = store.get_document(&library.slug, "doc.md").await.unwrap();
+    let after_replay = store
+        .get_document(&library.slug, "doc.md")
+        .await
+        .context("read document after replay")?;
     assert_eq!(after_replay.version.id, outcome.version.id);
+    Ok(())
 }
 
 #[tokio::test]
