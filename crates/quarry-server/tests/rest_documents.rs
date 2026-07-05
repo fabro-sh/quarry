@@ -2792,30 +2792,34 @@ async fn raw_document_put_bypasses_the_block_model_entirely() -> anyhow::Result<
 /// projection. Rows, ids, review anchors, and conflict artifacts all survive;
 /// only the rendered frontmatter (and the version clock) moves.
 #[tokio::test]
-async fn metadata_patch_preserves_rows_anchors_and_conflict_items() {
+async fn metadata_patch_preserves_rows_anchors_and_conflict_items() -> anyhow::Result<()> {
     let (_root, app, store) = block_test_app().await;
     put_block_markdown(&app, "meta.md", "# Title\n\nAlpha.\n").await;
     let tree = get_block_tree(&app, "meta.md").await;
     let ids: Vec<String> = tree["blocks"]
         .as_array()
-        .unwrap()
+        .context("block tree response should include blocks array")?
         .iter()
-        .map(|block| block["block_id"].as_str().unwrap().to_string())
-        .collect();
-    commit_block_transaction(
-        &app,
-        "meta.md",
-        block_tx(
-            "tx-meta-anchor",
-            serde_json::json!([
-                {"op": "comment.add", "block_id": ids[1], "start": 0, "end": 5, "body": "keep"},
-                {"op": "conflict.add", "after_block_id": ids[0],
-                 "base_markdown": "Old.\n", "incoming_markdown": "New.\n",
-                 "canonical_markdown": "Alpha.\n"}
-            ]),
-        ),
-    )
-    .await;
+        .map(|block| {
+            block["block_id"]
+                .as_str()
+                .context("block row should include block_id")
+                .map(str::to_string)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let title_block_id = ids
+        .first()
+        .context("metadata test document should include title block")?;
+    let body_block_id = ids
+        .get(1)
+        .context("metadata test document should include body block")?;
+    let ops = serde_json::json!([
+        {"op": "comment.add", "block_id": body_block_id, "start": 0, "end": 5, "body": "keep"},
+        {"op": "conflict.add", "after_block_id": title_block_id,
+         "base_markdown": "Old.\n", "incoming_markdown": "New.\n",
+         "canonical_markdown": "Alpha.\n"}
+    ]);
+    commit_block_transaction(&app, "meta.md", block_tx("tx-meta-anchor", ops)).await;
 
     let response = app
         .clone()
@@ -2825,7 +2829,7 @@ async fn metadata_patch_preserves_rows_anchors_and_conflict_items() {
             serde_json::json!({"title": "Patched Title", "rank": 7}),
         ))
         .await
-        .unwrap();
+        .context("patch metadata for block document")?;
     assert_eq!(response.status(), StatusCode::OK);
     let outcome = response_json(response).await;
     assert_eq!(outcome["version"]["metadata"]["title"], "Patched Title");
@@ -2835,14 +2839,24 @@ async fn metadata_patch_preserves_rows_anchors_and_conflict_items() {
     let tree = get_block_tree(&app, "meta.md").await;
     let ids_after: Vec<String> = tree["blocks"]
         .as_array()
-        .unwrap()
+        .context("block tree response after metadata patch should include blocks array")?
         .iter()
-        .map(|block| block["block_id"].as_str().unwrap().to_string())
-        .collect();
+        .map(|block| {
+            block["block_id"]
+                .as_str()
+                .context("post-patch block row should include block_id")
+                .map(str::to_string)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
     assert_eq!(ids_after, ids);
     let review = get_block_review(&app, "meta.md", false).await;
     assert_eq!(review["comments"][0]["status"], "open");
-    assert_eq!(review["comments"][0]["anchor"]["blockId"], ids[1].as_str());
+    assert_eq!(
+        review["comments"][0]["anchor"]["blockId"]
+            .as_str()
+            .context("comment anchor should include block id")?,
+        body_block_id
+    );
     assert_eq!(review["conflicts"][0]["incomingMarkdown"], "New.\n");
     // The new frontmatter rides in the normalized content.
     let content = get_document_markdown(&app, "meta.md").await;
@@ -2853,6 +2867,18 @@ async fn metadata_patch_preserves_rows_anchors_and_conflict_items() {
     assert!(content.contains("title: Patched Title"));
     assert!(content.ends_with("# Title\n\nAlpha.\n"));
     // Rows persist in storage too.
-    let document_id = store.head_document("blocks", "meta.md").await.unwrap().id;
-    assert_eq!(store.load_block_tree(&document_id).await.unwrap().len(), 2);
+    let document_id = store
+        .head_document("blocks", "meta.md")
+        .await
+        .context("read metadata-patched document head")?
+        .id;
+    assert_eq!(
+        store
+            .load_block_tree(&document_id)
+            .await
+            .context("load metadata-patched block tree from storage")?
+            .len(),
+        2
+    );
+    Ok(())
 }
