@@ -323,11 +323,15 @@ async fn version_restore_merges_through_the_gateway_preserving_ids_and_anchors()
 }
 
 #[tokio::test]
-async fn conflict_items_persist_project_and_resolve_without_mutating_the_document() {
+async fn conflict_items_persist_project_and_resolve_without_mutating_the_document()
+-> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "conf.md", "Alpha.\n\nBravo.\n").await;
     let tree = get_block_tree(&app, "conf.md").await;
-    let alpha_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+    let alpha_id = tree["blocks"][0]["block_id"]
+        .as_str()
+        .context("block tree should include the alpha block id")?
+        .to_string();
     let markdown_before = get_document_markdown(&app, "conf.md").await;
 
     let ack = commit_block_transaction(
@@ -354,7 +358,9 @@ async fn conflict_items_persist_project_and_resolve_without_mutating_the_documen
     );
 
     let review = get_block_review(&app, "conf.md", false).await;
-    let conflicts = review["conflicts"].as_array().unwrap();
+    let conflicts = review["conflicts"]
+        .as_array()
+        .context("review should include conflicts array")?;
     assert_eq!(conflicts.len(), 1);
     assert_eq!(conflicts[0]["status"], "open");
     assert_eq!(
@@ -364,7 +370,10 @@ async fn conflict_items_persist_project_and_resolve_without_mutating_the_documen
     assert_eq!(conflicts[0]["baseMarkdown"], "Bravo, base.\n");
     assert_eq!(conflicts[0]["incomingMarkdown"], "Bravo, incoming edit.\n");
     assert_eq!(conflicts[0]["canonicalMarkdown"], "Bravo.\n");
-    let conflict_id = conflicts[0]["id"].as_str().unwrap().to_string();
+    let conflict_id = conflicts[0]["id"]
+        .as_str()
+        .context("conflict should include id")?
+        .to_string();
 
     // Conflicts resolve with the comment vocabulary; resolution never
     // mutates the document.
@@ -378,13 +387,20 @@ async fn conflict_items_persist_project_and_resolve_without_mutating_the_documen
     )
     .await;
     let open_review = get_block_review(&app, "conf.md", false).await;
-    assert_eq!(open_review["conflicts"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        open_review["conflicts"]
+            .as_array()
+            .context("open review should include conflicts array")?
+            .len(),
+        0
+    );
     let full_review = get_block_review(&app, "conf.md", true).await;
     assert_eq!(full_review["conflicts"][0]["status"], "resolved");
     assert_eq!(
         get_document_markdown(&app, "conf.md").await,
         markdown_before
     );
+    Ok(())
 }
 
 #[tokio::test]
