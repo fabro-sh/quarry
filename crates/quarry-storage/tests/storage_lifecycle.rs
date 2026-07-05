@@ -539,16 +539,19 @@ async fn concurrent_auto_commit_writes_publish_without_lost_documents() {
 }
 
 #[tokio::test]
-async fn put_after_delete_same_path_creates_new_document_identity_and_history() {
-    let root = tempfile::tempdir().unwrap();
+async fn put_after_delete_same_path_creates_new_document_identity_and_history() -> TestResult {
+    let root = tempfile::tempdir()?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("recreate").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("recreate")
+        .await
+        .context("create library")?;
 
     let first = store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -563,11 +566,11 @@ async fn put_after_delete_same_path_creates_new_document_identity_and_history() 
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("create initial document")?;
     store
         .delete_document(&library.slug, "notes/daily.md", DocumentSource::Rest)
         .await
-        .unwrap();
+        .context("delete initial document")?;
     let second = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -581,21 +584,21 @@ async fn put_after_delete_same_path_creates_new_document_identity_and_history() 
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("create replacement document")?;
 
     assert_ne!(first.document.id, second.document.id);
     assert_eq!(
         store
             .get_document(&library.slug, "notes/daily.md")
             .await
-            .unwrap()
+            .context("load replacement document")?
             .content,
         b"new"
     );
     let history = store
         .version_history(&library.slug, "notes/daily.md")
         .await
-        .unwrap();
+        .context("load replacement document history")?;
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].latest_version_id, second.version.id);
     assert!(
@@ -604,6 +607,7 @@ async fn put_after_delete_same_path_creates_new_document_identity_and_history() 
             .await
             .is_err()
     );
+    Ok(())
 }
 
 #[tokio::test]
