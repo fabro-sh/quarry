@@ -537,7 +537,7 @@ async fn document_start_conflicts_anchor_null_and_delete_dismisses_them() -> any
 }
 
 #[tokio::test]
-async fn conflict_add_requires_an_existing_attachment_block() {
+async fn conflict_add_requires_an_existing_attachment_block() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "conf-missing.md", "Alpha.\n").await;
     let _ = get_block_tree(&app, "conf-missing.md").await;
@@ -556,6 +556,7 @@ async fn conflict_add_requires_an_existing_attachment_block() {
     )
     .await;
     assert_typed_error(status, &body, "BLOCK_DELETED", false);
+    Ok(())
 }
 
 #[tokio::test]
