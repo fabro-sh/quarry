@@ -1112,16 +1112,19 @@ async fn suggestions_include_aliases_and_headings_for_wikilink_completion() -> T
 }
 
 #[tokio::test]
-async fn markdown_frontmatter_aliases_participate_in_link_resolution() {
-    let root = tempfile::tempdir().unwrap();
+async fn markdown_frontmatter_aliases_participate_in_link_resolution() -> TestResult {
+    let root = tempfile::tempdir()?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("frontmatterlinks").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("frontmatterlinks")
+        .await
+        .context("create library")?;
 
     store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -1136,7 +1139,7 @@ async fn markdown_frontmatter_aliases_participate_in_link_resolution() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("create guide document with frontmatter alias")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -1150,9 +1153,12 @@ async fn markdown_frontmatter_aliases_participate_in_link_resolution() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("create source document linking to frontmatter alias")?;
 
-    let guide = store.get_document(&library.slug, "guide.md").await.unwrap();
+    let guide = store
+        .get_document(&library.slug, "guide.md")
+        .await
+        .context("load guide document")?;
     assert_eq!(
         String::from_utf8_lossy(&guide.content),
         "---\naliases:\n  - Front Alias\n---\n# Guide\n"
@@ -1162,13 +1168,14 @@ async fn markdown_frontmatter_aliases_participate_in_link_resolution() {
     let outgoing = store
         .outgoing_links(&library.slug, "source.md")
         .await
-        .unwrap();
+        .context("load source outgoing links")?;
     assert!(outgoing.links.iter().any(|link| {
         link.target_kind == "wiki_link"
             && link.target_text == "Front Alias"
             && link.target_path.as_deref() == Some("guide.md")
             && link.resolved
     }));
+    Ok(())
 }
 
 #[tokio::test]
