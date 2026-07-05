@@ -785,7 +785,7 @@ const CONFLICT_MARKER_SOUP: &str =
     "<<<<<<< HEAD\nOurs line.\n=======\nTheirs line.\n>>>>>>> feature\n";
 
 #[tokio::test]
-async fn markdown_put_with_conflict_markers_flags_a_review_item() {
+async fn markdown_put_with_conflict_markers_flags_a_review_item() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "soup.md", "Alpha.\n").await;
 
@@ -799,11 +799,14 @@ async fn markdown_put_with_conflict_markers_flags_a_review_item() {
     let markdown = get_document_markdown(&app, "soup.md").await;
     assert_ne!(markdown, "Alpha.\n", "the soup write still committed");
     let review = get_block_review(&app, "soup.md", false).await;
-    let conflicts = review["conflicts"].as_array().unwrap();
+    let conflicts = review["conflicts"]
+        .as_array()
+        .context("review should include conflicts array")?;
     assert_eq!(conflicts.len(), 1);
     assert_eq!(conflicts[0]["status"], "open");
     assert_eq!(conflicts[0]["incomingMarkdown"], CONFLICT_MARKER_SOUP);
     assert!(conflicts[0]["afterBlockId"].is_null());
+    Ok(())
 }
 
 #[tokio::test]
