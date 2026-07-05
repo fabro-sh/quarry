@@ -3194,9 +3194,15 @@ async fn tmp_documents_reject_non_markdown_media_types_on_create_and_update() ->
 }
 
 #[tokio::test]
-async fn tmp_documents_reject_invalid_utf8_on_create_and_update() {
-    let root = tempfile::tempdir().unwrap();
-    let store = open_block_store(root.path()).await;
+async fn tmp_documents_reject_invalid_utf8_on_create_and_update() -> TestResult {
+    let root = tempfile::tempdir().context("create tmp invalid-UTF-8 rejection tempdir")?;
+    let store = QuarryStore::open(StoreConfig {
+        db_path: root.path().join("quarry.db"),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .context("open tmp invalid-UTF-8 rejection store")?;
 
     let error = store
         .create_tmp_document(
@@ -3206,7 +3212,7 @@ async fn tmp_documents_reject_invalid_utf8_on_create_and_update() {
             TmpTtl::Default,
         )
         .await
-        .unwrap_err();
+        .expect_err("invalid UTF-8 tmp create should be rejected");
     assert!(matches!(error, QuarryError::InvalidInput(_)));
 
     let valid = store
@@ -3217,7 +3223,7 @@ async fn tmp_documents_reject_invalid_utf8_on_create_and_update() {
             TmpTtl::Default,
         )
         .await
-        .unwrap();
+        .context("create valid tmp Markdown document before invalid UTF-8 update")?;
     let error = store
         .put_tmp_document(
             &valid.document.path,
@@ -3228,11 +3234,15 @@ async fn tmp_documents_reject_invalid_utf8_on_create_and_update() {
             WritePrecondition::IfMatch(valid.version.id.to_string()),
         )
         .await
-        .unwrap_err();
+        .expect_err("invalid UTF-8 tmp update should be rejected");
     assert!(matches!(error, QuarryError::InvalidInput(_)));
 
-    let head = store.head_tmp_document(&valid.document.path).await.unwrap();
+    let head = store
+        .head_tmp_document(&valid.document.path)
+        .await
+        .context("load tmp document head after rejected invalid UTF-8 update")?;
     assert_eq!(head.head_version_id, valid.version.id);
+    Ok(())
 }
 
 #[tokio::test]
