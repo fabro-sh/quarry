@@ -2305,16 +2305,19 @@ async fn document_mutation_events_include_origin_and_document_identity() -> Test
 }
 
 #[tokio::test]
-async fn inode_paths_are_lookupable_and_moves_keep_inode_identity() {
-    let root = tempfile::tempdir().unwrap();
+async fn inode_paths_are_lookupable_and_moves_keep_inode_identity() -> TestResult {
+    let root = tempfile::tempdir().context("create temp dir")?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("notes").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -2328,14 +2331,17 @@ async fn inode_paths_are_lookupable_and_moves_keep_inode_identity() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("put original document")?;
     let inode = store
         .inode_for_path(&library.slug, "plans/one.md")
         .await
-        .unwrap();
+        .context("load inode for original path")?;
 
     assert_eq!(
-        store.path_for_inode(&library.slug, inode).await.unwrap(),
+        store
+            .path_for_inode(&library.slug, inode)
+            .await
+            .context("load path for inode before move")?,
         "plans/one.md"
     );
 
@@ -2347,17 +2353,20 @@ async fn inode_paths_are_lookupable_and_moves_keep_inode_identity() {
             DocumentSource::Rest,
         )
         .await
-        .unwrap();
+        .context("move document")?;
 
     assert_eq!(
         store
             .inode_for_path(&library.slug, "archive/one.md")
             .await
-            .unwrap(),
+            .context("load inode for moved path")?,
         inode
     );
     assert_eq!(
-        store.path_for_inode(&library.slug, inode).await.unwrap(),
+        store
+            .path_for_inode(&library.slug, inode)
+            .await
+            .context("load path for inode after move")?,
         "archive/one.md"
     );
     assert!(
@@ -2366,6 +2375,7 @@ async fn inode_paths_are_lookupable_and_moves_keep_inode_identity() {
             .await
             .is_err()
     );
+    Ok(())
 }
 
 #[tokio::test]
