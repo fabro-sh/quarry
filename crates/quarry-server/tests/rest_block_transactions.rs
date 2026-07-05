@@ -218,7 +218,7 @@ async fn blocks_route_materializes_rows_with_stable_ids() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn block_routes_reject_raw_documents_with_a_typed_error() {
+async fn block_routes_reject_raw_documents_with_a_typed_error() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     let response = app
         .clone()
@@ -227,11 +227,9 @@ async fn block_routes_reject_raw_documents_with_a_typed_error() {
                 .method(Method::PUT)
                 .uri("/v1/libraries/blocks/documents/image.png")
                 .header(header::CONTENT_TYPE, "image/png")
-                .body(Body::from(vec![0x89u8, 0x50, 0x4e, 0x47]))
-                .unwrap(),
+                .body(Body::from(vec![0x89u8, 0x50, 0x4e, 0x47]))?,
         )
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
@@ -240,11 +238,9 @@ async fn block_routes_reject_raw_documents_with_a_typed_error() {
             Request::builder()
                 .method(Method::GET)
                 .uri("/v1/libraries/blocks/documents/image.png/blocks")
-                .body(Body::empty())
-                .unwrap(),
+                .body(Body::empty())?,
         )
-        .await
-        .unwrap();
+        .await?;
     let status = response.status();
     let body = response_json(response).await;
     assert_typed_error(status, &body, "UNSUPPORTED_BLOCK_DOCUMENT", false);
@@ -259,6 +255,8 @@ async fn block_routes_reject_raw_documents_with_a_typed_error() {
     )
     .await;
     assert_typed_error(status, &body, "UNSUPPORTED_BLOCK_DOCUMENT", false);
+
+    Ok(())
 }
 
 #[tokio::test]
