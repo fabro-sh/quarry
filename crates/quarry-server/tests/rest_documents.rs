@@ -18,6 +18,14 @@ mod common;
 
 use common::{document_test_app, json_request, open_test_store, response_json};
 
+fn empty_request(method: Method, uri: &str) -> anyhow::Result<Request<Body>> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(Body::empty())
+        .with_context(|| format!("build empty request for {uri}"))
+}
+
 async fn block_test_app() -> (tempfile::TempDir, axum::Router, QuarryStore) {
     let (root, app, store) = document_test_app().await;
     let response = app
@@ -1845,9 +1853,12 @@ async fn version_actor(
 }
 
 #[tokio::test]
-async fn agent_snapshot_exposes_snapshot_scoped_block_refs() {
+async fn agent_snapshot_exposes_snapshot_scoped_block_refs() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    let library = store.create_library("agent").await.unwrap();
+    let library = store
+        .create_library("agent")
+        .await
+        .context("create agent library")?;
     let written = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -1861,41 +1872,48 @@ async fn agent_snapshot_exposes_snapshot_scoped_block_refs() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write snapshot source document")?;
     let app = router(store);
 
     let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/agent/documents/notes/one.md/snapshot")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(
+            Method::GET,
+            "/v1/libraries/agent/documents/notes/one.md/snapshot",
+        )?)
         .await
-        .unwrap();
+        .context("read agent snapshot")?;
 
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body["documentId"], written.document.id.as_str());
     assert_eq!(body["baseToken"], written.version.id.as_str());
-    assert_eq!(body["blocks"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        body["blocks"]
+            .as_array()
+            .context("snapshot response should include blocks")?
+            .len(),
+        3
+    );
     assert_eq!(body["blocks"][0]["markdown"], "# Title\n\n");
     assert!(body["blocks"][0]["ref"].get("baseToken").is_none());
     assert_eq!(body["blocks"][0]["ref"]["ordinal"], 0);
     assert_eq!(
         body["blocks"][0]["ref"]["contentHash"]
             .as_str()
-            .unwrap()
+            .context("snapshot block ref should include content hash")?
             .len(),
         64
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn agent_review_lists_open_comments_replies_and_suggestions() {
+async fn agent_review_lists_open_comments_replies_and_suggestions() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    let library = store.create_library("agentreviewread").await.unwrap();
+    let library = store
+        .create_library("agentreviewread")
+        .await
+        .context("create agentreviewread library")?;
     let markdown = "Alpha {==target==}{>>Needs work.<<}{#c1} and {==done==}{>>Fixed.<<}{#c2}.\n\nUse {~~old~>new~~}{#s1} wording and `{++literal++}{#s_code}`.\n\n```text\n{==ignored==}{>>Nope<<}{#c_code}\n{--gone--}{#s_code2}\n```\n\n---\ncomments:\n  c1:\n    at: \"2026-01-01T00:00:00.000Z\"\n    by: user:a\n  c2:\n    at: \"2026-01-02T00:00:00.000Z\"\n    by: user:b\n    status: resolved\n  c_code:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: user:code\n  r1:\n    at: \"2026-01-01T01:00:00.000Z\"\n    body: Reply body.\n    by: ai:codex\n    re: c1\n  r2:\n    at: \"2026-01-03T01:00:00.000Z\"\n    body: Suggestion reply.\n    by: user:a\n    re: s1\nsuggestions:\n  s1:\n    at: \"2026-01-03T00:00:00.000Z\"\n    by: ai:codex\n  s_code:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: ai:code\n  s_code2:\n    at: \"2026-01-04T00:00:00.000Z\"\n    by: ai:code\n";
     let written = store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -1910,40 +1928,40 @@ async fn agent_review_lists_open_comments_replies_and_suggestions() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write review source document")?;
     let app = router(store);
 
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/agentreviewread/documents/notes/review.md/snapshot")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(
+            Method::GET,
+            "/v1/libraries/agentreviewread/documents/notes/review.md/snapshot",
+        )?)
         .await
-        .unwrap();
+        .context("read review document snapshot")?;
     assert_eq!(response.status(), StatusCode::OK);
     let snapshot: Value = response_json(response).await;
 
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/agentreviewread/documents/notes/review.md/review")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(
+            Method::GET,
+            "/v1/libraries/agentreviewread/documents/notes/review.md/review",
+        )?)
         .await
-        .unwrap();
+        .context("read open review items")?;
 
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body["documentId"], written.document.id.as_str());
     assert_eq!(body["baseToken"], written.version.id.as_str());
-    assert_eq!(body["comments"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        body["comments"]
+            .as_array()
+            .context("review response should include comments")?
+            .len(),
+        1
+    );
     assert_eq!(body["comments"][0]["id"], "c1");
     assert_eq!(body["comments"][0]["status"], "open");
     assert_eq!(body["comments"][0]["by"], "user:a");
@@ -1951,13 +1969,25 @@ async fn agent_review_lists_open_comments_replies_and_suggestions() {
     assert_eq!(body["comments"][0]["ref"], snapshot["blocks"][0]["ref"]);
     assert_eq!(body["comments"][0]["quote"], "target");
     assert_eq!(body["comments"][0]["body"], "Needs work.");
-    assert_eq!(body["comments"][0]["replies"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        body["comments"][0]["replies"]
+            .as_array()
+            .context("comment should include replies")?
+            .len(),
+        1
+    );
     assert_eq!(body["comments"][0]["replies"][0]["id"], "r1");
     assert_eq!(body["comments"][0]["replies"][0]["status"], "open");
     assert_eq!(body["comments"][0]["replies"][0]["by"], "ai:codex");
     assert_eq!(body["comments"][0]["replies"][0]["body"], "Reply body.");
 
-    assert_eq!(body["suggestions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        body["suggestions"]
+            .as_array()
+            .context("review response should include suggestions")?
+            .len(),
+        1
+    );
     assert_eq!(body["suggestions"][0]["id"], "s1");
     assert_eq!(body["suggestions"][0]["status"], "open");
     assert_eq!(body["suggestions"][0]["kind"], "substitution");
@@ -1977,28 +2007,35 @@ async fn agent_review_lists_open_comments_replies_and_suggestions() {
     );
 
     let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/agentreviewread/documents/notes/review.md/review?includeResolved=1")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(
+            Method::GET,
+            "/v1/libraries/agentreviewread/documents/notes/review.md/review?includeResolved=1",
+        )?)
         .await
-        .unwrap();
+        .context("read review items including resolved")?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert_eq!(body["comments"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        body["comments"]
+            .as_array()
+            .context("resolved review response should include comments")?
+            .len(),
+        2
+    );
     assert_eq!(body["comments"][1]["id"], "c2");
     assert_eq!(body["comments"][1]["status"], "resolved");
     assert_eq!(body["comments"][1]["quote"], "done");
     assert_eq!(body["comments"][1]["body"], "Fixed.");
+    Ok(())
 }
 
 #[tokio::test]
-async fn agent_review_reports_explicit_inline_markers_without_endmatter() {
+async fn agent_review_reports_explicit_inline_markers_without_endmatter() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    let library = store.create_library("agentrevieworphan").await.unwrap();
+    let library = store
+        .create_library("agentrevieworphan")
+        .await
+        .context("create agentrevieworphan library")?;
     let written = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -2013,42 +2050,55 @@ async fn agent_review_reports_explicit_inline_markers_without_endmatter() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write orphan review marker document")?;
     let app = router(store);
 
     let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/agentrevieworphan/documents/notes/review.md/review")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(
+            Method::GET,
+            "/v1/libraries/agentrevieworphan/documents/notes/review.md/review",
+        )?)
         .await
-        .unwrap();
+        .context("read orphan review markers")?;
 
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body["documentId"], written.document.id.as_str());
     assert_eq!(body["baseToken"], written.version.id.as_str());
-    assert_eq!(body["comments"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        body["comments"]
+            .as_array()
+            .context("orphan review response should include comments")?
+            .len(),
+        1
+    );
     assert_eq!(body["comments"][0]["id"], "c_orphan");
     assert_eq!(body["comments"][0]["by"], "unknown");
     assert_eq!(body["comments"][0]["at"], "");
     assert_eq!(body["comments"][0]["body"], "Check it");
     assert_eq!(body["comments"][0]["quote"], "this");
-    assert_eq!(body["suggestions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        body["suggestions"]
+            .as_array()
+            .context("orphan review response should include suggestions")?
+            .len(),
+        1
+    );
     assert_eq!(body["suggestions"][0]["id"], "s_orphan");
     assert_eq!(body["suggestions"][0]["by"], "unknown");
     assert_eq!(body["suggestions"][0]["at"], "");
     assert_eq!(body["suggestions"][0]["kind"], "insert");
     assert_eq!(body["suggestions"][0]["content"], "better");
+    Ok(())
 }
 
 #[tokio::test]
-async fn agent_review_matches_snapshot_errors_for_missing_and_non_markdown() {
+async fn agent_review_matches_snapshot_errors_for_missing_and_non_markdown() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    let library = store.create_library("agentreviewerrors").await.unwrap();
+    let library = store
+        .create_library("agentreviewerrors")
+        .await
+        .context("create agentreviewerrors library")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -2062,57 +2112,46 @@ async fn agent_review_matches_snapshot_errors_for_missing_and_non_markdown() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write non-markdown review error fixture")?;
     let app = router(store);
 
     let snapshot = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/agentreviewerrors/documents/notes/missing.md/snapshot")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(
+            Method::GET,
+            "/v1/libraries/agentreviewerrors/documents/notes/missing.md/snapshot",
+        )?)
         .await
-        .unwrap();
+        .context("read missing-document snapshot error")?;
     let review = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/agentreviewerrors/documents/notes/missing.md/review")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(
+            Method::GET,
+            "/v1/libraries/agentreviewerrors/documents/notes/missing.md/review",
+        )?)
         .await
-        .unwrap();
+        .context("read missing-document review error")?;
     assert_eq!(review.status(), snapshot.status());
     assert_eq!(response_json(review).await, response_json(snapshot).await);
 
     let snapshot = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/agentreviewerrors/documents/notes/plain.txt/snapshot")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(
+            Method::GET,
+            "/v1/libraries/agentreviewerrors/documents/notes/plain.txt/snapshot",
+        )?)
         .await
-        .unwrap();
+        .context("read non-markdown snapshot error")?;
     let review = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries/agentreviewerrors/documents/notes/plain.txt/review")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(empty_request(
+            Method::GET,
+            "/v1/libraries/agentreviewerrors/documents/notes/plain.txt/review",
+        )?)
         .await
-        .unwrap();
+        .context("read non-markdown review error")?;
     assert_eq!(review.status(), snapshot.status());
     assert_eq!(response_json(review).await, response_json(snapshot).await);
+    Ok(())
 }
 
 #[tokio::test]
