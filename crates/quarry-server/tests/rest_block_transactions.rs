@@ -302,7 +302,7 @@ async fn block_transaction_insert_block_commits_one_version_and_emits_events() -
 }
 
 #[tokio::test]
-async fn block_transaction_replace_block_content_preserves_block_identity() {
+async fn block_transaction_replace_block_content_preserves_block_identity() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Original text.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -330,6 +330,8 @@ async fn block_transaction_replace_block_content_preserves_block_identity() {
         get_document_markdown(&app, "doc.md").await,
         "Rewritten text.\n"
     );
+
+    Ok(())
 }
 
 #[tokio::test]
