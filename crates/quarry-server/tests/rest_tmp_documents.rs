@@ -676,7 +676,7 @@ async fn tmp_markdown_put_rejects_non_markdown_content_type() -> anyhow::Result<
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn tmp_create_rejects_non_markdown_content_type() {
+async fn tmp_create_rejects_non_markdown_content_type() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     let response = app
         .clone()
@@ -690,7 +690,7 @@ async fn tmp_create_rejects_non_markdown_content_type() {
             }),
         ))
         .await
-        .unwrap();
+        .context("create tmp document with non-markdown content type")?;
     let status = response.status();
     let body = response_json(response).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
@@ -698,4 +698,5 @@ async fn tmp_create_rejects_non_markdown_content_type() {
         body["error"],
         "unsupported media type: tmp documents are Markdown-only; unsupported content type text/plain"
     );
+    Ok(())
 }
