@@ -1555,9 +1555,12 @@ async fn version_history_includes_transaction_metadata() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn put_document_rejects_invalid_transaction_provenance_header() {
+async fn put_document_rejects_invalid_transaction_provenance_header() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    store.create_library("badprovenance").await.unwrap();
+    store
+        .create_library("badprovenance")
+        .await
+        .context("create badprovenance library")?;
     let app = router(store);
 
     let response = app
@@ -1568,12 +1571,13 @@ async fn put_document_rejects_invalid_transaction_provenance_header() {
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .header("x-quarry-transaction-provenance", "{bad json")
                 .body(Body::from("body"))
-                .unwrap(),
+                .context("build invalid provenance document PUT request")?,
         )
         .await
-        .unwrap();
+        .context("send invalid provenance document PUT request")?;
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    Ok(())
 }
 
 #[tokio::test]
