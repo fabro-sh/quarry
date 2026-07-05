@@ -582,7 +582,7 @@ async fn block_transaction_comment_lifecycle_projects_from_rows() -> anyhow::Res
 }
 
 #[tokio::test]
-async fn block_transaction_comment_edit_updates_body_and_edited_at() {
+async fn block_transaction_comment_edit_updates_body_and_edited_at() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Discuss this sentence.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -634,6 +634,8 @@ async fn block_transaction_comment_edit_updates_body_and_edited_at() {
     assert_ne!(edited["editedAt"], edited["at"]);
     assert_eq!(edited["anchor"], anchor);
     assert_eq!(edited["quote"], quote);
+
+    Ok(())
 }
 
 #[tokio::test]
