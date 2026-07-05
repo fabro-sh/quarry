@@ -639,7 +639,8 @@ async fn block_transaction_comment_edit_updates_body_and_edited_at() -> anyhow::
 }
 
 #[tokio::test]
-async fn block_transaction_comment_edit_updates_reply_without_changing_root() {
+async fn block_transaction_comment_edit_updates_reply_without_changing_root() -> anyhow::Result<()>
+{
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Discuss this sentence.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -712,6 +713,8 @@ async fn block_transaction_comment_edit_updates_reply_without_changing_root() {
     assert_eq!(reply["at"], reply_at);
     assert_ne!(reply["editedAt"], Value::Null);
     assert_ne!(reply["editedAt"], reply["at"]);
+
+    Ok(())
 }
 
 #[tokio::test]
