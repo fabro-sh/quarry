@@ -155,7 +155,7 @@ async fn agent_presence_records_status_by_document() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn tmp_agent_presence_omits_capability_path() {
+async fn tmp_agent_presence_omits_capability_path() -> anyhow::Result<()> {
     let (_root, app, _store) = document_test_app().await;
 
     let response = app
@@ -169,11 +169,17 @@ async fn tmp_agent_presence_omits_capability_path() {
             }),
         ))
         .await
-        .unwrap();
+        .context("create tmp document for presence test")?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let created: Value = response_json(response).await;
-    let secret = created["document"]["path"].as_str().unwrap().to_string();
-    let document_id = created["document"]["id"].as_str().unwrap().to_string();
+    let secret = created["document"]["path"]
+        .as_str()
+        .context("tmp create response should include secret path")?
+        .to_string();
+    let document_id = created["document"]["id"]
+        .as_str()
+        .context("tmp create response should include document id")?
+        .to_string();
 
     let response = app
         .clone()
@@ -186,15 +192,19 @@ async fn tmp_agent_presence_omits_capability_path() {
                 .body(Body::from(
                     serde_json::json!({"status":"thinking","by":"ai:codex"}).to_string(),
                 ))
-                .unwrap(),
+                .context("build tmp presence POST")?,
         )
         .await
-        .unwrap();
+        .context("send tmp presence POST")?;
     assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let body = String::from_utf8(body.to_vec()).unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .context("read tmp presence POST response body")?;
+    let body =
+        String::from_utf8(body.to_vec()).context("tmp presence POST response should be UTF-8")?;
     assert!(!body.contains(&secret));
-    let presence: Value = serde_json::from_str(&body).unwrap();
+    let presence: Value =
+        serde_json::from_str(&body).context("tmp presence POST response should be JSON")?;
     assert_eq!(presence["current"]["documentId"], document_id);
     assert_eq!(presence["current"]["agentId"], "agent-tmp");
     assert_eq!(presence["current"]["status"], "thinking");
@@ -211,20 +221,28 @@ async fn tmp_agent_presence_omits_capability_path() {
                 .method(Method::GET)
                 .uri(format!("/v1/tmp/documents/{secret}/presence"))
                 .body(Body::empty())
-                .unwrap(),
+                .context("build tmp presence GET")?,
         )
         .await
-        .unwrap();
+        .context("send tmp presence GET")?;
     assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let body = String::from_utf8(body.to_vec()).unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .context("read tmp presence GET response body")?;
+    let body =
+        String::from_utf8(body.to_vec()).context("tmp presence GET response should be UTF-8")?;
     assert!(!body.contains(&secret));
-    let presence: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(presence["presence"].as_array().unwrap().len(), 1);
+    let presence: Value =
+        serde_json::from_str(&body).context("tmp presence GET response should be JSON")?;
+    let entries = presence["presence"]
+        .as_array()
+        .context("tmp presence GET response should include an array")?;
+    assert_eq!(entries.len(), 1);
     assert_eq!(presence["presence"][0]["documentId"], document_id);
     assert_eq!(presence["presence"][0]["agentId"], "agent-tmp");
     assert!(presence["presence"][0].get("path").is_none());
     assert!(presence["presence"][0].get("library").is_none());
+    Ok(())
 }
 
 async fn presence_test_app(library: &str) -> (tempfile::TempDir, axum::Router) {
