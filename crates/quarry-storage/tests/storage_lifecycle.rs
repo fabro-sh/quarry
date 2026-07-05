@@ -2030,14 +2030,16 @@ async fn global_operation_lock_blocks_normal_writes_until_released() {
 }
 
 #[tokio::test]
-async fn second_store_owner_is_rejected_by_lock_file() {
-    let root = tempfile::tempdir().unwrap();
+async fn second_store_owner_is_rejected_by_lock_file() -> TestResult {
+    let root = tempfile::tempdir().context("create second-owner lock tempdir")?;
     let config = StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     };
-    let _owner = QuarryStore::open(config.clone()).await.unwrap();
+    let _owner = QuarryStore::open(config.clone())
+        .await
+        .context("open first store owner")?;
 
     let error = match QuarryStore::open(config).await {
         Ok(_) => panic!("second store owner should be rejected"),
@@ -2045,29 +2047,33 @@ async fn second_store_owner_is_rejected_by_lock_file() {
     };
 
     assert!(error.to_string().contains("another Quarry daemon"));
+    Ok(())
 }
 
 #[tokio::test]
-async fn stale_empty_lock_file_does_not_block_store_open_and_is_removed_on_drop() {
-    let root = tempfile::tempdir().unwrap();
+async fn stale_empty_lock_file_does_not_block_store_open_and_is_removed_on_drop() -> TestResult {
+    let root = tempfile::tempdir().context("create stale-lock tempdir")?;
     let lock_path = root.path().join("quarry.lock");
-    std::fs::write(&lock_path, "").unwrap();
+    std::fs::write(&lock_path, "").context("write stale empty lock file")?;
     let config = StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     };
 
-    let store = QuarryStore::open(config).await.unwrap();
+    let store = QuarryStore::open(config)
+        .await
+        .context("open store with stale empty lock file")?;
     assert!(lock_path.exists());
 
     drop(store);
     assert!(!lock_path.exists());
+    Ok(())
 }
 
 #[tokio::test]
-async fn dropped_store_removes_lock_file() {
-    let root = tempfile::tempdir().unwrap();
+async fn dropped_store_removes_lock_file() -> TestResult {
+    let root = tempfile::tempdir().context("create dropped-store lock tempdir")?;
     let lock_path = root.path().join("quarry.lock");
     let config = StoreConfig {
         db_path: root.path().join("quarry.db"),
@@ -2075,11 +2081,14 @@ async fn dropped_store_removes_lock_file() {
         lock_path: None,
     };
 
-    let store = QuarryStore::open(config).await.unwrap();
+    let store = QuarryStore::open(config)
+        .await
+        .context("open store that owns lock file")?;
     assert!(lock_path.exists());
 
     drop(store);
     assert!(!lock_path.exists());
+    Ok(())
 }
 
 #[tokio::test]
