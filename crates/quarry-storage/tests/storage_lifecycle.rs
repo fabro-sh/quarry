@@ -3828,10 +3828,13 @@ async fn import_surfaces_the_codecs_typed_unsupported_error() -> TestResult {
 }
 
 #[tokio::test]
-async fn block_shadow_bases_and_block_transactions_roundtrip() {
-    let root = tempfile::tempdir().unwrap();
+async fn block_shadow_bases_and_block_transactions_roundtrip() -> TestResult {
+    let root = tempfile::tempdir().context("create block shadow tempdir")?;
     let store = open_block_store(root.path()).await;
-    let library = store.create_library("bases").await.unwrap();
+    let library = store
+        .create_library("bases")
+        .await
+        .context("create block shadow library")?;
     let outcome = store
         .import_block_document(
             &library.slug,
@@ -3843,7 +3846,7 @@ async fn block_shadow_bases_and_block_transactions_roundtrip() {
             WritePrecondition::None,
         )
         .await
-        .unwrap();
+        .context("import block document")?;
     let document_id = outcome.document.id.clone();
 
     let base = store
@@ -3855,31 +3858,31 @@ async fn block_shadow_bases_and_block_transactions_roundtrip() {
             Some(outcome.version.id.to_string()),
         )
         .await
-        .unwrap();
+        .context("put block shadow base")?;
     assert_eq!(
         store
             .block_shadow_base("git", "peer-1:doc.md", &document_id)
             .await
-            .unwrap(),
+            .context("load block shadow base")?,
         Some(base)
     );
     // Upsert replaces the base for the same scope.
     store
         .put_block_shadow_base("git", "peer-1:doc.md", &document_id, "Updated.\n", None)
         .await
-        .unwrap();
+        .context("update block shadow base")?;
     let updated = store
         .block_shadow_base("git", "peer-1:doc.md", &document_id)
         .await
-        .unwrap()
-        .unwrap();
+        .context("load updated block shadow base")?
+        .context("updated block shadow base should exist")?;
     assert_eq!(updated.base_markdown, "Updated.\n");
     assert_eq!(updated.base_version_id, None);
     assert_eq!(
         store
             .block_shadow_base("fuse", "peer-1:doc.md", &document_id)
             .await
-            .unwrap(),
+            .context("load unrelated block shadow base")?,
         None
     );
 
@@ -3887,12 +3890,12 @@ async fn block_shadow_bases_and_block_transactions_roundtrip() {
     let recorded = store
         .record_block_transaction(&document_id, "ctx-1", "agent", None, ops.clone(), None)
         .await
-        .unwrap();
+        .context("record block transaction")?;
     assert_eq!(
         store
             .block_transaction(&document_id, "ctx-1")
             .await
-            .unwrap(),
+            .context("load block transaction")?,
         Some(recorded)
     );
     // client_tx_id is unique per document: duplicates conflict (idempotent
@@ -3900,8 +3903,9 @@ async fn block_shadow_bases_and_block_transactions_roundtrip() {
     let duplicate = store
         .record_block_transaction(&document_id, "ctx-1", "agent", None, ops, None)
         .await
-        .unwrap_err();
+        .expect_err("duplicate block transaction id should conflict");
     assert!(matches!(duplicate, QuarryError::Conflict(_)));
+    Ok(())
 }
 
 #[tokio::test]
