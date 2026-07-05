@@ -449,7 +449,7 @@ async fn comment_edit_on_conflict_id_returns_anchor_not_found() -> anyhow::Resul
 /// `ANCHOR_NOT_FOUND` (conflicts resolve/delete with the comment vocabulary
 /// but cannot host threads).
 #[tokio::test]
-async fn comment_reply_on_a_conflict_item_is_anchor_not_found() {
+async fn comment_reply_on_a_conflict_item_is_anchor_not_found() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "conf-reply.md", "Alpha.\n").await;
     let _ = get_block_tree(&app, "conf-reply.md").await;
@@ -466,7 +466,10 @@ async fn comment_reply_on_a_conflict_item_is_anchor_not_found() {
     )
     .await;
     let review = get_block_review(&app, "conf-reply.md", false).await;
-    let conflict_id = review["conflicts"][0]["id"].as_str().unwrap().to_string();
+    let conflict_id = review["conflicts"][0]["id"]
+        .as_str()
+        .context("conflict should include id")?
+        .to_string();
 
     let (status, body) = post_block_transaction(
         &app,
@@ -480,6 +483,7 @@ async fn comment_reply_on_a_conflict_item_is_anchor_not_found() {
     )
     .await;
     assert_typed_error(status, &body, "ANCHOR_NOT_FOUND", false);
+    Ok(())
 }
 
 #[tokio::test]
