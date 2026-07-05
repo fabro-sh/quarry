@@ -262,16 +262,23 @@ async fn projection_truncate_open_replaces_existing_content_on_release() -> anyh
 }
 
 #[tokio::test]
-async fn projection_rejects_writes_when_read_only() {
+async fn projection_rejects_writes_when_read_only() -> anyhow::Result<()> {
     let store = test_store().await;
-    let library = store.create_library("notes").await.unwrap();
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     let projection = FuseProjection::open(store, &library.slug, true)
         .await
-        .unwrap();
+        .context("open read-only projection")?;
 
-    let error = projection.mkdir("drafts").await.unwrap_err();
+    let error = projection
+        .mkdir("drafts")
+        .await
+        .expect_err("read-only projection should reject mkdir");
 
     assert!(error.to_string().contains("read-only"));
+    Ok(())
 }
 
 #[tokio::test]
