@@ -1569,17 +1569,20 @@ async fn put_document_rejects_invalid_transaction_provenance_header() {
 }
 
 #[tokio::test]
-async fn put_document_decodes_percent_encoded_transaction_actor_header() {
+async fn put_document_decodes_percent_encoded_transaction_actor_header() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    store.create_library("actorheader").await.unwrap();
+    store
+        .create_library("actorheader")
+        .await
+        .context("create actorheader library")?;
     let app = router(store);
 
     // Each document is created first so the actor-carrying write exercises
     // the update path (first-import attribution is covered separately by
     // first_import_records_transaction_actor_header).
-    put_markdown(&app, "actorheader", "a.md", "# A\n", None).await;
-    put_markdown(&app, "actorheader", "b.md", "# B\n", None).await;
-    put_markdown(&app, "actorheader", "c.md", "# C\n", None).await;
+    put_markdown(&app, "actorheader", "a.md", "# A\n", None).await?;
+    put_markdown(&app, "actorheader", "b.md", "# B\n", None).await?;
+    put_markdown(&app, "actorheader", "c.md", "# C\n", None).await?;
 
     // Percent-encoded UTF-8 name decodes before storage.
     let version = put_markdown(
@@ -1589,50 +1592,58 @@ async fn put_document_decodes_percent_encoded_transaction_actor_header() {
         "# A updated\n",
         Some("Jos%C3%A9"),
     )
-    .await;
+    .await?;
     assert_eq!(
-        version_actor(&app, "actorheader", "a.md", &version).await,
+        version_actor(&app, "actorheader", "a.md", &version).await?,
         "José"
     );
 
     // Plain ASCII passes through unchanged.
-    let version = put_markdown(&app, "actorheader", "b.md", "# B updated\n", Some("Avery")).await;
+    let version = put_markdown(&app, "actorheader", "b.md", "# B updated\n", Some("Avery")).await?;
     assert_eq!(
-        version_actor(&app, "actorheader", "b.md", &version).await,
+        version_actor(&app, "actorheader", "b.md", &version).await?,
         "Avery"
     );
 
     // No header falls back to the gateway's surface label.
-    let version = put_markdown(&app, "actorheader", "c.md", "# C updated\n", None).await;
+    let version = put_markdown(&app, "actorheader", "c.md", "# C updated\n", None).await?;
     assert_eq!(
-        version_actor(&app, "actorheader", "c.md", &version).await,
+        version_actor(&app, "actorheader", "c.md", &version).await?,
         "rest"
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn first_import_records_transaction_actor_header() {
+async fn first_import_records_transaction_actor_header() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    store.create_library("actorcreate").await.unwrap();
+    store
+        .create_library("actorcreate")
+        .await
+        .context("create actorcreate library")?;
     let app = router(store);
 
-    let version = put_markdown(&app, "actorcreate", "fresh.md", "# Fresh\n", Some("Avery")).await;
+    let version = put_markdown(&app, "actorcreate", "fresh.md", "# Fresh\n", Some("Avery")).await?;
 
     assert_eq!(
-        version_actor(&app, "actorcreate", "fresh.md", &version).await,
+        version_actor(&app, "actorcreate", "fresh.md", &version).await?,
         "Avery"
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn delete_move_and_restore_record_transaction_actor_header() {
+async fn delete_move_and_restore_record_transaction_actor_header() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    store.create_library("actorops").await.unwrap();
+    store
+        .create_library("actorops")
+        .await
+        .context("create actorops library")?;
     let app = router(store);
 
-    let v1 = put_markdown(&app, "actorops", "keep.md", "# Doc one\n", None).await;
-    let _v2 = put_markdown(&app, "actorops", "keep.md", "# Doc two\n", None).await;
-    put_markdown(&app, "actorops", "doomed.md", "# Doomed\n", None).await;
+    let v1 = put_markdown(&app, "actorops", "keep.md", "# Doc one\n", None).await?;
+    let _v2 = put_markdown(&app, "actorops", "keep.md", "# Doc two\n", None).await?;
+    put_markdown(&app, "actorops", "doomed.md", "# Doomed\n", None).await?;
 
     // Move records the actor on its transaction.
     let response = app
@@ -1644,10 +1655,10 @@ async fn delete_move_and_restore_record_transaction_actor_header() {
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("x-quarry-transaction-actor", "Avery")
                 .body(Body::from(r#"{"to_path":"kept.md"}"#))
-                .unwrap(),
+                .context("build document move request")?,
         )
         .await
-        .unwrap();
+        .context("move document with transaction actor")?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body["actor"], "Avery");
@@ -1661,10 +1672,10 @@ async fn delete_move_and_restore_record_transaction_actor_header() {
                 .uri("/v1/libraries/actorops/documents/doomed.md")
                 .header("x-quarry-transaction-actor", "Avery")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build document delete request")?,
         )
         .await
-        .unwrap();
+        .context("delete document with transaction actor")?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
     assert_eq!(body["actor"], "Avery");
@@ -1682,23 +1693,29 @@ async fn delete_move_and_restore_record_transaction_actor_header() {
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("x-quarry-transaction-actor", "Avery")
                 .body(Body::from("{}"))
-                .unwrap(),
+                .context("build markdown version restore request")?,
         )
         .await
-        .unwrap();
+        .context("restore markdown document version with transaction actor")?;
     assert_eq!(response.status(), StatusCode::OK);
     let restored: Value = response_json(response).await;
-    let restored_version = restored["version"]["id"].as_str().unwrap();
+    let restored_version = restored["version"]["id"]
+        .as_str()
+        .context("restore response should include version id")?;
     assert_eq!(
-        version_actor(&app, "actorops", "kept.md", restored_version).await,
+        version_actor(&app, "actorops", "kept.md", restored_version).await?,
         "Avery"
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn raw_document_restore_records_transaction_actor_header() {
+async fn raw_document_restore_records_transaction_actor_header() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    store.create_library("actorraw").await.unwrap();
+    store
+        .create_library("actorraw")
+        .await
+        .context("create actorraw library")?;
     let app = router(store);
 
     // A plain-text document routes as a RawDocument (not `.md`, not a
@@ -1706,8 +1723,8 @@ async fn raw_document_restore_records_transaction_actor_header() {
     // (`restore_document_version_with_origin`) rather than the markdown
     // gateway. Restoring the current head short-circuits, so write two
     // versions and restore the first.
-    let v1 = put_plain_text(&app, "actorraw", "notes.txt", "raw one\n").await;
-    let _v2 = put_plain_text(&app, "actorraw", "notes.txt", "raw two\n").await;
+    let v1 = put_plain_text(&app, "actorraw", "notes.txt", "raw one\n").await?;
+    let _v2 = put_plain_text(&app, "actorraw", "notes.txt", "raw two\n").await?;
 
     let response = app
         .clone()
@@ -1720,22 +1737,30 @@ async fn raw_document_restore_records_transaction_actor_header() {
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("x-quarry-transaction-actor", "Avery")
                 .body(Body::from("{}"))
-                .unwrap(),
+                .context("build raw version restore request")?,
         )
         .await
-        .unwrap();
+        .context("restore raw document version with transaction actor")?;
     assert_eq!(response.status(), StatusCode::OK);
     let restored: Value = response_json(response).await;
-    let restored_version = restored["version"]["id"].as_str().unwrap();
+    let restored_version = restored["version"]["id"]
+        .as_str()
+        .context("raw restore response should include version id")?;
     assert_eq!(
-        version_actor(&app, "actorraw", "notes.txt", restored_version).await,
+        version_actor(&app, "actorraw", "notes.txt", restored_version).await?,
         "Avery"
     );
+    Ok(())
 }
 
 /// PUTs plain text (a RawDocument) into `library`, returning the written
 /// version id.
-async fn put_plain_text(app: &axum::Router, library: &str, path: &str, body: &str) -> String {
+async fn put_plain_text(
+    app: &axum::Router,
+    library: &str,
+    path: &str,
+    body: &str,
+) -> anyhow::Result<String> {
     let response = app
         .clone()
         .oneshot(
@@ -1744,13 +1769,16 @@ async fn put_plain_text(app: &axum::Router, library: &str, path: &str, body: &st
                 .uri(format!("/v1/libraries/{library}/documents/{path}"))
                 .header(header::CONTENT_TYPE, "text/plain")
                 .body(Body::from(body.to_string()))
-                .unwrap(),
+                .with_context(|| format!("build plain text PUT request for {library}/{path}"))?,
         )
         .await
-        .unwrap();
+        .with_context(|| format!("PUT plain text document {library}/{path}"))?;
     assert_eq!(response.status(), StatusCode::OK);
     let outcome: Value = response_json(response).await;
-    outcome["version"]["id"].as_str().unwrap().to_string()
+    Ok(outcome["version"]["id"]
+        .as_str()
+        .context("plain text PUT response should include version id")?
+        .to_string())
 }
 
 /// PUTs markdown into `library`, optionally with an
@@ -1761,7 +1789,7 @@ async fn put_markdown(
     path: &str,
     body: &str,
     actor_header: Option<&str>,
-) -> String {
+) -> anyhow::Result<String> {
     let mut request = Request::builder()
         .method(Method::PUT)
         .uri(format!("/v1/libraries/{library}/documents/{path}"))
@@ -1771,16 +1799,28 @@ async fn put_markdown(
     }
     let response = app
         .clone()
-        .oneshot(request.body(Body::from(body.to_string())).unwrap())
+        .oneshot(
+            request
+                .body(Body::from(body.to_string()))
+                .with_context(|| format!("build markdown PUT request for {library}/{path}"))?,
+        )
         .await
-        .unwrap();
+        .with_context(|| format!("PUT markdown document {library}/{path}"))?;
     assert_eq!(response.status(), StatusCode::OK);
     let outcome: Value = response_json(response).await;
-    outcome["version"]["id"].as_str().unwrap().to_string()
+    Ok(outcome["version"]["id"]
+        .as_str()
+        .context("markdown PUT response should include version id")?
+        .to_string())
 }
 
 /// The `"actor"` recorded for `version_id` of `path`, via GET `/versions`.
-async fn version_actor(app: &axum::Router, library: &str, path: &str, version_id: &str) -> Value {
+async fn version_actor(
+    app: &axum::Router,
+    library: &str,
+    path: &str,
+    version_id: &str,
+) -> anyhow::Result<Value> {
     let response = app
         .clone()
         .oneshot(
@@ -1788,18 +1828,20 @@ async fn version_actor(app: &axum::Router, library: &str, path: &str, version_id
                 .method(Method::GET)
                 .uri(format!("/v1/libraries/{library}/documents/{path}/versions"))
                 .body(Body::empty())
-                .unwrap(),
+                .with_context(|| format!("build version history request for {library}/{path}"))?,
         )
         .await
-        .unwrap();
+        .with_context(|| format!("read version history for {library}/{path}"))?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    body.as_array()
-        .unwrap()
+    Ok(body
+        .as_array()
+        .context("version history response should be an array")?
         .iter()
         .find(|version| version["id"] == version_id)
-        .unwrap()["actor"]
-        .clone()
+        .with_context(|| format!("version history should contain version id {version_id}"))?
+        ["actor"]
+        .clone())
 }
 
 #[tokio::test]
