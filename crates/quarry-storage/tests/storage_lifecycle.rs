@@ -3548,10 +3548,13 @@ async fn tmp_block_import_rejects_path_like_identifiers() -> TestResult {
 }
 
 #[tokio::test]
-async fn replace_block_tree_swaps_the_whole_row_set_transactionally() {
-    let root = tempfile::tempdir().unwrap();
+async fn replace_block_tree_swaps_the_whole_row_set_transactionally() -> TestResult {
+    let root = tempfile::tempdir().context("create replace block tree tempdir")?;
     let store = open_block_store(root.path()).await;
-    let library = store.create_library("blocks").await.unwrap();
+    let library = store
+        .create_library("blocks")
+        .await
+        .context("create replace block tree library")?;
     let outcome = store
         .import_block_document(
             &library.slug,
@@ -3563,34 +3566,38 @@ async fn replace_block_tree_swaps_the_whole_row_set_transactionally() {
             WritePrecondition::None,
         )
         .await
-        .unwrap();
+        .context("import document before replacing block tree")?;
 
     let mut next = 0u32;
     let replacement = quarry_collab_codec::markdown_to_block_rows("# New\n\nReplaced.\n", || {
         next += 1;
         format!("swap-{next}")
     })
-    .unwrap();
+    .context("parse replacement Markdown to block rows")?;
     store
         .replace_block_tree(&outcome.document.id, &replacement)
         .await
-        .unwrap();
+        .context("replace block tree with parsed rows")?;
 
-    let tree = store.load_block_tree(&outcome.document.id).await.unwrap();
+    let tree = store
+        .load_block_tree(&outcome.document.id)
+        .await
+        .context("load block tree after replacement")?;
     assert_eq!(tree, replacement);
     assert_eq!(
         store
             .export_block_document(&outcome.document.id)
             .await
-            .unwrap(),
+            .context("export block document after replacement")?,
         "# New\n\nReplaced.\n"
     );
 
     let missing = store
         .replace_block_tree("not-a-document", &replacement)
         .await
-        .unwrap_err();
+        .expect_err("replacing a missing block tree should fail");
     assert!(matches!(missing, QuarryError::NotFound(_)));
+    Ok(())
 }
 
 #[tokio::test]
