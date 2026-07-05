@@ -4231,10 +4231,13 @@ async fn block_mutation_commit_applies_rows_version_history_and_replays_duplicat
 }
 
 #[tokio::test]
-async fn block_mutation_commit_rejects_a_moved_head() {
-    let root = tempfile::tempdir().unwrap();
+async fn block_mutation_commit_rejects_a_moved_head() -> TestResult {
+    let root = tempfile::tempdir().context("create stale mutation tempdir")?;
     let store = open_block_store(root.path()).await;
-    let library = store.create_library("stale").await.unwrap();
+    let library = store
+        .create_library("stale")
+        .await
+        .context("create stale mutation library")?;
     let imported = store
         .import_block_document(
             &library.slug,
@@ -4246,11 +4249,11 @@ async fn block_mutation_commit_rejects_a_moved_head() {
             WritePrecondition::None,
         )
         .await
-        .unwrap();
+        .context("import original block document")?;
     let state = store
         .block_mutation_state(&library.slug, "doc.md", "ctx-1")
         .await
-        .unwrap();
+        .context("load stale mutation state")?;
     // Another write moves the head between load and commit.
     store
         .import_block_document(
@@ -4263,7 +4266,7 @@ async fn block_mutation_commit_rejects_a_moved_head() {
             WritePrecondition::None,
         )
         .await
-        .unwrap();
+        .context("move document head")?;
 
     let error = store
         .commit_block_mutation(
@@ -4288,9 +4291,10 @@ async fn block_mutation_commit_rejects_a_moved_head() {
             },
         )
         .await
-        .unwrap_err();
+        .expect_err("stale block mutation commit should fail precondition");
     assert!(matches!(error, QuarryError::PreconditionFailed(_)));
     let _ = imported;
+    Ok(())
 }
 
 #[tokio::test]
