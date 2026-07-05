@@ -260,7 +260,8 @@ async fn block_routes_reject_raw_documents_with_a_typed_error() -> anyhow::Resul
 }
 
 #[tokio::test]
-async fn block_transaction_insert_block_commits_one_version_and_emits_events() {
+async fn block_transaction_insert_block_commits_one_version_and_emits_events() -> anyhow::Result<()>
+{
     let (_root, app, store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "First.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -296,6 +297,8 @@ async fn block_transaction_insert_block_commits_one_version_and_emits_events() {
     let event = next_document_put_event(&mut events).await;
     assert_eq!(event.version_id(), Some(clock));
     assert_eq!(event.path(), Some("doc.md"));
+
+    Ok(())
 }
 
 #[tokio::test]
