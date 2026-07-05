@@ -3789,10 +3789,13 @@ async fn raw_documents_keep_the_byte_path_untouched() -> TestResult {
 }
 
 #[tokio::test]
-async fn import_surfaces_the_codecs_typed_unsupported_error() {
-    let root = tempfile::tempdir().unwrap();
+async fn import_surfaces_the_codecs_typed_unsupported_error() -> TestResult {
+    let root = tempfile::tempdir().context("create typed unsupported import tempdir")?;
     let store = open_block_store(root.path()).await;
-    let library = store.create_library("typed").await.unwrap();
+    let library = store
+        .create_library("typed")
+        .await
+        .context("create typed unsupported import library")?;
 
     let error = store
         .import_block_document(
@@ -3805,7 +3808,7 @@ async fn import_surfaces_the_codecs_typed_unsupported_error() {
             WritePrecondition::None,
         )
         .await
-        .unwrap_err();
+        .expect_err("critic markup import should fail with typed unsupported error");
 
     let QuarryError::UnsupportedMarkdown(inner) = error else {
         panic!("expected the codec's typed Unsupported error, got {error:?}");
@@ -3821,6 +3824,7 @@ async fn import_surfaces_the_codecs_typed_unsupported_error() {
             .await
             .is_err()
     );
+    Ok(())
 }
 
 #[tokio::test]
