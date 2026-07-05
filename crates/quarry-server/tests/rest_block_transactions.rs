@@ -369,7 +369,8 @@ async fn block_transaction_move_block_is_placement_only() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn block_transaction_set_block_type_preserves_identity_text_and_anchors() {
+async fn block_transaction_set_block_type_preserves_identity_text_and_anchors() -> anyhow::Result<()>
+{
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Heading soon.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -420,6 +421,8 @@ async fn block_transaction_set_block_type_preserves_identity_text_and_anchors() 
     assert_eq!(review["comments"][0]["anchor"]["startOffset"], 0);
     assert_eq!(review["comments"][0]["anchor"]["endOffset"], 7);
     assert_eq!(review["comments"][0]["status"], "open");
+
+    Ok(())
 }
 
 #[tokio::test]
