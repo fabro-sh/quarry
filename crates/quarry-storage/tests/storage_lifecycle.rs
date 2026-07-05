@@ -1676,8 +1676,8 @@ async fn explicit_transaction_commit_rejects_stale_heads_without_overwriting_new
 }
 
 #[tokio::test]
-async fn open_transaction_survives_restart_without_publishing_staged_cas() {
-    let root = tempfile::tempdir().unwrap();
+async fn open_transaction_survives_restart_without_publishing_staged_cas() -> TestResult {
+    let root = tempfile::tempdir()?;
     let db_path = root.path().join("quarry.db");
     let cas_path = root.path().join("cas");
     let store = QuarryStore::open(StoreConfig {
@@ -1686,8 +1686,11 @@ async fn open_transaction_survives_restart_without_publishing_staged_cas() {
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("restarttx").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("restarttx")
+        .await
+        .context("create library")?;
     let tx = store
         .begin_transaction(
             &library.slug,
@@ -1697,7 +1700,7 @@ async fn open_transaction_survives_restart_without_publishing_staged_cas() {
             serde_json::json!({}),
         )
         .await
-        .unwrap();
+        .context("begin transaction")?;
     store
         .stage_put(
             &tx.id,
@@ -1707,7 +1710,7 @@ async fn open_transaction_survives_restart_without_publishing_staged_cas() {
             "application/octet-stream",
         )
         .await
-        .unwrap();
+        .context("stage large CAS document")?;
     assert!(
         store
             .get_document(&library.slug, "docs/staged.bin")
@@ -1722,7 +1725,7 @@ async fn open_transaction_survives_restart_without_publishing_staged_cas() {
         lock_path: None,
     })
     .await
-    .unwrap();
+    .context("reopen store")?;
 
     assert!(
         reopened
@@ -1730,13 +1733,34 @@ async fn open_transaction_survives_restart_without_publishing_staged_cas() {
             .await
             .is_err()
     );
-    let transactions = reopened.list_transactions(&library.slug).await.unwrap();
+    let transactions = reopened
+        .list_transactions(&library.slug)
+        .await
+        .context("list transactions after restart")?;
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].state, quarry_core::TransactionState::Open);
-    assert_eq!(reopened.gc().await.unwrap().removed, 0);
+    assert_eq!(
+        reopened
+            .gc()
+            .await
+            .context("run gc before rollback")?
+            .removed,
+        0
+    );
 
-    reopened.rollback_transaction(&tx.id).await.unwrap();
-    assert_eq!(reopened.gc().await.unwrap().removed, 1);
+    reopened
+        .rollback_transaction(&tx.id)
+        .await
+        .context("rollback reopened transaction")?;
+    assert_eq!(
+        reopened
+            .gc()
+            .await
+            .context("run gc after rollback")?
+            .removed,
+        1
+    );
+    Ok(())
 }
 
 #[tokio::test]
