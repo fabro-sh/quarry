@@ -747,9 +747,12 @@ async fn document_put_events_echo_origin_id() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn document_delete_events_echo_origin_id_and_doc_id() {
+async fn document_delete_events_echo_origin_id_and_doc_id() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    store.create_library("delete-origin").await.unwrap();
+    store
+        .create_library("delete-origin")
+        .await
+        .context("create delete-origin library")?;
     let written = store
         .put_document(quarry_storage::PutDocumentRequest {
             library: ("delete-origin").to_string(),
@@ -763,7 +766,7 @@ async fn document_delete_events_echo_origin_id_and_doc_id() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write document before delete event test")?;
     let mut events = store.subscribe_events();
     let app = router(store);
 
@@ -774,24 +777,25 @@ async fn document_delete_events_echo_origin_id_and_doc_id() {
                 .uri("/v1/libraries/delete-origin/documents/live.md")
                 .header("X-Quarry-Origin-Id", "browser:session-1")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build document DELETE request")?,
         )
         .await
-        .unwrap();
+        .context("delete document with origin id")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     let event = timeout(Duration::from_secs(2), async {
         loop {
-            let event = events.recv().await.unwrap();
+            let event = events.recv().await.context("receive store event")?;
             if event.kind() == StoreEventKind::DocumentDelete {
-                break event;
+                break Ok::<_, anyhow::Error>(event);
             }
         }
     })
     .await
-    .unwrap();
+    .context("wait for document delete event")??;
     assert_eq!(event.doc_id(), Some(written.document.id.as_str()));
     assert_eq!(event.origin_id(), Some("browser:session-1"));
+    Ok(())
 }
 
 #[tokio::test]
