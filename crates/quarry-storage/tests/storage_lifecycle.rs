@@ -4097,10 +4097,13 @@ async fn delete_document_removes_the_block_projection() -> TestResult {
 }
 
 #[tokio::test]
-async fn empty_body_import_canonicalizes_to_one_empty_paragraph_row() {
-    let root = tempfile::tempdir().unwrap();
+async fn empty_body_import_canonicalizes_to_one_empty_paragraph_row() -> TestResult {
+    let root = tempfile::tempdir().context("create empty import tempdir")?;
     let store = open_block_store(root.path()).await;
-    let library = store.create_library("empty").await.unwrap();
+    let library = store
+        .create_library("empty")
+        .await
+        .context("create empty import library")?;
     let outcome = store
         .import_block_document(
             &library.slug,
@@ -4112,9 +4115,12 @@ async fn empty_body_import_canonicalizes_to_one_empty_paragraph_row() {
             WritePrecondition::None,
         )
         .await
-        .unwrap();
+        .context("import frontmatter-only block document")?;
 
-    let tree = store.load_block_tree(&outcome.document.id).await.unwrap();
+    let tree = store
+        .load_block_tree(&outcome.document.id)
+        .await
+        .context("load frontmatter-only block tree")?;
     assert_eq!(tree.len(), 1);
     assert_eq!(tree[0].block_type, "p");
     assert_eq!(tree[0].text, "");
@@ -4122,9 +4128,10 @@ async fn empty_body_import_canonicalizes_to_one_empty_paragraph_row() {
         store
             .export_block_document(&outcome.document.id)
             .await
-            .unwrap(),
+            .context("export frontmatter-only block document")?,
         "---\ntitle: Stub\n---\n"
     );
+    Ok(())
 }
 
 #[tokio::test]
