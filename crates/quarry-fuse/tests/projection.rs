@@ -47,9 +47,13 @@ async fn mount_library_with_shutdown_reports_unsupported_on_non_linux() {
 }
 
 #[tokio::test]
-async fn projection_lists_virtual_directories_and_reads_committed_documents() {
+async fn projection_lists_virtual_directories_and_reads_committed_documents() -> anyhow::Result<()>
+{
     let store = test_store().await;
-    let library = store.create_library("notes").await.unwrap();
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -63,7 +67,7 @@ async fn projection_lists_virtual_directories_and_reads_committed_documents() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write first plan document")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -77,18 +81,24 @@ async fn projection_lists_virtual_directories_and_reads_committed_documents() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write second plan document")?;
 
     let projection = FuseProjection::open(store.clone(), &library.slug, true)
         .await
-        .unwrap();
+        .context("open read-only projection")?;
 
-    let root_entries = projection.list_dir("").await.unwrap();
+    let root_entries = projection
+        .list_dir("")
+        .await
+        .context("list projection root")?;
     assert_eq!(root_entries.len(), 1);
     assert_eq!(root_entries[0].name, "plans");
     assert_eq!(root_entries[0].kind, FuseNodeKind::Directory);
 
-    let plan_entries = projection.list_dir("plans").await.unwrap();
+    let plan_entries = projection
+        .list_dir("plans")
+        .await
+        .context("list plans directory")?;
     assert_eq!(
         plan_entries
             .iter()
@@ -100,9 +110,13 @@ async fn projection_lists_virtual_directories_and_reads_committed_documents() {
         ]
     );
     assert_eq!(
-        projection.read_file("plans/one.md", 1, 2).await.unwrap(),
+        projection
+            .read_file("plans/one.md", 1, 2)
+            .await
+            .context("read projection file slice")?,
         b"ne"
     );
+    Ok(())
 }
 
 #[tokio::test]
