@@ -4298,10 +4298,13 @@ async fn block_mutation_commit_rejects_a_moved_head() -> TestResult {
 }
 
 #[tokio::test]
-async fn block_mutation_state_materializes_rows_for_legacy_written_documents() {
-    let root = tempfile::tempdir().unwrap();
+async fn block_mutation_state_materializes_rows_for_legacy_written_documents() -> TestResult {
+    let root = tempfile::tempdir().context("create legacy state tempdir")?;
     let store = open_block_store(root.path()).await;
-    let library = store.create_library("legacy-state").await.unwrap();
+    let library = store
+        .create_library("legacy-state")
+        .await
+        .context("create legacy state library")?;
     // A legacy put creates a markdown document with no block projection.
     store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -4316,12 +4319,12 @@ async fn block_mutation_state_materializes_rows_for_legacy_written_documents() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("put legacy markdown document")?;
 
     let state = store
         .block_mutation_state(&library.slug, "legacy.md", "ctx-1")
         .await
-        .unwrap();
+        .context("materialize legacy document mutation state")?;
     assert!(state.projection_missing);
     let shape: Vec<&str> = state
         .rows
@@ -4335,9 +4338,10 @@ async fn block_mutation_state_materializes_rows_for_legacy_written_documents() {
         store
             .load_block_tree(&state.document_id)
             .await
-            .unwrap()
+            .context("load legacy document block projection")?
             .is_empty()
     );
+    Ok(())
 }
 
 #[tokio::test]
