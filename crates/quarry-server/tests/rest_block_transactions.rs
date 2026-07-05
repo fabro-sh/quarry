@@ -426,7 +426,7 @@ async fn block_transaction_set_block_type_preserves_identity_text_and_anchors() 
 }
 
 #[tokio::test]
-async fn block_transaction_set_block_attrs_edits_raw_markdown_blocks() {
+async fn block_transaction_set_block_attrs_edits_raw_markdown_blocks() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "<div>\nopaque\n</div>\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -453,6 +453,8 @@ async fn block_transaction_set_block_attrs_edits_raw_markdown_blocks() {
     );
     let after = get_block_tree(&app, "doc.md").await;
     assert_eq!(after["blocks"][0]["block_id"], block_id.as_str());
+
+    Ok(())
 }
 
 #[tokio::test]
