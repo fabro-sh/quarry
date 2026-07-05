@@ -42,38 +42,36 @@ fn assert_json_timestamp(value: &Value) {
 }
 
 #[tokio::test]
-async fn document_feature_surface_matches_compiled_features() {
+async fn document_feature_surface_matches_compiled_features() -> anyhow::Result<()> {
     let (_root, app, _store) = document_test_app().await;
     let tmp_documents = cfg!(feature = "tmp-documents");
     let lib_documents = cfg!(feature = "lib-documents");
 
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/v1/capabilities")
+        .body(Body::empty())
+        .context("build capabilities request")?;
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/capabilities")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(request)
         .await
-        .unwrap();
+        .context("send capabilities request")?;
     assert_eq!(response.status(), StatusCode::OK);
     let capabilities: Value = response_json(response).await;
     assert_eq!(capabilities["tmp_documents"], tmp_documents);
     assert_eq!(capabilities["lib_documents"], lib_documents);
 
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/v1/openapi.json")
+        .body(Body::empty())
+        .context("build OpenAPI request")?;
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/openapi.json")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(request)
         .await
-        .unwrap();
+        .context("send OpenAPI request")?;
     assert_eq!(response.status(), StatusCode::OK);
     let openapi: Value = response_json(response).await;
     assert!(openapi["paths"]["/v1/capabilities"].is_object());
@@ -126,18 +124,17 @@ async fn document_feature_surface_matches_compiled_features() {
         lib_documents
     );
 
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/.well-known/agent.json")
+        .header("host", "127.0.0.1:7831")
+        .body(Body::empty())
+        .context("build agent discovery request")?;
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/.well-known/agent.json")
-                .header("host", "127.0.0.1:7831")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(request)
         .await
-        .unwrap();
+        .context("send agent discovery request")?;
     assert_eq!(response.status(), StatusCode::OK);
     let discovery: Value = response_json(response).await;
     assert_eq!(
@@ -164,7 +161,7 @@ async fn document_feature_surface_matches_compiled_features() {
         assert!(
             discovery["capabilities"]
                 .as_array()
-                .unwrap()
+                .context("discovery capabilities should be an array")?
                 .iter()
                 .any(|capability| capability == "tmp_documents")
         );
@@ -173,17 +170,16 @@ async fn document_feature_surface_matches_compiled_features() {
         assert!(discovery["route_hints"][removed_tmp_signal_key].is_null());
     }
 
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/v1/tmp/documents")
+        .body(Body::empty())
+        .context("build tmp documents collection request")?;
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/tmp/documents")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(request)
         .await
-        .unwrap();
+        .context("send tmp documents collection request")?;
     assert_eq!(
         response.status(),
         if tmp_documents {
@@ -193,17 +189,16 @@ async fn document_feature_surface_matches_compiled_features() {
         }
     );
 
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/v1/libraries")
+        .body(Body::empty())
+        .context("build libraries collection request")?;
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/v1/libraries")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(request)
         .await
-        .unwrap();
+        .context("send libraries collection request")?;
     assert_eq!(
         response.status(),
         if lib_documents {
@@ -219,10 +214,10 @@ async fn document_feature_surface_matches_compiled_features() {
                 .method(Method::GET)
                 .uri("/v1/collab/missing")
                 .body(Body::empty())
-                .unwrap(),
+                .context("build missing collab request")?,
         )
         .await
-        .unwrap();
+        .context("send missing collab request")?;
     assert_eq!(
         response.status(),
         if tmp_documents || lib_documents {
@@ -231,6 +226,7 @@ async fn document_feature_surface_matches_compiled_features() {
             StatusCode::NOT_FOUND
         }
     );
+    Ok(())
 }
 
 #[cfg(feature = "tmp-documents")]
