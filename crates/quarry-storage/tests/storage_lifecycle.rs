@@ -803,16 +803,19 @@ async fn concurrent_staged_creates_same_path_publish_by_staged_document_id() {
 }
 
 #[tokio::test]
-async fn link_index_updates_from_markdown_writes_and_ignores_binary_content() {
-    let root = tempfile::tempdir().unwrap();
+async fn link_index_updates_from_markdown_writes_and_ignores_binary_content() -> TestResult {
+    let root = tempfile::tempdir()?;
     let store = QuarryStore::open(StoreConfig {
         db_path: root.path().join("quarry.db"),
         cas_path: root.path().join("cas"),
         lock_path: None,
     })
     .await
-    .unwrap();
-    let library = store.create_library("links").await.unwrap();
+    .context("open store")?;
+    let library = store
+        .create_library("links")
+        .await
+        .context("create library")?;
 
     store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -830,7 +833,7 @@ async fn link_index_updates_from_markdown_writes_and_ignores_binary_content() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write target markdown document")?;
 
     let source = store
         .put_document(quarry_storage::PutDocumentRequest {
@@ -845,12 +848,12 @@ origin_id: None,
 transaction: quarry_storage::TransactionMetadata::default(),
 })
         .await
-        .unwrap();
+        .context("write source markdown document")?;
 
     let outgoing = store
         .outgoing_links(&library.slug, "source.md")
         .await
-        .unwrap();
+        .context("load source outgoing links")?;
     assert!(outgoing.links.iter().any(|link| {
         link.target_kind == "wiki_link"
             && link.target_path.as_deref() == Some("target.md")
@@ -879,7 +882,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
     let target_links = store
         .outgoing_links(&library.slug, "target.md")
         .await
-        .unwrap();
+        .context("load target outgoing links")?;
     assert!(target_links.links.iter().any(|link| {
         link.target_kind == "heading"
             && link.target_text == "Target Heading"
@@ -901,12 +904,12 @@ transaction: quarry_storage::TransactionMetadata::default(),
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write binary document")?;
     assert!(
         store
             .outgoing_links(&library.slug, "raw.bin")
             .await
-            .unwrap()
+            .context("load binary outgoing links")?
             .links
             .is_empty()
     );
@@ -922,7 +925,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
             None,
         )
         .await
-        .unwrap();
+        .context("load graph focused on target")?;
     assert!(
         focused_graph
             .nodes
@@ -955,12 +958,12 @@ transaction: quarry_storage::TransactionMetadata::default(),
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("rewrite source without links")?;
     assert!(
         store
             .outgoing_links(&library.slug, "source.md")
             .await
-            .unwrap()
+            .context("load source outgoing links after rewrite")?
             .links
             .is_empty()
     );
@@ -968,7 +971,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
         store
             .backlinks(&library.slug, "target.md")
             .await
-            .unwrap()
+            .context("load target backlinks after source rewrite")?
             .links
             .is_empty()
     );
@@ -982,7 +985,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
             serde_json::json!({}),
         )
         .await
-        .unwrap();
+        .context("begin source link restore transaction")?;
     store
         .stage_put(
             &tx.id,
@@ -992,18 +995,22 @@ transaction: quarry_storage::TransactionMetadata::default(),
             "text/markdown",
         )
         .await
-        .unwrap();
-    store.commit_transaction(&tx.id).await.unwrap();
+        .context("stage source link restore")?;
+    store
+        .commit_transaction(&tx.id)
+        .await
+        .context("commit source link restore transaction")?;
 
     assert!(
         store
             .backlinks(&library.slug, "target.md")
             .await
-            .unwrap()
+            .context("load target backlinks after transaction restore")?
             .links
             .iter()
             .any(|link| link.src_path == "source.md")
     );
+    Ok(())
 }
 
 #[tokio::test]
