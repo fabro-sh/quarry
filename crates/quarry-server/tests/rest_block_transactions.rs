@@ -957,7 +957,8 @@ async fn block_transaction_suggestion_accept_applies_replacement_and_resolves() 
 }
 
 #[tokio::test]
-async fn block_transaction_suggestion_reject_resolves_without_changing_text() {
+async fn block_transaction_suggestion_reject_resolves_without_changing_text() -> anyhow::Result<()>
+{
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Keep this text.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -1036,6 +1037,8 @@ async fn block_transaction_suggestion_reject_resolves_without_changing_text() {
     )
     .await;
     assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    Ok(())
 }
 
 #[tokio::test]
