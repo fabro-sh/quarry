@@ -449,7 +449,7 @@ async fn wait_for_markdown_containing(app: &axum::Router, path: &str, needle: &s
 }
 
 #[tokio::test]
-async fn legacy_edit_ops_and_review_process_endpoints_are_gone() {
+async fn legacy_edit_ops_and_review_process_endpoints_are_gone() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Hello.\n").await;
 
@@ -493,10 +493,12 @@ async fn legacy_edit_ops_and_review_process_endpoints_are_gone() {
     // The read-side review projection is unaffected by the deletion.
     let review = get_block_review(&app, "doc.md", false).await;
     assert_eq!(review["comments"], serde_json::json!([]));
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn session_seeds_from_rows_and_final_checkpoint_persists_typing() {
+async fn session_seeds_from_rows_and_final_checkpoint_persists_typing() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Hello session.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -519,10 +521,12 @@ async fn session_seeds_from_rows_and_final_checkpoint_persists_typing() {
     assert_eq!(tree["blocks"][0]["text"], "Hello session. Typed live.");
 
     server.abort();
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn shutdown_closes_live_collab_socket_and_runs_final_checkpoint() {
+async fn shutdown_closes_live_collab_socket_and_runs_final_checkpoint() -> anyhow::Result<()> {
     let (_root, addr, app, store, shutdown, server) = spawn_shutdown_session_server().await;
     put_block_markdown(&app, "live.md", "Shutdown target.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -552,13 +556,15 @@ async fn shutdown_closes_live_collab_socket_and_runs_final_checkpoint() {
         .expect("server should finish after cooperative shutdown")
         .unwrap()
         .unwrap();
+
+    Ok(())
 }
 
 /// A restore during a live session dispatches through the session mode
 /// switch: the restored content lands in the live doc as a collaborator
 /// edit, never by clearing the projection underneath the session.
 #[tokio::test]
-async fn version_restore_lands_in_a_live_session_as_a_collaborator_edit() {
+async fn version_restore_lands_in_a_live_session_as_a_collaborator_edit() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Stable block.\n\nOld text.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -598,11 +604,14 @@ async fn version_restore_lands_in_a_live_session_as_a_collaborator_edit() {
 
     socket.close(None).await.unwrap();
     server.abort();
+
+    Ok(())
 }
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn tmp_markdown_put_lands_in_an_active_session_as_a_collaborator_edit() {
+async fn tmp_markdown_put_lands_in_an_active_session_as_a_collaborator_edit() -> anyhow::Result<()>
+{
     let (_root, addr, app, store, server) = spawn_session_server().await;
     let response = app
         .clone()
@@ -649,11 +658,13 @@ async fn tmp_markdown_put_lands_in_an_active_session_as_a_collaborator_edit() {
 
     socket.close(None).await.unwrap();
     server.abort();
+
+    Ok(())
 }
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test(flavor = "current_thread")]
-async fn tmp_session_and_markdown_write_logs_do_not_emit_capability_secret() {
+async fn tmp_session_and_markdown_write_logs_do_not_emit_capability_secret() -> anyhow::Result<()> {
     let (logs, _guard) = capture_debug_logs();
     let (_root, addr, app, store, server) = spawn_session_server().await;
     let response = app
@@ -715,13 +726,15 @@ async fn tmp_session_and_markdown_write_logs_do_not_emit_capability_secret() {
 
     socket.close(None).await.unwrap();
     server.abort();
+
+    Ok(())
 }
 
 /// A metadata patch composes with a live session: it waits on the document
 /// mutex, flushes pending typing, and commits the typed rows under the new
 /// metadata -- typing and frontmatter both land, the session stays alive.
 #[tokio::test]
-async fn metadata_patch_composes_with_an_active_session() {
+async fn metadata_patch_composes_with_an_active_session() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "meta-live.md", "Session content.\n").await;
     let document_id = document_id_of(&store, "meta-live.md").await;
@@ -759,6 +772,8 @@ async fn metadata_patch_composes_with_an_active_session() {
     assert!(content.contains("title: Live Patch"), "{content}");
     socket.close(None).await.ok();
     server.abort();
+
+    Ok(())
 }
 
 /// The reviewer's probe, pinned directly: in-flight (un-checkpointed) typing
@@ -766,7 +781,8 @@ async fn metadata_patch_composes_with_an_active_session() {
 /// write carries its base clock, so the merge is a true three-way: BOTH
 /// edits survive -- no last-writer-wins in either direction.
 #[tokio::test]
-async fn in_flight_typing_and_concurrent_file_write_both_survive_through_the_session() {
+async fn in_flight_typing_and_concurrent_file_write_both_survive_through_the_session()
+-> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     // The separator keeps the typed region and the file-edited region apart:
     // edits to ADJACENT blocks are conflict-absorbed by design (pinned by
@@ -831,13 +847,16 @@ async fn in_flight_typing_and_concurrent_file_write_both_survive_through_the_ses
     assert_eq!(review["conflicts"].as_array().unwrap().len(), 0);
     socket.close(None).await.ok();
     server.abort();
+
+    Ok(())
 }
 
 /// A session-mode gateway transaction targeting the block a collaborator's
 /// cursor sits in must SPLICE (only changed spans edited): the cursor's Yjs
 /// item survives and a sticky index keeps resolving to the same character.
 #[tokio::test]
-async fn session_transaction_splices_so_cursors_in_the_edited_block_survive() {
+async fn session_transaction_splices_so_cursors_in_the_edited_block_survive() -> anyhow::Result<()>
+{
     use yrs::{Assoc, IndexedSequence};
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(
@@ -904,6 +923,8 @@ async fn session_transaction_splices_so_cursors_in_the_edited_block_survive() {
     drop(txn);
     socket.close(None).await.unwrap();
     server.abort();
+
+    Ok(())
 }
 
 /// Phase 5 checkpoint-ack protocol: a custom `MSG_QUARRY_CHECKPOINT` frame
@@ -912,7 +933,7 @@ async fn session_transaction_splices_so_cursors_in_the_edited_block_survive() {
 /// session-mode transaction). A client compares the acked snapshot against
 /// its own doc — equality means "everything I see is canonical" (`Saved`).
 #[tokio::test]
-async fn checkpoint_commits_broadcast_snapshot_ack_frames() {
+async fn checkpoint_commits_broadcast_snapshot_ack_frames() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Ack target.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -977,6 +998,8 @@ async fn checkpoint_commits_broadcast_snapshot_ack_frames() {
 
     socket.close(None).await.unwrap();
     server.abort();
+
+    Ok(())
 }
 
 /// A checkpoint that cannot project (here: a bare text node at block level,
@@ -984,7 +1007,7 @@ async fn checkpoint_commits_broadcast_snapshot_ack_frames() {
 /// `MSG_QUARRY_CHECKPOINT_FAILED` frame so still-connected browsers surface
 /// "Save failed" instead of a benign "Saving…".
 #[tokio::test]
-async fn failing_checkpoints_broadcast_a_checkpoint_failed_frame() {
+async fn failing_checkpoints_broadcast_a_checkpoint_failed_frame() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Failure probe.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -997,6 +1020,8 @@ async fn failing_checkpoints_broadcast_a_checkpoint_failed_frame() {
 
     next_checkpoint_failure(&mut socket, &doc).await;
     server.abort();
+
+    Ok(())
 }
 
 /// Waits for the next `MSG_QUARRY_CHECKPOINT_FAILED` frame, applying
@@ -1089,7 +1114,7 @@ fn nth_block_text_in(txn: &mut yrs::TransactionMut<'_>, index: usize) -> XmlText
 /// session into unpersistable state. The checkpoint drops the unknown mark
 /// and persists everything else.
 #[tokio::test]
-async fn checkpoint_succeeds_despite_unknown_inline_marks() {
+async fn checkpoint_succeeds_despite_unknown_inline_marks() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Mark target text.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -1129,6 +1154,8 @@ async fn checkpoint_succeeds_despite_unknown_inline_marks() {
 
     socket.close(None).await.unwrap();
     server.abort();
+
+    Ok(())
 }
 
 /// The R1 probe: a KNOWN `code` mark spanning a link's inner text (the
@@ -1137,7 +1164,7 @@ async fn checkpoint_succeeds_despite_unknown_inline_marks() {
 /// the link text instead of wedging every checkpoint with
 /// "code mark on a non-text span".
 #[tokio::test]
-async fn checkpoint_succeeds_with_code_marks_inside_link_text() {
+async fn checkpoint_succeeds_with_code_marks_inside_link_text() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "See [docs](https://example.test) now.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -1173,6 +1200,8 @@ async fn checkpoint_succeeds_with_code_marks_inside_link_text() {
 
     socket.close(None).await.unwrap();
     server.abort();
+
+    Ok(())
 }
 
 /// Resolves the first inline embed (a link) inside an open transaction.
@@ -1196,7 +1225,7 @@ fn first_embed_in(txn: &mut yrs::TransactionMut<'_>, block: &XmlTextRef) -> XmlT
 /// failed on the unknown mark and ALL un-checkpointed edits (including
 /// plain typing) were lost with only a warn log.
 #[tokio::test]
-async fn final_checkpoint_persists_typing_despite_unknown_inline_marks() {
+async fn final_checkpoint_persists_typing_despite_unknown_inline_marks() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Discard probe.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -1222,10 +1251,12 @@ async fn final_checkpoint_persists_typing_despite_unknown_inline_marks() {
     let tree = get_block_tree(&app, "live.md").await;
     assert_eq!(tree["blocks"][0]["marks"], serde_json::json!([]));
     server.abort();
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn multiple_typed_updates_coalesce_into_one_debounced_checkpoint() {
+async fn multiple_typed_updates_coalesce_into_one_debounced_checkpoint() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Coalesce target.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -1277,6 +1308,8 @@ async fn multiple_typed_updates_coalesce_into_one_debounced_checkpoint() {
         versions_before + 1
     );
     server.abort();
+
+    Ok(())
 }
 
 async fn raw_versions(app: &axum::Router, path: &str) -> Value {
@@ -1298,7 +1331,7 @@ async fn raw_versions(app: &axum::Router, path: &str) -> Value {
 }
 
 #[tokio::test]
-async fn session_checkpoint_attributes_awareness_author() {
+async fn session_checkpoint_attributes_awareness_author() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Attribution target.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -1319,13 +1352,15 @@ async fn session_checkpoint_attributes_awareness_author() {
         "Avery"
     );
     server.abort();
+
+    Ok(())
 }
 
 /// The abrupt tab-close case: the client never sends an awareness removal,
 /// so the author name survives into the final post-disconnect checkpoint
 /// (directly in awareness, or via the session's cached label).
 #[tokio::test]
-async fn final_checkpoint_after_disconnect_attributes_author() {
+async fn final_checkpoint_after_disconnect_attributes_author() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Disconnect target.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -1347,13 +1382,15 @@ async fn final_checkpoint_after_disconnect_attributes_author() {
         "Avery"
     );
     server.abort();
+
+    Ok(())
 }
 
 /// Forces the `live_actor` cache path: after the named participant withdraws
 /// their awareness state, the next checkpoint observes a name-less awareness
 /// and must fall back to the label cached by the first checkpoint.
 #[tokio::test]
-async fn checkpoint_after_awareness_removal_uses_cached_author() {
+async fn checkpoint_after_awareness_removal_uses_cached_author() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Cache target.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -1386,10 +1423,12 @@ async fn checkpoint_after_awareness_removal_uses_cached_author() {
         "Avery"
     );
     server.abort();
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn session_transaction_lands_in_live_doc_and_rows_before_ack() {
+async fn session_transaction_lands_in_live_doc_and_rows_before_ack() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Humans here.\n\nAgent target.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -1425,10 +1464,12 @@ async fn session_transaction_lands_in_live_doc_and_rows_before_ack() {
 
     socket.close(None).await.unwrap();
     server.abort();
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn session_transaction_coalesces_unflushed_typing_first() {
+async fn session_transaction_coalesces_unflushed_typing_first() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Typing block.\n\nAgent block.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -1468,10 +1509,12 @@ async fn session_transaction_coalesces_unflushed_typing_first() {
 
     socket.close(None).await.unwrap();
     server.abort();
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn transaction_racing_session_seed_is_never_rejected() {
+async fn transaction_racing_session_seed_is_never_rejected() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "race.md", "Race target.\n").await;
     let document_id = document_id_of(&store, "race.md").await;
@@ -1507,10 +1550,12 @@ async fn transaction_racing_session_seed_is_never_rejected() {
     }
     socket.close(None).await.unwrap();
     server.abort();
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn transaction_racing_final_checkpoint_and_discard_succeeds() {
+async fn transaction_racing_final_checkpoint_and_discard_succeeds() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "race2.md", "First block.\n\nSecond block.\n").await;
     let document_id = document_id_of(&store, "race2.md").await;
@@ -1545,10 +1590,12 @@ async fn transaction_racing_final_checkpoint_and_discard_succeeds() {
     let markdown = wait_for_markdown_containing(&app, "race2.md", "typed").await;
     assert_eq!(markdown, "First block. typed\n\nOp landed.\n");
     server.abort();
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn two_transactions_share_one_session() {
+async fn two_transactions_share_one_session() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Alpha.\n\nBeta.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -1594,6 +1641,8 @@ async fn two_transactions_share_one_session() {
     wait_for_yjs_plain_text(&mut socket, &doc, "Alpha rewritten.Beta rewritten.").await;
     socket.close(None).await.unwrap();
     server.abort();
+
+    Ok(())
 }
 
 /// Phase 5 deleted the PUT-as-checkpoint transitional rule: a Markdown PUT
@@ -1602,7 +1651,7 @@ async fn two_transactions_share_one_session() {
 /// honored, it merges into the live doc as a collaborator edit, and the
 /// session's own typing survives the merge.
 #[tokio::test]
-async fn browser_origin_markdown_put_is_an_ordinary_reconciled_write() {
+async fn browser_origin_markdown_put_is_an_ordinary_reconciled_write() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(
         &app,
@@ -1653,6 +1702,8 @@ async fn browser_origin_markdown_put_is_an_ordinary_reconciled_write() {
 
     socket.close(None).await.unwrap();
     server.abort();
+
+    Ok(())
 }
 
 async fn head_etag(app: &axum::Router, path: &str) -> String {
@@ -1678,7 +1729,7 @@ async fn head_etag(app: &axum::Router, path: &str) -> String {
 }
 
 #[tokio::test]
-async fn server_restart_reseeds_sessions_from_last_checkpoint() {
+async fn server_restart_reseeds_sessions_from_last_checkpoint() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Before restart.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -1711,10 +1762,12 @@ async fn server_restart_reseeds_sessions_from_last_checkpoint() {
     assert_eq!(yjs_plain_text(&doc), "Before restart. Checkpointed.");
     socket.close(None).await.unwrap();
     server.abort();
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn session_review_transaction_renders_marks_and_meta_for_browsers() {
+async fn session_review_transaction_renders_marks_and_meta_for_browsers() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Comment on this text.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -1774,10 +1827,12 @@ async fn session_review_transaction_renders_marks_and_meta_for_browsers() {
 
     socket.close(None).await.unwrap();
     server.abort();
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn browser_created_comment_checkpoints_into_review_rows() {
+async fn browser_created_comment_checkpoints_into_review_rows() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Browser comments here.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -1832,13 +1887,15 @@ async fn browser_created_comment_checkpoints_into_review_rows() {
     assert_eq!(comment["anchor"]["endOffset"], 16);
     assert_eq!(comment["quote"], "comments");
     server.abort();
+
+    Ok(())
 }
 
 /// Resolving a comment from the browser (a meta-map status flip; the text
 /// mark stays) must keep the anchor in the committed rows so the NEXT
 /// session still seeds the resolved comment's mark.
 #[tokio::test]
-async fn browser_resolved_comment_keeps_its_anchor_for_the_next_seed() {
+async fn browser_resolved_comment_keeps_its_anchor_for_the_next_seed() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Resolve keeps anchors.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -1919,10 +1976,12 @@ async fn browser_resolved_comment_keeps_its_anchor_for_the_next_seed() {
         "the reseeded doc carries the resolved comment's mark"
     );
     server.abort();
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn browser_review_map_body_edit_checkpoints_into_review_rows() {
+async fn browser_review_map_body_edit_checkpoints_into_review_rows() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Browser edits comments.\n").await;
     let document_id = document_id_of(&store, "live.md").await;
@@ -1986,10 +2045,12 @@ async fn browser_review_map_body_edit_checkpoints_into_review_rows() {
     assert_eq!(review["comments"][0]["body"], "Edited from browser map");
     assert_eq!(review["comments"][0]["editedAt"], edited_at);
     server.abort();
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn raw_documents_refuse_sessions() {
+async fn raw_documents_refuse_sessions() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     let response = app
         .clone()
@@ -2019,4 +2080,6 @@ async fn raw_documents_refuse_sessions() {
         None | Some(Ok(TungsteniteMessage::Close(_))) | Some(Err(_))
     ));
     server.abort();
+
+    Ok(())
 }

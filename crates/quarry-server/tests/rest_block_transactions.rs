@@ -1611,7 +1611,7 @@ async fn raw_markdown_attrs_must_keep_the_markdown_key() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn ops_against_raw_markdown_blocks_are_invalid_transactions() {
+async fn ops_against_raw_markdown_blocks_are_invalid_transactions() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Para.\n\n<div>\nopaque\n</div>\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -1725,10 +1725,12 @@ async fn ops_against_raw_markdown_blocks_are_invalid_transactions() {
         get_document_markdown(&app, "doc.md").await,
         "Para.\n\n<div>\nopaque\n</div>\n"
     );
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn move_block_preserves_children_and_review_anchors() {
+async fn move_block_preserves_children_and_review_anchors() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "```rust\nline one\n```\n\nAfter.\n").await;
     let tree = get_block_tree(&app, "doc.md").await;
@@ -1788,4 +1790,6 @@ async fn move_block_preserves_children_and_review_anchors() {
     assert_eq!(comment["anchor"]["blockId"], code_line.as_str());
     assert_eq!(comment["anchor"]["startOffset"], 0);
     assert_eq!(comment["anchor"]["endOffset"], 4);
+
+    Ok(())
 }
