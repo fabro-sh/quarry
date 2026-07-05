@@ -3601,10 +3601,13 @@ async fn replace_block_tree_swaps_the_whole_row_set_transactionally() -> TestRes
 }
 
 #[tokio::test]
-async fn block_review_anchors_validate_utf16_boundaries_and_survive_restart() {
-    let root = tempfile::tempdir().unwrap();
+async fn block_review_anchors_validate_utf16_boundaries_and_survive_restart() -> TestResult {
+    let root = tempfile::tempdir().context("create block review anchor tempdir")?;
     let store = open_block_store(root.path()).await;
-    let library = store.create_library("anchors").await.unwrap();
+    let library = store
+        .create_library("anchors")
+        .await
+        .context("create block review anchor library")?;
     let outcome = store
         .import_block_document(
             &library.slug,
@@ -3616,8 +3619,11 @@ async fn block_review_anchors_validate_utf16_boundaries_and_survive_restart() {
             WritePrecondition::None,
         )
         .await
-        .unwrap();
-    let tree = store.load_block_tree(&outcome.document.id).await.unwrap();
+        .context("import document with UTF-16 anchor target")?;
+    let tree = store
+        .load_block_tree(&outcome.document.id)
+        .await
+        .context("load block tree with UTF-16 anchor target")?;
     let block_id = tree[0].block_id.clone();
     // "Anchor target " (14) + 👍 (2, surrogate pair) + " emoji." (7) = 23.
     assert_eq!(tree[0].text, "Anchor target 👍 emoji.");
@@ -3641,46 +3647,46 @@ async fn block_review_anchors_validate_utf16_boundaries_and_survive_restart() {
     let full = store
         .put_block_review_item(item(0, 23, BlockReviewState::Open))
         .await
-        .unwrap();
+        .context("store full-block review anchor")?;
     // The emoji's surrogate pair is two UTF-16 units: [14, 16) is exact...
     let emoji = store
         .put_block_review_item(item(14, 16, BlockReviewState::Open))
         .await
-        .unwrap();
+        .context("store exact emoji review anchor")?;
     // ...and an offset inside the pair is rejected.
     let split_pair = store
         .put_block_review_item(item(14, 15, BlockReviewState::Open))
         .await
-        .unwrap_err();
+        .expect_err("anchor splitting a UTF-16 surrogate pair should fail");
     assert!(matches!(split_pair, QuarryError::InvalidInput(_)));
     let past_end = store
         .put_block_review_item(item(0, 24, BlockReviewState::Open))
         .await
-        .unwrap_err();
+        .expect_err("anchor past block end should fail");
     assert!(matches!(past_end, QuarryError::InvalidInput(_)));
     let inverted = store
         .put_block_review_item(item(9, 4, BlockReviewState::Open))
         .await
-        .unwrap_err();
+        .expect_err("inverted anchor range should fail");
     assert!(matches!(inverted, QuarryError::InvalidInput(_)));
     // A collapsed range means orphaned at the row layer: open is rejected,
     // orphaned is stored.
     let collapsed_open = store
         .put_block_review_item(item(5, 5, BlockReviewState::Open))
         .await
-        .unwrap_err();
+        .expect_err("open collapsed anchor should fail");
     assert!(matches!(collapsed_open, QuarryError::InvalidInput(_)));
     let collapsed_orphaned = store
         .put_block_review_item(item(5, 5, BlockReviewState::Orphaned))
         .await
-        .unwrap();
+        .context("store orphaned collapsed review anchor")?;
     let unknown_block = store
         .put_block_review_item(NewBlockReviewItem {
             block_id: "missing-block".to_string(),
             ..item(0, 1, BlockReviewState::Open)
         })
         .await
-        .unwrap_err();
+        .expect_err("anchor on unknown block should fail");
     assert!(matches!(unknown_block, QuarryError::NotFound(_)));
 
     drop(store);
@@ -3689,11 +3695,12 @@ async fn block_review_anchors_validate_utf16_boundaries_and_survive_restart() {
     let items = reopened
         .list_block_review_items(&outcome.document.id)
         .await
-        .unwrap();
+        .context("list block review items after reopening store")?;
     assert_eq!(items.len(), 3);
     assert!(items.contains(&full));
     assert!(items.contains(&emoji));
     assert!(items.contains(&collapsed_orphaned));
+    Ok(())
 }
 
 #[tokio::test]
