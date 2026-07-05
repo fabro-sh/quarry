@@ -519,31 +519,51 @@ async fn projection_empty_directories_survive_reopening() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn projection_updates_directory_metadata_and_preserves_it_on_reopen() {
+async fn projection_updates_directory_metadata_and_preserves_it_on_reopen() -> anyhow::Result<()> {
     let store = test_store().await;
-    let library = store.create_library("notes").await.unwrap();
+    let library = store
+        .create_library("notes")
+        .await
+        .context("create notes library")?;
     let projection = FuseProjection::open(store.clone(), &library.slug, false)
         .await
-        .unwrap();
+        .context("open writable projection")?;
 
-    projection.mkdir_with_mode("drafts", 0o750).await.unwrap();
-    assert_eq!(projection.attr("drafts").await.unwrap().mode, Some(0o750));
+    projection
+        .mkdir_with_mode("drafts", 0o750)
+        .await
+        .context("create drafts directory with initial mode")?;
+    assert_eq!(
+        projection
+            .attr("drafts")
+            .await
+            .context("read initial drafts directory attrs")?
+            .mode,
+        Some(0o750)
+    );
 
     projection
         .set_directory_metadata("drafts", Some(0o700), Some("2026-05-28T06:00:00.000Z"))
         .await
-        .unwrap();
+        .context("set drafts directory metadata")?;
 
-    let attr = projection.attr("drafts").await.unwrap();
+    let attr = projection
+        .attr("drafts")
+        .await
+        .context("read updated drafts directory attrs")?;
     assert_eq!(attr.mode, Some(0o700));
     assert_eq!(attr.mtime.as_deref(), Some("2026-05-28T06:00:00.000Z"));
 
     let reopened = FuseProjection::open(store, &library.slug, false)
         .await
-        .unwrap();
-    let attr = reopened.attr("drafts").await.unwrap();
+        .context("reopen writable projection")?;
+    let attr = reopened
+        .attr("drafts")
+        .await
+        .context("read reopened drafts directory attrs")?;
     assert_eq!(attr.mode, Some(0o700));
     assert_eq!(attr.mtime.as_deref(), Some("2026-05-28T06:00:00.000Z"));
+    Ok(())
 }
 
 #[tokio::test]
