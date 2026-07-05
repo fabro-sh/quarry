@@ -508,7 +508,7 @@ async fn tmp_put_requires_markdown_content_type() -> anyhow::Result<()> {
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn tmp_create_and_put_reject_oversized_markdown() {
+async fn tmp_create_and_put_reject_oversized_markdown() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     let oversized = "a".repeat(quarry_storage::TMP_DOCUMENT_MARKDOWN_MAX_BYTES + 1);
 
@@ -523,7 +523,7 @@ async fn tmp_create_and_put_reject_oversized_markdown() {
             }),
         ))
         .await
-        .unwrap();
+        .context("create oversized tmp markdown document through REST")?;
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 
     let response = app
@@ -538,14 +538,17 @@ async fn tmp_create_and_put_reject_oversized_markdown() {
             }),
         ))
         .await
-        .unwrap();
+        .context("create tmp markdown document before oversized PUT")?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let etag = response.headers()[header::ETAG]
         .to_str()
-        .unwrap()
+        .context("tmp create response ETag should be valid header text")?
         .to_string();
     let created = response_json(response).await;
-    let secret = created["document"]["path"].as_str().unwrap().to_string();
+    let secret = created["document"]["path"]
+        .as_str()
+        .context("tmp create response should include document path")?
+        .to_string();
 
     let oversized = "a".repeat(quarry_storage::TMP_DOCUMENT_MARKDOWN_MAX_BYTES + 1);
     let response = app
@@ -557,15 +560,16 @@ async fn tmp_create_and_put_reject_oversized_markdown() {
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .header(header::IF_MATCH, etag)
                 .body(Body::from(oversized))
-                .unwrap(),
+                .context("build oversized tmp markdown PUT request")?,
         )
         .await
-        .unwrap();
+        .context("send oversized tmp markdown PUT request")?;
     let status = response.status();
     let body = response_json(response).await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
     assert_eq!(body["code"], "PAYLOAD_TOO_LARGE");
     assert_eq!(body["retryable"], false);
+    Ok(())
 }
 
 #[cfg(feature = "tmp-documents")]
