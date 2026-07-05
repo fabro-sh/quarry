@@ -207,8 +207,8 @@ fn autosave_groups_split_after_ten_minute_span() {
 }
 
 #[tokio::test]
-async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
-    let root = tempfile::tempdir().unwrap();
+async fn stores_multiple_libraries_versions_cas_restart_and_gc() -> TestResult {
+    let root = tempfile::tempdir()?;
     let db_path = root.path().join("quarry.db");
     let cas_path = root.path().join("cas");
 
@@ -218,10 +218,16 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
         lock_path: None,
     })
     .await
-    .unwrap();
+    .context("open store")?;
 
-    let alpha = store.create_library("alpha").await.unwrap();
-    let beta = store.create_library("beta").await.unwrap();
+    let alpha = store
+        .create_library("alpha")
+        .await
+        .context("create alpha library")?;
+    let beta = store
+        .create_library("beta")
+        .await
+        .context("create beta library")?;
     assert_ne!(alpha.id, beta.id);
 
     let small = store
@@ -237,7 +243,7 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write small inline document")?;
     assert!(small.version.content_hash.is_none());
     assert_eq!(small.version.inline_content.as_deref(), Some(&b"one"[..]));
 
@@ -255,7 +261,7 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write large CAS document")?;
     let expected_large_hash = quarry_cas::DiskCas::hash(&large_bytes);
     assert_eq!(
         large.version.content_hash.as_deref(),
@@ -265,10 +271,10 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
     let listed_large = store
         .list_documents(&alpha.slug, Some("assets/"), None)
         .await
-        .unwrap()
+        .context("list asset documents")?
         .into_iter()
         .find(|document| document.path == "assets/large.bin")
-        .unwrap();
+        .context("large document should be listed")?;
     assert_eq!(listed_large.content_hash, large.version.content_hash);
 
     let second = store
@@ -284,13 +290,13 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("write second version of small document")?;
     assert_ne!(small.version.id, second.version.id);
     assert_eq!(
         store
             .version_history(&alpha.slug, "notes/plan.md")
             .await
-            .unwrap()
+            .context("load version history")?
             .len(),
         2
     );
@@ -303,7 +309,7 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
             DocumentSource::Rest,
         )
         .await
-        .unwrap();
+        .context("move document")?;
     assert!(
         store
             .get_document(&alpha.slug, "notes/plan.md")
@@ -314,7 +320,7 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
         store
             .get_document(&alpha.slug, "notes/renamed.md")
             .await
-            .unwrap()
+            .context("load renamed document")?
             .content,
         b"two"
     );
@@ -322,7 +328,7 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
     store
         .delete_document(&alpha.slug, "notes/renamed.md", DocumentSource::Rest)
         .await
-        .unwrap();
+        .context("delete renamed document")?;
     assert!(
         store
             .get_document(&alpha.slug, "notes/renamed.md")
@@ -338,18 +344,19 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() {
         lock_path: None,
     })
     .await
-    .unwrap();
+    .context("reopen store")?;
     assert_eq!(
         reopened
             .get_document(&alpha.slug, "assets/large.bin")
             .await
-            .unwrap()
+            .context("load large document after restart")?
             .content,
         large_bytes
     );
 
-    let gc = reopened.gc().await.unwrap();
+    let gc = reopened.gc().await.context("run gc after restart")?;
     assert_eq!(gc.removed, 0);
+    Ok(())
 }
 
 #[tokio::test]
