@@ -308,7 +308,7 @@ async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() -> anyhow:
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn tmp_markdown_put_replaces_materialized_blocks_and_preserves_ttl() {
+async fn tmp_markdown_put_replaces_materialized_blocks_and_preserves_ttl() -> anyhow::Result<()> {
     let (_root, app, store) = block_test_app().await;
     let response = app
         .clone()
@@ -322,17 +322,33 @@ async fn tmp_markdown_put_replaces_materialized_blocks_and_preserves_ttl() {
             }),
         ))
         .await
-        .unwrap();
+        .context("create tmp markdown document through REST")?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let created = response_json(response).await;
-    let secret = created["document"]["path"].as_str().unwrap().to_string();
+    let secret = created["document"]["path"]
+        .as_str()
+        .context("tmp create response should include document path")?
+        .to_string();
 
     let before = get_tmp_block_tree(&app, &secret).await;
-    assert_eq!(before["blocks"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        before["blocks"]
+            .as_array()
+            .context("tmp block tree should include blocks before PUT")?
+            .len(),
+        2
+    );
     assert_eq!(before["blocks"][0]["text"], "Original");
     assert_eq!(before["blocks"][1]["text"], "Old body.");
-    let clock = before["document_clock"].as_str().unwrap().to_string();
-    let expires_before = store.head_tmp_document(&secret).await.unwrap().expires_at;
+    let clock = before["document_clock"]
+        .as_str()
+        .context("tmp block tree should include document clock")?
+        .to_string();
+    let expires_before = store
+        .head_tmp_document(&secret)
+        .await
+        .context("read tmp document head before PUT")?
+        .expires_at;
 
     let response = app
         .clone()
@@ -343,36 +359,51 @@ async fn tmp_markdown_put_replaces_materialized_blocks_and_preserves_ttl() {
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .header(header::IF_MATCH, format!("\"{clock}\""))
                 .body(Body::from("# Uploaded\n\nNew body.\n"))
-                .unwrap(),
+                .context("build tmp markdown PUT request")?,
         )
         .await
-        .unwrap();
+        .context("replace tmp markdown document through REST")?;
     assert_eq!(response.status(), StatusCode::OK);
     let etag = response.headers()[header::ETAG]
         .to_str()
-        .unwrap()
+        .context("tmp markdown PUT response ETag should be valid header text")?
         .to_string();
     let outcome = response_json(response).await;
     assert_eq!(
         etag,
-        format!("\"{}\"", outcome["version"]["id"].as_str().unwrap())
+        format!(
+            "\"{}\"",
+            outcome["version"]["id"]
+                .as_str()
+                .context("tmp markdown PUT response should include version id")?
+        )
     );
     assert_eq!(
-        store.head_tmp_document(&secret).await.unwrap().expires_at,
+        store
+            .head_tmp_document(&secret)
+            .await
+            .context("read tmp document head after PUT")?
+            .expires_at,
         expires_before
     );
 
     let after = get_tmp_block_tree(&app, &secret).await;
-    let blocks = after["blocks"].as_array().unwrap();
+    let blocks = after["blocks"]
+        .as_array()
+        .context("tmp block tree should include blocks after PUT")?;
     assert_eq!(blocks.len(), 2);
     assert_eq!(blocks[0]["text"], "Uploaded");
     assert_eq!(blocks[1]["text"], "New body.");
 
-    let document = store.get_tmp_document(&secret).await.unwrap();
+    let document = store
+        .get_tmp_document(&secret)
+        .await
+        .context("read tmp document after markdown PUT")?;
     assert_eq!(
-        String::from_utf8(document.content).unwrap(),
+        String::from_utf8(document.content).context("tmp document content should be utf-8")?,
         "# Uploaded\n\nNew body.\n"
     );
+    Ok(())
 }
 
 #[cfg(feature = "tmp-documents")]
