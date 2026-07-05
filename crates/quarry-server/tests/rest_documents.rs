@@ -2631,10 +2631,16 @@ async fn rest_api_rejects_stale_transaction_commit_with_precondition_failed() ->
 }
 
 #[tokio::test]
-async fn rest_api_scopes_transaction_routes_to_the_url_library() {
+async fn rest_api_scopes_transaction_routes_to_the_url_library() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
-    let library = store.create_library("txscope").await.unwrap();
-    store.create_library("other").await.unwrap();
+    let library = store
+        .create_library("txscope")
+        .await
+        .context("create txscope library")?;
+    store
+        .create_library("other")
+        .await
+        .context("create other library")?;
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -2648,7 +2654,7 @@ async fn rest_api_scopes_transaction_routes_to_the_url_library() {
             transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
-        .unwrap();
+        .context("seed txscope draft document")?;
     let app = router(store);
 
     let response = app
@@ -2659,25 +2665,26 @@ async fn rest_api_scopes_transaction_routes_to_the_url_library() {
             serde_json::json!({}),
         ))
         .await
-        .unwrap();
+        .context("begin txscope transaction")?;
     assert_eq!(response.status(), StatusCode::CREATED);
     let body: Value = response_json(response).await;
-    let tx = body["id"].as_str().unwrap();
+    let tx = body["id"]
+        .as_str()
+        .context("transaction create response should include id")?;
 
+    let leak_uri = format!("/v1/libraries/other/transactions/{tx}/documents/drafts/leak.md");
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method(Method::PUT)
-                .uri(format!(
-                    "/v1/libraries/other/transactions/{tx}/documents/drafts/leak.md"
-                ))
+                .uri(leak_uri)
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .body(Body::from("leak"))
-                .unwrap(),
+                .context("build cross-library transaction PUT request")?,
         )
         .await
-        .unwrap();
+        .context("attempt cross-library transaction PUT")?;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let response = app
@@ -2688,7 +2695,7 @@ async fn rest_api_scopes_transaction_routes_to_the_url_library() {
             serde_json::json!({"wrong_library":true}),
         ))
         .await
-        .unwrap();
+        .context("attempt cross-library transaction metadata patch")?;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let response = app
@@ -2699,7 +2706,7 @@ async fn rest_api_scopes_transaction_routes_to_the_url_library() {
             serde_json::json!({"to_path":"published/a.md"}),
         ))
         .await
-        .unwrap();
+        .context("attempt cross-library transaction move")?;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let response = app
@@ -2710,7 +2717,7 @@ async fn rest_api_scopes_transaction_routes_to_the_url_library() {
             serde_json::json!({}),
         ))
         .await
-        .unwrap();
+        .context("attempt cross-library transaction delete")?;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let response = app
@@ -2721,7 +2728,7 @@ async fn rest_api_scopes_transaction_routes_to_the_url_library() {
             serde_json::json!({}),
         ))
         .await
-        .unwrap();
+        .context("attempt cross-library transaction commit")?;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let response = app
@@ -2732,7 +2739,7 @@ async fn rest_api_scopes_transaction_routes_to_the_url_library() {
             serde_json::json!({}),
         ))
         .await
-        .unwrap();
+        .context("attempt cross-library transaction rollback")?;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let response = app
@@ -2742,8 +2749,9 @@ async fn rest_api_scopes_transaction_routes_to_the_url_library() {
             serde_json::json!({}),
         ))
         .await
-        .unwrap();
+        .context("rollback txscope transaction")?;
     assert_eq!(response.status(), StatusCode::OK);
+    Ok(())
 }
 
 /// RawDocuments keep the untouched byte path: bytes round-trip exactly and
