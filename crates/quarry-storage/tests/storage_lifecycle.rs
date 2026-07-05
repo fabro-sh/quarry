@@ -3525,8 +3525,8 @@ async fn imports_block_document_and_exports_stably_across_restart() -> TestResul
 }
 
 #[tokio::test]
-async fn tmp_block_import_rejects_path_like_identifiers() {
-    let root = tempfile::tempdir().unwrap();
+async fn tmp_block_import_rejects_path_like_identifiers() -> TestResult {
+    let root = tempfile::tempdir().context("create tmp block import validation tempdir")?;
     let store = open_block_store(root.path()).await;
 
     let error = store
@@ -3544,6 +3544,7 @@ async fn tmp_block_import_rejects_path_like_identifiers() {
         error,
         QuarryError::InvalidPath(message) if message == "invalid tmp document secret"
     ));
+    Ok(())
 }
 
 #[tokio::test]
