@@ -404,7 +404,7 @@ async fn conflict_items_persist_project_and_resolve_without_mutating_the_documen
 }
 
 #[tokio::test]
-async fn comment_edit_on_conflict_id_returns_anchor_not_found() {
+async fn comment_edit_on_conflict_id_returns_anchor_not_found() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "conf-edit.md", "Alpha.\n").await;
 
@@ -423,7 +423,10 @@ async fn comment_edit_on_conflict_id_returns_anchor_not_found() {
     )
     .await;
     let review = get_block_review(&app, "conf-edit.md", false).await;
-    let conflict_id = review["conflicts"][0]["id"].as_str().unwrap().to_string();
+    let conflict_id = review["conflicts"][0]["id"]
+        .as_str()
+        .context("conflict should include id")?
+        .to_string();
 
     let (status, body) = post_block_transaction(
         &app,
@@ -439,6 +442,7 @@ async fn comment_edit_on_conflict_id_returns_anchor_not_found() {
     )
     .await;
     assert_typed_error(status, &body, "ANCHOR_NOT_FOUND", false);
+    Ok(())
 }
 
 /// Replies stay comment-only: `comment.reply` on a conflict item is
