@@ -759,7 +759,7 @@ async fn whole_file_writes_log_a_reconcile_outcome() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn oversized_reconciles_warn_about_lcs_degradation() {
+async fn oversized_reconciles_warn_about_lcs_degradation() -> anyhow::Result<()> {
     let (logs, _guard) = capture_debug_logs();
     let (_root, app, _store) = block_test_app().await;
     // 1030² changed-middle cells exceed the 2^20 LCS budget; every block
@@ -780,6 +780,7 @@ async fn oversized_reconciles_warn_about_lcs_degradation() {
         output.contains("document.block_write.lcs_degraded"),
         "degraded reconciles should warn:\n{output}"
     );
+    Ok(())
 }
 
 const CONFLICT_MARKER_SOUP: &str =
