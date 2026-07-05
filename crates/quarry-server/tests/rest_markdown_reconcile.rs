@@ -560,7 +560,8 @@ async fn conflict_add_requires_an_existing_attachment_block() -> anyhow::Result<
 }
 
 #[tokio::test]
-async fn markdown_put_merges_against_the_if_match_base_preserving_ids_and_anchors() {
+async fn markdown_put_merges_against_the_if_match_base_preserving_ids_and_anchors()
+-> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     // The separator keeps the two edited regions apart: edits to ADJACENT
     // blocks (no stable block between them) are conflict-absorbed by design.
@@ -571,13 +572,21 @@ async fn markdown_put_merges_against_the_if_match_base_preserving_ids_and_anchor
     )
     .await;
     let tree = get_block_tree(&app, "merge.md").await;
-    let base_clock = tree["document_clock"].as_str().unwrap().to_string();
+    let base_clock = tree["document_clock"]
+        .as_str()
+        .context("block tree should include document clock")?
+        .to_string();
     let ids: Vec<String> = tree["blocks"]
         .as_array()
-        .unwrap()
+        .context("block tree should include block array")?
         .iter()
-        .map(|block| block["block_id"].as_str().unwrap().to_string())
-        .collect();
+        .map(|block| {
+            block["block_id"]
+                .as_str()
+                .context("block should include block_id")
+                .map(ToString::to_string)
+        })
+        .collect::<anyhow::Result<_>>()?;
     let base_export = get_document_markdown(&app, "merge.md").await;
 
     // A live anchor on the Title block (untouched by either side).
@@ -621,7 +630,7 @@ async fn markdown_put_merges_against_the_if_match_base_preserving_ids_and_anchor
                 .unwrap(),
         )
         .await
-        .unwrap();
+        .context("put stale markdown merge")?;
     assert_eq!(response.status(), StatusCode::OK);
 
     // Both sides landed; nothing conflicted.
@@ -633,15 +642,27 @@ async fn markdown_put_merges_against_the_if_match_base_preserving_ids_and_anchor
     let tree = get_block_tree(&app, "merge.md").await;
     let merged_ids: Vec<String> = tree["blocks"]
         .as_array()
-        .unwrap()
+        .context("merged block tree should include block array")?
         .iter()
-        .map(|block| block["block_id"].as_str().unwrap().to_string())
-        .collect();
+        .map(|block| {
+            block["block_id"]
+                .as_str()
+                .context("merged block should include block_id")
+                .map(ToString::to_string)
+        })
+        .collect::<anyhow::Result<_>>()?;
     assert_eq!(merged_ids, ids, "sibling block ids survive the file write");
     let review = get_block_review(&app, "merge.md", false).await;
-    assert_eq!(review["conflicts"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        review["conflicts"]
+            .as_array()
+            .context("review should include conflicts array")?
+            .len(),
+        0
+    );
     assert_eq!(review["comments"][0]["status"], "open");
     assert_eq!(review["comments"][0]["anchor"]["blockId"], ids[0].as_str());
+    Ok(())
 }
 
 #[tokio::test]
