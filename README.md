@@ -24,12 +24,14 @@ Open `http://127.0.0.1:7831`, create a document, and start typing. Then hand the
 
 ## Quickstart
 
-Install with Homebrew (macOS and Linux, pre-compiled binaries):
+Install stable releases with Homebrew (macOS and Linux, pre-compiled binaries):
 
 ```sh
 brew tap fabro-sh/quarry ssh://git@github.com/fabro-sh/quarry.git
 brew install fabro-sh/quarry/quarry
 ```
+
+Stable release tags update the in-repo Homebrew formula automatically after the GitHub Release workflow succeeds. Nightly prereleases are available from GitHub Releases, not Homebrew.
 
 Or build from source (Rust stable required):
 
