@@ -1,7 +1,6 @@
 class Quarry < Formula
   desc "Local-first document workspace for humans and AI agents"
   homepage "https://github.com/fabro-sh/quarry"
-  version "0.1.1"
   license "MIT"
   head "ssh://git@github.com/fabro-sh/quarry.git", branch: "main"
 

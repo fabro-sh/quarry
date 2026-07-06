@@ -78,7 +78,7 @@ class UpdateHomebrewFormulaTest < Minitest::Test
       assert status.success?, stderr
 
       formula = File.read(formula_path)
-      assert_includes formula, '  version "1.2.3"'
+      refute_includes formula, '  version "1.2.3"'
       assert_includes formula, "  on_macos do"
       assert_includes formula, '      url "https://github.com/fabro-sh/quarry/releases/download/v1.2.3/quarry-aarch64-apple-darwin.tar.gz"'
       assert_includes formula, "      sha256 \"#{SHA_AARCH64_DARWIN}\""
@@ -115,6 +115,7 @@ class UpdateHomebrewFormulaTest < Minitest::Test
       formula = File.read(formula_path)
       assert_equal 1, formula.scan(/^  on_macos do$/).length
       assert_equal 1, formula.scan(/^  on_linux do$/).length
+      refute_includes formula, 'version "'
       refute_includes formula, "v1.2.2"
       assert_includes formula, "v1.2.3"
     end

@@ -22,8 +22,6 @@ checksums.each do |target, checksum|
   end
 end
 
-version = release_tag.delete_prefix("v")
-version_declaration = "  version \"#{version}\""
 platform_release = [
   "  on_macos do",
   "    if Hardware::CPU.arm?",
@@ -53,6 +51,6 @@ formula_parts = formula.match(
 abort "Unable to find Homebrew homepage/license/head/install declarations in #{formula_path}" unless formula_parts
 
 head = formula_parts[:head].rstrip
-updated_formula = "#{formula_parts[:prefix]}#{version_declaration}\n#{formula_parts[:license]}#{head}\n\n#{platform_release}\n\n#{formula_parts[:body]}"
+updated_formula = "#{formula_parts[:prefix]}#{formula_parts[:license]}#{head}\n\n#{platform_release}\n\n#{formula_parts[:body]}"
 
 File.write(formula_path, updated_formula)
