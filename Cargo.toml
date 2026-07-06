@@ -79,6 +79,7 @@ git2 = "0.21"
 http = "1.1"
 indexmap = { version = "2.7", features = ["serde"] }
 mime_guess = "2.0"
+open = "5.3.6"
 percent-encoding = "2.3"
 pulldown-cmark = "0.13"
 regex = "1.11"

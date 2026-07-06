@@ -568,15 +568,17 @@ pub async fn run() -> Result<()> {
         #[cfg(feature = "lib-documents")]
         Command::Conflicts(command) => run_conflicts(&cli.root, command).await,
         Command::New(command) => {
-            let prompt = create_tmp_document(&command.server, None).await?;
-            println!("{prompt}");
+            let document = create_tmp_document_for_cli(&command.server, None).await?;
+            println!("{}", document.agent_prompt);
+            open_tmp_document_in_browser(&document.browser_url);
             Ok(())
         }
         Command::Open { file, client } => {
             let content = fs::read_to_string(&file)
                 .map_err(|error| anyhow::anyhow!("read {}: {error}", file.display()))?;
-            let prompt = create_tmp_document(&client.server, Some(content)).await?;
-            println!("{prompt}");
+            let document = create_tmp_document_for_cli(&client.server, Some(content)).await?;
+            println!("{}", document.agent_prompt);
+            open_tmp_document_in_browser(&document.browser_url);
             Ok(())
         }
         Command::Gc => {
@@ -780,6 +782,21 @@ async fn ensure_library(store: &QuarryStore, library: &str) -> Result<()> {
 /// `None`) and returns the AI-agent connect instructions the server generates
 /// for it. This is the shared body of `quarry new` and `quarry open`.
 pub async fn create_tmp_document(server: &str, content: Option<String>) -> Result<String> {
+    Ok(create_tmp_document_for_cli(server, content)
+        .await?
+        .agent_prompt)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CreatedTmpDocument {
+    agent_prompt: String,
+    browser_url: String,
+}
+
+async fn create_tmp_document_for_cli(
+    server: &str,
+    content: Option<String>,
+) -> Result<CreatedTmpDocument> {
     let base = server.trim_end_matches('/');
     let client = reqwest::Client::new();
 
@@ -809,7 +826,22 @@ pub async fn create_tmp_document(server: &str, content: Option<String>) -> Resul
     .await?
     .text()
     .await?;
-    Ok(prompt)
+    Ok(CreatedTmpDocument {
+        agent_prompt: prompt,
+        browser_url: tmp_document_browser_url(server, secret),
+    })
+}
+
+fn tmp_document_browser_url(server: &str, secret: &str) -> String {
+    format!("{}/tmp/{secret}", server.trim_end_matches('/'))
+}
+
+fn open_tmp_document_in_browser(browser_url: &str) {
+    open_tmp_document_with(browser_url, |url| open::that(url));
+}
+
+fn open_tmp_document_with(browser_url: &str, opener: impl FnOnce(&str) -> std::io::Result<()>) {
+    let _ = opener(browser_url);
 }
 
 /// Sends `request`, mapping transport failures to a "could not reach" message
@@ -916,6 +948,39 @@ mod tests {
         let config = logging::LogConfig::from_env_values(Some("quarry=debug,="), None);
 
         assert_eq!(config.filter, logging::DEVELOPMENT_FILTER);
+    }
+
+    #[test]
+    fn tmp_document_browser_url_trims_trailing_server_slash() {
+        let url =
+            tmp_document_browser_url("http://127.0.0.1:7831/", "0123456789abcdef0123456789abcdef");
+
+        assert_eq!(
+            url,
+            "http://127.0.0.1:7831/tmp/0123456789abcdef0123456789abcdef"
+        );
+    }
+
+    #[test]
+    fn best_effort_browser_open_calls_injected_opener() {
+        let mut opened_url = None;
+
+        open_tmp_document_with("http://127.0.0.1:7831/tmp/secret", |url| {
+            opened_url = Some(url.to_string());
+            Ok(())
+        });
+
+        assert_eq!(
+            opened_url,
+            Some("http://127.0.0.1:7831/tmp/secret".to_string())
+        );
+    }
+
+    #[test]
+    fn best_effort_browser_open_swallows_opener_error() {
+        open_tmp_document_with("http://127.0.0.1:7831/tmp/secret", |_| {
+            Err(std::io::Error::other("browser unavailable"))
+        });
     }
 
     #[test]

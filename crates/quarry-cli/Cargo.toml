@@ -18,6 +18,7 @@ admin-api = ["quarry-server/admin-api"]
 anyhow.workspace = true
 clap.workspace = true
 mime_guess.workspace = true
+open.workspace = true
 quarry-core.workspace = true
 quarry-fuse = { workspace = true, optional = true }
 quarry-git = { workspace = true, optional = true }
