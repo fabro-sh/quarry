@@ -24,6 +24,8 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+mod detect_agent;
+
 mod logging {
     use tracing_subscriber::EnvFilter;
 
