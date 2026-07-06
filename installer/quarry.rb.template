@@ -25,6 +25,6 @@ class Quarry < Formula
   end
 
   test do
-    assert_match "Local-first document substrate", shell_output("#{bin}/quarry --help")
+    assert_match "Shared, real-time document workspace for you and your AI agents", shell_output("#{bin}/quarry --help")
   end
 end

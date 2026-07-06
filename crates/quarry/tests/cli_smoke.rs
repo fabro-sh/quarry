@@ -32,7 +32,7 @@ fn cli_verbose_logs_stay_on_stderr_and_stdout_stays_payload_only() -> anyhow::Re
 
     let output = quarry_command()
         .env("RUST_LOG", VERBOSE_FILTER)
-        .args(["init", root_str])
+        .args(["server", "--root", root_str, "init"])
         .output()
         .context("run quarry init")?;
     assert!(output.status.success());
@@ -44,14 +44,8 @@ fn cli_verbose_logs_stay_on_stderr_and_stdout_stays_payload_only() -> anyhow::Re
 
     let output = quarry_command()
         .env("RUST_LOG", VERBOSE_FILTER)
-        .args([
-            "--root",
-            root_str,
-            "put",
-            "notes",
-            "notes/hello.md",
-            source_str,
-        ])
+        .env("QUARRY_ROOT", root_str)
+        .args(["put", "notes", "notes/hello.md", source_str])
         .output()
         .context("run quarry put")?;
     assert!(output.status.success());
@@ -62,7 +56,8 @@ fn cli_verbose_logs_stay_on_stderr_and_stdout_stays_payload_only() -> anyhow::Re
     assert_eq!(written["document"]["path"], "notes/hello.md");
 
     let output = quarry_command()
-        .args(["--root", root_str, "list", "notes"])
+        .env("QUARRY_ROOT", root_str)
+        .args(["list", "notes"])
         .output()
         .context("run quarry list")?;
     assert!(output.status.success());
@@ -77,7 +72,8 @@ fn cli_verbose_logs_stay_on_stderr_and_stdout_stays_payload_only() -> anyhow::Re
     );
 
     let output = quarry_command()
-        .args(["--root", root_str, "get", "notes", "notes/hello.md"])
+        .env("QUARRY_ROOT", root_str)
+        .args(["get", "notes", "notes/hello.md"])
         .output()
         .context("run quarry get")?;
     assert!(output.status.success());
@@ -106,14 +102,8 @@ fn cli_verbose_logs_stay_on_stderr_and_stdout_stays_payload_only() -> anyhow::Re
         })
     }?;
     let output = quarry_command()
-        .args([
-            "--root",
-            root_str,
-            "conflicts",
-            "resolve",
-            "notes",
-            &conflict_id,
-        ])
+        .env("QUARRY_ROOT", root_str)
+        .args(["conflicts", "resolve", "notes", &conflict_id])
         .output()
         .context("run quarry conflict resolve")?;
     assert!(output.status.success());
@@ -132,7 +122,7 @@ fn cli_client_and_admin_commands_are_quiet_by_default() -> anyhow::Result<()> {
     let root_str = root.to_str().context("root path should be UTF-8")?;
 
     let output = quarry_command()
-        .args(["init", root_str])
+        .args(["server", "--root", root_str, "init"])
         .output()
         .context("run quarry init")?;
     assert!(output.status.success());
@@ -150,7 +140,7 @@ fn cli_conflict_resolve_rejects_conflicts_from_another_library() -> anyhow::Resu
     let temp = tempfile::tempdir().context("create temp dir")?;
     let root = temp.path().join("root");
     let root_str = root.to_str().context("root path should be UTF-8")?;
-    run_quarry(["init", root_str]);
+    run_quarry(["server", "--root", root_str, "init"]);
 
     let conflict_id = {
         let runtime = tokio::runtime::Runtime::new().context("create tokio runtime")?;
@@ -198,14 +188,8 @@ fn cli_conflict_resolve_rejects_conflicts_from_another_library() -> anyhow::Resu
     }?;
 
     let output = quarry_command()
-        .args([
-            "--root",
-            root_str,
-            "conflicts",
-            "resolve",
-            "other",
-            &conflict_id,
-        ])
+        .env("QUARRY_ROOT", root_str)
+        .args(["conflicts", "resolve", "other", &conflict_id])
         .output()
         .context("run quarry conflict resolve for wrong library")?;
 
@@ -216,14 +200,8 @@ fn cli_conflict_resolve_rejects_conflicts_from_another_library() -> anyhow::Resu
     );
 
     let output = quarry_command()
-        .args([
-            "--root",
-            root_str,
-            "conflicts",
-            "resolve",
-            "actions",
-            &conflict_id,
-        ])
+        .env("QUARRY_ROOT", root_str)
+        .args(["conflicts", "resolve", "actions", &conflict_id])
         .output()
         .context("run quarry conflict resolve for owning library")?;
     assert!(
@@ -251,20 +229,14 @@ fn cli_backup_restore_reproduces_document_content() -> anyhow::Result<()> {
     let source_str = source.to_str().context("source path should be UTF-8")?;
     std::fs::write(&source, "hello from cli\n").context("write source markdown")?;
 
-    run_quarry(["init", root_str]);
-    run_quarry([
-        "--root",
-        root_str,
-        "put",
-        "notes",
-        "notes/hello.md",
-        source_str,
-    ]);
-    run_quarry(["--root", root_str, "backup", backup_str]);
-    run_quarry(["--root", restored_str, "restore", backup_str]);
+    run_quarry(["server", "--root", root_str, "init"]);
+    run_quarry_with_root(root_str, ["put", "notes", "notes/hello.md", source_str]);
+    run_quarry(["server", "--root", root_str, "backup", backup_str]);
+    run_quarry(["server", "--root", restored_str, "restore", backup_str]);
 
     let output = quarry_command()
-        .args(["--root", restored_str, "get", "notes", "notes/hello.md"])
+        .env("QUARRY_ROOT", restored_str)
+        .args(["get", "notes", "notes/hello.md"])
         .output()
         .context("run quarry get from restored backup")?;
     assert!(
@@ -303,25 +275,11 @@ fn cli_backup_restore_preserves_metadata_versions_and_cas_content() -> anyhow::R
     )
     .context("write second raw blob")?;
 
-    run_quarry(["init", root_str]);
-    run_quarry([
-        "--root",
-        root_str,
-        "put",
-        "assets",
-        "blobs/large.bin",
-        first_str,
-    ]);
-    run_quarry([
-        "--root",
-        root_str,
-        "put",
-        "assets",
-        "blobs/large.bin",
-        second_str,
-    ]);
-    run_quarry(["--root", root_str, "backup", backup_str]);
-    run_quarry(["--root", restored_str, "restore", backup_str]);
+    run_quarry(["server", "--root", root_str, "init"]);
+    run_quarry_with_root(root_str, ["put", "assets", "blobs/large.bin", first_str]);
+    run_quarry_with_root(root_str, ["put", "assets", "blobs/large.bin", second_str]);
+    run_quarry(["server", "--root", root_str, "backup", backup_str]);
+    run_quarry(["server", "--root", restored_str, "restore", backup_str]);
 
     let runtime = tokio::runtime::Runtime::new().context("create tokio runtime")?;
     runtime.block_on(async {
@@ -379,7 +337,7 @@ fn cli_can_create_and_list_git_peers() -> anyhow::Result<()> {
     std::fs::create_dir_all(&repo).context("create git repo directory")?;
 
     let output = quarry_command()
-        .args(["init", root_str])
+        .args(["server", "--root", root_str, "init"])
         .output()
         .context("run quarry init")?;
     assert!(
@@ -388,9 +346,8 @@ fn cli_can_create_and_list_git_peers() -> anyhow::Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let output = quarry_command()
-        .args([
-            "--root", root_str, "git", "peer", "add", "notes", repo_str, "--branch", "main",
-        ])
+        .env("QUARRY_ROOT", root_str)
+        .args(["git", "peer", "add", "notes", repo_str, "--branch", "main"])
         .output()
         .context("run quarry git peer add")?;
     assert!(
@@ -405,7 +362,8 @@ fn cli_can_create_and_list_git_peers() -> anyhow::Result<()> {
     assert_eq!(peer["config"]["branch"], "main");
 
     let output = quarry_command()
-        .args(["--root", root_str, "git", "peer", "list", "notes"])
+        .env("QUARRY_ROOT", root_str)
+        .args(["git", "peer", "list", "notes"])
         .output()
         .context("run quarry git peer list")?;
     assert!(
@@ -435,9 +393,10 @@ fn serve_sigterm_exits_and_removes_lock_file() {
     let addr = unused_loopback_addr();
     let mut child = quarry_command()
         .args([
+            "server",
             "--root",
             root.to_str().unwrap(),
-            "serve",
+            "start",
             "--addr",
             &addr.to_string(),
         ])
@@ -460,7 +419,7 @@ fn serve_sigterm_exits_and_removes_lock_file() {
         }
         if Instant::now() >= deadline {
             child.kill().unwrap();
-            panic!("quarry serve did not exit after SIGTERM");
+            panic!("quarry server start did not exit after SIGTERM");
         }
         std::thread::sleep(Duration::from_millis(20));
     };
@@ -470,7 +429,7 @@ fn serve_sigterm_exits_and_removes_lock_file() {
     }
     assert!(
         exit_status.success(),
-        "quarry serve should exit gracefully, got {exit_status:?}, stderr: {stderr}"
+        "quarry server start should exit gracefully, got {exit_status:?}, stderr: {stderr}"
     );
     assert!(
         !lock_path.exists(),
@@ -481,6 +440,20 @@ fn serve_sigterm_exits_and_removes_lock_file() {
 #[cfg(feature = "lib-documents")]
 fn run_quarry<const N: usize>(args: [&str; N]) {
     let output = quarry_command().args(args).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(feature = "lib-documents")]
+fn run_quarry_with_root<const N: usize>(root: &str, args: [&str; N]) {
+    let output = quarry_command()
+        .env("QUARRY_ROOT", root)
+        .args(args)
+        .output()
+        .unwrap();
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -499,7 +472,7 @@ fn put_with_base_version_merges_instead_of_reverting_concurrent_edits() -> anyho
     let root = temp.path().join("root");
     let root_str = root.to_str().context("root path should be UTF-8")?;
     let init = quarry_command()
-        .args(["init", root_str])
+        .args(["server", "--root", root_str, "init"])
         .output()
         .context("run quarry init")?;
     assert!(init.status.success());
@@ -524,9 +497,8 @@ fn put_with_base_version_merges_instead_of_reverting_concurrent_edits() -> anyho
     std::fs::write(&source, "Alpha, from cli.\n\nSeparator.\n\nBravo.\n")
         .context("write CLI source markdown")?;
     let output = quarry_command()
+        .env("QUARRY_ROOT", root_str)
         .args([
-            "--root",
-            root_str,
             "put",
             "notes",
             "notes/doc.md",
@@ -543,7 +515,8 @@ fn put_with_base_version_merges_instead_of_reverting_concurrent_edits() -> anyho
     );
 
     let output = quarry_command()
-        .args(["--root", root_str, "get", "notes", "notes/doc.md"])
+        .env("QUARRY_ROOT", root_str)
+        .args(["get", "notes", "notes/doc.md"])
         .output()
         .context("run quarry get after base-version merge")?;
     assert_eq!(
@@ -560,7 +533,7 @@ fn put_with_an_unknown_base_version_fails_clearly() -> anyhow::Result<()> {
     let root = temp.path().join("root");
     let root_str = root.to_str().context("root path should be UTF-8")?;
     let init = quarry_command()
-        .args(["init", root_str])
+        .args(["server", "--root", root_str, "init"])
         .output()
         .context("run quarry init")?;
     assert!(init.status.success());
@@ -570,9 +543,8 @@ fn put_with_an_unknown_base_version_fails_clearly() -> anyhow::Result<()> {
     let source_str = source.to_str().context("source path should be UTF-8")?;
     std::fs::write(&source, "Alpha, edited.\n").context("write edited source markdown")?;
     let output = quarry_command()
+        .env("QUARRY_ROOT", root_str)
         .args([
-            "--root",
-            root_str,
             "put",
             "notes",
             "notes/doc.md",
@@ -594,21 +566,15 @@ fn get_show_version_prints_the_head_version_id_on_stderr() -> anyhow::Result<()>
     let root = temp.path().join("root");
     let root_str = root.to_str().context("root path should be UTF-8")?;
     let init = quarry_command()
-        .args(["init", root_str])
+        .args(["server", "--root", root_str, "init"])
         .output()
         .context("run quarry init")?;
     assert!(init.status.success());
     let version = put_markdown(&root, temp.path(), "notes/doc.md", "hello\n")?;
 
     let output = quarry_command()
-        .args([
-            "--root",
-            root_str,
-            "get",
-            "notes",
-            "notes/doc.md",
-            "--show-version",
-        ])
+        .env("QUARRY_ROOT", root_str)
+        .args(["get", "notes", "notes/doc.md", "--show-version"])
         .output()
         .context("run quarry get with --show-version")?;
     assert!(output.status.success());
@@ -634,7 +600,8 @@ fn put_markdown(
     let source_str = source.to_str().context("source path should be UTF-8")?;
     std::fs::write(&source, content).context("write markdown source")?;
     let output = quarry_command()
-        .args(["--root", root_str, "put", "notes", doc_path, source_str])
+        .env("QUARRY_ROOT", root_str)
+        .args(["put", "notes", doc_path, source_str])
         .output()
         .context("run quarry put markdown")?;
     assert!(
@@ -693,21 +660,15 @@ fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() -> anyhow::Result<()> 
     let temp = tempfile::tempdir().context("create temp dir")?;
     let root = temp.path().join("root");
     let root_str = root.to_str().context("root path should be UTF-8")?;
-    run_quarry(["init", root_str]);
+    run_quarry(["server", "--root", root_str, "init"]);
 
     let markdown = temp.path().join("doc.md");
     let markdown_str = markdown.to_str().context("markdown path should be UTF-8")?;
     std::fs::write(&markdown, "# Title\n\nAlpha.\n").context("write initial markdown")?;
-    run_quarry([
-        "--root",
-        root_str,
-        "put",
-        "notes",
-        "notes/doc.md",
-        markdown_str,
-    ]);
+    run_quarry_with_root(root_str, ["put", "notes", "notes/doc.md", markdown_str]);
     let output = quarry_command()
-        .args(["--root", root_str, "get", "notes", "notes/doc.md"])
+        .env("QUARRY_ROOT", root_str)
+        .args(["get", "notes", "notes/doc.md"])
         .output()
         .context("run quarry get for initial markdown")?;
     assert!(output.status.success());
@@ -745,16 +706,10 @@ fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() -> anyhow::Result<()> 
     let ids_before = block_ids(&runtime)?;
     assert!(!ids_before.is_empty());
     std::fs::write(&markdown, "# Title\n\nAlpha, edited.\n").context("write edited markdown")?;
-    run_quarry([
-        "--root",
-        root_str,
-        "put",
-        "notes",
-        "notes/doc.md",
-        markdown_str,
-    ]);
+    run_quarry_with_root(root_str, ["put", "notes", "notes/doc.md", markdown_str]);
     let output = quarry_command()
-        .args(["--root", root_str, "get", "notes", "notes/doc.md"])
+        .env("QUARRY_ROOT", root_str)
+        .args(["get", "notes", "notes/doc.md"])
         .output()
         .context("run quarry get for edited markdown")?;
     assert!(output.status.success());
@@ -770,14 +725,7 @@ fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() -> anyhow::Result<()> 
     let blob = temp.path().join("blob.bin");
     let blob_str = blob.to_str().context("blob path should be UTF-8")?;
     std::fs::write(&blob, [0u8, 159, 146, 150]).context("write raw blob")?;
-    run_quarry([
-        "--root",
-        root_str,
-        "put",
-        "notes",
-        "assets/blob.bin",
-        blob_str,
-    ]);
+    run_quarry_with_root(root_str, ["put", "notes", "assets/blob.bin", blob_str]);
     // `get` prints lossily; verify raw byte fidelity at the store.
     runtime.block_on(async {
         let store = quarry_storage::QuarryStore::open(quarry_storage::StoreConfig {

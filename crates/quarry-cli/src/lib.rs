@@ -122,19 +122,24 @@ mod logging {
 
 #[derive(Debug, Parser)]
 #[command(name = "quarry")]
-#[command(about = "Local-first document substrate for agents and developer tools")]
+#[command(about = "Shared, real-time document workspace for you and your AI agents")]
 pub struct Cli {
-    #[arg(long, env = "QUARRY_ROOT", default_value = ".quarry")]
-    root: PathBuf,
-
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    Init(InitCommand),
-    Serve(ServeCommand),
+    /// Manage the local server lifecycle and backups.
+    Server(ServerCommand),
+    /// Start a new temporary document backed by a running server and print connect details.
+    New(ClientCommand),
+    /// Open an existing file through a new temporary document and print connect details.
+    Open {
+        file: PathBuf,
+        #[command(flatten)]
+        client: ClientCommand,
+    },
     #[cfg(feature = "lib-documents")]
     Mount(MountCommand),
     #[cfg(feature = "lib-documents")]
@@ -155,65 +160,99 @@ enum Command {
     Git(GitCommand),
     #[cfg(feature = "lib-documents")]
     Conflicts(ConflictsCommand),
-    New(ClientCommand),
-    Open {
-        file: PathBuf,
-        #[command(flatten)]
-        client: ClientCommand,
-    },
-    Gc,
+}
+
+#[derive(Debug, Args)]
+struct ServerCommand {
+    #[arg(long, hide = true)]
+    root: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: ServerSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ServerSubcommand {
+    Init(ServerRoot),
+    /// Run the server in the foreground.
+    Start(ServeCommand),
+    Gc(ServerRoot),
     Backup {
+        #[command(flatten)]
+        root: ServerRoot,
         destination: PathBuf,
     },
     Restore {
+        #[command(flatten)]
+        root: ServerRoot,
         source: PathBuf,
     },
 }
 
+impl ServerSubcommand {
+    /// Long-running server commands log verbosely by default; client and
+    /// admin commands stay quiet so their stdout/stderr belong to the user.
+    /// `RUST_LOG` overrides either default.
+    fn default_log_filter(&self) -> &'static str {
+        match self {
+            Self::Start(_) => logging::DEVELOPMENT_FILTER,
+            Self::Init(_) | Self::Gc(_) | Self::Backup { .. } | Self::Restore { .. } => {
+                logging::QUIET_FILTER
+            }
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct ServerRoot {
+    #[arg(long, env = "QUARRY_ROOT", default_value = ".quarry")]
+    root: PathBuf,
+}
+
+impl ServerRoot {
+    fn resolve(self, parent_root: Option<&PathBuf>) -> PathBuf {
+        parent_root.cloned().unwrap_or(self.root)
+    }
+}
+
+#[allow(clippy::match_single_binding)]
 impl Command {
     /// Long-running server commands log verbosely by default; client and
     /// admin commands stay quiet so their stdout/stderr belong to the user.
     /// `RUST_LOG` overrides either default.
     fn default_log_filter(&self) -> &'static str {
         match self {
-            Self::Serve(_) => logging::DEVELOPMENT_FILTER,
+            Self::Server(command) => command.command.default_log_filter(),
+            Self::New(_) | Self::Open { .. } => logging::QUIET_FILTER,
             #[cfg(feature = "lib-documents")]
-            Self::Mount(_) => logging::DEVELOPMENT_FILTER,
-            Self::Init(_)
-            | Self::New(_)
-            | Self::Open { .. }
-            | Self::Gc
-            | Self::Backup { .. }
-            | Self::Restore { .. } => logging::QUIET_FILTER,
+            Self::Mount(_) => logging::QUIET_FILTER,
             #[cfg(feature = "lib-documents")]
-            Self::Get(_)
-            | Self::Put(_)
-            | Self::List(_)
-            | Self::Share(_)
-            | Self::Move(_)
-            | Self::Delete(_)
-            | Self::Tx(_)
-            | Self::Git(_)
-            | Self::Conflicts(_) => logging::QUIET_FILTER,
+            Self::Get(_) => logging::QUIET_FILTER,
+            #[cfg(feature = "lib-documents")]
+            Self::Put(_) => logging::QUIET_FILTER,
+            #[cfg(feature = "lib-documents")]
+            Self::List(_) => logging::QUIET_FILTER,
+            #[cfg(feature = "lib-documents")]
+            Self::Share(_) => logging::QUIET_FILTER,
+            #[cfg(feature = "lib-documents")]
+            Self::Move(_) => logging::QUIET_FILTER,
+            #[cfg(feature = "lib-documents")]
+            Self::Delete(_) => logging::QUIET_FILTER,
+            #[cfg(feature = "lib-documents")]
+            Self::Tx(_) => logging::QUIET_FILTER,
+            #[cfg(feature = "lib-documents")]
+            Self::Git(_) => logging::QUIET_FILTER,
+            #[cfg(feature = "lib-documents")]
+            Self::Conflicts(_) => logging::QUIET_FILTER,
         }
     }
 }
 
 #[derive(Debug, Args)]
-struct ClientCommand {
-    /// Quarry server to target, e.g. http://localhost:5173 or
-    /// https://quarry.lithos.computer.
-    #[arg(long, env = "QUARRY_SERVER", default_value = "http://127.0.0.1:7831")]
-    server: String,
-}
-
-#[derive(Debug, Args)]
-struct InitCommand {
-    server_root: PathBuf,
-}
-
-#[derive(Debug, Args)]
 struct ServeCommand {
+    #[command(flatten)]
+    root: ServerRoot,
+
     #[arg(long)]
     db: Option<PathBuf>,
 
@@ -394,20 +433,57 @@ pub async fn run() -> Result<()> {
     let cli = Cli::parse();
     logging::init(cli.command.default_log_filter());
     match cli.command {
-        Command::Init(command) => {
-            let store = open_at(&command.server_root, None, None).await?;
-            drop(store);
-            println!("{}", command.server_root.display());
-            Ok(())
-        }
-        Command::Serve(command) => {
-            let store = open_at(&cli.root, command.db, command.cas).await?;
-            serve(store, command.addr).await?;
-            Ok(())
+        Command::Server(command) => {
+            let parent_root = command.root;
+            match command.command {
+                ServerSubcommand::Init(command) => {
+                    let root = command.resolve(parent_root.as_ref());
+                    let store = open_at(&root, None, None).await?;
+                    drop(store);
+                    println!("{}", root.display());
+                    Ok(())
+                }
+                ServerSubcommand::Start(command) => {
+                    let root = command.root.resolve(parent_root.as_ref());
+                    let store = open_at(&root, command.db, command.cas).await?;
+                    serve(store, command.addr).await?;
+                    Ok(())
+                }
+                #[cfg(feature = "lib-documents")]
+                ServerSubcommand::Gc(command) => {
+                    let root = command.resolve(parent_root.as_ref());
+                    let store = open_at(&root, None, None).await?;
+                    println!("{}", serde_json::to_string_pretty(&store.gc().await?)?);
+                    Ok(())
+                }
+                #[cfg(feature = "lib-documents")]
+                ServerSubcommand::Backup { root, destination } => {
+                    let root = root.resolve(parent_root.as_ref());
+                    copy_dir(&root, &destination)?;
+                    println!("{}", destination.display());
+                    Ok(())
+                }
+                #[cfg(feature = "lib-documents")]
+                ServerSubcommand::Restore { root, source } => {
+                    let root = root.resolve(parent_root.as_ref());
+                    if root.exists() {
+                        fs::remove_dir_all(&root)?;
+                    }
+                    copy_dir(&source, &root)?;
+                    println!("{}", root.display());
+                    Ok(())
+                }
+                #[cfg(not(feature = "lib-documents"))]
+                ServerSubcommand::Gc(_)
+                | ServerSubcommand::Backup { .. }
+                | ServerSubcommand::Restore { .. } => {
+                    anyhow::bail!("server admin command requires the lib-documents feature")
+                }
+            }
         }
         #[cfg(feature = "lib-documents")]
         Command::Mount(command) => {
-            let store = open_at(&cli.root, None, None).await?;
+            let store = open_at(&quarry_root_from_env(), None, None).await?;
             // ONE state for the mount and the optional embedded server, so
             // FUSE markdown writes reconcile through the same SessionHub the
             // browsers connect to (Phase 4 mode switch).
@@ -454,7 +530,7 @@ pub async fn run() -> Result<()> {
         }
         #[cfg(feature = "lib-documents")]
         Command::Get(command) => {
-            let store = open_at(&cli.root, None, None).await?;
+            let store = open_at(&quarry_root_from_env(), None, None).await?;
             let document = store.get_document(&command.library, &command.path).await?;
             if command.show_version {
                 eprintln!("{}", document.version.id);
@@ -464,7 +540,7 @@ pub async fn run() -> Result<()> {
         }
         #[cfg(feature = "lib-documents")]
         Command::Put(command) => {
-            let store = open_at(&cli.root, None, None).await?;
+            let store = open_at(&quarry_root_from_env(), None, None).await?;
             ensure_library(&store, &command.library).await?;
             let bytes = fs::read(&command.file)
                 .with_context(|| format!("read {}", command.file.display()))?;
@@ -551,7 +627,7 @@ pub async fn run() -> Result<()> {
         }
         #[cfg(feature = "lib-documents")]
         Command::List(command) => {
-            let store = open_at(&cli.root, None, None).await?;
+            let store = open_at(&quarry_root_from_env(), None, None).await?;
             let documents = store
                 .list_documents(&command.library, command.prefix.as_deref(), None)
                 .await?;
@@ -560,7 +636,7 @@ pub async fn run() -> Result<()> {
         }
         #[cfg(feature = "lib-documents")]
         Command::Share(command) => {
-            let store = open_at(&cli.root, None, None).await?;
+            let store = open_at(&quarry_root_from_env(), None, None).await?;
             let token = store
                 .create_collab_invite_token(
                     &command.library,
@@ -574,7 +650,7 @@ pub async fn run() -> Result<()> {
         }
         #[cfg(feature = "lib-documents")]
         Command::Move(command) => {
-            let store = open_at(&cli.root, None, None).await?;
+            let store = open_at(&quarry_root_from_env(), None, None).await?;
             let tx = store
                 .move_document(
                     &command.library,
@@ -588,7 +664,7 @@ pub async fn run() -> Result<()> {
         }
         #[cfg(feature = "lib-documents")]
         Command::Delete(command) => {
-            let store = open_at(&cli.root, None, None).await?;
+            let store = open_at(&quarry_root_from_env(), None, None).await?;
             let tx = store
                 .delete_document(&command.library, &command.path, DocumentSource::Cli)
                 .await?;
@@ -596,11 +672,20 @@ pub async fn run() -> Result<()> {
             Ok(())
         }
         #[cfg(feature = "lib-documents")]
-        Command::Tx(command) => run_tx(&cli.root, command).await,
+        Command::Tx(command) => {
+            let root = quarry_root_from_env();
+            run_tx(&root, command).await
+        }
         #[cfg(feature = "lib-documents")]
-        Command::Git(command) => run_git(&cli.root, command).await,
+        Command::Git(command) => {
+            let root = quarry_root_from_env();
+            run_git(&root, command).await
+        }
         #[cfg(feature = "lib-documents")]
-        Command::Conflicts(command) => run_conflicts(&cli.root, command).await,
+        Command::Conflicts(command) => {
+            let root = quarry_root_from_env();
+            run_conflicts(&root, command).await
+        }
         Command::New(command) => {
             let document = create_tmp_document_for_cli(&command.server, None).await?;
             println!("{}", tmp_document_stdout_for_environment(&document));
@@ -615,25 +700,22 @@ pub async fn run() -> Result<()> {
             open_tmp_document_in_browser(&document.browser_url);
             Ok(())
         }
-        Command::Gc => {
-            let store = open_at(&cli.root, None, None).await?;
-            println!("{}", serde_json::to_string_pretty(&store.gc().await?)?);
-            Ok(())
-        }
-        Command::Backup { destination } => {
-            copy_dir(&cli.root, &destination)?;
-            println!("{}", destination.display());
-            Ok(())
-        }
-        Command::Restore { source } => {
-            if cli.root.exists() {
-                fs::remove_dir_all(&cli.root)?;
-            }
-            copy_dir(&source, &cli.root)?;
-            println!("{}", cli.root.display());
-            Ok(())
-        }
     }
+}
+
+#[derive(Debug, Args)]
+struct ClientCommand {
+    /// Quarry server to target, e.g. http://localhost:5173 or
+    /// https://quarry.lithos.computer.
+    #[arg(long, env = "QUARRY_SERVER", default_value = "http://127.0.0.1:7831")]
+    server: String,
+}
+
+#[cfg(feature = "lib-documents")]
+fn quarry_root_from_env() -> PathBuf {
+    std::env::var("QUARRY_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(".quarry"))
 }
 
 #[cfg(feature = "lib-documents")]
@@ -923,6 +1005,7 @@ async fn open_at(root: &Path, db: Option<PathBuf>, cas: Option<PathBuf>) -> Resu
     .map_err(Into::into)
 }
 
+#[cfg(feature = "lib-documents")]
 fn copy_dir(source: &Path, destination: &Path) -> Result<()> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
@@ -949,6 +1032,7 @@ mod tests {
     )]
 
     use super::*;
+    use clap::CommandFactory;
 
     #[test]
     fn development_logging_config_enables_quarry_crates_at_debug_and_dependencies_at_warn() {
@@ -1017,13 +1101,16 @@ mod tests {
         };
 
         assert_eq!(
-            filter_for(&["quarry", "serve"]),
+            filter_for(&["quarry", "server", "start"]),
             logging::DEVELOPMENT_FILTER
         );
         assert_eq!(filter_for(&["quarry", "new"]), logging::QUIET_FILTER);
-        assert_eq!(filter_for(&["quarry", "gc"]), logging::QUIET_FILTER);
         assert_eq!(
-            filter_for(&["quarry", "init", "/tmp/root"]),
+            filter_for(&["quarry", "server", "--root", "/tmp/root", "init"]),
+            logging::QUIET_FILTER
+        );
+        assert_eq!(
+            filter_for(&["quarry", "server", "gc"]),
             logging::QUIET_FILTER
         );
     }
@@ -1109,15 +1196,22 @@ mod tests {
 
     #[test]
     fn serve_addr_defaults_to_loopback_and_can_be_overridden() {
-        let cli = Cli::try_parse_from(["quarry", "serve"]).unwrap();
-        let Command::Serve(command) = cli.command else {
-            panic!("expected serve command");
+        let cli = Cli::try_parse_from(["quarry", "server", "start"]).unwrap();
+        let Command::Server(command) = cli.command else {
+            panic!("expected server command");
+        };
+        let ServerSubcommand::Start(command) = command.command else {
+            panic!("expected start command");
         };
         assert_eq!(command.addr, "127.0.0.1:7831".parse().unwrap());
 
-        let cli = Cli::try_parse_from(["quarry", "serve", "--addr", "127.0.0.1:9000"]).unwrap();
-        let Command::Serve(command) = cli.command else {
-            panic!("expected serve command");
+        let cli =
+            Cli::try_parse_from(["quarry", "server", "start", "--addr", "127.0.0.1:9000"]).unwrap();
+        let Command::Server(command) = cli.command else {
+            panic!("expected server command");
+        };
+        let ServerSubcommand::Start(command) = command.command else {
+            panic!("expected start command");
         };
         assert_eq!(command.addr, "127.0.0.1:9000".parse().unwrap());
     }
@@ -1143,6 +1237,47 @@ mod tests {
         };
         assert_eq!(file, PathBuf::from("draft.md"));
         assert_eq!(client.server, "https://q.example");
+    }
+
+    #[test]
+    fn server_help_mentions_top_level_commands_and_new_root_scope() {
+        let mut command = Cli::command();
+        let mut output = Vec::new();
+        command.write_long_help(&mut output).unwrap();
+        let help = String::from_utf8(output).unwrap();
+
+        assert!(help.contains("Shared, real-time document workspace for you and your AI agents"));
+        assert!(help.contains("server"));
+        assert!(help.contains("new"));
+        assert!(help.contains("open"));
+        assert!(help.contains("Manage the local server lifecycle and backups"));
+        assert!(!help.contains("--root <ROOT>"));
+    }
+
+    #[test]
+    fn new_and_open_reject_root_argument() {
+        assert!(Cli::try_parse_from(["quarry", "new", "--root", ".quarry"]).is_err());
+        assert!(Cli::try_parse_from(["quarry", "open", "draft.md", "--root", ".quarry"]).is_err());
+        let cli =
+            Cli::try_parse_from(["quarry", "server", "--root", "/tmp/root", "start"]).unwrap();
+        let Command::Server(command) = cli.command else {
+            panic!("expected server command");
+        };
+        assert_eq!(command.root, Some(PathBuf::from("/tmp/root")));
+        let ServerSubcommand::Start(_) = command.command else {
+            panic!("expected start command");
+        };
+
+        let cli =
+            Cli::try_parse_from(["quarry", "server", "start", "--root", "/tmp/root"]).unwrap();
+        let Command::Server(command) = cli.command else {
+            panic!("expected server command");
+        };
+        assert_eq!(command.root, None);
+        let ServerSubcommand::Start(command) = command.command else {
+            panic!("expected start command");
+        };
+        assert_eq!(command.root.root, PathBuf::from("/tmp/root"));
     }
 
     #[cfg(not(feature = "lib-documents"))]

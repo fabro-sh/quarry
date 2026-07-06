@@ -24,11 +24,11 @@ cargo build --release -p quarry --features lib-documents
 Library-surface quickstart (requires `lib-documents`):
 
 ```sh
-quarry init .quarry
+quarry server --root .quarry init
 printf 'hello\n' > /tmp/hello.md
 quarry put notes notes/hello.md /tmp/hello.md
 quarry get notes notes/hello.md
-quarry serve --addr 127.0.0.1:7831
+quarry server --root .quarry start --addr 127.0.0.1:7831
 ```
 
 The server binds to `127.0.0.1` by default. Non-loopback binds print a warning because phase one intentionally has no auth.

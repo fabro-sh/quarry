@@ -68,7 +68,7 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=12 \
   CMD curl -fsS http://127.0.0.1:${PORT:-7831}/v1/health >/dev/null || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["sh", "-c", "chown -R quarry:quarry \"$QUARRY_ROOT\" && exec gosu quarry quarry serve --addr 0.0.0.0:${PORT:-7831}"]
+CMD ["sh", "-c", "chown -R quarry:quarry \"$QUARRY_ROOT\" && exec gosu quarry quarry server start --root \"$QUARRY_ROOT\" --addr 0.0.0.0:${PORT:-7831}"]
 
 FROM runtime-base AS runtime-prebuilt
 

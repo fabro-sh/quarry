@@ -7,8 +7,8 @@ Working on a document with an AI agent today usually means one of two things: pa
 Quarry fixes that. It gives you and your agents **one live canvas**: a real-time collaborative Markdown editor where agents join as named collaborators — with their own cursors and presence — to draft alongside you, leave comments, and propose suggestions you can accept or reject. Like a Google Doc, except it runs entirely on your machine and agents are first-class participants.
 
 ```sh
-quarry init .quarry
-quarry serve
+quarry server --root .quarry init
+quarry server --root .quarry start
 ```
 
 Open `http://127.0.0.1:7831`, create a document, and start typing. Then hand the document's link to any agent and tell it to join you.
@@ -41,8 +41,8 @@ install -Dm755 target/release/quarry ~/.local/bin/quarry
 Or grab a tarball for your platform from [GitHub Releases](https://github.com/fabro-sh/quarry/releases) — stable releases and nightly prereleases ship macOS (Apple silicon and Intel) and Linux x86_64 binaries. Then:
 
 ```sh
-quarry init .quarry
-quarry serve
+quarry server --root .quarry init
+quarry server --root .quarry start
 ```
 
 The browser workspace is embedded in the server — open `http://127.0.0.1:7831` and create a document. See [docs/operations/install-linux.md](docs/operations/install-linux.md) for details.

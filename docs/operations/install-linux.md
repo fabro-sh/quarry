@@ -32,7 +32,7 @@ install -Dm755 quarry-x86_64-unknown-linux-gnu/quarry ~/.local/bin/quarry
 Quick smoke test:
 
 ```sh
-quarry init .quarry
+quarry server --root .quarry init
 printf 'hello\n' >/tmp/quarry-hello.md
 quarry put notes notes/hello.md /tmp/quarry-hello.md
 quarry get notes notes/hello.md

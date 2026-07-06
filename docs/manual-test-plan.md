@@ -29,11 +29,11 @@ directly from these tiers.
 - [ ] Create a disposable root:
   ```sh
   export QUARRY_ROOT="$(mktemp -d)/quarry-root"
-  cargo run -p quarry -- init "$QUARRY_ROOT"
+  cargo run -p quarry -- server init
   ```
 - [ ] Start the daemon on loopback:
   ```sh
-  cargo run -p quarry -- --root "$QUARRY_ROOT" serve --addr 127.0.0.1:7831
+  cargo run -p quarry -- server start --addr 127.0.0.1:7831
   ```
 - [ ] Start the browser UI:
   ```sh
@@ -54,7 +54,7 @@ directly from these tiers.
 - [ ] Type text, wait for the save status to become `Saved` (checkpoint ack), reload, and confirm content persisted.
 - [ ] Read the same document through CLI:
   ```sh
-  cargo run -p quarry -- --root "$QUARRY_ROOT" get manual-main notes/smoke.md
+  cargo run -p quarry -- get manual-main notes/smoke.md
   ```
 - [ ] Read the same document through REST and confirm the body and `ETag` match the latest version.
 - [ ] Confirm no unexpected conflict dialog or stale banner appears; the only save states are `Saved`, `Saving…`, and `Reconnecting (read-only)`.
@@ -106,8 +106,8 @@ directly from these tiers.
 
 ### Backup, Restore, GC, And Daemon Ownership
 
-- [ ] Stop active writes, run `quarry backup`, restore into a new root, and confirm documents, versions, and CAS objects read back.
-- [ ] Run `POST /v1/admin/gc` or `quarry gc` after deleting/replacing large documents and confirm reachable documents still read back.
+- [ ] Stop active writes, run `quarry server backup`, restore into a new root, and confirm documents, versions, and CAS objects read back.
+- [ ] Run `POST /v1/admin/gc` or `quarry server gc` after deleting/replacing large documents and confirm reachable documents still read back.
 - [ ] Try starting two daemon processes on the same root and confirm the second owner is rejected or cannot corrupt the database.
 - [ ] Restart the daemon after in-progress client activity and confirm committed data remains intact.
 
@@ -325,7 +325,7 @@ Run this section on Linux with `fuse3`. Waivable on non-Linux release candidates
 
 - [ ] Mount a library read-only:
   ```sh
-  cargo run -p quarry -- --root "$QUARRY_ROOT" mount manual-main /tmp/quarry-mount --read-only
+  cargo run -p quarry -- mount manual-main /tmp/quarry-mount --read-only
   ```
 - [ ] Confirm `ls`, `find`, `cat`, and `rg` read committed documents.
 - [ ] Confirm writes fail cleanly in read-only mode.

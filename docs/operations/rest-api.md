@@ -3,7 +3,7 @@
 The REST server is exposed by:
 
 ```sh
-cargo run -p quarry -- serve --addr 127.0.0.1:7831
+cargo run -p quarry -- server start --addr 127.0.0.1:7831
 ```
 
 Implemented phase-one core endpoints:
