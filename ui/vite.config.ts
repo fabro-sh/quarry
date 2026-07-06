@@ -8,6 +8,12 @@ const quarryApiOrigin = process.env.QUARRY_API_ORIGIN ?? 'http://127.0.0.1:7831'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    // The server's CSP has no `data:` in font/style sources, so small assets
+    // (like the 2KB cyrillic-ext font subset) must be emitted as files, not
+    // inlined as data: URIs.
+    assetsInlineLimit: 0,
+  },
   resolve: {
     alias: {
       // Vite resolves the `browser` export condition even for worker bundles,

@@ -16,6 +16,8 @@
     "generate:api": "bun run scripts/generate-api.ts"
   },
   "dependencies": {
+    "@fontsource-variable/geist": "^5.2.9",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@platejs/autoformat": "52.0.11",
     "@platejs/basic-nodes": "52.0.11",
     "@platejs/code-block": "52.0.11",

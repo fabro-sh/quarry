@@ -1,4 +1,5 @@
-@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=JetBrains+Mono:wght@400..600&display=swap");
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/jetbrains-mono";
 @import "tailwindcss";
 
 /*
@@ -8,9 +9,10 @@
  * `border-line`, …); dark mode is a single block of variable overrides.
  */
 @theme {
-  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo,
+    monospace;
 
   /* Cool "ice" neutrals (light) */
   --color-canvas: #eef2f7;
