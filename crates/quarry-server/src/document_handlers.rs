@@ -1,3 +1,5 @@
+use crate::agent_prompt::{AgentPromptScope, agent_prompt};
+use crate::discovery::request_origin;
 use crate::markdown_write;
 use crate::presence::PresenceStreamGuard;
 use crate::review::{DocumentReviewQuery, agent_document_review, agent_document_snapshot};
@@ -35,6 +37,7 @@ pub(crate) struct ListQuery {
 #[derive(Debug, Deserialize)]
 pub(crate) struct DocumentGetQuery {
     against: Option<String>,
+    token: Option<String>,
     #[serde(default, flatten)]
     review: DocumentReviewQuery,
 }
@@ -278,6 +281,26 @@ pub(crate) async fn agent_presence_openapi() {}
 
 #[utoipa::path(
     get,
+    path = "/v1/libraries/{library}/documents/{path}/agent-prompt",
+    params(
+        ("library" = String, Path),
+        ("path" = String, Path),
+        ("token" = String, Query)
+    ),
+    responses(
+        (status = 200, description = "Ready-to-paste AI agent connect instructions", body = String),
+        (status = 400, body = ErrorResponse),
+        (status = 404, body = ErrorResponse)
+    )
+)]
+#[expect(
+    dead_code,
+    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
+)]
+pub(crate) async fn document_agent_prompt_openapi() {}
+
+#[utoipa::path(
+    get,
     path = "/v1/libraries/{library}/documents/{path}",
     params(("library" = String, Path), ("path" = String, Path)),
     responses((status = 200, body = String), (status = 404, body = ErrorResponse))
@@ -350,6 +373,34 @@ pub(crate) async fn get_document(
             )
             .await?
             .into_response());
+        }
+        DocumentSubResource::AgentPrompt => {
+            let token = query.token.as_deref().filter(|token| !token.is_empty());
+            let Some(token) = token else {
+                return Err(QuarryError::InvalidInput(
+                    "agent-prompt requires a token query parameter".to_string(),
+                )
+                .into());
+            };
+            touch_agent_presence(&state, &headers, Some(&library), document_path).await?;
+            state.store.head_document(&library, document_path).await?;
+            let prompt = agent_prompt(
+                &request_origin(&headers),
+                &AgentPromptScope::Library {
+                    library: &library,
+                    path: document_path,
+                    token,
+                },
+            );
+            return Ok((
+                StatusCode::OK,
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8",
+                )],
+                prompt,
+            )
+                .into_response());
         }
         DocumentSubResource::Share => {
             return json_response(

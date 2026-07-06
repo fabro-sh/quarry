@@ -148,6 +148,12 @@ enum Command {
     Git(GitCommand),
     #[cfg(feature = "lib-documents")]
     Conflicts(ConflictsCommand),
+    New(ClientCommand),
+    Open {
+        file: PathBuf,
+        #[command(flatten)]
+        client: ClientCommand,
+    },
     Gc,
     Backup {
         destination: PathBuf,
@@ -155,6 +161,14 @@ enum Command {
     Restore {
         source: PathBuf,
     },
+}
+
+#[derive(Debug, Args)]
+struct ClientCommand {
+    /// Quarry server to target, e.g. http://localhost:5173 or
+    /// https://quarry.lithos.computer.
+    #[arg(long, env = "QUARRY_SERVER", default_value = "http://127.0.0.1:7831")]
+    server: String,
 }
 
 #[derive(Debug, Args)]
@@ -551,6 +565,18 @@ pub async fn run() -> Result<()> {
         Command::Git(command) => run_git(&cli.root, command).await,
         #[cfg(feature = "lib-documents")]
         Command::Conflicts(command) => run_conflicts(&cli.root, command).await,
+        Command::New(command) => {
+            let prompt = create_tmp_document(&command.server, None).await?;
+            println!("{prompt}");
+            Ok(())
+        }
+        Command::Open { file, client } => {
+            let content = fs::read_to_string(&file)
+                .map_err(|error| anyhow::anyhow!("read {}: {error}", file.display()))?;
+            let prompt = create_tmp_document(&client.server, Some(content)).await?;
+            println!("{prompt}");
+            Ok(())
+        }
         Command::Gc => {
             let store = open_at(&cli.root, None, None).await?;
             println!("{}", serde_json::to_string_pretty(&store.gc().await?)?);
@@ -748,6 +774,61 @@ async fn ensure_library(store: &QuarryStore, library: &str) -> Result<()> {
     Ok(())
 }
 
+/// Creates a tmp document on `server` (seeded with `content`, or empty when
+/// `None`) and returns the AI-agent connect instructions the server generates
+/// for it. This is the shared body of `quarry new` and `quarry open`.
+pub async fn create_tmp_document(server: &str, content: Option<String>) -> Result<String> {
+    let base = server.trim_end_matches('/');
+    let client = reqwest::Client::new();
+
+    let mut body = serde_json::Map::new();
+    body.insert("content_type".into(), "text/markdown".into());
+    if let Some(content) = content {
+        body.insert("content".into(), content.into());
+    }
+
+    let created: serde_json::Value = send(
+        client.post(format!("{base}/v1/tmp/documents")).json(&body),
+        server,
+        "creating tmp document",
+    )
+    .await?
+    .json()
+    .await?;
+    let secret = created["document"]["path"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("tmp document response missing document.path"))?;
+
+    let prompt = send(
+        client.get(format!("{base}/v1/tmp/documents/{secret}/agent-prompt")),
+        server,
+        "fetching agent prompt",
+    )
+    .await?
+    .text()
+    .await?;
+    Ok(prompt)
+}
+
+/// Sends `request`, mapping transport failures to a "could not reach" message
+/// and any non-2xx response to the server's own error body.
+async fn send(
+    request: reqwest::RequestBuilder,
+    server: &str,
+    action: &str,
+) -> Result<reqwest::Response> {
+    let response = request
+        .send()
+        .await
+        .map_err(|error| anyhow::anyhow!("could not reach quarry server at {server}: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("quarry server returned {status} {action}: {body}");
+    }
+    Ok(response)
+}
+
 async fn open_at(root: &Path, db: Option<PathBuf>, cas: Option<PathBuf>) -> Result<QuarryStore> {
     fs::create_dir_all(root)?;
     QuarryStore::open(StoreConfig {
@@ -848,6 +929,24 @@ mod tests {
             panic!("expected serve command");
         };
         assert_eq!(command.addr, "127.0.0.1:9000".parse().unwrap());
+    }
+
+    #[test]
+    fn new_and_open_default_the_server_and_stay_available_without_lib_documents() {
+        let cli = Cli::try_parse_from(["quarry", "new"]).unwrap();
+        let Command::New(command) = cli.command else {
+            panic!("expected new command");
+        };
+        assert_eq!(command.server, "http://127.0.0.1:7831");
+
+        let cli =
+            Cli::try_parse_from(["quarry", "open", "draft.md", "--server", "https://q.example"])
+                .unwrap();
+        let Command::Open { file, client } = cli.command else {
+            panic!("expected open command");
+        };
+        assert_eq!(file, PathBuf::from("draft.md"));
+        assert_eq!(client.server, "https://q.example");
     }
 
     #[cfg(not(feature = "lib-documents"))]

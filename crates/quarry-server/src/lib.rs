@@ -1,4 +1,5 @@
 mod agent_events;
+mod agent_prompt;
 mod assets;
 mod collab;
 mod collab_handlers;
@@ -619,6 +620,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         tmp_document_handlers::tmp_document_events_stream_openapi,
         tmp_document_handlers::tmp_agent_presence_list_openapi,
         tmp_document_handlers::tmp_agent_presence_openapi,
+        tmp_document_handlers::tmp_document_agent_prompt_openapi,
         search_handlers::search_documents,
         search_handlers::suggest_documents,
         search_handlers::reindex_library,
@@ -636,6 +638,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         document_handlers::document_share_revoke_openapi,
         document_handlers::agent_presence_list_openapi,
         document_handlers::agent_presence_openapi,
+        document_handlers::document_agent_prompt_openapi,
         agent_events::agent_events_pending,
         agent_events::agent_events_ack,
         document_handlers::document_versions_openapi,
@@ -997,6 +1000,10 @@ mod tests {
             ("notes/daily.md", DocumentSubResource::Blocks)
         );
         assert_eq!(
+            parse_document_subresource("notes/daily.md/agent-prompt"),
+            ("notes/daily.md", DocumentSubResource::AgentPrompt)
+        );
+        assert_eq!(
             parse_document_subresource("notes/daily.md/move"),
             ("notes/daily.md", DocumentSubResource::Move)
         );
@@ -1041,6 +1048,10 @@ mod tests {
         assert_eq!(
             parse_tmp_document_subresource("tmp-secret"),
             ("tmp-secret", TmpDocumentSubResource::Document)
+        );
+        assert_eq!(
+            parse_tmp_document_subresource("tmp-secret/agent-prompt"),
+            ("tmp-secret", TmpDocumentSubResource::AgentPrompt)
         );
         assert_eq!(
             parse_tmp_document_subresource("tmp-secret/blocks"),
@@ -1443,6 +1454,7 @@ pub(crate) enum DocumentSubResource<'path> {
     Review,
     Presence,
     EventsStream,
+    AgentPrompt,
     Share,
     ShareRevoke(&'path str),
     RawVersions,
@@ -1459,6 +1471,7 @@ pub(crate) enum DocumentSubResource<'path> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TmpDocumentSubResource<'path> {
     Document,
+    AgentPrompt,
     Blocks,
     Review,
     Presence,
@@ -1493,6 +1506,7 @@ pub(crate) fn parse_document_subresource(path: &str) -> (&str, DocumentSubResour
 
     for (suffix, subresource) in [
         ("/events/stream", DocumentSubResource::EventsStream),
+        ("/agent-prompt", DocumentSubResource::AgentPrompt),
         ("/outgoing-links", DocumentSubResource::OutgoingLinks),
         ("/transactions", DocumentSubResource::Transactions),
         ("/backlinks", DocumentSubResource::Backlinks),
@@ -1526,6 +1540,7 @@ pub(crate) fn parse_tmp_document_subresource(path: &str) -> (&str, TmpDocumentSu
 
     for (suffix, subresource) in [
         ("/events/stream", TmpDocumentSubResource::EventsStream),
+        ("/agent-prompt", TmpDocumentSubResource::AgentPrompt),
         ("/transactions", TmpDocumentSubResource::Transactions),
         ("/presence", TmpDocumentSubResource::Presence),
         ("/promote", TmpDocumentSubResource::Promote),

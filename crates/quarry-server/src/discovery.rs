@@ -336,7 +336,7 @@ fn discovery_endpoint(
     }
 }
 
-fn request_origin(headers: &HeaderMap) -> String {
+pub(crate) fn request_origin(headers: &HeaderMap) -> String {
     let scheme = headers
         .get("x-forwarded-proto")
         .and_then(|value| value.to_str().ok())

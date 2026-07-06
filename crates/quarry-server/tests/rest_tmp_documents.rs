@@ -700,3 +700,70 @@ async fn tmp_create_rejects_non_markdown_content_type() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[cfg(feature = "tmp-documents")]
+#[tokio::test]
+async fn tmp_agent_prompt_returns_connect_instructions() -> anyhow::Result<()> {
+    let (_root, app, _store) = document_test_app().await;
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/tmp/documents",
+            serde_json::json!({"content": "hello", "content_type": "text/markdown"}),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created: Value = response_json(response).await;
+    let secret = created["document"]["path"]
+        .as_str()
+        .context("created tmp document should expose a secret path")?
+        .to_string();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/tmp/documents/{secret}/agent-prompt"))
+                .header(header::HOST, "quarry.example.com")
+                .header("x-forwarded-proto", "https")
+                .body(Body::empty())
+                .context("build request")?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "text/plain; charset=utf-8"
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let prompt = String::from_utf8(body.to_vec())?;
+    assert!(prompt.contains(&format!("https://quarry.example.com/tmp/{secret}")));
+    assert!(prompt.contains("Scope: tmp document"));
+    assert!(prompt.contains("Tmp document URLs are bearer capabilities"));
+    assert!(prompt.contains(&format!(
+        "POST https://quarry.example.com/v1/tmp/documents/{secret}/presence"
+    )));
+    assert!(prompt.contains("Connected in Quarry and ready."));
+    Ok(())
+}
+
+#[cfg(feature = "tmp-documents")]
+#[tokio::test]
+async fn tmp_agent_prompt_unknown_secret_is_not_found() -> anyhow::Result<()> {
+    let (_root, app, _store) = document_test_app().await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/tmp/documents/00000000000000000000000000000000/agent-prompt")
+                .body(Body::empty())
+                .context("build request")?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    Ok(())
+}

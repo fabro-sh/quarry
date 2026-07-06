@@ -67,6 +67,7 @@ import {
   type AgentPresenceDisplayEntry,
   backlinks,
   createCollabInvite,
+  fetchAgentPrompt,
   createDocument,
   createGitPeer,
   createTmpDocument,
@@ -153,8 +154,6 @@ import { CommentsPanel } from '../features/review/ui/CommentsPanel';
 import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../features/tree/tree-model';
 import { cn } from '../lib/utils';
 import {
-  buildAddAgentPrompt,
-  buildTokenizedDocumentUrl,
   tmpWorkspaceRouteForDocument,
   workspaceRouteForDocument,
 } from './agent-invite';
@@ -1187,8 +1186,6 @@ function Workspace() {
     if (!selectedPath || !isMarkdownDocument(selectedPath, selectedContentType)) return;
     if (isLibraryDocument && (!libDocumentsEnabled || !activeLibrary)) return;
     if (isTmpDocument && !tmpDocumentsEnabled) return;
-    const scope = isTmpDocument ? 'tmp' : 'library';
-    const library = isTmpDocument ? undefined : activeLibrary;
     const path = selectedPath;
     const knownAgentIds = agentPresence.presence.map((e) => e.agentId);
     setAddAgentModal({
@@ -1200,29 +1197,20 @@ function Workspace() {
       knownAgentIds,
     });
     try {
-      const token = isTmpDocument
-        ? { id: '' }
-        : await createCollabInvite(activeLibrary, path, {
-            byHint: author,
-            role: 'editor',
+      const instructions = isTmpDocument
+        ? await fetchAgentPrompt({ scope: 'tmp', secret: path })
+        : await fetchAgentPrompt({
+            scope: 'library',
+            library: activeLibrary,
+            path,
+            token: (
+              await createCollabInvite(activeLibrary, path, { byHint: author, role: 'editor' })
+            ).id,
           });
-      const tokenizedDocUrl = buildTokenizedDocumentUrl({
-        origin: window.location.origin,
-        scope,
-        library,
-        path,
-        token: token.id,
-      });
       setAddAgentModal({
         open: true,
         loading: false,
-        instructions: buildAddAgentPrompt({
-          origin: window.location.origin,
-          scope,
-          library,
-          path,
-          tokenizedDocUrl,
-        }),
+        instructions,
         error: '',
         waitingForAgent: false,
         knownAgentIds,

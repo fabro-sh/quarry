@@ -2886,3 +2886,52 @@ async fn metadata_patch_preserves_rows_anchors_and_conflict_items() -> anyhow::R
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn library_agent_prompt_returns_connect_instructions() -> anyhow::Result<()> {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "notes/live%20doc.md", "hello").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/libraries/blocks/documents/notes/live%20doc.md/agent-prompt?token=invite-token")
+                .header(header::HOST, "quarry.example.com")
+                .header("x-forwarded-proto", "https")
+                .body(Body::empty())
+                .context("build request")?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "text/plain; charset=utf-8"
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let prompt = String::from_utf8(body.to_vec())?;
+    assert!(prompt.contains(
+        "https://quarry.example.com/lib/blocks/documents/notes/live%20doc.md?token=invite-token"
+    ));
+    assert!(prompt.contains("Library: blocks"));
+    assert!(prompt.contains("trusted-localhost"));
+    assert!(prompt.contains("Connected in Quarry and ready."));
+    Ok(())
+}
+
+#[tokio::test]
+async fn library_agent_prompt_requires_token() -> anyhow::Result<()> {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "notes/live.md", "hello").await;
+
+    let response = app
+        .clone()
+        .oneshot(empty_request(
+            Method::GET,
+            "/v1/libraries/blocks/documents/notes/live.md/agent-prompt",
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    Ok(())
+}

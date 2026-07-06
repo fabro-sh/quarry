@@ -1,3 +1,5 @@
+use crate::agent_prompt::{AgentPromptScope, agent_prompt};
+use crate::discovery::request_origin;
 use crate::presence::PresenceStreamGuard;
 use crate::review::{DocumentReviewQuery, agent_tmp_document_review};
 use crate::sse::events_for_tmp_document;
@@ -140,6 +142,21 @@ pub(crate) async fn tmp_document_promote_openapi() {}
 
 #[utoipa::path(
     get,
+    path = "/v1/tmp/documents/{secret}/agent-prompt",
+    params(("secret" = String, Path)),
+    responses(
+        (status = 200, description = "Ready-to-paste AI agent connect instructions", body = String),
+        (status = 404, body = ErrorResponse)
+    )
+)]
+#[expect(
+    dead_code,
+    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
+)]
+pub(crate) async fn tmp_document_agent_prompt_openapi() {}
+
+#[utoipa::path(
+    get,
     path = "/v1/tmp/documents/{secret}/blocks",
     params(("secret" = String, Path)),
     responses(
@@ -225,6 +242,25 @@ pub(crate) async fn get_tmp_document(
 ) -> Result<Response, ApiError> {
     let (document_path, subresource) = parse_tmp_document_subresource(&path);
     match subresource {
+        TmpDocumentSubResource::AgentPrompt => {
+            touch_agent_presence(&state, &headers, None, document_path).await?;
+            state.store.head_tmp_document(document_path).await?;
+            let prompt = agent_prompt(
+                &request_origin(&headers),
+                &AgentPromptScope::Tmp {
+                    secret: document_path,
+                },
+            );
+            return Ok((
+                StatusCode::OK,
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8",
+                )],
+                prompt,
+            )
+                .into_response());
+        }
         TmpDocumentSubResource::Blocks => {
             touch_agent_presence(&state, &headers, None, document_path).await?;
             return gateway::tmp_document_blocks(&state, document_path).await;
@@ -449,6 +485,7 @@ pub(crate) async fn post_tmp_document_action(
             json_response(StatusCode::OK, &entry)
         }
         TmpDocumentSubResource::Document
+        | TmpDocumentSubResource::AgentPrompt
         | TmpDocumentSubResource::Blocks
         | TmpDocumentSubResource::Review
         | TmpDocumentSubResource::EventsStream

@@ -324,6 +324,20 @@ export const createCollabInvite = (
     body: JSON.stringify({ byHint: request.byHint, role: request.role ?? 'editor' }),
   });
 
+export async function fetchAgentPrompt(
+  params:
+    | { scope: 'tmp'; secret: string }
+    | { scope: 'library'; library: string; path: string; token: string }
+): Promise<string> {
+  const url =
+    params.scope === 'tmp'
+      ? `/v1/tmp/documents/${segment(params.secret)}/agent-prompt`
+      : `/v1/libraries/${segment(params.library)}/documents/${pathSegments(params.path)}/agent-prompt?token=${segment(params.token)}`;
+  const response = await fetch(url);
+  await assertOk(response);
+  return response.text();
+}
+
 export const listAgentPresence = (library: string, path: string) =>
   jsonRequest<AgentPresenceListResponse>(
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/presence`

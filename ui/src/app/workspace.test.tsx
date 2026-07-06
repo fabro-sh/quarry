@@ -74,8 +74,27 @@ describe('Quarry Browser workspace', () => {
       configurable: true,
       value: { writeText },
     });
+    // The prompt text is generated server-side (covered by the Rust
+    // agent_prompt tests); this test only verifies the UI mints a token,
+    // fetches the prompt with it, and surfaces the server's response.
+    const serverPrompt = [
+      'Quarry is a local-first collaborative Markdown editor with presence, comments, suggestions, and block edit APIs.',
+      '',
+      'http://127.0.0.1/lib/agent-lib/documents/folder/live.md?token=invite-agent',
+      'trusted-localhost',
+      'POST http://127.0.0.1/v1/libraries/agent-lib/documents/folder/live.md/presence',
+      'Connected in Quarry and ready.',
+    ].join('\n');
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (
+        url ===
+        '/v1/libraries/agent-lib/documents/folder/live.md/agent-prompt?token=invite-agent'
+      ) {
+        return new Response(serverPrompt, {
+          headers: { 'content-type': 'text/plain; charset=utf-8' },
+        });
+      }
       if (url === '/v1/libraries') {
         return json([{ id: 'lib-agent', slug: 'agent-lib', created_at: 'now', settings: {} }]);
       }
