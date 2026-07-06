@@ -1,4 +1,4 @@
-name: E2E Live
+name: E2E Live CI
 
 # The live-collaboration Playwright suite drives a real quarry server
 # (lib-documents build) plus the vite dev server — the only coverage that
