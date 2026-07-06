@@ -18,7 +18,7 @@
 
 use crate::Unsupported;
 use crate::markdown::{
-    CRITIC_MARKERS, browser_compatible_markdown_options, slate_from_block_events,
+    browser_compatible_markdown_options, contains_critic_markup, slate_from_block_events,
 };
 use crate::markdown_writer::slate_to_markdown;
 use crate::slate::{Attrs, Node};
@@ -86,7 +86,8 @@ pub fn is_utf16_boundary(text: &str, offset: u32) -> bool {
 /// Import: Markdown body → block rows with freshly minted `block_id`s.
 ///
 /// CriticMarkup is unsafe (it collides with the review codec) and rejects the
-/// whole document with the typed [`Unsupported`] error. Any other top-level
+/// whole document with the typed [`Unsupported`] error; markers inside code
+/// spans or code blocks are literal text and allowed. Any other top-level
 /// block the codec cannot represent falls back to a `raw_markdown` row
 /// carrying the original source slice.
 ///
@@ -95,10 +96,7 @@ pub fn markdown_to_block_rows(
     markdown: &str,
     mut mint_block_id: impl FnMut() -> String,
 ) -> Result<Vec<BlockRow>, Unsupported> {
-    if CRITIC_MARKERS
-        .iter()
-        .any(|marker| markdown.contains(marker))
-    {
+    if contains_critic_markup(markdown) {
         return Err(Unsupported::new("critic markup"));
     }
 

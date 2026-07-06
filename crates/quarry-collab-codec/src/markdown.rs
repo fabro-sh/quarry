@@ -7,13 +7,38 @@ use pulldown_cmark::{
 };
 use serde_json::{Value, json};
 
-pub(crate) const CRITIC_MARKERS: [&str; 6] = ["{==", "{++", "{--", "{~~", "{>>", "{#"];
+const CRITIC_MARKERS: [&str; 6] = ["{==", "{++", "{--", "{~~", "{>>", "{#"];
 
-pub fn block_markdown_to_slate(markdown: &str) -> Result<Vec<Node>, Unsupported> {
-    if CRITIC_MARKERS
+/// True when `markdown` contains CriticMarkup markers outside code contexts.
+/// Markers inside inline code spans or code blocks are literal text — the
+/// browser never treats them as CriticMarkup there — so they must not reject
+/// a document. The scan masks code ranges out of the raw source rather than
+/// walking parsed text events, because extensions like strikethrough can
+/// split a real `{~~…~~}` marker across events.
+pub(crate) fn contains_critic_markup(markdown: &str) -> bool {
+    if !CRITIC_MARKERS
         .iter()
         .any(|marker| markdown.contains(marker))
     {
+        return false;
+    }
+
+    let mut masked = markdown.as_bytes().to_vec();
+    for (event, range) in
+        Parser::new_ext(markdown, browser_compatible_markdown_options()).into_offset_iter()
+    {
+        // A `Start` event's range spans the whole element, so this masks the
+        // entire code block, fence markers included.
+        if matches!(event, Event::Code(_) | Event::Start(Tag::CodeBlock(_))) {
+            masked[range].fill(b' ');
+        }
+    }
+    let masked = String::from_utf8_lossy(&masked);
+    CRITIC_MARKERS.iter().any(|marker| masked.contains(marker))
+}
+
+pub fn block_markdown_to_slate(markdown: &str) -> Result<Vec<Node>, Unsupported> {
+    if contains_critic_markup(markdown) {
         return Err(Unsupported::new("critic markup"));
     }
 

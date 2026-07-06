@@ -106,6 +106,25 @@ fn unsupported_critic_markup_returns_error() {
 }
 
 #[test]
+fn critic_markers_inside_code_spans_parse_as_literal_code_text() {
+    let nodes = block_markdown_to_slate("A `{++literal++}` marker.\n").unwrap();
+
+    assert_eq!(
+        serde_json::to_value(&nodes).unwrap(),
+        json!([
+            {
+                "type": "p",
+                "children": [
+                    { "text": "A " },
+                    { "code": true, "text": "{++literal++}" },
+                    { "text": " marker." }
+                ]
+            }
+        ])
+    );
+}
+
+#[test]
 fn zero_width_placeholder_block_matches_plate_empty_paragraph() {
     let nodes = block_markdown_to_slate("\u{200b}\n\n").unwrap();
 

@@ -228,6 +228,36 @@ fn critic_markup_returns_the_typed_unsupported_error() {
 }
 
 #[test]
+fn critic_substitution_markup_returns_the_typed_unsupported_error() {
+    // `~~…~~` parses as strikethrough, so a naive event-based scan would never
+    // see the `{~~` marker in a text event. The raw source must still reject.
+    let error =
+        markdown_to_block_rows("Change {~~old~>new~~} now.\n", sequential_ids()).unwrap_err();
+
+    assert_eq!(error.0, "critic markup");
+}
+
+#[test]
+fn critic_markers_inside_inline_code_are_literal_text() {
+    let rows = markdown_to_block_rows(
+        "The title carries `{==Local Light==}{>>note<<}{#c19b}` markers.\n",
+        sequential_ids(),
+    )
+    .expect("markers inside code spans are not CriticMarkup");
+
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].text.contains("{==Local Light==}"));
+}
+
+#[test]
+fn critic_markers_inside_fenced_code_blocks_are_literal_text() {
+    let rows = markdown_to_block_rows("```\n{++inserted++}{--deleted--}\n```\n", sequential_ids())
+        .expect("markers inside code blocks are not CriticMarkup");
+
+    assert_eq!(rows[0].block_type, "code_block");
+}
+
+#[test]
 fn block_rows_to_nodes_places_block_id_as_the_id_attribute() {
     let nodes = block_rows_to_nodes(&import("Hello world.\n")).unwrap();
 
