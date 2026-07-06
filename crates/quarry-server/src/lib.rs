@@ -15,6 +15,7 @@ mod journal;
 mod library_handlers;
 mod log_redaction;
 mod markdown_write;
+mod onboarding;
 mod presence;
 mod review;
 mod search_handlers;
@@ -156,6 +157,11 @@ pub fn router(store: QuarryStore) -> Router {
 
 pub fn router_with_state(state: AppState) -> Router {
     let router = Router::new()
+        .route("/", get(onboarding::home_page))
+        .route("/home.js", get(onboarding::home_js))
+        .route("/setup.md", get(onboarding::setup_md))
+        .route("/prompt.md", get(onboarding::prompt_md))
+        .route("/example.md", get(onboarding::example_md))
         .route("/quarry.SKILL.md", get(quarry_skill))
         .route("/agent-docs", get(agent_docs))
         .route("/.well-known/agent.json", get(agent_discovery))

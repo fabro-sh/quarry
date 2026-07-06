@@ -9,13 +9,12 @@ description: Build, launch, and drive the Quarry server + embedded browser UI fo
 
 ```sh
 cd ui && bun run build          # rebuild the browser bundle (server serves ui/dist)
-cd .. && cargo run -q -p quarry -- init <scratch-dir>/.quarry
-cargo run -q -p quarry -- serve --db <scratch-dir>/.quarry/quarry.db \
-  --cas <scratch-dir>/.quarry/cas --addr 127.0.0.1:<port>
+cd .. && cargo run -q -p quarry -- server init --root <scratch-dir>/.quarry
+cargo run -q -p quarry -- server start --root <scratch-dir>/.quarry --addr 127.0.0.1:<port>
 ```
 
 - Use a fresh scratch dir + fresh port. **Check `lsof -nP -iTCP:<port> -sTCP:LISTEN` first** — stale quarry servers from earlier sessions linger (5273 and 7831 are commonly taken) and will silently serve you their own state.
-- Confirm you're talking to your build: `curl -s http://127.0.0.1:<port>/ | grep -o 'assets/index[^"]*'` and match the hash against `ui/dist/assets/`.
+- Confirm you're talking to your build: `curl -s http://127.0.0.1:<port>/tmp | grep -o 'assets/index[^"]*'` and match the hash against `ui/dist/assets/`. (`/` serves the static marketing page, not the SPA — use a SPA route like `/tmp`.)
 
 ## Drive the UI (browser-use)
 

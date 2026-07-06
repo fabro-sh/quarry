@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Quarry — a shared document workspace for you and your AI agents</title>
+    <meta
+      name="description"
+      content="Quarry is a real-time collaborative Markdown workspace where AI agents join as first-class collaborators — comments, suggestions, presence, and plain-HTTP APIs."
+    />
+    <style>
+      :root {
+        --bg: #fafafa;
+        --surface: #ffffff;
+        --ink: #18181b;
+        --body: #3f3f46;
+        --muted: #71717a;
+        --line: #e4e4e7;
+        --line-strong: #d4d4d8;
+        --accent: #0d7360;
+        --accent-ink: #ffffff;
+        --well: #f4f4f5;
+        --code-bg: #18181b;
+        --code-ink: #e4e4e7;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #111113;
+          --surface: #18181b;
+          --ink: #fafafa;
+          --body: #d4d4d8;
+          --muted: #a1a1aa;
+          --line: #27272a;
+          --line-strong: #3f3f46;
+          --accent: #14b8a0;
+          --accent-ink: #052e2a;
+          --well: #1f1f23;
+          --code-bg: #09090b;
+          --code-ink: #d4d4d8;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--body);
+        font-family:
+          ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+          Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        font-size: 1rem;
+        line-height: 1.6;
+      }
+      main {
+        max-width: 44rem;
+        margin: 0 auto;
+        padding: 0 1.5rem 4rem;
+      }
+      header.site {
+        max-width: 44rem;
+        margin: 0 auto;
+        padding: 1.25rem 1.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+      }
+      .wordmark {
+        color: var(--ink);
+        font-weight: 600;
+        font-size: 1.125rem;
+        letter-spacing: -0.01em;
+        text-decoration: none;
+      }
+      nav {
+        display: flex;
+        align-items: center;
+        gap: 1.25rem;
+      }
+      nav a {
+        color: var(--muted);
+        font-size: 0.875rem;
+        text-decoration: none;
+      }
+      nav a:hover {
+        color: var(--ink);
+      }
+      h1 {
+        color: var(--ink);
+        font-size: 2.25rem;
+        font-weight: 600;
+        letter-spacing: -0.025em;
+        line-height: 1.15;
+        text-wrap: balance;
+        margin: 3rem 0 1rem;
+      }
+      .lede {
+        font-size: 1.125rem;
+        text-wrap: pretty;
+        margin: 0 0 2.5rem;
+        max-width: 60ch;
+      }
+      .lede strong {
+        color: var(--ink);
+        font-weight: 600;
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 0.75rem;
+        padding: 1.5rem;
+        margin: 0 0 1rem;
+      }
+      .card h2 {
+        color: var(--ink);
+        font-size: 1.125rem;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        margin: 0 0 0.25rem;
+      }
+      .card > p {
+        margin: 0 0 1rem;
+        font-size: 0.9375rem;
+        color: var(--muted);
+        text-wrap: pretty;
+      }
+      .promptbox {
+        position: relative;
+        background: var(--code-bg);
+        color: var(--code-ink);
+        border-radius: 0.5rem;
+        padding: 1rem 1.25rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.875rem;
+        line-height: 1.55;
+      }
+      .promptbox p {
+        margin: 0;
+        padding-right: 4.5rem;
+        overflow-wrap: break-word;
+      }
+      .copy {
+        position: absolute;
+        top: 0.75rem;
+        right: 0.75rem;
+        appearance: none;
+        border: 1px solid var(--line-strong);
+        border-radius: 0.375rem;
+        background: var(--surface);
+        color: var(--ink);
+        font: inherit;
+        font-size: 0.8125rem;
+        padding: 0.25rem 0.625rem;
+        cursor: pointer;
+      }
+      .copy:hover {
+        background: var(--well);
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 1rem;
+        margin: 1.5rem 0 3rem;
+      }
+      .button {
+        display: inline-block;
+        background: var(--accent);
+        color: var(--accent-ink);
+        font-size: 0.9375rem;
+        font-weight: 500;
+        text-decoration: none;
+        border-radius: 0.5rem;
+        padding: 0.5rem 1rem;
+      }
+      .button:hover {
+        filter: brightness(1.08);
+      }
+      .quiet-link {
+        color: var(--muted);
+        font-size: 0.9375rem;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      .quiet-link:hover {
+        color: var(--ink);
+      }
+      h2.section {
+        color: var(--ink);
+        font-size: 1.25rem;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        margin: 3rem 0 1rem;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1.5rem 2rem;
+        margin: 0;
+      }
+      @media (max-width: 40rem) {
+        dl {
+          grid-template-columns: 1fr;
+        }
+      }
+      dt {
+        color: var(--ink);
+        font-weight: 600;
+        font-size: 0.9375rem;
+      }
+      dd {
+        margin: 0.25rem 0 0;
+        font-size: 0.9375rem;
+        color: var(--muted);
+        text-wrap: pretty;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.875em;
+        background: var(--well);
+        border: 1px solid var(--line);
+        border-radius: 0.25rem;
+        padding: 0.0625rem 0.25rem;
+      }
+      footer {
+        max-width: 44rem;
+        margin: 0 auto;
+        padding: 1.5rem;
+        border-top: 1px solid var(--line);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.25rem;
+        font-size: 0.875rem;
+      }
+      footer a {
+        color: var(--muted);
+        text-decoration: none;
+      }
+      footer a:hover {
+        color: var(--ink);
+      }
+    </style>
+  </head>
+  <body>
+    <header class="site">
+      <a class="wordmark" href="/">Quarry</a>
+      <nav>
+        <a href="/tmp">Open the editor</a>
+        <a href="/agent-docs">Agent docs</a>
+      </nav>
+    </header>
+    <main>
+      <h1>A shared document workspace for you and your AI agents.</h1>
+      <p class="lede">
+        Quarry is a real-time collaborative Markdown editor where agents are
+        <strong>first-class collaborators</strong> — they join with their own presence and
+        cursors, draft alongside you, leave comments, and propose suggestions you can
+        accept or reject. Like a Google Doc, except agents connect over plain HTTP.
+      </p>
+
+      <div class="card">
+        <h2>Give this to your coding agent</h2>
+        <p>
+          This prompt tells the agent how to install Quarry, open an example document with
+          you, and set up the review workflow for future sessions.
+        </p>
+        <div class="promptbox">
+          <p id="agent-prompt">Install Quarry for me using `brew install fabro-sh/quarry/quarry`, then read __QUARRY_ORIGIN__/setup.md and set yourself up to use it.</p>
+          <button class="copy" type="button" data-copy="agent-prompt">Copy</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>No install needed</h2>
+        <p>
+          Agents can also connect with nothing but HTTP — create a document, share the
+          URL, and collaborate. If your agent can run <code>curl</code>, it can join.
+        </p>
+        <div class="promptbox">
+          <p id="http-prompt">Read __QUARRY_ORIGIN__/setup.md and set yourself up to use Quarry over plain HTTP, without installing anything.</p>
+          <button class="copy" type="button" data-copy="http-prompt">Copy</button>
+        </div>
+      </div>
+
+      <div class="actions">
+        <a class="button" href="/tmp">Start a document in your browser</a>
+        <a class="quiet-link" href="/example.md">See the example document</a>
+      </div>
+
+      <h2 class="section">What you get</h2>
+      <dl>
+        <div>
+          <dt>Real-time collaboration</dt>
+          <dd>Live cursors and presence for people and agents, in the same document at the same time.</dd>
+        </div>
+        <div>
+          <dt>Comments and suggestions</dt>
+          <dd>Threaded comments and tracked-change suggestions you accept or reject — from anyone in the doc.</dd>
+        </div>
+        <div>
+          <dt>Agent-native by design</dt>
+          <dd>A small REST API with presence, events, and atomic transactions. No SDK, no browser automation.</dd>
+        </div>
+        <div>
+          <dt>Share by URL</dt>
+          <dd>Every document is a private capability link. No accounts, no sign-in; anyone with the URL can join.</dd>
+        </div>
+        <div>
+          <dt>Versioned</dt>
+          <dd>Writes create immutable versions behind a mutable head, with three-way merges for concurrent edits.</dd>
+        </div>
+        <div>
+          <dt>Ephemeral by default</dt>
+          <dd>Shared documents expire after 30 days unless you keep them, so scratch work stays scratch.</dd>
+        </div>
+      </dl>
+    </main>
+    <footer>
+      <a href="/setup.md">setup.md</a>
+      <a href="/prompt.md">prompt.md</a>
+      <a href="/example.md">example.md</a>
+      <a href="/agent-docs">Agent docs</a>
+      <a href="/quarry.SKILL.md">quarry.SKILL.md</a>
+    </footer>
+    <script src="/home.js" defer></script>
+  </body>
+</html>
