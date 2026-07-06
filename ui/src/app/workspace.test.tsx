@@ -2158,7 +2158,8 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Readme/ }));
-    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Document actions' }));
+    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Current'));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Document actions' }));
     await userEvent.click(await screen.findByText('Upload Markdown'));
     await userEvent.upload(
       screen.getByLabelText('Upload Markdown file'),
