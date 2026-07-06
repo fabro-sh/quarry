@@ -19,7 +19,10 @@ pub(crate) enum AgentPromptScope<'a> {
     },
     #[cfg_attr(
         not(feature = "lib-documents"),
-        expect(dead_code, reason = "library prompts require the lib-documents feature")
+        expect(
+            dead_code,
+            reason = "library prompts require the lib-documents feature"
+        )
     )]
     Library {
         library: &'a str,
@@ -159,7 +162,10 @@ mod tests {
 
     #[test]
     fn tmp_prompt_uses_secret_locator_and_bearer_capability_notice() {
-        let prompt = agent_prompt("http://127.0.0.1:5173", &AgentPromptScope::Tmp { secret: SECRET });
+        let prompt = agent_prompt(
+            "http://127.0.0.1:5173",
+            &AgentPromptScope::Tmp { secret: SECRET },
+        );
 
         assert!(prompt.contains(&format!(
             "Join this Quarry document using this locator URL:\nhttp://127.0.0.1:5173/tmp/{SECRET}"
@@ -208,9 +214,11 @@ mod tests {
             "POST http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md/presence"
         ));
         assert!(!prompt.contains("/snapshot"));
-        assert!(prompt.contains(
-            "Connected in Quarry and ready.\n   <one-sentence summary of the document>"
-        ));
+        assert!(
+            prompt.contains(
+                "Connected in Quarry and ready.\n   <one-sentence summary of the document>"
+            )
+        );
         assert!(prompt.contains(
             "GET http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md/events/stream"
         ));

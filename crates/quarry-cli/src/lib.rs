@@ -941,9 +941,14 @@ mod tests {
         };
         assert_eq!(command.server, "http://127.0.0.1:7831");
 
-        let cli =
-            Cli::try_parse_from(["quarry", "open", "draft.md", "--server", "https://q.example"])
-                .unwrap();
+        let cli = Cli::try_parse_from([
+            "quarry",
+            "open",
+            "draft.md",
+            "--server",
+            "https://q.example",
+        ])
+        .unwrap();
         let Command::Open { file, client } = cli.command else {
             panic!("expected open command");
         };

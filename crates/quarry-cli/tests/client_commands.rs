@@ -64,9 +64,10 @@ async fn new_creates_empty_tmp_document_and_prints_prompt() {
 async fn open_seeds_tmp_document_from_markdown() {
     let (_root, server) = spawn_server().await;
 
-    let prompt = quarry_cli::create_tmp_document(&server, Some("# Draft\n\nHello world\n".to_string()))
-        .await
-        .unwrap();
+    let prompt =
+        quarry_cli::create_tmp_document(&server, Some("# Draft\n\nHello world\n".to_string()))
+            .await
+            .unwrap();
 
     let secret = secret_from_prompt(&prompt, &server);
     let rendered = reqwest::get(format!("{server}/v1/tmp/documents/{secret}"))
