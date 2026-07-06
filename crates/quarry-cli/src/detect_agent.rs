@@ -1,8 +1,3 @@
-#![expect(
-    dead_code,
-    reason = "agent detection is landing before CLI behavior starts consuming it"
-)]
-
 use std::io;
 use std::path::Path;
 

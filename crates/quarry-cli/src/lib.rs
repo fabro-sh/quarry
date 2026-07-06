@@ -603,7 +603,7 @@ pub async fn run() -> Result<()> {
         Command::Conflicts(command) => run_conflicts(&cli.root, command).await,
         Command::New(command) => {
             let document = create_tmp_document_for_cli(&command.server, None).await?;
-            println!("{}", document.agent_prompt);
+            println!("{}", tmp_document_stdout_for_environment(&document));
             open_tmp_document_in_browser(&document.browser_url);
             Ok(())
         }
@@ -611,7 +611,7 @@ pub async fn run() -> Result<()> {
             let content = fs::read_to_string(&file)
                 .map_err(|error| anyhow::anyhow!("read {}: {error}", file.display()))?;
             let document = create_tmp_document_for_cli(&client.server, Some(content)).await?;
-            println!("{}", document.agent_prompt);
+            println!("{}", tmp_document_stdout_for_environment(&document));
             open_tmp_document_in_browser(&document.browser_url);
             Ok(())
         }
@@ -866,6 +866,25 @@ fn tmp_document_browser_url(server: &str, secret: &str) -> String {
     format!("{}/tmp/{secret}", server.trim_end_matches('/'))
 }
 
+fn tmp_document_stdout_for_environment(document: &CreatedTmpDocument) -> &str {
+    let agent = detect_agent::determine_agent();
+    if let Some(agent) = agent.as_ref() {
+        tracing::debug!(
+            agent = agent.name(),
+            "printing tmp document agent instructions"
+        );
+    }
+    tmp_document_stdout(document, agent.is_some())
+}
+
+fn tmp_document_stdout(document: &CreatedTmpDocument, agent_detected: bool) -> &str {
+    if agent_detected {
+        &document.agent_prompt
+    } else {
+        &document.browser_url
+    }
+}
+
 fn open_tmp_document_in_browser(browser_url: &str) {
     open_tmp_document_with(browser_url, |url| open::that(url));
 }
@@ -1037,6 +1056,32 @@ mod tests {
         assert_eq!(
             url,
             "http://127.0.0.1:7831/tmp/0123456789abcdef0123456789abcdef"
+        );
+    }
+
+    #[test]
+    fn tmp_document_stdout_for_detected_agent_is_agent_prompt() {
+        let document = CreatedTmpDocument {
+            agent_prompt: "Agent instructions with http://127.0.0.1:7831/tmp/secret".to_string(),
+            browser_url: "http://127.0.0.1:7831/tmp/secret".to_string(),
+        };
+
+        assert_eq!(
+            tmp_document_stdout(&document, true),
+            "Agent instructions with http://127.0.0.1:7831/tmp/secret"
+        );
+    }
+
+    #[test]
+    fn tmp_document_stdout_without_detected_agent_is_browser_url() {
+        let document = CreatedTmpDocument {
+            agent_prompt: "Agent instructions with http://127.0.0.1:7831/tmp/secret".to_string(),
+            browser_url: "http://127.0.0.1:7831/tmp/secret".to_string(),
+        };
+
+        assert_eq!(
+            tmp_document_stdout(&document, false),
+            "http://127.0.0.1:7831/tmp/secret"
         );
     }
 

@@ -38,7 +38,7 @@ fn secret_from_prompt(prompt: &str, server: &str) -> String {
 }
 
 #[tokio::test]
-async fn new_creates_empty_tmp_document_and_prints_prompt() {
+async fn create_tmp_document_creates_empty_tmp_document_and_returns_prompt() {
     let (_root, server) = spawn_server().await;
 
     let prompt = quarry_cli::create_tmp_document(&server, None)
