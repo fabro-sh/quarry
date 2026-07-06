@@ -215,7 +215,6 @@ impl ServerRoot {
     }
 }
 
-#[allow(clippy::match_single_binding)]
 impl Command {
     /// Long-running server commands log verbosely by default; client and
     /// admin commands stay quiet so their stdout/stderr belong to the user.
@@ -225,7 +224,7 @@ impl Command {
             Self::Server(command) => command.command.default_log_filter(),
             Self::New(_) | Self::Open { .. } => logging::QUIET_FILTER,
             #[cfg(feature = "lib-documents")]
-            Self::Mount(_) => logging::QUIET_FILTER,
+            Self::Mount(_) => logging::DEVELOPMENT_FILTER,
             #[cfg(feature = "lib-documents")]
             Self::Get(_) => logging::QUIET_FILTER,
             #[cfg(feature = "lib-documents")]
@@ -707,7 +706,11 @@ pub async fn run() -> Result<()> {
 struct ClientCommand {
     /// Quarry server to target, e.g. http://localhost:5173 or
     /// https://quarry.lithos.computer.
-    #[arg(long, env = "QUARRY_SERVER", default_value = "https://quarry.lithos.computer")]
+    #[arg(
+        long,
+        env = "QUARRY_SERVER",
+        default_value = "https://quarry.lithos.computer"
+    )]
     server: String,
 }
 
