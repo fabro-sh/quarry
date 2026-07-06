@@ -1020,7 +1020,7 @@ mod linux_mount {
 
         async fn lookup(
             &self,
-            _req: Request,
+            req: Request,
             parent: Inode,
             name: &OsStr,
         ) -> fuse3::Result<ReplyEntry> {
@@ -1028,14 +1028,14 @@ mod linux_mount {
             let attr = self.attr(&path).await.map_err(to_errno)?;
             Ok(ReplyEntry {
                 ttl: TTL,
-                attr: to_fuse_attr(attr, self.read_only()),
+                attr: to_fuse_attr(attr, self.read_only(), req),
                 generation: 0,
             })
         }
 
         async fn getattr(
             &self,
-            _req: Request,
+            req: Request,
             inode: Inode,
             _fh: Option<u64>,
             _flags: u32,
@@ -1044,13 +1044,13 @@ mod linux_mount {
             let attr = self.attr(&path).await.map_err(to_errno)?;
             Ok(ReplyAttr {
                 ttl: TTL,
-                attr: to_fuse_attr(attr, self.read_only()),
+                attr: to_fuse_attr(attr, self.read_only(), req),
             })
         }
 
         async fn setattr(
             &self,
-            _req: Request,
+            req: Request,
             inode: Inode,
             fh: Option<u64>,
             set_attr: SetAttr,
@@ -1076,13 +1076,13 @@ mod linux_mount {
             let attr = self.attr(&path).await.map_err(to_errno)?;
             Ok(ReplyAttr {
                 ttl: TTL,
-                attr: to_fuse_attr(attr, self.read_only()),
+                attr: to_fuse_attr(attr, self.read_only(), req),
             })
         }
 
         async fn mkdir(
             &self,
-            _req: Request,
+            req: Request,
             parent: Inode,
             name: &OsStr,
             mode: u32,
@@ -1095,7 +1095,7 @@ mod linux_mount {
             let attr = self.attr(&path).await.map_err(to_errno)?;
             Ok(ReplyEntry {
                 ttl: TTL,
-                attr: to_fuse_attr(attr, self.read_only()),
+                attr: to_fuse_attr(attr, self.read_only(), req),
                 generation: 0,
             })
         }
@@ -1219,19 +1219,19 @@ mod linux_mount {
             Ok(ReplyOpen { fh: 0, flags: 0 })
         }
 
-        async fn readdir<'a>(
-            &'a self,
-            _req: Request,
+        async fn readdir(
+            &self,
+            req: Request,
             inode: Inode,
             _fh: u64,
             offset: i64,
         ) -> fuse3::Result<
             ReplyDirectory<
-                impl futures_util::Stream<Item = fuse3::Result<DirectoryEntry>> + Send + 'a,
+                impl futures_util::Stream<Item = fuse3::Result<DirectoryEntry>> + Send + '_,
             >,
         > {
             let entries = self
-                .directory_entries(inode, offset)
+                .directory_entries(inode, offset, req)
                 .await?
                 .into_iter()
                 .map(|(entry, _)| Ok(entry))
@@ -1241,20 +1241,20 @@ mod linux_mount {
             })
         }
 
-        async fn readdirplus<'a>(
-            &'a self,
-            _req: Request,
+        async fn readdirplus(
+            &self,
+            req: Request,
             inode: Inode,
             _fh: u64,
             offset: u64,
             _lock_owner: u64,
         ) -> fuse3::Result<
             ReplyDirectoryPlus<
-                impl futures_util::Stream<Item = fuse3::Result<DirectoryEntryPlus>> + Send + 'a,
+                impl futures_util::Stream<Item = fuse3::Result<DirectoryEntryPlus>> + Send + '_,
             >,
         > {
             let entries = self
-                .directory_entries(inode, i64::try_from(offset).unwrap_or(i64::MAX))
+                .directory_entries(inode, i64::try_from(offset).unwrap_or(i64::MAX), req)
                 .await?
                 .into_iter()
                 .map(|(entry, attr)| {
@@ -1277,7 +1277,7 @@ mod linux_mount {
 
         async fn create(
             &self,
-            _req: Request,
+            req: Request,
             parent: Inode,
             name: &OsStr,
             _mode: u32,
@@ -1288,7 +1288,7 @@ mod linux_mount {
             let attr = self.attr(&path).await.map_err(to_errno)?;
             Ok(ReplyCreated {
                 ttl: TTL,
-                attr: to_fuse_attr(attr, self.read_only()),
+                attr: to_fuse_attr(attr, self.read_only(), req),
                 generation: 0,
                 fh,
                 flags: 0,
@@ -1346,6 +1346,7 @@ mod linux_mount {
             &self,
             inode: Inode,
             offset: i64,
+            req: Request,
         ) -> fuse3::Result<Vec<(DirectoryEntry, FileAttr)>> {
             let path = self.path_for_inode(inode).await?;
             let parent_path = if path.is_empty() {
@@ -1354,11 +1355,15 @@ mod linux_mount {
                 super::parent_path(&path)
             };
             let parent_inode = self.parent_inode(&path).await?;
-            let current_attr =
-                to_fuse_attr(self.attr(&path).await.map_err(to_errno)?, self.read_only());
+            let current_attr = to_fuse_attr(
+                self.attr(&path).await.map_err(to_errno)?,
+                self.read_only(),
+                req,
+            );
             let parent_attr = to_fuse_attr(
                 self.attr(parent_path).await.map_err(to_errno)?,
                 self.read_only(),
+                req,
             );
             let mut entries = vec![
                 (
@@ -1398,7 +1403,7 @@ mod linux_mount {
                         name: OsString::from(entry.name),
                         offset: index as i64 + 3,
                     },
-                    to_fuse_attr(attr, self.read_only()),
+                    to_fuse_attr(attr, self.read_only(), req),
                 ));
             }
             Ok(entries
@@ -1421,7 +1426,7 @@ mod linux_mount {
         normalize_mount_path(&joined).map_err(to_errno)
     }
 
-    fn to_fuse_attr(attr: FuseAttr, read_only: bool) -> FileAttr {
+    fn to_fuse_attr(attr: FuseAttr, read_only: bool, req: Request) -> FileAttr {
         let kind = to_file_type(&attr.kind);
         let now = Timestamp::from(SystemTime::now());
         let mtime = attr
@@ -1450,8 +1455,8 @@ mod linux_mount {
             } else {
                 1
             },
-            uid: unsafe { libc::getuid() },
-            gid: unsafe { libc::getgid() },
+            uid: req.uid,
+            gid: req.gid,
             rdev: 0,
             blksize: 4096,
         }

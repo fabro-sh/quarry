@@ -183,8 +183,11 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(link).toHaveText('example');
 
     // Putting the cursor in the link reveals the edit popover; Remove unlinks it.
-    await editor.locator('a[href*="example.com"]').click();
-    await page.getByRole('button', { name: 'Remove link' }).click();
+    await link.click();
+    await expectSelectionText(page, 'example');
+    const removeLink = page.getByRole('button', { name: 'Remove link' });
+    await expect(removeLink).toBeVisible();
+    await removeLink.click();
     await expect(editor.locator('a[href*="example.com"]')).toHaveCount(0);
     await expect(editor).toContainText('example');
   });
@@ -478,7 +481,8 @@ test.describe('Quarry Browser smoke flows', () => {
     await page.getByRole('treeitem', { name: /T3/ }).click();
     const editor = page.getByLabel('Plate markdown editor');
     await editor.locator('td', { hasText: 'x' }).click();
-    await page.keyboard.type('X1');
+    await expectSelectionText(page, 'x');
+    await page.keyboard.insertText('X1');
     await expect.poll(() => api.collab.roomText('doc-t3')).toContain('X1');
     await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
   });
@@ -1804,6 +1808,8 @@ test.describe('Quarry Browser smoke flows', () => {
     const dialog = page.getByRole('dialog', { name: 'Resolve conflict' });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
+    await expect(dialog.getByRole('button', { name: 'Use ours' })).toBeEnabled();
+    await expect(dialog.getByRole('button', { name: 'Use theirs' })).toBeEnabled();
 
     await page.keyboard.press('Tab');
     await expect(dialog.getByLabel('Manual resolution')).toBeFocused();
@@ -1941,6 +1947,12 @@ async function dropTinyPng(page: Page, editor: Locator) {
 async function expectNoAxeViolations(page: Page, context: string) {
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations, `${context} has accessibility violations`).toEqual([]);
+}
+
+async function expectSelectionText(page: Page, text: string) {
+  await expect
+    .poll(() => page.evaluate(() => window.getSelection()?.anchorNode?.textContent ?? ''))
+    .toContain(text);
 }
 
 async function runCommand(page: Page, query: string, command: string) {
