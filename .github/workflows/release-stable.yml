@@ -145,6 +145,8 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+    outputs:
+      image-digest: ${{ steps.publish-image.outputs.digest }}
     steps:
       - name: Check out release tag
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -153,8 +155,212 @@ jobs:
           persist-credentials: false
 
       - name: Build and publish multi-arch image
+        id: publish-image
         uses: ./.github/actions/release-docker
         with:
           tag: ${{ needs.plan.outputs.tag }}
           prerelease: "false"
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy-production:
+    name: Deploy production
+    needs: [plan, docker]
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: quarry-production
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_REGION: us-east-1
+      AWS_ROLE_ARN: arn:aws:iam::449957914122:role/quarry-github-actions-deploy
+      QUARRY_PUBLIC_HEALTH_URL: https://quarry.lithos.computer/v1/health
+      QUARRY_IMAGE: ghcr.io/fabro-sh/quarry
+      QUARRY_INSTANCE_NAME: quarry-production
+      QUARRY_SERVICE_TAG: quarry
+      QUARRY_ALB_NAME: quarry-production-alb
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@ec61189d14ec14c8efccab744f656cffd0e33f37 # v6.1.0
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy pinned image by SSM
+        id: deploy
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+          IMAGE_DIGEST: ${{ needs.docker.outputs.image-digest }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$IMAGE_DIGEST" || "$IMAGE_DIGEST" != sha256:* ]]; then
+            echo "Invalid Docker image digest: ${IMAGE_DIGEST}" >&2
+            exit 1
+          fi
+
+          image="${QUARRY_IMAGE}@${IMAGE_DIGEST}"
+          instance_id="$(aws ec2 describe-instances \
+            --region "$AWS_REGION" \
+            --filters \
+              "Name=tag:Service,Values=${QUARRY_SERVICE_TAG}" \
+              "Name=tag:Name,Values=${QUARRY_INSTANCE_NAME}" \
+              "Name=instance-state-name,Values=running" \
+            --query 'Reservations[].Instances[].InstanceId' \
+            --output text)"
+
+          if [[ -z "$instance_id" || "$instance_id" == "None" || "$instance_id" == *$'\t'* ]]; then
+            echo "Expected exactly one running Quarry production instance, got: ${instance_id}" >&2
+            exit 1
+          fi
+
+          remote_script="$(cat <<SCRIPT
+          #!/usr/bin/env bash
+          set -euxo pipefail
+          cd /opt/quarry
+          backup="compose.yaml.\$(date -u +%Y%m%dT%H%M%SZ).bak"
+          sudo cp compose.yaml "\$backup"
+          echo "backup=\$backup"
+          grep -n image: compose.yaml
+          sudo sed -i -E "s#image: ghcr.io/fabro-sh/quarry@sha256:[0-9a-f]+#image: ${image}#" compose.yaml
+          grep -n image: compose.yaml
+          sudo docker compose pull
+          sudo docker compose up -d
+          for i in \$(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8080/v1/health >/tmp/quarry-health.json; then
+              break
+            fi
+            sleep 2
+          done
+          cat /tmp/quarry-health.json
+          echo
+          sudo docker compose ps
+          cid=\$(sudo docker compose ps -q quarry)
+          sudo docker inspect --format "container={{.Name}} image={{.Config.Image}} image_id={{.Image}} status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" "\$cid"
+          sudo docker logs --tail=80 "\$cid" 2>&1 | tail -80
+          SCRIPT
+          )"
+
+          jq -n --arg script "$remote_script" '{commands: [$script]}' > ssm-parameters.json
+
+          command_id="$(aws ssm send-command \
+            --region "$AWS_REGION" \
+            --instance-ids "$instance_id" \
+            --document-name AWS-RunShellScript \
+            --comment "Deploy Quarry ${TAG} (${IMAGE_DIGEST})" \
+            --parameters file://ssm-parameters.json \
+            --query Command.CommandId \
+            --output text)"
+
+          set +e
+          aws ssm wait command-executed \
+            --region "$AWS_REGION" \
+            --command-id "$command_id" \
+            --instance-id "$instance_id"
+          wait_status=$?
+          set -e
+
+          aws ssm get-command-invocation \
+            --region "$AWS_REGION" \
+            --command-id "$command_id" \
+            --instance-id "$instance_id"
+
+          if [[ "$wait_status" -ne 0 ]]; then
+            exit "$wait_status"
+          fi
+
+          {
+            echo "instance-id=${instance_id}"
+            echo "command-id=${command_id}"
+            echo "image=${image}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify Docker health through SSM
+        run: |
+          set -euo pipefail
+
+          remote_script='#!/usr/bin/env bash
+          set -euo pipefail
+          cd /opt/quarry
+          cid=$(sudo docker compose ps -q quarry)
+          for i in $(seq 1 40); do
+            health=$(sudo docker inspect --format "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" "$cid")
+            echo "docker_health=${health}"
+            if [[ "$health" == "healthy" ]]; then
+              curl -fsS http://127.0.0.1:8080/v1/health
+              exit 0
+            fi
+            sleep 3
+          done
+          sudo docker compose ps
+          exit 1'
+
+          jq -n --arg script "$remote_script" '{commands: [$script]}' > ssm-verify-parameters.json
+          command_id="$(aws ssm send-command \
+            --region "$AWS_REGION" \
+            --instance-ids "${{ steps.deploy.outputs.instance-id }}" \
+            --document-name AWS-RunShellScript \
+            --comment "Verify Quarry production health" \
+            --parameters file://ssm-verify-parameters.json \
+            --query Command.CommandId \
+            --output text)"
+
+          set +e
+          aws ssm wait command-executed \
+            --region "$AWS_REGION" \
+            --command-id "$command_id" \
+            --instance-id "${{ steps.deploy.outputs.instance-id }}"
+          wait_status=$?
+          set -e
+
+          aws ssm get-command-invocation \
+            --region "$AWS_REGION" \
+            --command-id "$command_id" \
+            --instance-id "${{ steps.deploy.outputs.instance-id }}"
+
+          if [[ "$wait_status" -ne 0 ]]; then
+            exit "$wait_status"
+          fi
+
+      - name: Verify ALB target health
+        run: |
+          set -euo pipefail
+
+          alb_arn="$(aws elbv2 describe-load-balancers \
+            --region "$AWS_REGION" \
+            --names "$QUARRY_ALB_NAME" \
+            --query 'LoadBalancers[0].LoadBalancerArn' \
+            --output text)"
+
+          tg_arns="$(aws elbv2 describe-target-groups \
+            --region "$AWS_REGION" \
+            --load-balancer-arn "$alb_arn" \
+            --query 'TargetGroups[].TargetGroupArn' \
+            --output text)"
+
+          for tg_arn in $tg_arns; do
+            for i in $(seq 1 30); do
+              state="$(aws elbv2 describe-target-health \
+                --region "$AWS_REGION" \
+                --target-group-arn "$tg_arn" \
+                --query 'TargetHealthDescriptions[?Target.Id==`${{ steps.deploy.outputs.instance-id }}`].TargetHealth.State | [0]' \
+                --output text)"
+              echo "${tg_arn}: ${state}"
+              if [[ "$state" == "healthy" ]]; then
+                break
+              fi
+              sleep 10
+            done
+
+            if [[ "$state" != "healthy" ]]; then
+              aws elbv2 describe-target-health \
+                --region "$AWS_REGION" \
+                --target-group-arn "$tg_arn"
+              exit 1
+            fi
+          done
+
+      - name: Verify public health
+        run: curl -fsS -D - "$QUARRY_PUBLIC_HEALTH_URL"

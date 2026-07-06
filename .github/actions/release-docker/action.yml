@@ -16,6 +16,11 @@ inputs:
     required: false
     default: ghcr.io/fabro-sh/quarry
 
+outputs:
+  digest:
+    description: Pushed multi-arch image digest.
+    value: ${{ steps.build.outputs.digest }}
+
 runs:
   using: composite
   steps:
