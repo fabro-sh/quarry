@@ -7,7 +7,6 @@ use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-#[cfg(feature = "lib-documents")]
 use anyhow::Context as _;
 
 #[cfg(feature = "lib-documents")]
@@ -16,9 +15,14 @@ fn assert_content_hash(hash: &str) {
     assert!(hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
 }
 
+/// Client and admin commands are quiet by default; `RUST_LOG` opts back into
+/// verbose logs, which stay on stderr so stdout remains payload-only.
+#[cfg(feature = "lib-documents")]
+const VERBOSE_FILTER: &str = "warn,quarry_cli=debug,quarry_server=debug,quarry_storage=debug";
+
 #[cfg(feature = "lib-documents")]
 #[test]
-fn cli_default_debug_logs_stay_on_stderr_and_stdout_stays_payload_only() -> anyhow::Result<()> {
+fn cli_verbose_logs_stay_on_stderr_and_stdout_stays_payload_only() -> anyhow::Result<()> {
     let temp = tempfile::tempdir().context("create temp dir")?;
     let root = temp.path().join("root");
     let root_str = root.to_str().context("root path should be UTF-8")?;
@@ -27,6 +31,7 @@ fn cli_default_debug_logs_stay_on_stderr_and_stdout_stays_payload_only() -> anyh
     std::fs::write(&source, "hello from cli\n").context("write source markdown")?;
 
     let output = quarry_command()
+        .env("RUST_LOG", VERBOSE_FILTER)
         .args(["init", root_str])
         .output()
         .context("run quarry init")?;
@@ -38,6 +43,7 @@ fn cli_default_debug_logs_stay_on_stderr_and_stdout_stays_payload_only() -> anyh
     assert!(String::from_utf8_lossy(&output.stderr).contains("logging.initialized"));
 
     let output = quarry_command()
+        .env("RUST_LOG", VERBOSE_FILTER)
         .args([
             "--root",
             root_str,
@@ -114,6 +120,27 @@ fn cli_default_debug_logs_stay_on_stderr_and_stdout_stays_payload_only() -> anyh
     let resolved: serde_json::Value =
         serde_json::from_slice(&output.stdout).context("parse conflict resolve JSON")?;
     assert_eq!(resolved["status"], "resolved");
+    Ok(())
+}
+
+/// The day-to-day regression guard: client and admin commands must not spill
+/// developer logs onto the user's console unless `RUST_LOG` asks for them.
+#[test]
+fn cli_client_and_admin_commands_are_quiet_by_default() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir().context("create temp dir")?;
+    let root = temp.path().join("root");
+    let root_str = root.to_str().context("root path should be UTF-8")?;
+
+    let output = quarry_command()
+        .args(["init", root_str])
+        .output()
+        .context("run quarry init")?;
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("{}\n", root.display())
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
     Ok(())
 }
 

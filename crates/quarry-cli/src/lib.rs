@@ -30,6 +30,7 @@ mod logging {
     use tracing_subscriber::EnvFilter;
 
     pub const DEVELOPMENT_FILTER: &str = "warn,quarry=debug,quarry_cli=debug,quarry_server=debug,quarry_storage=debug,quarry_git=debug,quarry_fuse=debug,quarry_cas=debug,quarry_collab_codec=debug";
+    pub const QUIET_FILTER: &str = "warn";
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct LogConfig {
@@ -44,21 +45,25 @@ mod logging {
     }
 
     impl LogConfig {
-        pub fn from_env() -> Self {
+        pub fn from_env(default_filter: &str) -> Self {
             let rust_log = std::env::var("RUST_LOG").ok();
             let format = std::env::var("QUARRY_LOG_FORMAT").ok();
-            Self::from_env_values(rust_log.as_deref(), format.as_deref())
+            Self::from_env_values(rust_log.as_deref(), format.as_deref(), default_filter)
         }
 
-        pub fn from_env_values(rust_log: Option<&str>, format: Option<&str>) -> Self {
+        pub fn from_env_values(
+            rust_log: Option<&str>,
+            format: Option<&str>,
+            default_filter: &str,
+        ) -> Self {
             let requested_filter = rust_log
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .unwrap_or(DEVELOPMENT_FILTER);
+                .unwrap_or(default_filter);
             let filter = if EnvFilter::try_new(requested_filter).is_ok() {
                 requested_filter.to_string()
             } else {
-                DEVELOPMENT_FILTER.to_string()
+                default_filter.to_string()
             };
 
             Self {
@@ -68,7 +73,7 @@ mod logging {
         }
 
         fn env_filter(&self) -> EnvFilter {
-            EnvFilter::try_new(&self.filter).unwrap_or_else(|_| EnvFilter::new(DEVELOPMENT_FILTER))
+            EnvFilter::try_new(&self.filter).unwrap_or_else(|_| EnvFilter::new(QUIET_FILTER))
         }
     }
 
@@ -88,8 +93,8 @@ mod logging {
         }
     }
 
-    pub fn init() {
-        let config = LogConfig::from_env();
+    pub fn init(default_filter: &str) {
+        let config = LogConfig::from_env(default_filter);
         let result = match config.format {
             LogFormat::Pretty => tracing_subscriber::fmt()
                 .with_env_filter(config.env_filter())
@@ -163,6 +168,35 @@ enum Command {
     Restore {
         source: PathBuf,
     },
+}
+
+impl Command {
+    /// Long-running server commands log verbosely by default; client and
+    /// admin commands stay quiet so their stdout/stderr belong to the user.
+    /// `RUST_LOG` overrides either default.
+    fn default_log_filter(&self) -> &'static str {
+        match self {
+            Self::Serve(_) => logging::DEVELOPMENT_FILTER,
+            #[cfg(feature = "lib-documents")]
+            Self::Mount(_) => logging::DEVELOPMENT_FILTER,
+            Self::Init(_)
+            | Self::New(_)
+            | Self::Open { .. }
+            | Self::Gc
+            | Self::Backup { .. }
+            | Self::Restore { .. } => logging::QUIET_FILTER,
+            #[cfg(feature = "lib-documents")]
+            Self::Get(_)
+            | Self::Put(_)
+            | Self::List(_)
+            | Self::Share(_)
+            | Self::Move(_)
+            | Self::Delete(_)
+            | Self::Tx(_)
+            | Self::Git(_)
+            | Self::Conflicts(_) => logging::QUIET_FILTER,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -357,8 +391,8 @@ enum ConflictsSubcommand {
 }
 
 pub async fn run() -> Result<()> {
-    init_tracing();
     let cli = Cli::parse();
+    logging::init(cli.command.default_log_filter());
     match cli.command {
         Command::Init(command) => {
             let store = open_at(&command.server_root, None, None).await?;
@@ -600,10 +634,6 @@ pub async fn run() -> Result<()> {
             Ok(())
         }
     }
-}
-
-fn init_tracing() {
-    logging::init();
 }
 
 #[cfg(feature = "lib-documents")]
@@ -902,8 +932,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_logging_config_enables_quarry_crates_at_debug_and_dependencies_at_warn() {
-        let config = logging::LogConfig::from_env_values(None, None);
+    fn development_logging_config_enables_quarry_crates_at_debug_and_dependencies_at_warn() {
+        let config = logging::LogConfig::from_env_values(None, None, logging::DEVELOPMENT_FILTER);
 
         assert_eq!(config.format, logging::LogFormat::Pretty);
         assert!(
@@ -923,31 +953,80 @@ mod tests {
     }
 
     #[test]
-    fn rust_log_overrides_development_default_filter() {
-        let config = logging::LogConfig::from_env_values(Some("info,quarry_storage=trace"), None);
+    fn rust_log_overrides_the_default_filter() {
+        let config = logging::LogConfig::from_env_values(
+            Some("info,quarry_storage=trace"),
+            None,
+            logging::QUIET_FILTER,
+        );
 
         assert_eq!(config.filter, "info,quarry_storage=trace");
     }
 
     #[test]
     fn json_log_format_is_selected_from_env() {
-        let config = logging::LogConfig::from_env_values(None, Some("json"));
+        let config = logging::LogConfig::from_env_values(None, Some("json"), logging::QUIET_FILTER);
 
         assert_eq!(config.format, logging::LogFormat::Json);
     }
 
     #[test]
     fn invalid_log_format_falls_back_to_pretty() {
-        let config = logging::LogConfig::from_env_values(None, Some("yaml"));
+        let config = logging::LogConfig::from_env_values(None, Some("yaml"), logging::QUIET_FILTER);
 
         assert_eq!(config.format, logging::LogFormat::Pretty);
     }
 
     #[test]
-    fn invalid_rust_log_falls_back_to_development_default_filter() {
-        let config = logging::LogConfig::from_env_values(Some("quarry=debug,="), None);
+    fn invalid_rust_log_falls_back_to_the_passed_default_filter() {
+        let config = logging::LogConfig::from_env_values(
+            Some("quarry=debug,="),
+            None,
+            logging::QUIET_FILTER,
+        );
 
-        assert_eq!(config.filter, logging::DEVELOPMENT_FILTER);
+        assert_eq!(config.filter, logging::QUIET_FILTER);
+    }
+
+    #[test]
+    fn server_commands_default_to_verbose_logging_and_client_commands_stay_quiet() {
+        let filter_for = |args: &[&str]| {
+            Cli::try_parse_from(args)
+                .unwrap()
+                .command
+                .default_log_filter()
+        };
+
+        assert_eq!(
+            filter_for(&["quarry", "serve"]),
+            logging::DEVELOPMENT_FILTER
+        );
+        assert_eq!(filter_for(&["quarry", "new"]), logging::QUIET_FILTER);
+        assert_eq!(filter_for(&["quarry", "gc"]), logging::QUIET_FILTER);
+        assert_eq!(
+            filter_for(&["quarry", "init", "/tmp/root"]),
+            logging::QUIET_FILTER
+        );
+    }
+
+    #[cfg(feature = "lib-documents")]
+    #[test]
+    fn mount_defaults_to_verbose_logging_and_library_commands_stay_quiet() {
+        let filter_for = |args: &[&str]| {
+            Cli::try_parse_from(args)
+                .unwrap()
+                .command
+                .default_log_filter()
+        };
+
+        assert_eq!(
+            filter_for(&["quarry", "mount", "notes", "/tmp/mnt"]),
+            logging::DEVELOPMENT_FILTER
+        );
+        assert_eq!(
+            filter_for(&["quarry", "list", "notes"]),
+            logging::QUIET_FILTER
+        );
     }
 
     #[test]
