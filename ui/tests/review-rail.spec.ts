@@ -1,5 +1,6 @@
-import { expect, test, type Page, type Route } from 'playwright/test';
+import type { Page, Route } from 'playwright/test';
 
+import { expect, test } from './helpers/fixtures';
 import {
   installMockCollabServer,
   type MockCollabServer,

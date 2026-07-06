@@ -1,7 +1,8 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Locator, type Page, type Route } from 'playwright/test';
+import type { Locator, Page, Route } from 'playwright/test';
 import * as Y from 'yjs';
 
+import { expect, test } from './helpers/fixtures';
 import { installMockCollabServer } from './helpers/mock-collab-server';
 
 interface MockDocument {
@@ -103,6 +104,56 @@ test.describe('Quarry Browser smoke flows', () => {
     await expect(page.getByRole('treeitem', { name: /new\.md/ })).toBeVisible();
     await page.getByRole('treeitem', { name: /new\.md/ }).click();
     await expect(page.getByLabel('Plate markdown editor')).toContainText('edited');
+  });
+
+  // The tab title is the always-on consumer of the markdown mirror (the
+  // debounced off-thread serialization of the live editor value). Asserting
+  // it after an edit proves the whole publish pipeline ran — a mirror that
+  // silently stops updating (e.g. a serializer promise that never settles)
+  // has no other test-visible symptom. The worker assertion pins the
+  // off-thread path itself: a crashed worker is downgraded to main-thread
+  // serialization, which keeps the title correct but reintroduces the
+  // trailing typing stall the worker exists to prevent.
+  test('publishes the markdown mirror after an edit (tab title, via the worker)', async ({ page }) => {
+    // A single-block document: End always lands the caret in the H1, so the
+    // edit below extends the title heading without fighting Slate's async
+    // click-selection (this test is about the mirror pipeline, not typing).
+    await installMockApi(page, {
+      documents: [
+        {
+          content: '# Mirror Title\n',
+          id: 'doc-mirror',
+          metadata: { title: 'Mirror Title' },
+          path: 'mirror.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Mirror Title/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Mirror Title');
+    // Let the session hydrate before typing: an editor swap mid-typing
+    // silently drops keystrokes.
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
+    await expect(page).toHaveTitle('Mirror Title · Quarry');
+
+    // Type into the H1: the tab title only changes when the mirror
+    // re-serializes it. Slate applies the click's selection asynchronously
+    // (typing earlier goes to the previous caret) and repositioning keys like
+    // End race its reconciliation, so wait for the selection to anchor in the
+    // heading and type the marker wherever the click landed — the assertions
+    // only need the H1, and so the republished title, to pick it up.
+    await editor.locator('h1').click();
+    await expect
+      .poll(() => page.evaluate(() => window.getSelection()?.anchorNode?.textContent ?? ''))
+      .toContain('Mirror Title');
+    await page.keyboard.type('Updated');
+    await expect(editor.locator('h1')).toContainText('Updated');
+
+    await expect(page).toHaveTitle(/Updated.*· Quarry$/);
+    expect(page.workers().some((worker) => worker.url().includes('mirror-serializer'))).toBe(true);
   });
 
   test('inserts and removes a hyperlink from the floating toolbar', async ({ page }) => {
