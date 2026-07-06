@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🪨</text></svg>" />
     <title>Quarry — a shared document workspace for you and your AI agents</title>
     <meta
       name="description"
@@ -229,17 +230,11 @@
         margin: 0 auto;
         padding: 1.5rem;
         border-top: 1px solid var(--line);
-        display: flex;
-        flex-wrap: wrap;
-        gap: 1.25rem;
         font-size: 0.875rem;
-      }
-      footer a {
         color: var(--muted);
-        text-decoration: none;
       }
-      footer a:hover {
-        color: var(--ink);
+      footer p {
+        margin: 0;
       }
     </style>
   </head>
@@ -272,21 +267,8 @@
         </div>
       </div>
 
-      <div class="card">
-        <h2>No install needed</h2>
-        <p>
-          Agents can also connect with nothing but HTTP — create a document, share the
-          URL, and collaborate. If your agent can run <code>curl</code>, it can join.
-        </p>
-        <div class="promptbox">
-          <p id="http-prompt">Read __QUARRY_ORIGIN__/setup.md and set yourself up to use Quarry over plain HTTP, without installing anything.</p>
-          <button class="copy" type="button" data-copy="http-prompt">Copy</button>
-        </div>
-      </div>
-
       <div class="actions">
         <a class="button" href="/tmp">Start a document in your browser</a>
-        <a class="quiet-link" href="/example.md">See the example document</a>
       </div>
 
       <h2 class="section">What you get</h2>
@@ -318,11 +300,7 @@
       </dl>
     </main>
     <footer>
-      <a href="/setup.md">setup.md</a>
-      <a href="/prompt.md">prompt.md</a>
-      <a href="/example.md">example.md</a>
-      <a href="/agent-docs">Agent docs</a>
-      <a href="/quarry.SKILL.md">quarry.SKILL.md</a>
+      <p>Brought to you by Lithos Computer Co.</p>
     </footer>
     <script src="/home.js" defer></script>
   </body>
