@@ -118,13 +118,22 @@ jobs:
   docker:
     name: Publish Docker image
     needs: [plan, publish]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
       id-token: write
       attestations: write
-    uses: ./.github/workflows/release-docker.yml
-    with:
-      tag: ${{ needs.plan.outputs.tag }}
-      prerelease: false
-    secrets: inherit
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.plan.outputs.tag }}
+          persist-credentials: false
+
+      - name: Build and publish multi-arch image
+        uses: ./.github/actions/release-docker
+        with:
+          tag: ${{ needs.plan.outputs.tag }}
+          prerelease: "false"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
