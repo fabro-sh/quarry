@@ -27,7 +27,6 @@ Open `http://127.0.0.1:7831`, create a document, and start typing. Then hand the
 Install stable releases with Homebrew (macOS and Linux, pre-compiled binaries):
 
 ```sh
-brew tap fabro-sh/quarry ssh://git@github.com/fabro-sh/quarry.git
 brew install fabro-sh/quarry/quarry
 ```
 
