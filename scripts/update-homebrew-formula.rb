@@ -48,7 +48,7 @@ platform_release = [
 
 formula = File.read(formula_path)
 formula_parts = formula.match(
-  /\A(?<prefix>.*?^  homepage "[^"]+"\n)(?<version_block>.*?)(?<license>^  license "[^"]+"\n)(?<pre_head_block>.*?)(?<head>^  head .*\n)(?<platform_block>.*?)(?<body>^  def install.*)\z/m
+  /\A(?<prefix>.*?^  homepage "[^"]+"\n)(?<version_block>.*?)(?<license>^  license "[^"]+"\n)(?<pre_head_block>.*?)(?<head>^  head [^\n]*\n)(?<platform_block>.*?)(?<body>^  def install.*)\z/m
 )
 abort "Unable to find Homebrew homepage/license/head/install declarations in #{formula_path}" unless formula_parts
 
