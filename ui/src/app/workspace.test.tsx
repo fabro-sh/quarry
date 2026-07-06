@@ -458,6 +458,19 @@ describe('Quarry Browser workspace', () => {
     expect(screen.queryByRole('tab', { name: 'Versions' })).not.toBeInTheDocument();
     expect(screen.queryByText(/Expires/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+
+    await userEvent.keyboard('{Control>}k{/Control}');
+    await userEvent.click(await screen.findByText('Open settings'));
+    const settings = screen.getByRole('dialog', { name: 'Workspace settings' });
+    expect(within(settings).getByText('Identity')).toBeInTheDocument();
+    expect(within(settings).getByText('Appearance')).toBeInTheDocument();
+    expect(within(settings).queryByText('Library')).not.toBeInTheDocument();
+    expect(within(settings).queryByText('Active library')).not.toBeInTheDocument();
+    expect(within(settings).queryByText('No library selected')).not.toBeInTheDocument();
+    expect(within(settings).queryByText('Layout')).not.toBeInTheDocument();
+    expect(within(settings).queryByText('Storage key')).not.toBeInTheDocument();
+    expect(within(settings).queryByText('quarry:layout:workspace')).not.toBeInTheDocument();
+    expect(within(settings).queryByRole('button', { name: 'Reset pane sizes' })).not.toBeInTheDocument();
   });
 
   it('does not mount a routed editor before the document body loads', async () => {
@@ -1650,7 +1663,9 @@ describe('Quarry Browser workspace', () => {
     await userEvent.click(await screen.findByText('Open settings'));
     const settings = screen.getByRole('dialog', { name: 'Workspace settings' });
     expect(within(settings).getByText('settings-lib')).toBeInTheDocument();
-    expect(within(settings).getByText('quarry:layout:settings-lib')).toBeInTheDocument();
+    expect(within(settings).getByText('Appearance')).toBeInTheDocument();
+    expect(within(settings).queryByText('Storage key')).not.toBeInTheDocument();
+    expect(within(settings).queryByText('quarry:layout:settings-lib')).not.toBeInTheDocument();
 
     await userEvent.click(within(settings).getByRole('button', { name: 'Use light theme' }));
     expect(screen.getByRole('main')).toHaveAttribute('data-theme', 'light');
@@ -1660,7 +1675,7 @@ describe('Quarry Browser workspace', () => {
     expect(screen.getByRole('main')).toHaveAttribute('data-theme', 'dark');
     expect(localStorage.getItem('quarry:theme')).toBe('dark');
 
-    await userEvent.click(within(settings).getByRole('button', { name: 'Reset workspace layout' }));
+    await userEvent.click(within(settings).getByRole('button', { name: 'Reset pane sizes' }));
     expect(localStorage.getItem('quarry:layout:settings-lib')).toBeNull();
 
     await userEvent.click(within(settings).getByRole('button', { name: 'Close settings' }));
@@ -1715,7 +1730,7 @@ describe('Quarry Browser workspace', () => {
     await userEvent.click(await screen.findByText('Open settings'));
     const settings = screen.getByRole('dialog', { name: 'Workspace settings' });
     const close = within(settings).getByRole('button', { name: 'Close settings' });
-    const resetLayout = within(settings).getByRole('button', { name: 'Reset workspace layout' });
+    const resetLayout = within(settings).getByRole('button', { name: 'Reset pane sizes' });
 
     await waitFor(() => expect(close).toHaveFocus());
     await userEvent.tab({ shift: true });

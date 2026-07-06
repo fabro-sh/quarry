@@ -56,6 +56,7 @@ import {
   Panel,
   PanelGroup,
   PanelResizeHandle,
+  type ImperativePanelGroupHandle,
   type ImperativePanelHandle,
 } from 'react-resizable-panels';
 import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom';
@@ -163,6 +164,7 @@ type DocumentScope = 'library' | 'tmp';
 type ThemePreference = 'light' | 'dark';
 type TreeOpenState = Record<string, boolean>;
 type RightPaneTab = 'links' | 'versions' | 'comments';
+const DEFAULT_WORKSPACE_LAYOUT = [22, 54, 24];
 const EVENT_POLL_INTERVAL_MS = 5_000;
 // How long the settled "Saved" status lingers before it fades away, so the
 // header confirms the save and then gets out of the way.
@@ -268,6 +270,7 @@ function Workspace() {
   const [mergeConflictId, setMergeConflictId] = useState<string | null>(null);
   const [treeMenu, setTreeMenu] = useState<TreeMenuState | null>(null);
   const leftPanelRef = useRef<ImperativePanelHandle>(null);
+  const workspaceLayoutRef = useRef<ImperativePanelGroupHandle>(null);
   const rightPanelRef = useRef<ImperativePanelHandle>(null);
   const uploadMarkdownInputRef = useRef<HTMLInputElement>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
@@ -1343,6 +1346,18 @@ function Workspace() {
     persistRightPaneTab(activeLibrary, tab);
   }
 
+  function resetWorkspaceLayout() {
+    localStorage.removeItem(layoutStorageKey);
+    leftPanelRef.current?.expand();
+    rightPanelRef.current?.expand();
+    setLeftCollapsed(false);
+    setRightCollapsed(false);
+    const panelGroup = workspaceLayoutRef.current;
+    if (panelGroup?.getLayout().length === DEFAULT_WORKSPACE_LAYOUT.length) {
+      panelGroup.setLayout(DEFAULT_WORKSPACE_LAYOUT);
+    }
+  }
+
   function viewSelectedVersion(versionId: string) {
     setCurrentDiffOpen(false);
     setSelectedVersionId(versionId);
@@ -1406,6 +1421,7 @@ function Workspace() {
         className="min-h-0 flex-1"
         data-layout-storage-key={layoutStorageKey}
         direction="horizontal"
+        ref={workspaceLayoutRef}
       >
         {!isTmpDocument ? (
           <>
@@ -1589,12 +1605,13 @@ function Workspace() {
       <SettingsDialog
         activeLibrary={activeLibrary}
         author={author}
-        layoutStorageKey={layoutStorageKey}
+        librarySettingsVisible={libDocumentsEnabled}
+        layoutSettingsVisible={libDocumentsEnabled && !isTmpDocument}
         open={settingsOpen}
         theme={theme}
         onClose={() => setSettingsOpen(false)}
         onAuthorChange={changeAuthor}
-        onResetLayout={() => localStorage.removeItem(layoutStorageKey)}
+        onResetLayout={resetWorkspaceLayout}
         onThemeChange={setTheme}
       />
 
@@ -2191,7 +2208,8 @@ function OnboardingDialog({
 function SettingsDialog({
   activeLibrary,
   author,
-  layoutStorageKey,
+  librarySettingsVisible,
+  layoutSettingsVisible,
   open,
   theme,
   onAuthorChange,
@@ -2201,7 +2219,8 @@ function SettingsDialog({
 }: {
   activeLibrary: string;
   author: string;
-  layoutStorageKey: string;
+  librarySettingsVisible: boolean;
+  layoutSettingsVisible: boolean;
   open: boolean;
   theme: ThemePreference;
   onAuthorChange: (author: string) => void;
@@ -2240,15 +2259,17 @@ function SettingsDialog({
         </div>
 
         <div className="space-y-5 p-4">
-          <section>
-            <h3 className="text-xs font-semibold uppercase text-muted">Library</h3>
-            <dl className="mt-2 grid grid-cols-[120px_1fr] gap-x-3 gap-y-2 text-sm">
-              <dt className="text-muted">Active library</dt>
-              <dd className="min-w-0 truncate font-mono text-body">
-                {activeLibrary || 'No library selected'}
-              </dd>
-            </dl>
-          </section>
+          {librarySettingsVisible ? (
+            <section>
+              <h3 className="text-xs font-semibold uppercase text-muted">Library</h3>
+              <dl className="mt-2 grid grid-cols-[120px_1fr] gap-x-3 gap-y-2 text-sm">
+                <dt className="text-muted">Active library</dt>
+                <dd className="min-w-0 truncate font-mono text-body">
+                  {activeLibrary || 'No library selected'}
+                </dd>
+              </dl>
+            </section>
+          ) : null}
 
           <section>
             <h3 className="text-xs font-semibold uppercase text-muted">Identity</h3>
@@ -2267,7 +2288,7 @@ function SettingsDialog({
           </section>
 
           <section>
-            <h3 className="text-xs font-semibold uppercase text-muted">Theme</h3>
+            <h3 className="text-xs font-semibold uppercase text-muted">Appearance</h3>
             <div className="mt-2 flex flex-wrap gap-2">
               <button
                 className={theme === 'light' ? primaryButton : secondaryButton}
@@ -2290,17 +2311,15 @@ function SettingsDialog({
             </div>
           </section>
 
-          <section>
-            <h3 className="text-xs font-semibold uppercase text-muted">Layout</h3>
-            <dl className="mt-2 grid grid-cols-[120px_1fr] gap-x-3 gap-y-2 text-sm">
-              <dt className="text-muted">Storage key</dt>
-              <dd className="min-w-0 truncate font-mono text-body">{layoutStorageKey}</dd>
-            </dl>
-            <button className={`${secondaryButton} mt-3`} onClick={onResetLayout} type="button">
-              <RotateCcw size={15} />
-              Reset workspace layout
-            </button>
-          </section>
+          {layoutSettingsVisible ? (
+            <section>
+              <h3 className="text-xs font-semibold uppercase text-muted">Layout</h3>
+              <button className={`${secondaryButton} mt-2`} onClick={onResetLayout} type="button">
+                <RotateCcw size={15} />
+                Reset pane sizes
+              </button>
+            </section>
+          ) : null}
         </div>
       </div>
     </div>
