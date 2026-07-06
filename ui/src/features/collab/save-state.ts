@@ -19,7 +19,11 @@ import * as Y from 'yjs';
 // a deletion advances no clock but must still flip the state to Saving…
 // until a checkpoint covers it.
 
-export type CollabSaveState = 'saved' | 'saving' | 'save_failed' | 'reconnecting';
+// 'refused' is set directly (never computed by collabSaveState): the server
+// closed the socket with the session-refused close code, meaning this
+// document cannot host a live session at all — retrying is pointless (see
+// COLLAB_SESSION_REFUSED_CLOSE_CODE in rust-ws-provider.ts).
+export type CollabSaveState = 'saved' | 'saving' | 'save_failed' | 'reconnecting' | 'refused';
 
 /** Whether the last acked checkpoint covers everything in the local doc. */
 export function checkpointCoversDoc(ackedSnapshot: Uint8Array | null, doc: Y.Doc): boolean {
@@ -51,6 +55,7 @@ export function saveStateLabel(state: CollabSaveState): string {
     saving: 'Saving…',
     save_failed: 'Save failed',
     reconnecting: 'Reconnecting (read-only)',
+    refused: 'Live editing unavailable',
   };
   return label[state];
 }

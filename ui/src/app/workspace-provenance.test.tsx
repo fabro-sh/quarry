@@ -111,6 +111,9 @@ describe('workspace document mutation provenance', () => {
     act(() => collab?.onSaveStateChange?.('reconnecting'));
     expect(screen.getByLabelText('Save status')).toHaveTextContent('Reconnecting (read-only)');
 
+    act(() => collab?.onSaveStateChange?.('refused'));
+    expect(screen.getByLabelText('Save status')).toHaveTextContent('Live editing unavailable');
+
     act(() => collab?.onSaveStateChange?.('saved'));
     expect(screen.getByLabelText('Save status')).toHaveTextContent('Saved');
   });

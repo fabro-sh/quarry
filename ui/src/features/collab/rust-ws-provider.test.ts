@@ -5,6 +5,7 @@ import { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 
 import {
+  COLLAB_SESSION_REFUSED_CLOSE_CODE,
   MSG_QUARRY_CHECKPOINT,
   MSG_QUARRY_CHECKPOINT_FAILED,
   RustWsProviderWrapper,
@@ -200,6 +201,42 @@ describe('RustWsProviderWrapper', () => {
     await Promise.resolve();
     expect(fakeProvider.disconnect).toHaveBeenCalledOnce();
   });
+
+  it('surfaces a session-refused close with its reason and still halts', async () => {
+    const doc = new Y.Doc();
+    const awareness = new Awareness(doc);
+    const fakeProvider = new FakeProvider(awareness, doc);
+    const onSessionRefused = vi.fn();
+    new RustWsProviderWrapper({
+      awareness,
+      doc,
+      options: { onSessionRefused, providerFactory: () => fakeProvider, roomName: 'doc-1' },
+    });
+
+    fakeProvider.emitConnectionClose({
+      code: COLLAB_SESSION_REFUSED_CLOSE_CODE,
+      reason: 'unsupported markdown: critic markup',
+    });
+    await Promise.resolve();
+    expect(onSessionRefused).toHaveBeenCalledExactlyOnceWith('unsupported markdown: critic markup');
+    expect(fakeProvider.disconnect).toHaveBeenCalledOnce();
+  });
+
+  it('does not report refusal for an ordinary close', async () => {
+    const doc = new Y.Doc();
+    const awareness = new Awareness(doc);
+    const fakeProvider = new FakeProvider(awareness, doc);
+    const onSessionRefused = vi.fn();
+    new RustWsProviderWrapper({
+      awareness,
+      doc,
+      options: { onSessionRefused, providerFactory: () => fakeProvider, roomName: 'doc-1' },
+    });
+
+    fakeProvider.emitConnectionClose({ code: 1006, reason: '' });
+    await Promise.resolve();
+    expect(onSessionRefused).not.toHaveBeenCalled();
+  });
 });
 
 function checkpointFrame(snapshot: Uint8Array): Uint8Array {
@@ -254,8 +291,8 @@ class FakeProvider implements WebsocketProviderLike {
   }
 
   /** Fires for every socket close, opened or not (unlike status). */
-  emitConnectionClose() {
-    this.emit('connection-close', null, this as never);
+  emitConnectionClose(event: { code: number; reason: string } | null = null) {
+    this.emit('connection-close', event as never, this as never);
   }
 
   emitSync(isSynced: boolean) {

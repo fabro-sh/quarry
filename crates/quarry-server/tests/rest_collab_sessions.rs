@@ -675,6 +675,50 @@ async fn tmp_markdown_put_lands_in_an_active_session_as_a_collaborator_edit() ->
     Ok(())
 }
 
+/// A stored document the codec cannot seed (real CriticMarkup in plain text)
+/// must refuse the session loudly: the socket closes with the application
+/// close code and reason so the browser stops retrying and shows the error
+/// instead of an endless "Reconnecting (read-only)".
+#[cfg(feature = "tmp-documents")]
+#[tokio::test]
+async fn refused_session_closes_the_socket_with_a_typed_close_frame() -> anyhow::Result<()> {
+    let (_root, addr, app, _store, server) = spawn_session_server().await;
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/tmp/documents",
+            serde_json::json!({
+                "content": "Edited {==this==}{>>why<<}{#c1} text.\n",
+                "content_type": "text/markdown"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created = response_json(response).await;
+    let secret = created["document"]["path"].as_str().unwrap().to_string();
+
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/tmp/collab/{secret}/content"))
+            .await
+            .unwrap();
+    let message = timeout(Duration::from_secs(1), socket.next())
+        .await
+        .expect("refused session should close promptly")
+        .expect("socket yields the close frame before ending")
+        .unwrap();
+    let TungsteniteMessage::Close(Some(frame)) = message else {
+        panic!("expected a close frame with a reason, got {message:?}");
+    };
+    assert_eq!(u16::from(frame.code), 4400);
+    assert_eq!(frame.reason.as_str(), "unsupported markdown: critic markup");
+
+    server.abort();
+
+    Ok(())
+}
+
 #[cfg(feature = "tmp-documents")]
 #[tokio::test(flavor = "current_thread")]
 async fn tmp_session_and_markdown_write_logs_do_not_emit_capability_secret() -> anyhow::Result<()> {

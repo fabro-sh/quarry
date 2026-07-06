@@ -414,14 +414,26 @@ export function PlateMarkdownEditor({
   const [collabEpoch, setCollabEpoch] = useState(0);
   const [collabState, setCollabState] = useState<CollabSaveState>('reconnecting');
   const [collabInitCompleted, setCollabInitCompleted] = useState(false);
+  // The server refused the session outright (close code 4400): the document
+  // cannot host a live session at all, so reconnecting would refuse again.
+  // Refusal is terminal for this document until it changes — it overrides the
+  // connection-derived save state and halts the reconnect probe.
+  const [collabRefused, setCollabRefused] = useState(false);
+  const handleSessionRefused = useCallback((reason: string) => {
+    console.warn('[collab] session refused by server:', reason);
+    setCollabRefused(true);
+  }, []);
+  useEffect(() => {
+    setCollabRefused(false);
+  }, [collabDocumentId]);
   const onSaveStateChange = collab?.onSaveStateChange;
-  const handleCollabSaveState = useCallback(
-    (state: CollabSaveState) => {
-      setCollabState(state);
-      onSaveStateChange?.(state);
-    },
-    [onSaveStateChange]
-  );
+  const handleCollabSaveState = useCallback((state: CollabSaveState) => {
+    setCollabState(state);
+  }, []);
+  const effectiveCollabState: CollabSaveState = collabRefused ? 'refused' : collabState;
+  useEffect(() => {
+    onSaveStateChange?.(effectiveCollabState);
+  }, [effectiveCollabState, onSaveStateChange]);
   const collabLive = collabState !== 'reconnecting';
   // Awareness cursor label. Never the 'user' sentinel — the server drops blank
   // names (keeping its "browser" checkpoint fallback), mirroring how REST
@@ -477,6 +489,7 @@ export function PlateMarkdownEditor({
             {
               options: {
                 baseUrl: collabBaseUrl,
+                onSessionRefused: handleSessionRefused,
                 roomName: collabRoomName,
                 token: collabToken,
               },
@@ -495,6 +508,7 @@ export function PlateMarkdownEditor({
     collabRoomName,
     collabSessionId,
     collabToken,
+    handleSessionRefused,
   ]);
   const editor = usePlateEditor(
     {
@@ -600,7 +614,7 @@ export function PlateMarkdownEditor({
   // recovered session. (Providers themselves never retry; see
   // rust-ws-provider.ts.)
   useEffect(() => {
-    if (!collabEnabled || collabLive || !collabInitCompleted) return;
+    if (!collabEnabled || collabLive || !collabInitCompleted || collabRefused) return;
     let disposed = false;
     let probe: WebSocket | null = null;
     let timer: number | null = null;
@@ -641,7 +655,7 @@ export function PlateMarkdownEditor({
         probe.close();
       }
     };
-  }, [collabBaseUrl, collabEnabled, collabInitCompleted, collabLive, collabRoomName]);
+  }, [collabBaseUrl, collabEnabled, collabInitCompleted, collabLive, collabRefused, collabRoomName]);
 
   useEffect(() => {
     if (collabEnabled) return;

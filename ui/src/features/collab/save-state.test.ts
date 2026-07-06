@@ -96,10 +96,11 @@ describe('collabSaveState', () => {
 });
 
 describe('saveStateLabel', () => {
-  it('maps the four states to their UI labels', () => {
+  it('maps the five states to their UI labels', () => {
     expect(saveStateLabel('saved')).toBe('Saved');
     expect(saveStateLabel('saving')).toBe('Saving…');
     expect(saveStateLabel('save_failed')).toBe('Save failed');
     expect(saveStateLabel('reconnecting')).toBe('Reconnecting (read-only)');
+    expect(saveStateLabel('refused')).toBe('Live editing unavailable');
   });
 });

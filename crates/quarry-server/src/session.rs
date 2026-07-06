@@ -87,7 +87,7 @@
 //!   keep every reachable doc shape projectable.
 
 use crate::collab::{SHARED_ROOT, serve_session_socket};
-use axum::extract::ws::WebSocket;
+use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use quarry_collab_codec::{
     BlockRow, Node, ReviewMeta, ReviewMetaEntry, SessionAnchor, SessionAnchorKind,
     SessionProjection, Unsupported, apply_built, block_rows_to_markdown, build_nodes,
@@ -137,6 +137,39 @@ pub const MSG_QUARRY_CHECKPOINT: u8 = 113;
 /// (details live in the server logs). The browser's save state surfaces it
 /// as "Save failed" until a later checkpoint ack covers the doc.
 pub const MSG_QUARRY_CHECKPOINT_FAILED: u8 = 114;
+
+/// Application WebSocket close code for a refused collab session. The browser
+/// provider keys off this code to stop reconnecting and surface the reason
+/// instead of retrying forever (see `rust-ws-provider.ts`).
+pub const SESSION_REFUSED_CLOSE_CODE: u16 = 4400;
+
+/// The refusal reason for paths that must not reveal specifics — e.g. whether
+/// an internal document id names a tmp document.
+const SESSION_REFUSED_GENERIC_REASON: &str = "collab session refused";
+
+/// Completes the closing handshake with the refusal code and reason. A bare
+/// drop resets the TCP stream instead, which the browser cannot distinguish
+/// from a transient outage — it would retry forever. Dropping right after
+/// `send` is just as bad: browsers report an unclean close as 1006 and
+/// discard the code, so this drains until the peer's close reply (bounded)
+/// to finish the handshake cleanly.
+async fn refuse_socket(mut socket: WebSocket, reason: String) {
+    let close_frame = Message::Close(Some(CloseFrame {
+        code: SESSION_REFUSED_CLOSE_CODE,
+        reason: reason.into(),
+    }));
+    if socket.send(close_frame).await.is_err() {
+        return;
+    }
+    let _ = timeout(Duration::from_secs(1), async {
+        while let Some(Ok(message)) = socket.recv().await {
+            if matches!(message, Message::Close(_)) {
+                break;
+            }
+        }
+    })
+    .await;
+}
 
 type AwarenessRef = Arc<RwLock<Awareness>>;
 
@@ -285,6 +318,7 @@ impl SessionHub {
                             reason_code = "tmp_requires_secret",
                             "collab session refused: tmp document requires the secret-authenticated route"
                         );
+                        refuse_socket(socket, SESSION_REFUSED_GENERIC_REASON.to_string()).await;
                         return;
                     }
                     session.clone()
@@ -301,6 +335,7 @@ impl SessionHub {
                             // `seed` logs the specific refusal reason
                             // (not a block document, or a tmp document reached
                             // without the secret).
+                            refuse_socket(socket, SESSION_REFUSED_GENERIC_REASON.to_string()).await;
                             return;
                         }
                         Err(error) => {
@@ -311,6 +346,15 @@ impl SessionHub {
                                 reason_code = "seed_failed",
                                 "collab session refused: seeding from rows failed"
                             );
+                            // Only the unsupported-markdown detail is shared;
+                            // storage errors stay server-side.
+                            let reason = match &error {
+                                QuarryError::UnsupportedMarkdown(unsupported) => {
+                                    format!("unsupported markdown: {}", unsupported.0)
+                                }
+                                _ => SESSION_REFUSED_GENERIC_REASON.to_string(),
+                            };
+                            refuse_socket(socket, reason).await;
                             return;
                         }
                     }

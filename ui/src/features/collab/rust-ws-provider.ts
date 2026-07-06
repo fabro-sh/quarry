@@ -24,11 +24,21 @@ export const MSG_QUARRY_CHECKPOINT = 113;
 // state surfaces it as "Save failed" until a later ack covers the doc.
 export const MSG_QUARRY_CHECKPOINT_FAILED = 114;
 
+// Application WebSocket close code the server sends when it refuses a collab
+// session outright (e.g. the stored markdown cannot seed a session doc). A
+// refusal is permanent for the document's current content — reconnecting
+// would refuse again — so the editor stops retrying and surfaces the close
+// reason instead. Mirrors `SESSION_REFUSED_CLOSE_CODE` in
+// `crates/quarry-server/src/session.rs`.
+export const COLLAB_SESSION_REFUSED_CLOSE_CODE = 4400;
+
 export interface RustWsProviderOptions {
   roomName: string;
   baseUrl?: string;
   disableBc?: boolean;
   maxBackoffTime?: number;
+  /** The server refused the session; the reason is the close-frame text. */
+  onSessionRefused?: (reason: string) => void;
   params?: Record<string, string>;
   protocols?: string[];
   providerFactory?: WebsocketProviderFactory;
@@ -143,7 +153,10 @@ export class RustWsProviderWrapper implements UnifiedProvider {
     // or not. Deferred one microtask: the event fires while the provider
     // still references the closing socket, and disconnecting synchronously
     // would recurse into the same close path.
-    this.provider.on('connection-close', () => {
+    this.provider.on('connection-close', (event) => {
+      if (event?.code === COLLAB_SESSION_REFUSED_CLOSE_CODE) {
+        options.onSessionRefused?.(event.reason);
+      }
       queueMicrotask(() => this.provider.disconnect());
     });
     this.provider.on('status', ({ status }) => {
