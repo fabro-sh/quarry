@@ -23,7 +23,9 @@ jobs:
           - target: x86_64-apple-darwin
             runner: macos-15
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm-32-cores
     env:
       TARGET: ${{ matrix.target }}
     steps:
@@ -36,13 +38,12 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libssl-dev fuse3
+          sudo apt-get install -y build-essential cmake pkg-config libssl-dev fuse3 unzip
 
       - name: Install Rust
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-          rustup target add "$TARGET"
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Install Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0

@@ -16,7 +16,7 @@ permissions: {}
 
 jobs:
   docker:
-    name: Build and publish linux/amd64 image
+    name: Build and publish multi-arch image
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -31,6 +31,28 @@ jobs:
         with:
           ref: ${{ inputs.tag }}
           persist-credentials: false
+
+      - name: Download Linux release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: target/distrib
+          pattern: artifacts-quarry-*-unknown-linux-gnu
+          merge-multiple: true
+
+      - name: Stage binaries for Docker build context
+        run: |
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            case "$target" in
+              x86_64-*) arch=amd64 ;;
+              aarch64-*) arch=arm64 ;;
+            esac
+            mkdir -p "tmp/docker-context/$arch"
+            tar -xzf "target/distrib/quarry-${target}.tar.gz" -C target/distrib
+            cp "target/distrib/quarry-${target}/quarry" "tmp/docker-context/$arch/quarry"
+          done
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
@@ -78,6 +100,7 @@ jobs:
         with:
           context: .
           file: Dockerfile
+          target: runtime-prebuilt
           platforms: linux/amd64
           load: true
           tags: quarry-smoke:amd64
@@ -98,13 +121,40 @@ jobs:
           docker logs "$cid"
           exit 1
 
-      - name: Build and push amd64 image
+      - name: Build arm64 image for smoke test
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: Dockerfile
+          target: runtime-prebuilt
+          platforms: linux/arm64
+          load: true
+          tags: quarry-smoke:arm64
+
+      - name: Smoke-test arm64 image
+        run: |
+          cid="$(docker run --rm -d --platform linux/arm64 -p 127.0.0.1::7831 quarry-smoke:arm64)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          port="$(docker port "$cid" 7831/tcp | awk -F: '{print $2}')"
+
+          for _ in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:${port}/v1/health"; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          docker logs "$cid"
+          exit 1
+
+      - name: Build and push multi-arch image
         id: build
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
           file: Dockerfile
-          platforms: linux/amd64
+          target: runtime-prebuilt
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.image.outputs.tags }}
           labels: ${{ steps.image.outputs.labels }}
