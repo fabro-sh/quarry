@@ -707,7 +707,7 @@ pub async fn run() -> Result<()> {
 struct ClientCommand {
     /// Quarry server to target, e.g. http://localhost:5173 or
     /// https://quarry.lithos.computer.
-    #[arg(long, env = "QUARRY_SERVER", default_value = "http://127.0.0.1:7831")]
+    #[arg(long, env = "QUARRY_SERVER", default_value = "https://quarry.lithos.computer")]
     server: String,
 }
 
@@ -1222,7 +1222,7 @@ mod tests {
         let Command::New(command) = cli.command else {
             panic!("expected new command");
         };
-        assert_eq!(command.server, "http://127.0.0.1:7831");
+        assert_eq!(command.server, "https://quarry.lithos.computer");
 
         let cli = Cli::try_parse_from([
             "quarry",
