@@ -15,7 +15,14 @@ quarry help
 If Quarry is missing and the user has asked you to install it, install it with Homebrew (macOS and Linux):
 
 ```bash
+brew tap fabro-sh/quarry https://github.com/fabro-sh/quarry.git
 brew install fabro-sh/quarry/quarry
+```
+
+If Homebrew is configured to require tap trust, run this after `brew tap` and before `brew install`:
+
+```bash
+brew trust --tap fabro-sh/quarry
 ```
 
 If the user did not explicitly ask you to install software, ask before installing.

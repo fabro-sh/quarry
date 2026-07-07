@@ -27,7 +27,14 @@ Open `http://127.0.0.1:7831`, create a document, and start typing. Then hand the
 Install stable releases with Homebrew (macOS and Linux, pre-compiled binaries):
 
 ```sh
+brew tap fabro-sh/quarry https://github.com/fabro-sh/quarry.git
 brew install fabro-sh/quarry/quarry
+```
+
+If Homebrew is configured to require tap trust, run this after `brew tap` and before `brew install`:
+
+```sh
+brew trust --tap fabro-sh/quarry
 ```
 
 Stable release tags update the in-repo Homebrew formula automatically after the GitHub Release workflow succeeds. Nightly prereleases are available from GitHub Releases, not Homebrew.
