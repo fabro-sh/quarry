@@ -42,7 +42,7 @@ async fn home_page_serves_marketing_html_with_agent_prompt() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(content_type, "text/html; charset=utf-8");
     assert!(body.contains("Give this to your coding agent"));
-    assert!(body.contains("brew install fabro-sh/quarry/quarry"));
+    assert!(body.contains("Homebrew instructions"));
     // Without forwarding headers the origin falls back to the local default.
     assert!(body.contains("http://127.0.0.1:7831/setup.md"));
     assert!(!body.contains("__QUARRY_ORIGIN__"));
@@ -57,7 +57,9 @@ async fn onboarding_documents_render_the_forwarded_origin() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(content_type, "text/markdown; charset=utf-8");
+    assert!(body.contains("brew tap fabro-sh/quarry https://github.com/fabro-sh/quarry.git"));
     assert!(body.contains("brew install fabro-sh/quarry/quarry"));
+    assert!(body.contains("brew trust --tap fabro-sh/quarry"));
     assert!(body.contains("https://quarry.lithos.computer/prompt.md"));
     assert!(body.contains("https://quarry.lithos.computer/example.md"));
     assert!(!body.contains("__QUARRY_ORIGIN__"));
