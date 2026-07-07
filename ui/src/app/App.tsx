@@ -158,6 +158,7 @@ import {
   tmpWorkspaceRouteForDocument,
   workspaceRouteForDocument,
 } from './agent-invite';
+import { WELCOME_DOCUMENT } from './welcome-document';
 
 type EventState = 'idle' | 'connecting' | 'open' | 'polling' | 'error';
 type DocumentScope = 'library' | 'tmp';
@@ -263,7 +264,11 @@ function Workspace() {
   });
   const [lastSyncResult, setLastSyncResult] = useState('');
   const [author, setAuthor] = useState(() => loadAuthor());
-  const [showOnboarding, setShowOnboarding] = useState(() => !hasStoredAuthor());
+  // The name prompt is deferred to the moment attribution starts to matter —
+  // inviting an agent — instead of gating first load. Skipping proceeds
+  // anonymously and stays skipped for this visit.
+  const [namePromptOpen, setNamePromptOpen] = useState(false);
+  const namePromptSkippedRef = useRef(false);
   const [theme, setTheme] = useState<ThemePreference>(() =>
     localStorage.getItem('quarry:theme') === 'light' ? 'light' : 'dark'
   );
@@ -339,6 +344,9 @@ function Workspace() {
 
   useEffect(() => {
     if (!capabilitiesLoaded) return;
+    // A create route resolves itself (with `replace`) once the document
+    // exists; syncing it to `/tmp` here would cancel the creation.
+    if (routeSelection.createTmp) return;
     if (documentScope === 'library' && !libDocumentsEnabled) return;
     if (documentScope === 'tmp' && !tmpDocumentsEnabled) return;
     const nextPath =
@@ -355,9 +363,27 @@ function Workspace() {
     libDocumentsEnabled,
     location.pathname,
     navigate,
+    routeSelection.createTmp,
     selectedPath,
     tmpDocumentsEnabled,
   ]);
+
+  // `/tmp/new` creates a welcome-seeded scratch document and replaces itself
+  // with the document's real route, so reloads and the back button never
+  // mint another one.
+  const autoCreatedTmpRef = useRef(false);
+  useEffect(() => {
+    if (!routeSelection.createTmp || !tmpDocumentsEnabled || autoCreatedTmpRef.current) return;
+    autoCreatedTmpRef.current = true;
+    void (async () => {
+      try {
+        const secret = await createNewTmpDocument(WELCOME_DOCUMENT);
+        navigate(tmpWorkspaceRouteForDocument(secret ?? ''), { replace: true });
+      } catch {
+        navigate('/tmp', { replace: true });
+      }
+    })();
+  }, [navigate, routeSelection.createTmp, tmpDocumentsEnabled]);
 
   useEffect(() => {
     if (libDocumentsEnabled && activeLibrary) {
@@ -967,14 +993,14 @@ function Workspace() {
     setSelectedPath(path);
   }
 
-  async function createNewTmpDocument() {
+  async function createNewTmpDocument(seed = { title: 'Untitled', content: '# Untitled\n' }) {
     if (!tmpDocumentsEnabled) return;
     setDocumentScope('tmp');
-    const initialContent = '# Untitled\n';
+    const initialContent = seed.content;
     const initialContentType = 'text/markdown';
     const created = await createTmpDocument({
       content: initialContent,
-      metadata: { title: 'Untitled' },
+      metadata: { title: seed.title },
     });
     const secret = created.outcome.document?.path ?? '';
     if (!secret) throw new Error('tmp document creation did not return a secret');
@@ -996,11 +1022,27 @@ function Workspace() {
       }),
     ]);
     setSelectedPath(secret);
+    return secret;
   }
 
   async function createVisibleDocument(defaultPath = 'untitled.md') {
     if (isTmpDocument || !libDocumentsEnabled) await createNewTmpDocument();
     else await createNewDocument(defaultPath);
+  }
+
+  // Seeds a fresh scratch document from an uploaded Markdown file — the empty
+  // workspace has no open document to replace, unlike startUploadMarkdown.
+  async function createTmpDocumentFromFile(file: File | undefined) {
+    if (!file || !tmpDocumentsEnabled) return;
+    try {
+      const text = await file.text();
+      const title = extractFirstH1(text) ?? file.name.replace(/\.(md|markdown)$/i, '');
+      await createNewTmpDocument({ title: title || 'Untitled', content: text });
+    } catch (error) {
+      window.alert(
+        `Upload Markdown failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
   async function createDocumentFromLink(link: DocumentLink) {
@@ -1189,6 +1231,10 @@ function Workspace() {
     if (!selectedPath || !isMarkdownDocument(selectedPath, selectedContentType)) return;
     if (isLibraryDocument && (!libDocumentsEnabled || !activeLibrary)) return;
     if (isTmpDocument && !tmpDocumentsEnabled) return;
+    if (!hasStoredAuthor() && !namePromptSkippedRef.current) {
+      setNamePromptOpen(true);
+      return;
+    }
     const path = selectedPath;
     const knownAgentIds = agentPresence.presence.map((e) => e.agentId);
     setAddAgentModal({
@@ -1512,7 +1558,11 @@ function Workspace() {
               )}
             </div>
           ) : (
-            <EmptyDocument treeHidden={isTmpDocument} />
+            <EmptyDocument
+              treeHidden={isTmpDocument}
+              onCreate={() => void createVisibleDocument()}
+              onUploadFile={(file) => void createTmpDocumentFromFile(file)}
+            />
           )}
         </Panel>
         {!isTmpDocument ? (
@@ -1594,11 +1644,17 @@ function Workspace() {
         onCopied={() => setAddAgentModal((s) => ({ ...s, waitingForAgent: true }))}
       />
 
-      <OnboardingDialog
-        open={showOnboarding}
+      <NamePromptDialog
+        open={namePromptOpen}
+        onSkip={() => {
+          namePromptSkippedRef.current = true;
+          setNamePromptOpen(false);
+          void openAddAgentModal();
+        }}
         onSubmit={(name) => {
           changeAuthor(name);
-          setShowOnboarding(false);
+          setNamePromptOpen(false);
+          void openAddAgentModal();
         }}
       />
 
@@ -2140,19 +2196,23 @@ async function copyText(text: string, promptLabel: string) {
   }
 }
 
-function OnboardingDialog({
+// Asks for a name the first time the user invites an agent — the moment
+// attribution starts to matter. Never a hard gate: skipping (or Escape)
+// proceeds anonymously.
+function NamePromptDialog({
   open,
+  onSkip,
   onSubmit,
 }: {
   open: boolean;
+  onSkip: () => void;
   onSubmit: (name: string) => void;
 }) {
-  // Required modal: Escape and click-outside are deliberately inert.
-  const dialogRef = useDialogFocusTrap(open, () => {});
+  const dialogRef = useDialogFocusTrap(open, onSkip);
   const [draftName, setDraftName] = useState('');
   const name = draftName.trim();
   // Reserved: saveAuthor treats the default author as "no stored name", which
-  // would bring this modal back on every load.
+  // would bring this prompt back on the next invite.
   const submittable = Boolean(name) && name !== DEFAULT_AUTHOR;
 
   if (!open) return null;
@@ -2160,7 +2220,7 @@ function OnboardingDialog({
   return (
     <div className="fixed inset-0 z-50 bg-black/20 p-4">
       <div
-        aria-label="Welcome to Quarry"
+        aria-label="What's your name?"
         aria-modal="true"
         className="mx-auto mt-[12vh] w-full max-w-md overflow-hidden rounded-md border border-line-strong bg-surface shadow-xl"
         ref={dialogRef}
@@ -2168,16 +2228,12 @@ function OnboardingDialog({
         tabIndex={-1}
       >
         <div className="space-y-4 p-6">
-          <h2 className="text-lg font-semibold text-ink">Welcome to Quarry</h2>
-          <p className="text-sm text-body">
-            Quarry is a local-first workspace for versioned documents. Every change you make is
-            kept with full history, alongside edits from agents and Git.
-          </p>
+          <h2 className="text-lg font-semibold text-ink">What&apos;s your name?</h2>
           <div className="grid gap-1 text-sm">
             <label className="grid gap-1">
               <span className="text-muted">Your name</span>
               <input
-                aria-describedby="onboarding-name-help"
+                aria-describedby="name-prompt-help"
                 className="h-9 rounded-md border border-line bg-raised px-3 text-sm text-body outline-none focus:border-accent-line focus:ring-2 focus:ring-accent-ring"
                 maxLength={120}
                 onChange={(event) => setDraftName(event.target.value)}
@@ -2187,18 +2243,24 @@ function OnboardingDialog({
                 value={draftName}
               />
             </label>
-            <span className="text-xs text-muted" id="onboarding-name-help">
-              Quarry records your name on every change you make, so history shows who did what.
+            <span className="text-xs text-muted" id="name-prompt-help">
+              Quarry stamps a name on your edits, comments, and suggestions so collaborators —
+              including your agent — can see who did what.
             </span>
           </div>
-          <button
-            className={primaryButton}
-            disabled={!submittable}
-            onClick={() => onSubmit(name)}
-            type="button"
-          >
-            Get started
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              className={primaryButton}
+              disabled={!submittable}
+              onClick={() => onSubmit(name)}
+              type="button"
+            >
+              Continue
+            </button>
+            <button className={ghostButton} onClick={onSkip} type="button">
+              Skip for now
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -4044,23 +4106,58 @@ function isDocumentLink(link: DocumentLink) {
   );
 }
 
-function EmptyDocument({ treeHidden }: { treeHidden: boolean }) {
+function EmptyDocument({
+  treeHidden,
+  onCreate,
+  onUploadFile,
+}: {
+  treeHidden: boolean;
+  onCreate: () => void;
+  onUploadFile: (file: File | undefined) => void;
+}) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 bg-surface px-6 text-center">
+    <div className="flex h-full flex-col items-center justify-center gap-4 bg-surface px-6 text-center">
       <div className="flex size-12 items-center justify-center rounded-xl bg-well text-faint">
         <FileText size={22} />
       </div>
-      <div>
-        <p className="text-sm font-medium text-body">No document open</p>
-        {treeHidden ? (
-          <p className="mt-1 text-sm text-muted">
+      {treeHidden ? (
+        <>
+          <div>
+            <p className="text-sm font-medium text-body">Start a document</p>
+            <p className="mt-1 text-sm text-muted">
+              Live, versioned, and shareable by URL — no account needed.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button className={primaryButton} onClick={onCreate} type="button">
+              <FilePlus2 size={15} />
+              New document
+            </button>
+            <label className={cn(secondaryButton, 'cursor-pointer')}>
+              <Upload size={15} />
+              Upload Markdown
+              <input
+                accept=".md,.markdown,text/markdown,text/x-markdown"
+                className="sr-only"
+                type="file"
+                onChange={(event) => {
+                  onUploadFile(event.currentTarget.files?.[0]);
+                  event.currentTarget.value = '';
+                }}
+              />
+            </label>
+          </div>
+          <p className="text-xs text-muted">
             Press{' '}
             <kbd className="rounded border border-line-strong bg-raised px-1.5 py-0.5 font-mono text-xs text-body">
               ⌘K
             </kbd>{' '}
-            to open or create a tmp document.
+            for the command palette.
           </p>
-        ) : (
+        </>
+      ) : (
+        <div>
+          <p className="text-sm font-medium text-body">No document open</p>
           <p className="mt-1 text-sm text-muted">
             Select a document from the tree, or press{' '}
             <kbd className="rounded border border-line-strong bg-raised px-1.5 py-0.5 font-mono text-xs text-body">
@@ -4068,8 +4165,8 @@ function EmptyDocument({ treeHidden }: { treeHidden: boolean }) {
             </kbd>{' '}
             to search.
           </p>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -4408,23 +4505,30 @@ function gitExportSummary(result: GitExportResult) {
 function parseWorkspaceRoute(pathname: string) {
   const segments = pathname.split('/').filter(Boolean);
   if (segments[0] === 'tmp') {
+    // `/tmp/new` (the homepage's "start a document" link) names no document;
+    // it asks the workspace to create one and route to it.
+    if (segments[1] === 'new') {
+      return { scope: 'tmp' as DocumentScope, library: null, path: '', createTmp: true };
+    }
     return {
       scope: 'tmp' as DocumentScope,
       library: null,
       path: segments[1] ? safeDecodeSegment(segments[1]) : '',
+      createTmp: false,
     };
   }
   if (segments[0] !== 'lib' || !segments[1]) {
-    return { scope: 'library' as DocumentScope, library: null, path: undefined };
+    return { scope: 'library' as DocumentScope, library: null, path: undefined, createTmp: false };
   }
   const library = safeDecodeSegment(segments[1]);
   if (segments[2] !== 'documents') {
-    return { scope: 'library' as DocumentScope, library, path: '' };
+    return { scope: 'library' as DocumentScope, library, path: '', createTmp: false };
   }
   return {
     scope: 'library' as DocumentScope,
     library,
     path: segments.slice(3).map(safeDecodeSegment).join('/'),
+    createTmp: false,
   };
 }
 

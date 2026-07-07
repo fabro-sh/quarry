@@ -2380,70 +2380,164 @@ describe('Quarry Browser workspace', () => {
     expect(editor).toHaveTextContent('Current');
   });
 
-  it('requires a name on first run and stamps it into the author store', async () => {
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === '/v1/libraries') {
-        return json([{ id: 'lib-1', slug: 'notes', created_at: 'now', settings: {} }]);
-      }
-      if (url === '/v1/libraries/notes/documents') return json([]);
-      if (url === '/v1/libraries/notes/conflicts') return json([]);
-      if (url === '/v1/libraries/notes/git/peers') return json([]);
-      if (url.startsWith('/v1/libraries/notes/search')) return json({ results: [], cursor: null });
-      if (url.startsWith('/v1/libraries/notes/graph')) {
-        return json({ nodes: [], edges: [], truncated: false });
-      }
-      return new Response('not found', { status: 404 });
-    });
+  it('defers the name prompt to Add agent and stamps the chosen name', async () => {
+    const secret = '63895bec2fda4380b44a240f8ca57075';
+    window.history.pushState({}, '', `/tmp/${secret}`);
+    const fetch = vi.fn(tmpDocumentFetch(secret));
     vi.stubGlobal('fetch', fetch);
 
     renderApp({ seedAuthor: false });
 
-    const dialog = await screen.findByRole('dialog', { name: 'Welcome to Quarry' });
-    const getStarted = within(dialog).getByRole('button', { name: 'Get started' });
-    expect(getStarted).toBeDisabled();
+    // No gate on first load: the workspace is usable without a name.
+    expect(await screen.findByRole('button', { name: 'Document mode' })).toHaveTextContent(
+      'Editing'
+    );
+    expect(screen.queryByRole('dialog', { name: "What's your name?" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add agent' }));
+    const dialog = await screen.findByRole('dialog', { name: "What's your name?" });
+    const continueButton = within(dialog).getByRole('button', { name: 'Continue' });
+    expect(continueButton).toBeDisabled();
 
     // Whitespace does not count as a name.
     await userEvent.type(within(dialog).getByLabelText('Your name'), '   ');
-    expect(getStarted).toBeDisabled();
+    expect(continueButton).toBeDisabled();
 
     // The reserved default author name does not count either.
     await userEvent.clear(within(dialog).getByLabelText('Your name'));
     await userEvent.type(within(dialog).getByLabelText('Your name'), 'user');
-    expect(getStarted).toBeDisabled();
+    expect(continueButton).toBeDisabled();
 
     await userEvent.clear(within(dialog).getByLabelText('Your name'));
     await userEvent.type(within(dialog).getByLabelText('Your name'), '  Avery  ');
-    expect(getStarted).toBeEnabled();
-    await userEvent.click(getStarted);
+    expect(continueButton).toBeEnabled();
+    await userEvent.click(continueButton);
 
-    expect(screen.queryByRole('dialog', { name: 'Welcome to Quarry' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: "What's your name?" })).not.toBeInTheDocument();
     expect(localStorage.getItem('quarry:author')).toBe('Avery');
+    // The interrupted action resumes: the agent instructions open.
+    const agentDialog = await screen.findByRole('dialog', { name: 'Add agent' });
+    await within(agentDialog).findByText(/Join this Quarry document/);
   });
 
-  it('does not show onboarding when an author is already stored', async () => {
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+  it('skips the name prompt and invites the agent anonymously', async () => {
+    const secret = '63895bec2fda4380b44a240f8ca57075';
+    window.history.pushState({}, '', `/tmp/${secret}`);
+    vi.stubGlobal('fetch', vi.fn(tmpDocumentFetch(secret)));
+
+    renderApp({ seedAuthor: false });
+
+    expect(await screen.findByRole('button', { name: 'Document mode' })).toHaveTextContent(
+      'Editing'
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Add agent' }));
+    const dialog = await screen.findByRole('dialog', { name: "What's your name?" });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Skip for now' }));
+
+    expect(localStorage.getItem('quarry:author')).toBeNull();
+    const agentDialog = await screen.findByRole('dialog', { name: 'Add agent' });
+    await within(agentDialog).findByText(/Join this Quarry document/);
+
+    // Skipping is remembered: the next invite goes straight to instructions.
+    await userEvent.click(within(agentDialog).getByRole('button', { name: 'Close' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Add agent' }));
+    expect(screen.queryByRole('dialog', { name: "What's your name?" })).not.toBeInTheDocument();
+    await screen.findByRole('dialog', { name: 'Add agent' });
+  });
+
+  it('creates a welcome document from /tmp/new and routes to it', async () => {
+    const secret = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+    window.history.pushState({}, '', '/tmp/new');
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === '/v1/libraries') {
-        return json([{ id: 'lib-1', slug: 'notes', created_at: 'now', settings: {} }]);
+      if (url === '/v1/tmp/documents' && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as {
+          content: string;
+          metadata: { title: string };
+        };
+        expect(body.content).toContain('# Welcome to Quarry');
+        expect(body.metadata).toMatchObject({ title: 'Welcome to Quarry' });
+        return json(
+          { version: version('v1'), document: { id: 'doc-welcome', path: secret } },
+          { ETag: '"v1"' }
+        );
       }
-      if (url === '/v1/libraries/notes/documents') return json([]);
-      if (url === '/v1/libraries/notes/conflicts') return json([]);
-      if (url === '/v1/libraries/notes/git/peers') return json([]);
-      if (url.startsWith('/v1/libraries/notes/search')) return json({ results: [], cursor: null });
-      if (url.startsWith('/v1/libraries/notes/graph')) {
-        return json({ nodes: [], edges: [], truncated: false });
-      }
-      return new Response('not found', { status: 404 });
+      return tmpDocumentFetch(secret, '# Welcome to Quarry\n')(input, init);
     });
     vi.stubGlobal('fetch', fetch);
 
     renderApp();
 
-    await waitFor(() => expect(fetch).toHaveBeenCalled());
-    expect(screen.queryByRole('dialog', { name: 'Welcome to Quarry' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Document mode' })).toHaveTextContent(
+      'Editing'
+    );
+    await waitFor(() => expect(window.location.pathname).toBe(`/tmp/${secret}`));
+    await waitFor(() => expect(window.document.title).toBe('Welcome to Quarry · Quarry'));
+  });
+
+  it('creates a scratch document from the empty tmp workspace buttons', async () => {
+    const secret = 'b2c3d4e5f60718293a4b5c6d7e8f90a1';
+    window.history.pushState({}, '', '/tmp');
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/v1/tmp/documents' && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as {
+          content: string;
+          metadata: { title: string };
+        };
+        expect(body.content).toBe('# Getting Around\n');
+        expect(body.metadata).toMatchObject({ title: 'Getting Around' });
+        return json(
+          { version: version('v1'), document: { id: 'doc-upload', path: secret } },
+          { ETag: '"v1"' }
+        );
+      }
+      return tmpDocumentFetch(secret, '# Getting Around\n')(input, init);
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    // The empty tmp workspace offers real actions, not just a keyboard hint.
+    expect(await screen.findByRole('button', { name: 'New document' })).toBeInTheDocument();
+    await userEvent.upload(
+      screen.getByLabelText('Upload Markdown'),
+      markdownFile('# Getting Around\n')
+    );
+
+    await waitFor(() => expect(window.location.pathname).toBe(`/tmp/${secret}`));
   });
 });
+
+// Serves a routed tmp document (capabilities, content, presence, review, and
+// the agent prompt) so tests can focus on the interaction under test.
+function tmpDocumentFetch(secret: string, content = '# Tmp\n') {
+  return async (input: RequestInfo | URL, _init?: RequestInit) => {
+    const url = String(input);
+    if (url === '/v1/capabilities') {
+      return json({ tmp_documents: true, lib_documents: false });
+    }
+    if (url === `/v1/tmp/documents/${secret}`) {
+      return new Response(content, {
+        headers: {
+          ETag: '"tmp-v1"',
+          'content-type': 'text/markdown',
+          'x-quarry-document-id': 'doc-tmp-fetch',
+        },
+      });
+    }
+    if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+    if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
+      return json({ documentId: 'doc-tmp-fetch', comments: [], suggestions: [], conflicts: [] });
+    }
+    if (url === `/v1/tmp/documents/${secret}/agent-prompt`) {
+      return new Response(`Join this Quarry document:\nhttp://127.0.0.1/tmp/${secret}`, {
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+      });
+    }
+    return new Response('not found', { status: 404 });
+  };
+}
 
 function renderApp({ seedAuthor = true }: { seedAuthor?: boolean } = {}) {
   // Most tests predate onboarding; a stored author keeps the modal away.
