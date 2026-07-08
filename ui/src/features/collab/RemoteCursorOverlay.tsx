@@ -3,8 +3,8 @@ import {
   type CursorOverlayData,
   useRemoteCursorOverlayPositions,
 } from '@slate-yjs/react';
-import { useEditorContainerRef, usePluginOption } from 'platejs/react';
-import { useState, type CSSProperties, type RefObject } from 'react';
+import { usePluginOption } from 'platejs/react';
+import { useRef, useState, type CSSProperties } from 'react';
 
 type CursorData = {
   color: string;
@@ -20,18 +20,26 @@ export function RemoteCursorOverlay() {
 }
 
 function RemoteCursorOverlayContent() {
-  const containerRef = useEditorContainerRef() as RefObject<HTMLDivElement>;
+  // The editor container is itself the scroll element, and
+  // useRemoteCursorOverlayPositions measures viewport-relative offsets without
+  // adding scrollTop — so positions measured against the container are wrong
+  // by the scroll amount. This wrapper is pinned to the container's scroll
+  // origin and scrolls with the content, giving the hook (and the absolutely
+  // positioned rects inside) a scroll-independent coordinate frame.
+  // Seeded with a detached div (replaced on mount) because the library wants
+  // a never-null RefObject under React 19's types.
+  const containerRef = useRef<HTMLDivElement>(document.createElement('div'));
   const [cursors] = useRemoteCursorOverlayPositions<CursorData>({
     containerRef,
     refreshOnResize: 'debounced',
   });
 
   return (
-    <>
+    <div className="pointer-events-none absolute inset-0" ref={containerRef}>
       {cursors.map((cursor) => (
         <RemoteSelection key={cursor.clientId} {...cursor} />
       ))}
-    </>
+    </div>
   );
 }
 
@@ -82,7 +90,7 @@ function Caret({
   return (
     <div aria-hidden="true" className="absolute w-0.5" style={caretStyle}>
       <div
-        className="absolute top-0 whitespace-nowrap rounded rounded-bl-none px-1.5 py-0.5 text-xs font-medium text-white shadow-sm"
+        className="pointer-events-auto absolute top-0 whitespace-nowrap rounded rounded-bl-none px-1.5 py-0.5 text-xs font-medium text-white shadow-sm"
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         style={labelStyle}
