@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   AgentReviewComment,
@@ -48,6 +48,19 @@ function openAndResolved(): AgentReviewResponse {
   return review({
     comments: [comment('c1', 'open note'), comment('c2', 'resolved note', 'resolved')],
   });
+}
+
+function conflictItem(status = 'open'): AgentReviewConflict {
+  return {
+    id: 'x1',
+    status,
+    by: 'git:peer',
+    at,
+    afterBlockId: 'b1',
+    baseMarkdown: 'Original paragraph.',
+    incomingMarkdown: 'Incoming rewrite.',
+    canonicalMarkdown: 'Canonical rewrite.',
+  };
 }
 
 describe('CommentsPanel', () => {
@@ -165,22 +178,62 @@ describe('CommentsPanel', () => {
   });
 
   it('shows diff3 conflict review items with kept and incoming text', () => {
-    const conflict: AgentReviewConflict = {
-      id: 'x1',
-      status: 'open',
-      by: 'git:peer',
-      at,
-      afterBlockId: 'b1',
-      baseMarkdown: 'Original paragraph.',
-      incomingMarkdown: 'Incoming rewrite.',
-      canonicalMarkdown: 'Canonical rewrite.',
-    };
-    render(<CommentsPanel review={review({ conflicts: [conflict] })} />);
+    render(<CommentsPanel review={review({ conflicts: [conflictItem()] })} />);
 
     const item = screen.getByTestId('comments-panel-conflict');
     expect(within(item).getByText('Canonical rewrite.')).toBeInTheDocument();
     expect(within(item).getByText('Incoming rewrite.')).toBeInTheDocument();
     expect(within(item).getByTestId('review-status-badge')).toHaveTextContent(/conflict/i);
+  });
+
+  it('dismissing an open conflict calls the handler with the conflict id', async () => {
+    const onDismissConflict = vi.fn().mockResolvedValue(undefined);
+    render(
+      <CommentsPanel
+        onDismissConflict={onDismissConflict}
+        review={review({ conflicts: [conflictItem()] })}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('dismiss-conflict'));
+
+    expect(onDismissConflict).toHaveBeenCalledWith('x1');
+    // The button disables while the dismissal is in flight and re-enables
+    // after it settles; waiting keeps the state update inside act().
+    await waitFor(() => expect(screen.getByTestId('dismiss-conflict')).toBeEnabled());
+  });
+
+  it('hides conflict actions once the conflict is resolved', () => {
+    const onDismissConflict = vi.fn().mockResolvedValue(undefined);
+    render(
+      <CommentsPanel
+        onDismissConflict={onDismissConflict}
+        review={review({ conflicts: [conflictItem('resolved')] })}
+      />
+    );
+
+    expect(screen.queryByTestId('dismiss-conflict')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('copy-conflict-incoming')).not.toBeInTheDocument();
+  });
+
+  it('copying an open conflict puts the incoming markdown on the clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    try {
+      render(<CommentsPanel review={review({ conflicts: [conflictItem()] })} />);
+
+      fireEvent.click(screen.getByTestId('copy-conflict-incoming'));
+
+      expect(writeText).toHaveBeenCalledWith('Incoming rewrite.');
+      await waitFor(() =>
+        expect(screen.getByTestId('copy-conflict-incoming')).toHaveTextContent('Copied')
+      );
+    } finally {
+      Reflect.deleteProperty(navigator, 'clipboard');
+    }
   });
 
   it('shows an empty message when there is nothing to review', () => {

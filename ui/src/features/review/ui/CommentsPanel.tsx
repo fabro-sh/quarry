@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 
 import type {
   AgentReviewComment,
@@ -136,7 +137,29 @@ function SuggestionItem({ suggestion }: { suggestion: AgentReviewSuggestion }) {
   );
 }
 
-function ConflictItem({ conflict }: { conflict: AgentReviewConflict }) {
+interface ConflictItemProps {
+  readonly conflict: AgentReviewConflict;
+  readonly onDismiss?: (conflictId: string) => Promise<void>;
+}
+
+function ConflictItem({ conflict, onDismiss }: ConflictItemProps): ReactNode {
+  const [copied, setCopied] = useState(false);
+  const [dismissing, setDismissing] = useState(false);
+
+  function copyIncoming() {
+    void navigator.clipboard.writeText(conflict.incomingMarkdown).then(() => setCopied(true));
+  }
+
+  async function dismiss() {
+    if (!onDismiss || dismissing) return;
+    setDismissing(true);
+    try {
+      await onDismiss(conflict.id);
+    } finally {
+      setDismissing(false);
+    }
+  }
+
   return (
     <li
       className="rounded-lg border border-warn-line bg-warn-tint/40 p-3"
@@ -167,11 +190,39 @@ function ConflictItem({ conflict }: { conflict: AgentReviewConflict }) {
           </pre>
         </div>
       </div>
+      {conflict.status === 'open' ? (
+        <div className="mt-2 flex justify-end gap-1">
+          <button
+            className="rounded px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-well hover:text-body"
+            data-testid="copy-conflict-incoming"
+            onClick={copyIncoming}
+            type="button"
+          >
+            {copied ? 'Copied' : 'Copy incoming'}
+          </button>
+          {onDismiss ? (
+            <button
+              className="rounded px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-well hover:text-body disabled:opacity-50"
+              data-testid="dismiss-conflict"
+              disabled={dismissing}
+              onClick={() => void dismiss()}
+              type="button"
+            >
+              Dismiss
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </li>
   );
 }
 
-export function CommentsPanel({ review }: { review?: AgentReviewResponse }) {
+interface CommentsPanelProps {
+  readonly review?: AgentReviewResponse;
+  readonly onDismissConflict?: (conflictId: string) => Promise<void>;
+}
+
+export function CommentsPanel({ review, onDismissConflict }: CommentsPanelProps): ReactNode {
   const [filter, setFilter] = useState<StatusFilter>('all');
 
   const comments = (review?.comments ?? []).filter((comment) =>
@@ -209,7 +260,7 @@ export function CommentsPanel({ review }: { review?: AgentReviewResponse }) {
       {conflicts.length > 0 ? (
         <ul className="mb-3 flex flex-col gap-2">
           {conflicts.map((conflict) => (
-            <ConflictItem conflict={conflict} key={conflict.id} />
+            <ConflictItem conflict={conflict} key={conflict.id} onDismiss={onDismissConflict} />
           ))}
         </ul>
       ) : null}

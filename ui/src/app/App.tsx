@@ -95,6 +95,8 @@ import {
   listTmpAgentPresence,
   moveDocument,
   outgoingLinks,
+  postBlockTransaction,
+  postTmpBlockTransaction,
   promoteTmpDocument,
   putBinaryDocument,
   putDocument,
@@ -109,6 +111,7 @@ import {
 } from '../api/client';
 import type {
   AgentReviewResponse,
+  BlockTransactionRequest,
   ConflictRecord,
   DocumentHistoryEntry,
   DocumentLink,
@@ -919,6 +922,10 @@ function Workspace() {
     isTmpDocument && selectedPath ? tmpCollabWebSocketBaseUrl(selectedPath) : undefined;
   const collabRoomName = isTmpDocument ? 'content' : undefined;
   const layoutStorageKey = activeLibrary ? `quarry:layout:${activeLibrary}` : 'quarry:layout:workspace';
+  // Tmp markdown documents carry the details pane too (the review record —
+  // diff3 conflicts especially — must stay visible to the human); the editor
+  // panel is only pinned full-width while the pane is absent.
+  const rightPaneVisible = !isTmpDocument || isMarkdownDocument(selectedPath, selectedContentType);
   const mergeConflict = conflicts.find((conflict) => conflict.id === mergeConflictId) ?? null;
   const { data: agentPresence = { presence: [] } } = useSWR(
     selectedPath && isTextContentType(selectedContentType) && scopeReady
@@ -944,7 +951,10 @@ function Workspace() {
     () =>
       isTmpDocument
         ? getTmpDocumentReview(selectedPath)
-        : getDocumentReview(activeLibrary, selectedPath)
+        : getDocumentReview(activeLibrary, selectedPath),
+    // Tmp documents have no SSE stream (the event source is library-gated),
+    // so poll to keep the conflict badge honest while an agent writes.
+    { refreshInterval: isTmpDocument ? 10_000 : 0 }
   );
 
   useEffect(() => {
@@ -1318,6 +1328,30 @@ function Workspace() {
     await mutate(['/v1/conflicts', activeLibrary]);
   }
 
+  // Diff3 conflict review items (whole-file merge leftovers) dismiss through
+  // the block-transaction gateway; resolution never mutates the document.
+  async function dismissReviewConflict(conflictId: string) {
+    if (!selectedPath) return;
+    const request: BlockTransactionRequest = {
+      client_tx_id: crypto.randomUUID(),
+      actor: { kind: 'user', id: storedAuthor() },
+      ops: [{ op: 'comment.resolve', item_id: conflictId }],
+    };
+    try {
+      if (isTmpDocument) {
+        await postTmpBlockTransaction(selectedPath, request);
+        await mutate(['/v1/tmp-review', selectedPath]);
+      } else {
+        await postBlockTransaction(activeLibrary, selectedPath, request);
+        await mutate(['/v1/review', activeLibrary, selectedPath]);
+      }
+    } catch (error) {
+      window.alert(
+        `Dismiss conflict failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
   function openDocument(path: string) {
     if (!path || (documentScope === 'library' && path === selectedPath)) return;
     if (isTmpDocument || !libDocumentsEnabled) setDocumentScope('tmp');
@@ -1510,7 +1544,10 @@ function Workspace() {
             <PanelResizeHandle className="w-px bg-line" onDragging={setResizingPanels} />
           </>
         ) : null}
-        <Panel defaultSize={isTmpDocument ? 100 : 54} minSize={isTmpDocument ? 100 : 35}>
+        <Panel
+          defaultSize={isTmpDocument ? (rightPaneVisible ? 76 : 100) : 54}
+          minSize={isTmpDocument && !rightPaneVisible ? 100 : 35}
+        >
           {selectedPath ? (
             <div className="flex h-full min-h-0 flex-col">
               <DocumentToolbar
@@ -1565,7 +1602,7 @@ function Workspace() {
             />
           )}
         </Panel>
-        {!isTmpDocument ? (
+        {rightPaneVisible ? (
           <>
             <PanelResizeHandle className="w-px bg-line" onDragging={setResizingPanels} />
             <Panel
@@ -1595,15 +1632,18 @@ function Workspace() {
                 onOpenDocument={openDocument}
                 onOpenConflict={setMergeConflictId}
                 onResolveConflict={resolveOpenConflict}
+                onDismissConflict={dismissReviewConflict}
                 onRestoreVersion={restoreSelectedVersion}
                 onViewVersion={viewSelectedVersion}
                 outgoing={outgoing.links}
                 review={documentReview}
+                reviewEnabled={isMarkdownDocument(selectedPath, selectedContentType)}
                 selectedVersionContent={selectedVersionContent}
                 selectedVersionDiff={selectedVersionDiff}
                 selectedVersionId={selectedVersionId}
                 onTabChange={changeRightPaneTab}
                 versions={versionList}
+                versionsEnabled={!isTmpDocument}
               />
             </Panel>
           </>
@@ -3528,16 +3568,19 @@ function RightPane({
   onOpenDocument,
   onOpenConflict,
   onResolveConflict,
+  onDismissConflict,
   onRestoreVersion,
   onToggleCollapsed,
   onViewVersion,
   outgoing,
   review,
+  reviewEnabled,
   selectedVersionContent,
   selectedVersionDiff,
   selectedVersionId,
   onTabChange,
   versions,
+  versionsEnabled,
 }: {
   activeTab: RightPaneTab;
   activeLibrary: string;
@@ -3554,22 +3597,35 @@ function RightPane({
   onOpenDocument: (path: string) => void;
   onOpenConflict: (conflict: string) => void;
   onResolveConflict: (conflict: string) => void;
+  onDismissConflict: (conflictId: string) => Promise<void>;
   onRestoreVersion: (version: string) => void;
   onToggleCollapsed: () => void;
   onViewVersion: (version: string) => void;
   outgoing: DocumentLink[];
   review?: AgentReviewResponse;
+  reviewEnabled: boolean;
   selectedVersionContent?: DocumentVersionContent;
   selectedVersionDiff?: VersionDiff;
   selectedVersionId: string | null;
   onTabChange: (tab: RightPaneTab) => void;
   versions: DocumentHistoryEntry[];
+  versionsEnabled: boolean;
 }) {
-  const visibleTabs = libraryControlsEnabled
-    ? rightPaneTabs
-    : rightPaneTabs.filter((tab) => tab.key === 'versions');
+  // Per-tab gating: the review record travels with every markdown document
+  // (tmp docs included — a diff3 conflict must stay visible to the human),
+  // while links and version history stay library-scope features.
+  const visibleTabs = rightPaneTabs.filter((tab) =>
+    tab.key === 'comments'
+      ? reviewEnabled
+      : tab.key === 'links'
+        ? libraryControlsEnabled
+        : versionsEnabled
+  );
   const selectedTab = visibleTabs.some((tab) => tab.key === activeTab) ? activeTab : visibleTabs[0]?.key ?? 'versions';
   const selectedTabLabel = visibleTabs.find((tab) => tab.key === selectedTab)?.label ?? 'Versions';
+  const openConflictCount = (review?.conflicts ?? []).filter(
+    (conflict) => conflict.status === 'open'
+  ).length;
 
   if (collapsed) {
     return (
@@ -3621,6 +3677,14 @@ function RightPane({
             type="button"
           >
             {tab.label}
+            {tab.key === 'comments' && openConflictCount > 0 ? (
+              <span
+                className="ml-1.5 inline-flex min-w-4 items-center justify-center rounded bg-warn-tint px-1 py-0.5 text-[0.625rem] font-semibold leading-none text-warn-ink"
+                data-testid="comments-tab-badge"
+              >
+                {openConflictCount}
+              </span>
+            ) : null}
           </button>
           ))}
         </div>
@@ -3685,10 +3749,10 @@ function RightPane({
             />
           </>
         ) : null}
-        {libraryControlsEnabled && selectedTab === 'comments' ? (
+        {selectedTab === 'comments' ? (
           <>
             <h2 className={rightHeading}>{selectedTabLabel}</h2>
-            <CommentsPanel review={review} />
+            <CommentsPanel onDismissConflict={onDismissConflict} review={review} />
           </>
         ) : null}
       </section>

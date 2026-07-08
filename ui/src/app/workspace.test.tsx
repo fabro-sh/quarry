@@ -383,6 +383,79 @@ describe('Quarry Browser workspace', () => {
     expect(screen.queryByText(/Extend TTL/)).not.toBeInTheDocument();
   });
 
+  it('badges open diff3 conflicts on a tmp document and dismisses them from the panel', async () => {
+    const secret = '5f1e0d3c2b4a49188c7d6e5f4a3b2c1d';
+    window.history.pushState({}, '', `/tmp/${secret}`);
+    const openConflict = {
+      id: 'x1',
+      status: 'open',
+      by: 'rest',
+      at: '2026-01-01T00:00:00.000Z',
+      afterBlockId: 'b1',
+      baseMarkdown: 'Old items.\n',
+      incomingMarkdown: 'Agent rewrite.\n',
+      canonicalMarkdown: 'Old items.\n',
+    };
+    let dismissed = false;
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/v1/capabilities') {
+        return json({ tmp_documents: true, lib_documents: false });
+      }
+      if (url === `/v1/tmp/documents/${secret}`) {
+        return new Response('# Tmp\n', {
+          headers: {
+            ETag: '"tmp-v1"',
+            'content-type': 'text/markdown',
+            'x-quarry-document-id': 'tmp-1',
+          },
+        });
+      }
+      if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
+        return json({
+          documentId: 'tmp-1',
+          baseToken: 'tmp-v1',
+          comments: [],
+          suggestions: [],
+          conflicts: [dismissed ? { ...openConflict, status: 'resolved' } : openConflict],
+        });
+      }
+      if (url === `/v1/tmp/documents/${secret}/transactions` && init?.method === 'POST') {
+        expect(JSON.parse(String(init.body))).toMatchObject({
+          actor: { kind: 'user' },
+          ops: [{ op: 'comment.resolve', item_id: 'x1' }],
+        });
+        dismissed = true;
+        return json({
+          status: 'committed',
+          document_clock: 'tmp-v2',
+          transaction_id: 'tx-1',
+          changed_block_ids: [],
+        });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    // The Comments tab is the tmp pane's only tab; the badge carries the
+    // open-conflict count and the card offers the dismiss affordance.
+    const badge = await screen.findByTestId('comments-tab-badge');
+    expect(badge).toHaveTextContent('1');
+    const card = await screen.findByTestId('comments-panel-conflict');
+    expect(within(card).getByText('Agent rewrite.')).toBeInTheDocument();
+
+    fireEvent.click(within(card).getByTestId('dismiss-conflict'));
+
+    await waitFor(() => expect(screen.queryByTestId('comments-tab-badge')).not.toBeInTheDocument());
+    expect(screen.getByTestId('comments-panel-conflict')).toHaveAttribute(
+      'data-status',
+      'resolved'
+    );
+  });
+
   it('loads a routed tmp Markdown document and titles the page from its H1', async () => {
     const secret = '63895bec2fda4380b44a240f8ca57075';
     window.history.pushState({}, '', `/tmp/${secret}`);
@@ -451,11 +524,15 @@ describe('Quarry Browser workspace', () => {
     expect(fetch).not.toHaveBeenCalledWith('/v1/libraries', undefined);
     expect(fetch).not.toHaveBeenCalledWith('/v1/tmp/documents', undefined);
     expect(screen.queryByLabelText('Document tree')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Document details')).not.toBeInTheDocument();
+    // The details pane stays for tmp markdown documents, but only carries the
+    // review record — links and version history remain library features.
+    expect(screen.getByLabelText('Document details')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Comments' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Versions' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Links' })).not.toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: 'Library switcher' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add agent' })).toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'Versions' })).not.toBeInTheDocument();
     expect(screen.queryByText(/Expires/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
 
