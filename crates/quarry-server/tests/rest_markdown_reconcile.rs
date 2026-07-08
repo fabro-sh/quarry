@@ -632,6 +632,9 @@ async fn markdown_put_merges_against_the_if_match_base_preserving_ids_and_anchor
         .await
         .context("put stale markdown merge")?;
     assert_eq!(response.status(), StatusCode::OK);
+    let reply = response_json(response).await;
+    assert_eq!(reply["conflicts"], 0, "unexpected PUT reply: {reply}");
+    assert_eq!(reply["changed"], true);
 
     // Both sides landed; nothing conflicted.
     let merged = get_document_markdown(&app, "merge.md").await;
@@ -718,6 +721,11 @@ async fn markdown_put_overlapping_edits_become_conflict_review_items() -> anyhow
         StatusCode::OK,
         "conflicts never fail the write"
     );
+    // …but the reply must report the parked hunk — a bare 200 is
+    // indistinguishable from a clean apply otherwise.
+    let reply = response_json(response).await;
+    assert_eq!(reply["conflicts"], 1, "unexpected PUT reply: {reply}");
+    assert_eq!(reply["changed"], true);
 
     // Canonical side retained…
     assert_eq!(
@@ -935,6 +943,8 @@ async fn byte_identical_markdown_put_commits_no_new_version() -> anyhow::Result<
     assert_eq!(response.status(), StatusCode::OK);
     let outcome = response_json(response).await;
     assert!(outcome["version"]["id"].is_string());
+    assert_eq!(outcome["changed"], false, "unexpected PUT reply: {outcome}");
+    assert_eq!(outcome["conflicts"], 0);
     assert_eq!(raw_version_count(&app, "noop.md").await, versions_before);
     assert_eq!(get_document_markdown(&app, "noop.md").await, content);
     Ok(())

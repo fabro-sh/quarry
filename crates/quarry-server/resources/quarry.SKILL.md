@@ -246,7 +246,15 @@ curl -sS -X PUT "$DOC" \
   merges; an unknown one fails 412. No `If-Match` degenerates to a two-way
   merge against the current document.
 - `block_id`s and review anchors survive the rewrite. Merge leftovers become
-  `conflicts` in `GET $DOC/review` — never write failures.
+  `conflicts` in `GET $DOC/review` — never write failures. A 200 alone does
+  NOT mean your Markdown is now the document: check `conflicts` in the reply.
+  It counts the conflict review items this write recorded; if it is non-zero,
+  the document kept the current text in those regions and your incoming text
+  is parked in review. To make your version win, re-read `GET $DOC/blocks`
+  and re-`PUT` with the fresh clock (this overwrites the concurrent edits in
+  those regions — re-read first if they should survive), then resolve the
+  stale conflict items with `comment.resolve` / `comment.delete`. The reply
+  also carries `changed: false` when a byte-identical write was a no-op.
 - Use `PUT` to create or rewrite documents wholesale; use block transactions
   for surgical edits, comments, and suggestions on existing content.
 - For library documents, Quarry refuses to change an existing Markdown block document into a raw

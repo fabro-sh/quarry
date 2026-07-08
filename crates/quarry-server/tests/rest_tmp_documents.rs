@@ -378,6 +378,10 @@ async fn tmp_markdown_put_replaces_materialized_blocks_and_preserves_ttl() -> an
                 .context("tmp markdown PUT response should include version id")?
         )
     );
+    // The tmp PUT reply carries the merge verdict too — agents on tmp docs
+    // (the usual case) must be able to tell "applied" from "parked in review".
+    assert_eq!(outcome["changed"], true, "unexpected PUT reply: {outcome}");
+    assert_eq!(outcome["conflicts"], 0);
     assert_eq!(
         store
             .head_tmp_document(&secret)

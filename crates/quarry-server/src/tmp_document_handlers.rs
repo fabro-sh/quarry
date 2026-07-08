@@ -389,7 +389,7 @@ pub(crate) async fn head_tmp_document(
         )
     ),
     responses(
-        (status = 200, body = WriteOutcome),
+        (status = 200, body = markdown_write::PutDocumentOutcome),
         (status = 412, body = ErrorResponse),
         (status = 413, description = "Tmp Markdown body exceeds 1 MiB", body = ErrorResponse),
         (status = 415, description = "Tmp writes require a Markdown Content-Type", body = ErrorResponse)

@@ -682,6 +682,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         DocumentVersion,
         DocumentVersionContent,
         WriteOutcome,
+        markdown_write::PutDocumentOutcome,
         AgentDocumentSnapshot,
         AgentSnapshotBlock,
         AgentBlockRef,

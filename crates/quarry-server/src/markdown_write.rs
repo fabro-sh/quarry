@@ -57,9 +57,11 @@ use quarry_storage::{
     BlockWriteBase, DocumentKind, DocumentScopeRef, document_kind, merge_json,
     split_markdown_frontmatter,
 };
+use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::future::Future;
 use std::pin::Pin;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 /// The Markdown `PUT` body for a BlockDocument: `If-Match` selects the base
@@ -73,6 +75,23 @@ pub(crate) struct PutBlockDocumentRequest {
     pub precondition: WritePrecondition,
     pub origin_id: Option<String>,
     pub transaction: quarry_storage::TransactionMetadata,
+}
+
+/// The document `PUT` reply: the committed outcome plus the merge verdict.
+/// A `PUT` that hits diff3 conflicts still returns 200 — the transaction
+/// that committed is the one recording the conflict — so the outcome alone
+/// cannot tell "applied" from "parked in review". `conflicts` closes that
+/// gap: it counts the conflict review items THIS write recorded; any
+/// non-zero value means the document kept the current text in those regions
+/// and the incoming Markdown rides in `GET …/review`. `changed` is `false`
+/// when a byte-identical write short-circuited without a commit. Raw
+/// (non-Markdown) writes never merge: always `changed: true, conflicts: 0`.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct PutDocumentOutcome {
+    #[serde(flatten)]
+    pub(crate) outcome: WriteOutcome,
+    pub(crate) changed: bool,
+    pub(crate) conflicts: usize,
 }
 
 pub(crate) async fn put_block_document(
@@ -165,10 +184,15 @@ async fn put_scoped_block_document(
         transaction,
     )
     .await?;
+    let reply = PutDocumentOutcome {
+        changed: result.changed,
+        conflicts: result.conflicts,
+        outcome: result.outcome,
+    };
     Ok(crate::json_with_etag(
         StatusCode::OK,
-        &result.outcome,
-        &result.outcome.version.id,
+        &reply,
+        &reply.outcome.version.id,
     )?)
 }
 

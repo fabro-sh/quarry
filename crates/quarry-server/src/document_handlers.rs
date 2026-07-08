@@ -496,7 +496,7 @@ pub(crate) async fn get_document(
         )
     ),
     responses(
-        (status = 200, body = WriteOutcome),
+        (status = 200, body = markdown_write::PutDocumentOutcome),
         (status = 409, description = "Existing Markdown document would be changed into a raw document without X-Quarry-Allow-Document-Kind-Change: true", body = ErrorResponse),
         (status = 412, body = ErrorResponse)
     )
@@ -560,7 +560,12 @@ pub(crate) async fn put_document(
             transaction,
         })
         .await?;
-    json_with_etag(StatusCode::OK, &outcome, &outcome.version.id)
+    let reply = markdown_write::PutDocumentOutcome {
+        outcome,
+        changed: true,
+        conflicts: 0,
+    };
+    json_with_etag(StatusCode::OK, &reply, &reply.outcome.version.id)
 }
 
 #[utoipa::path(
