@@ -126,7 +126,7 @@ Document path: {document_path}
 6. Do not edit until the user gives further instructions.
    For surgical edits and review operations, POST {document_api}/transactions with header X-Agent-Id: <agent-id> and body {{"client_tx_id":"<unique-id>","base_clock":"<document_clock>","actor":{{"kind":"agent","id":"<agent-id>"}},"ops":[...]}}.
    Ops: insert_block, delete_block, move_block, replace_block_content, set_block_attrs, mark/link ops, comment.add, comment.reply, comment.edit, comment.resolve, comment.delete, suggestion.add, suggestion.accept, suggestion.reject.
-   To author or restructure the whole document, instead PUT {document_api} with a plain Markdown body and headers If-Match: "<document_clock>" and X-Agent-Id: <agent-id> — concurrent edits diff3-merge rather than being overwritten (details in the skill).
+   To author or restructure the whole document, instead PUT {document_api} with a plain Markdown body and headers If-Match: "<document_clock>" and X-Agent-Id: <agent-id> — concurrent edits diff3-merge rather than being overwritten (details in the skill). The reply's conflicts field counts hunks parked in review instead of applied — if non-zero, re-read GET {document_api}/blocks and re-PUT with the fresh clock.
    To read existing comments, suggestions, and merge conflicts, GET {document_api}/review.
    Errors are typed {{code, retryable, message}}; when retryable, refresh GET {document_api}/blocks and resubmit with the new document_clock."#
     )
@@ -242,6 +242,8 @@ mod tests {
             "PUT http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md with a plain Markdown body"
         ));
         assert!(prompt.contains("If-Match: \"<document_clock>\""));
+        // A 200 PUT can park hunks in review; the prompt says how to notice.
+        assert!(prompt.contains("The reply's conflicts field counts hunks parked in review"));
         assert!(prompt.contains("{code, retryable, message}"));
         // The quarantined legacy facades are no longer advertised.
         assert!(!prompt.contains("/edit"));
