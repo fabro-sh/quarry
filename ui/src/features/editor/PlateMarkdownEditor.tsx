@@ -143,7 +143,7 @@ import { TableKit } from './table-element';
 import { TocSidebar } from './toc-sidebar';
 import { wikiLinkMdRules } from './wiki-link';
 import { WikiLinkPlugin, WikiLinkProvider, type WikiLinkApi } from './wiki-link-element';
-import { startCommentDraft } from '../review/comment-draft';
+import { cancelCommentDraft, startCommentDraft } from '../review/comment-draft';
 import { currentAuthor, storedAuthor } from '../review/identity';
 import { markdownToReview, reviewToMarkdown } from '../review/rfm-codec';
 import {
@@ -1852,6 +1852,8 @@ function BlockDropLine() {
 }
 
 function resetPlateEditor(editor: PlateEditor, value: PlateValue) {
+  // The draft range is anchored to the outgoing document; it dies with it.
+  cancelCommentDraft(editor);
   editor.tf.replaceNodes(value as never, {
     at: [],
     children: true,

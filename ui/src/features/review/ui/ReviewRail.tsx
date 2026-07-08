@@ -1,4 +1,4 @@
-import { useEditorSelector, type PlateEditor } from 'platejs/react';
+import { useEditorSelector, usePluginOption, type PlateEditor } from 'platejs/react';
 import { useMemo } from 'react';
 
 import {
@@ -6,7 +6,7 @@ import {
   rejectSuggestionById,
   type SuggestionResolution,
 } from '../accept-reject';
-import { draftAnchorText, hasCommentDraft } from '../comment-draft';
+import { CommentDraftPlugin, draftAnchorText, hasCommentDraft } from '../comment-draft';
 import { resolveSuggestions } from '../resolve-suggestions';
 import { buildThreads, useReviewStore } from '../review-store';
 import { CommentThreadCard } from './CommentThreadCard';
@@ -35,8 +35,14 @@ export function ReviewRail({
     [meta]
   );
   const suggestions = useEditorSelector((ed) => resolveSuggestions(ed.children), []);
-  const hasDraft = useEditorSelector((ed) => hasCommentDraft(ed), []);
-  const draftText = useEditorSelector((ed) => draftAnchorText(ed), []);
+  // The draft is client-local plugin state, not document content, so starting
+  // one never produces an editor change — the option subscription is what
+  // makes the composer appear. The editor selectors (re-run on every editor
+  // change, keyed on draftRef) keep the anchor text live and dismiss the
+  // composer if the anchored text is deleted, including by a remote peer.
+  const draftRef = usePluginOption(CommentDraftPlugin, 'draftRef');
+  const hasDraft = useEditorSelector((ed) => hasCommentDraft(ed), [draftRef]);
+  const draftText = useEditorSelector((ed) => draftAnchorText(ed), [draftRef]);
 
   if (threads.length === 0 && suggestions.length === 0 && !hasDraft) return null;
 
