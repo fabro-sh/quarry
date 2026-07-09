@@ -18,7 +18,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use quarry_core::{
     DocumentHistoryEntry, DocumentListEntry, DocumentVersion, DocumentVersionContent,
-    TransactionRecord, WriteOutcome, WritePrecondition,
+    TransactionRecord, VersionDiff, WriteOutcome, WritePrecondition,
 };
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -30,6 +30,15 @@ pub(crate) struct CreateTmpDocumentRequest {
     pub metadata: Option<JsonValue>,
     pub content_type: Option<String>,
     pub expires_at: Option<String>,
+}
+
+/// The tmp GET query: the library shape minus the collab `token` (tmp
+/// documents authenticate by capability secret, not invite token).
+#[derive(Debug, Deserialize)]
+pub(crate) struct TmpDocumentGetQuery {
+    against: Option<String>,
+    #[serde(default, flatten)]
+    review: DocumentReviewQuery,
 }
 
 #[utoipa::path(
@@ -205,6 +214,30 @@ pub(crate) async fn tmp_document_events_stream_openapi() {}
 
 #[utoipa::path(
     get,
+    path = "/v1/tmp/documents/{secret}/versions/{version}/diff",
+    params(("secret" = String, Path), ("version" = String, Path), ("against" = Option<String>, Query)),
+    responses((status = 200, body = VersionDiff), (status = 404, body = ErrorResponse))
+)]
+#[expect(
+    dead_code,
+    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
+)]
+pub(crate) async fn tmp_document_version_diff_openapi() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/tmp/documents/{secret}/versions/{version}/restore",
+    params(("secret" = String, Path), ("version" = String, Path)),
+    responses((status = 200, body = WriteOutcome), (status = 404, body = ErrorResponse))
+)]
+#[expect(
+    dead_code,
+    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
+)]
+pub(crate) async fn tmp_document_version_restore_openapi() {}
+
+#[utoipa::path(
+    get,
     path = "/v1/tmp/documents/{secret}/presence",
     params(("secret" = String, Path)),
     responses((status = 200, body = TmpAgentPresenceListResponse), (status = 404, body = ErrorResponse))
@@ -236,7 +269,7 @@ pub(crate) async fn tmp_agent_presence_openapi() {}
 )]
 pub(crate) async fn get_tmp_document(
     State(state): State<AppState>,
-    Query(query): Query<DocumentReviewQuery>,
+    Query(query): Query<TmpDocumentGetQuery>,
     Path(path): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
@@ -267,7 +300,7 @@ pub(crate) async fn get_tmp_document(
         }
         TmpDocumentSubResource::Review => {
             touch_agent_presence(&state, &headers, None, document_path).await?;
-            let include_resolved = query.include_resolved()?;
+            let include_resolved = query.review.include_resolved()?;
             return json_response(
                 StatusCode::OK,
                 &agent_tmp_document_review(&state.store, document_path, include_resolved).await?,
@@ -326,10 +359,20 @@ pub(crate) async fn get_tmp_document(
                     .await?,
             );
         }
+        TmpDocumentSubResource::VersionDiff(version) => {
+            return json_response(
+                StatusCode::OK,
+                &state
+                    .store
+                    .tmp_version_diff(document_path, version, query.against.as_deref())
+                    .await?,
+            );
+        }
         TmpDocumentSubResource::Document
         | TmpDocumentSubResource::Ttl
         | TmpDocumentSubResource::Transactions
-        | TmpDocumentSubResource::Promote => {}
+        | TmpDocumentSubResource::Promote
+        | TmpDocumentSubResource::VersionRestore(_) => {}
     }
     touch_agent_presence(&state, &headers, None, &path).await?;
     let document = state.store.get_tmp_document(&path).await?;
@@ -466,6 +509,28 @@ pub(crate) async fn post_tmp_document_action(
                 agent_presence_tmp_document(&state, &headers, document_path, request).await?;
             json_response(StatusCode::OK, &response)
         }
+        TmpDocumentSubResource::VersionRestore(version) => {
+            touch_agent_presence(&state, &headers, None, document_path).await?;
+            let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
+            let actor = transaction_metadata_from_headers(&headers)?.actor;
+            let target = state
+                .store
+                .tmp_document_version(document_path, version)
+                .await?;
+            // Tmp documents are always BlockDocuments, so restore is always a
+            // whole-file write through the reconciler — no raw byte path.
+            gateway::gateway_reply(
+                markdown_write::restore_block_document_version(
+                    &state,
+                    quarry_storage::DocumentScopeRef::Tmp,
+                    document_path,
+                    &target,
+                    origin_id,
+                    actor,
+                )
+                .await,
+            )
+        }
         TmpDocumentSubResource::Promote => {
             if !cfg!(feature = "lib-documents") {
                 return Err(QuarryError::NotFound(document_path.to_string()).into());
@@ -492,6 +557,7 @@ pub(crate) async fn post_tmp_document_action(
         | TmpDocumentSubResource::RawVersions
         | TmpDocumentSubResource::Versions
         | TmpDocumentSubResource::Version(_)
+        | TmpDocumentSubResource::VersionDiff(_)
         | TmpDocumentSubResource::Ttl => Err(QuarryError::NotFound(path).into()),
     }
 }

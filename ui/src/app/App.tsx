@@ -879,12 +879,8 @@ function Workspace() {
     }),
     []
   );
-  // The versions pane is hidden in the tmp island layout, so the version
-  // list only ever loads for library documents.
   const { data: versionList = [] } = useSWR(
-    isLibraryDocument && scopeReady && documentRef
-      ? documentRefKey('versions', documentRef)
-      : null,
+    documentRef && scopeReady ? documentRefKey('versions', documentRef) : null,
     () => versions(requireValue(documentRef))
   );
   const headVersionId = versionList[0]?.latest_version_id;
@@ -896,10 +892,19 @@ function Workspace() {
   );
   const selectedDiffAgainstVersionId = compareVersionId ?? headVersionId;
   const { data: selectedVersionDiff } = useSWR(
-    libDocumentsEnabled && isLibraryDocument && activeLibrary && selectedPath && selectedVersionId
-      ? ['/v1/version-diff', activeLibrary, selectedPath, selectedVersionId, selectedDiffAgainstVersionId ?? '']
+    documentRef && scopeReady && selectedVersionId
+      ? [
+          ...documentRefKey('version-diff', documentRef),
+          selectedVersionId,
+          selectedDiffAgainstVersionId ?? '',
+        ]
       : null,
-    () => diffVersion(activeLibrary, selectedPath, requireValue(selectedVersionId), selectedDiffAgainstVersionId)
+    () =>
+      diffVersion(
+        requireValue(documentRef),
+        requireValue(selectedVersionId),
+        selectedDiffAgainstVersionId
+      )
   );
   const currentEditorDiff = useMemo(
     () => unifiedLineDiff(document?.content ?? '', content, 'latest server', 'current editor'),
@@ -1353,19 +1358,25 @@ function Workspace() {
   }
 
   async function restoreSelectedVersion(versionId: string) {
-    if (!libDocumentsEnabled || !isLibraryDocument || !activeLibrary || !selectedPath) return;
-    const ref = libraryDocumentRef(activeLibrary, selectedPath);
-    const restored = await restoreVersion(activeLibrary, selectedPath, versionId, browserMutationOptions());
+    if (!documentRef) return;
+    const ref = documentRef;
+    const restored = await restoreVersion(ref, versionId, browserMutationOptions());
     setEtag(restored.etag || `"${restored.outcome.version.id}"`);
     setSelectedVersionId(null);
     setCompareVersionId(null);
-    await Promise.all([
+    const scoped = [
       mutate(documentRefKey('document', ref)),
-      mutate(['/v1/documents', activeLibrary]),
       mutate(documentRefKey('versions', ref)),
-      mutate(['/v1/outgoing', activeLibrary, selectedPath]),
-      mutate(['/v1/backlinks', activeLibrary, selectedPath]),
-    ]);
+    ];
+    const libraryOnly =
+      ref.scope === 'library'
+        ? [
+            mutate(['/v1/documents', ref.library]),
+            mutate(['/v1/outgoing', ref.library, ref.path]),
+            mutate(['/v1/backlinks', ref.library, ref.path]),
+          ]
+        : [];
+    await Promise.all([...scoped, ...libraryOnly]);
   }
 
   async function resolveOpenConflict(conflictId: string) {
@@ -1684,7 +1695,6 @@ function Workspace() {
                 selectedVersionId={selectedVersionId}
                 onTabChange={changeRightPaneTab}
                 versions={versionList}
-                versionsEnabled={!isTmpDocument}
               />
             </Panel>
           </>
@@ -3619,7 +3629,6 @@ function RightPane({
   selectedVersionId,
   onTabChange,
   versions,
-  versionsEnabled,
 }: {
   activeTab: RightPaneTab;
   activeLibrary: string;
@@ -3648,17 +3657,11 @@ function RightPane({
   selectedVersionId: string | null;
   onTabChange: (tab: RightPaneTab) => void;
   versions: DocumentHistoryEntry[];
-  versionsEnabled: boolean;
 }) {
-  // Per-tab gating: the review record travels with every markdown document
-  // (tmp docs included — a diff3 conflict must stay visible to the human),
-  // while links and version history stay library-scope features.
+  // Per-tab gating: the review record and version history travel with every
+  // document in either scope; links stay a library-scope feature.
   const visibleTabs = rightPaneTabs.filter((tab) =>
-    tab.key === 'comments'
-      ? reviewEnabled
-      : tab.key === 'links'
-        ? libraryControlsEnabled
-        : versionsEnabled
+    tab.key === 'links' ? libraryControlsEnabled : tab.key === 'comments' ? reviewEnabled : true
   );
   const selectedTab = visibleTabs.some((tab) => tab.key === activeTab) ? activeTab : visibleTabs[0]?.key ?? 'versions';
   const selectedTabLabel = visibleTabs.find((tab) => tab.key === selectedTab)?.label ?? 'Versions';

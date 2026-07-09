@@ -359,6 +359,7 @@ describe('Quarry Browser workspace', () => {
         });
       }
       if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/versions`) return json([]);
       if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
         return json({ documentId: 'tmp-1', comments: [], suggestions: [], conflicts: [] });
       }
@@ -412,6 +413,7 @@ describe('Quarry Browser workspace', () => {
         });
       }
       if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/versions`) return json([]);
       if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
         return json({
           documentId: 'tmp-1',
@@ -477,6 +479,7 @@ describe('Quarry Browser workspace', () => {
         });
       }
       if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/versions`) return json([]);
       if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
         return json({
           documentId: 'tmp-1',
@@ -486,7 +489,6 @@ describe('Quarry Browser workspace', () => {
           conflicts,
         });
       }
-      if (url === `/v1/tmp/documents/${secret}/versions`) return json([]);
       return new Response('not found', { status: 404 });
     });
     vi.stubGlobal('fetch', fetch);
@@ -523,6 +525,78 @@ describe('Quarry Browser workspace', () => {
     expect(badge).toHaveTextContent('1');
   });
 
+  it('restores a tmp document version from the Versions tab', async () => {
+    const secret = '1f2e3d4c5b6a49871f2e3d4c5b6a4987';
+    window.history.pushState({}, '', `/tmp/${secret}`);
+    const historyEntry = (id: string, at: string) => ({
+      id,
+      document_id: 'tmp-1',
+      latest_version_id: id,
+      earliest_version_id: id,
+      raw_version_count: 1,
+      source: 'rest',
+      actor: null,
+      message: null,
+      provenance: null,
+      checkpoint_reason: null,
+      content_type: 'text/markdown',
+      byte_size: 12,
+      created_at: at,
+      updated_at: at,
+    });
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/v1/capabilities') {
+        return json({ tmp_documents: true, lib_documents: false });
+      }
+      if (url === `/v1/tmp/documents/${secret}` && init?.method !== 'PUT') {
+        return new Response('# Tmp\n', {
+          headers: {
+            ETag: '"tmp-v2"',
+            'content-type': 'text/markdown',
+            'x-quarry-document-id': 'tmp-1',
+          },
+        });
+      }
+      if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/versions`) {
+        return json([
+          historyEntry('tmp-v2', '2026-01-02T00:00:00Z'),
+          historyEntry('tmp-v1', '2026-01-01T00:00:00Z'),
+        ]);
+      }
+      if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
+        return json({
+          documentId: 'tmp-1',
+          baseToken: 'tmp-v2',
+          comments: [],
+          suggestions: [],
+          conflicts: [],
+        });
+      }
+      if (
+        url === `/v1/tmp/documents/${secret}/versions/tmp-v1/restore` &&
+        init?.method === 'POST'
+      ) {
+        return json({ version: { id: 'tmp-v3' } }, { ETag: '"tmp-v3"' });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    await userEvent.click(await screen.findByRole('tab', { name: 'Versions' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Restore version tmp-v1' }));
+
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        `/v1/tmp/documents/${secret}/versions/tmp-v1/restore`,
+        expect.objectContaining({ method: 'POST' })
+      )
+    );
+  });
+
   it('loads a routed tmp Markdown document and titles the page from its H1', async () => {
     const secret = '63895bec2fda4380b44a240f8ca57075';
     window.history.pushState({}, '', `/tmp/${secret}`);
@@ -541,6 +615,7 @@ describe('Quarry Browser workspace', () => {
         });
       }
       if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/versions`) return json([]);
       if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
         return json({ documentId: 'tmp-title', comments: [], suggestions: [], conflicts: [] });
       }
@@ -574,6 +649,7 @@ describe('Quarry Browser workspace', () => {
         });
       }
       if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/versions`) return json([]);
       if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
         return json({ documentId: 'tmp-1', comments: [], suggestions: [], conflicts: [] });
       }
@@ -591,11 +667,11 @@ describe('Quarry Browser workspace', () => {
     expect(fetch).not.toHaveBeenCalledWith('/v1/libraries', undefined);
     expect(fetch).not.toHaveBeenCalledWith('/v1/tmp/documents', undefined);
     expect(screen.queryByLabelText('Document tree')).not.toBeInTheDocument();
-    // The details pane stays for tmp markdown documents, but only carries the
-    // review record — links and version history remain library features.
+    // The details pane stays for tmp markdown documents with the
+    // document-scoped tabs; links remain a library feature.
     expect(screen.getByLabelText('Document details')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Comments' })).toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'Versions' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Versions' })).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Links' })).not.toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: 'Library switcher' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
@@ -2210,6 +2286,7 @@ describe('Quarry Browser workspace', () => {
         });
       }
       if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/versions`) return json([]);
       if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
         return json({ documentId: 'tmp-copy', comments: [], suggestions: [], conflicts: [] });
       }
@@ -2379,6 +2456,7 @@ describe('Quarry Browser workspace', () => {
         });
       }
       if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/versions`) return json([]);
       if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
         return json({ documentId: 'tmp-upload', comments: [], suggestions: [], conflicts: [] });
       }
@@ -2671,6 +2749,7 @@ function tmpDocumentFetch(secret: string, content = '# Tmp\n') {
       });
     }
     if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/versions`) return json([]);
     if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
       return json({ documentId: 'doc-tmp-fetch', comments: [], suggestions: [], conflicts: [] });
     }

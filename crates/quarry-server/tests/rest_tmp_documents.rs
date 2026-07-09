@@ -512,6 +512,130 @@ async fn tmp_put_requires_markdown_content_type() -> anyhow::Result<()> {
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
+async fn tmp_documents_expose_version_history_diff_and_restore() -> anyhow::Result<()> {
+    let (_root, app, _store) = block_test_app().await;
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/tmp/documents",
+            serde_json::json!({"content": "# Plan\n\nAlpha.\n", "content_type": "text/markdown"}),
+        ))
+        .await
+        .context("create tmp document")?;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created = response_json(response).await;
+    let secret = created["document"]["path"]
+        .as_str()
+        .context("tmp create response should include the secret path")?
+        .to_string();
+    let first_version = created["version"]["id"]
+        .as_str()
+        .context("tmp create response should include the version id")?
+        .to_string();
+
+    let tree = get_tmp_block_tree(&app, &secret).await;
+    let clock = tree["document_clock"]
+        .as_str()
+        .context("tmp block tree should include the document clock")?
+        .to_string();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/v1/tmp/documents/{secret}"))
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header(header::IF_MATCH, format!("\"{clock}\""))
+                .body(Body::from("# Plan\n\nBravo.\n"))
+                .context("build tmp rewrite request")?,
+        )
+        .await
+        .context("rewrite tmp document")?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // The aggregated history (DocumentHistoryEntry groups) is served for tmp.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/tmp/documents/{secret}/versions"))
+                .body(Body::empty())
+                .context("build tmp versions request")?,
+        )
+        .await
+        .context("list tmp version history")?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let history = response_json(response).await;
+    let entries = history
+        .as_array()
+        .context("tmp version history should be an array")?;
+    assert!(
+        entries.len() >= 2,
+        "expected history entries for create and rewrite: {history}"
+    );
+    assert!(entries[0]["latest_version_id"].is_string());
+
+    // Diffing the first version against the current head shows the rewrite.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v1/tmp/documents/{secret}/versions/{first_version}/diff"
+                ))
+                .body(Body::empty())
+                .context("build tmp diff request")?,
+        )
+        .await
+        .context("diff tmp version")?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let diff = response_json(response).await;
+    assert_eq!(diff["base_version_id"], first_version.as_str());
+    let unified = diff["unified_diff"]
+        .as_str()
+        .context("tmp diff should include a unified diff")?;
+    assert!(unified.contains("-Alpha."), "unexpected diff: {unified}");
+    assert!(unified.contains("+Bravo."), "unexpected diff: {unified}");
+
+    // Restore is a whole-file write through the reconciler (tmp documents
+    // are always BlockDocuments); the document returns to the old content.
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            &format!("/v1/tmp/documents/{secret}/versions/{first_version}/restore"),
+            serde_json::json!({}),
+        ))
+        .await
+        .context("restore tmp version")?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let restored = response_json(response).await;
+    assert!(restored["version"]["id"].is_string());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/tmp/documents/{secret}"))
+                .body(Body::empty())
+                .context("build tmp read request")?,
+        )
+        .await
+        .context("read restored tmp document")?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .context("read restored body")?;
+    assert_eq!(String::from_utf8_lossy(&body), "# Plan\n\nAlpha.\n");
+    Ok(())
+}
+
+#[cfg(feature = "tmp-documents")]
+#[tokio::test]
 async fn tmp_create_and_put_reject_oversized_markdown() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     let oversized = "a".repeat(quarry_storage::TMP_DOCUMENT_MARKDOWN_MAX_BYTES + 1);

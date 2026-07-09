@@ -599,7 +599,7 @@ pub(crate) async fn post_document_action(
             return gateway::gateway_reply(
                 markdown_write::restore_block_document_version(
                     &state,
-                    &library,
+                    quarry_storage::DocumentScopeRef::library(&library),
                     document_path,
                     &target,
                     origin_id.clone(),

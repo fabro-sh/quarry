@@ -350,25 +350,24 @@ export const promoteTmpDocument = (secret: string, request: PromoteTmpDocumentRe
     }),
   });
 
-export const diffVersion = (library: string, path: string, version: string, against?: string) =>
+export const diffVersion = (ref: DocumentRef, version: string, against?: string) =>
   jsonRequest<VersionDiff>(
-    `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/versions/${segment(
-      version
-    )}/diff${against ? `?against=${encodeURIComponent(against)}` : ''}`
+    documentRefUrl(
+      ref,
+      `/versions/${segment(version)}/diff${against ? `?against=${encodeURIComponent(against)}` : ''}`
+    )
   );
 
 export async function restoreVersion(
-  library: string,
-  path: string,
+  ref: DocumentRef,
   version: string,
   options: DocumentMutationOptions = {}
 ): Promise<SavedDocument> {
-  const response = await fetch(
-    `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/versions/${segment(
-      version
-    )}/restore`,
-    { method: 'POST', headers: mutationHeaders(options, { 'content-type': 'application/json' }), body: '{}' }
-  );
+  const response = await fetch(documentRefUrl(ref, `/versions/${segment(version)}/restore`), {
+    method: 'POST',
+    headers: mutationHeaders(options, { 'content-type': 'application/json' }),
+    body: '{}',
+  });
   await assertOk(response);
   return {
     outcome: (await response.json()) as WriteOutcome,

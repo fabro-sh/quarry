@@ -618,6 +618,8 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         tmp_document_handlers::tmp_document_versions_openapi,
         tmp_document_handlers::tmp_document_versions_raw_openapi,
         tmp_document_handlers::tmp_document_version_openapi,
+        tmp_document_handlers::tmp_document_version_diff_openapi,
+        tmp_document_handlers::tmp_document_version_restore_openapi,
         tmp_document_handlers::tmp_document_ttl_openapi,
         tmp_document_handlers::tmp_document_promote_openapi,
         review::tmp_document_review_openapi,
@@ -1486,6 +1488,8 @@ pub(crate) enum TmpDocumentSubResource<'path> {
     RawVersions,
     Versions,
     Version(&'path str),
+    VersionDiff(&'path str),
+    VersionRestore(&'path str),
     Ttl,
     Transactions,
     Promote,
@@ -1535,6 +1539,12 @@ pub(crate) fn parse_document_subresource(path: &str) -> (&str, DocumentSubResour
 }
 
 pub(crate) fn parse_tmp_document_subresource(path: &str) -> (&str, TmpDocumentSubResource<'_>) {
+    if let Some((path, version)) = document_version_path_with_suffix(path, "/diff") {
+        return (path, TmpDocumentSubResource::VersionDiff(version));
+    }
+    if let Some((path, version)) = document_version_path_with_suffix(path, "/restore") {
+        return (path, TmpDocumentSubResource::VersionRestore(version));
+    }
     if let Some(path) = path.strip_suffix("/versions/raw") {
         return (path, TmpDocumentSubResource::RawVersions);
     }

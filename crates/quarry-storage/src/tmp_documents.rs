@@ -235,6 +235,44 @@ impl QuarryStore {
         })
     }
 
+    pub async fn tmp_version_diff(
+        &self,
+        path: &str,
+        version_id: &str,
+        against: Option<&str>,
+    ) -> Result<quarry_core::VersionDiff> {
+        let secret = TmpDocumentSecret::parse(path)?;
+        let path = secret.as_str().to_string();
+        let conn = self.conn()?;
+        let document_id = self
+            .tmp_document_id_conn(&conn, &path)
+            .await?
+            .ok_or_else(|| QuarryError::NotFound(path.clone()))?;
+        let (_, base_content) = self
+            .version_content_conn(&conn, &document_id, version_id)
+            .await?;
+        let against_id = match against {
+            Some(against) => against.to_string(),
+            None => self
+                .tmp_document_entry_conn(&conn, &path)
+                .await?
+                .head_version_id
+                .to_string(),
+        };
+        let (_, against_content) = self
+            .version_content_conn(&conn, &document_id, &against_id)
+            .await?;
+
+        Ok(quarry_core::VersionDiff {
+            base_version_id: version_id.into(),
+            against_version_id: against_id.into(),
+            unified_diff: crate::versions::unified_line_diff(
+                &String::from_utf8_lossy(&base_content),
+                &String::from_utf8_lossy(&against_content),
+            ),
+        })
+    }
+
     pub async fn delete_tmp_document(&self, path: &str) -> Result<TransactionRecord> {
         let secret = TmpDocumentSecret::parse(path)?;
         let path = secret.as_str().to_string();

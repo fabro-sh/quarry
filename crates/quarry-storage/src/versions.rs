@@ -221,7 +221,7 @@ impl QuarryStore {
     }
 }
 
-fn unified_line_diff(base: &str, against: &str) -> String {
+pub(crate) fn unified_line_diff(base: &str, against: &str) -> String {
     let base_lines: Vec<&str> = base.lines().collect();
     let against_lines: Vec<&str> = against.lines().collect();
     let mut diff = String::from("--- base\n+++ against\n");

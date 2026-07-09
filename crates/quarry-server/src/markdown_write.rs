@@ -206,7 +206,7 @@ async fn put_scoped_block_document(
 /// the legacy byte path in storage.
 pub(crate) async fn restore_block_document_version(
     state: &AppState,
-    library: &str,
+    scope: DocumentScopeRef,
     path: &str,
     version: &quarry_core::DocumentVersionContent,
     origin_id: Option<String>,
@@ -216,7 +216,7 @@ pub(crate) async fn restore_block_document_version(
     let result = write_markdown_with(
         state,
         BlockMarkdownWrite {
-            scope: DocumentScopeRef::library(library),
+            scope,
             path: path.to_string(),
             markdown: version.content.clone(),
             metadata: version.version.metadata.clone(),

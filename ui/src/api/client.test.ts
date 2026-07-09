@@ -535,7 +535,9 @@ describe('Quarry API client', () => {
     );
     vi.stubGlobal('fetch', fetch);
 
-    await restoreVersion('notes', 'daily.md', 'v1', { originId: 'browser:session-1' });
+    await restoreVersion(libraryDocumentRef('notes', 'daily.md'), 'v1', {
+      originId: 'browser:session-1',
+    });
 
     expect(fetch).toHaveBeenCalledWith(
       '/v1/libraries/notes/documents/daily.md/versions/v1/restore',
