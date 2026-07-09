@@ -456,6 +456,73 @@ describe('Quarry Browser workspace', () => {
     );
   });
 
+  it('subscribes tmp documents to their event stream and refreshes review from it', async () => {
+    vi.stubGlobal('EventSource', MockEventSource);
+    MockEventSource.instances = [];
+    const secret = '9a8b7c6d5e4f43219a8b7c6d5e4f4321';
+    window.history.pushState({}, '', `/tmp/${secret}`);
+    let conflicts: Array<Record<string, unknown>> = [];
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/v1/capabilities') {
+        return json({ tmp_documents: true, lib_documents: false });
+      }
+      if (url === `/v1/tmp/documents/${secret}`) {
+        return new Response('# Tmp\n', {
+          headers: {
+            ETag: '"tmp-v1"',
+            'content-type': 'text/markdown',
+            'x-quarry-document-id': 'tmp-1',
+          },
+        });
+      }
+      if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
+        return json({
+          documentId: 'tmp-1',
+          baseToken: 'tmp-v1',
+          comments: [],
+          suggestions: [],
+          conflicts,
+        });
+      }
+      if (url === `/v1/tmp/documents/${secret}/versions`) return json([]);
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    await screen.findByRole('tab', { name: 'Comments' });
+    const stream = MockEventSource.instances.find(
+      (instance) => instance.url === `/v1/tmp/documents/${secret}/events/stream`
+    );
+    expect(stream).toBeDefined();
+    expect(screen.queryByTestId('comments-tab-badge')).not.toBeInTheDocument();
+
+    // An agent's whole-file write diff3-conflicts server-side; the
+    // document-scoped stream signals the change (payloads carry no path —
+    // the stream is already filtered to this document).
+    conflicts = [
+      {
+        id: 'x9',
+        status: 'open',
+        by: 'rest',
+        at: '2026-01-01T00:00:00.000Z',
+        afterBlockId: null,
+        baseMarkdown: 'Old.\n',
+        incomingMarkdown: 'Agent rewrite.\n',
+        canonicalMarkdown: 'Old.\n',
+      },
+    ];
+    act(() => {
+      stream?.emit('doc.changed', { type: 'doc.changed', doc_id: 'tmp-1' });
+    });
+
+    const badge = await screen.findByTestId('comments-tab-badge');
+    expect(badge).toHaveTextContent('1');
+  });
+
   it('loads a routed tmp Markdown document and titles the page from its H1', async () => {
     const secret = '63895bec2fda4380b44a240f8ca57075';
     window.history.pushState({}, '', `/tmp/${secret}`);

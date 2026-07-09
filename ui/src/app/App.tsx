@@ -106,6 +106,7 @@ import {
   type DocumentRef,
   documentRefKey,
   documentRefPath,
+  documentRefUrl,
   libraryDocumentRef,
   tmpDocumentRef,
 } from '../api/document-ref';
@@ -484,6 +485,17 @@ function Workspace() {
     [mutate]
   );
 
+  // The document-scoped caches a write invalidates in ANY scope: content
+  // arrives through the live collab doc, so only the metadata projections
+  // (version history, review record) need a refetch.
+  const invalidateDocumentScopedState = useCallback(
+    (ref: DocumentRef) => {
+      void mutate(documentRefKey('versions', ref));
+      void mutate(documentRefKey('review', ref));
+    },
+    [mutate]
+  );
+
   useEffect(() => {
     searchQueryRef.current = searchQuery;
   }, [searchQuery]);
@@ -610,9 +622,7 @@ function Workspace() {
         // Every write to the session document reaches the editor through
         // the live doc; the event only refreshes metadata caches.
         if (currentPath) {
-          const ref = libraryDocumentRef(activeLibrary, currentPath);
-          void mutate(documentRefKey('versions', ref));
-          void mutate(documentRefKey('review', ref));
+          invalidateDocumentScopedState(libraryDocumentRef(activeLibrary, currentPath));
           void mutate(['/v1/outgoing', activeLibrary, currentPath]);
           void mutate(['/v1/backlinks', activeLibrary, currentPath]);
         }
@@ -697,7 +707,7 @@ function Workspace() {
       source.close();
       stopPollingFallback();
     };
-  }, [activeLibrary, clearDeletedDocumentCaches, libDocumentsEnabled, mutate]);
+  }, [activeLibrary, clearDeletedDocumentCaches, invalidateDocumentScopedState, libDocumentsEnabled, mutate]);
 
   const isTmpDocument = documentScope === 'tmp';
   const isLibraryDocument = documentScope === 'library';
@@ -714,6 +724,80 @@ function Workspace() {
       ? tmpDocumentRef(selectedPath)
       : libraryDocumentRef(activeLibrary, selectedPath)
     : null;
+
+  // Tmp documents get their liveness from the document-scoped SSE stream —
+  // the library stream above is library-wide (documents list, git, search)
+  // and gated on lib documents. The server filters this stream to the one
+  // document and redacts paths, so every event here is ours and no doc_id
+  // correlation is needed. Content still arrives over the collab WebSocket;
+  // the stream only refreshes the metadata projections (versions, review —
+  // diff3 conflicts land there). SSE is primary; polling is the error path.
+  useEffect(() => {
+    if (!isTmpDocument || !tmpDocumentsEnabled || !selectedPath) return;
+    const ref = tmpDocumentRef(selectedPath);
+    let pollingTimer: number | null = null;
+
+    function refreshFromEvent(payload: BrowserEventPayload) {
+      if (payload.type === 'doc.deleted') {
+        void clearDeletedDocumentCaches(ref);
+        return;
+      }
+      invalidateDocumentScopedState(ref);
+    }
+
+    function startPollingFallback() {
+      invalidateDocumentScopedState(ref);
+      if (pollingTimer !== null) return;
+      pollingTimer = window.setInterval(
+        () => invalidateDocumentScopedState(ref),
+        EVENT_POLL_INTERVAL_MS
+      );
+    }
+
+    function stopPollingFallback() {
+      if (pollingTimer === null) return;
+      window.clearInterval(pollingTimer);
+      pollingTimer = null;
+    }
+
+    if (typeof EventSource === 'undefined') {
+      startPollingFallback();
+      return stopPollingFallback;
+    }
+
+    const eventTypes = [
+      'doc.changed',
+      'doc.deleted',
+      'doc.moved',
+      'conflict.created',
+      'conflict.resolved',
+      'stream.lagged',
+    ];
+    const handleEvent = (event: MessageEvent) => {
+      const payload = parseBrowserEvent(event);
+      if (payload) refreshFromEvent(payload);
+    };
+    const source = new EventSource(documentRefUrl(ref, '/events/stream'));
+    for (const eventType of eventTypes) {
+      source.addEventListener(eventType, handleEvent);
+    }
+    source.onopen = () => stopPollingFallback();
+    source.onerror = () => startPollingFallback();
+
+    return () => {
+      for (const eventType of eventTypes) {
+        source.removeEventListener(eventType, handleEvent);
+      }
+      source.close();
+      stopPollingFallback();
+    };
+  }, [
+    clearDeletedDocumentCaches,
+    invalidateDocumentScopedState,
+    isTmpDocument,
+    selectedPath,
+    tmpDocumentsEnabled,
+  ]);
 
   const { data: libraryDocuments = [] } = useSWR(
     libDocumentsEnabled && activeLibrary ? ['/v1/documents', activeLibrary] : null,
@@ -934,15 +1018,12 @@ function Workspace() {
   );
   // The rows-backed review projection feeds the Comments panel (states,
   // orphaned/invalidated badges, diff3 conflict items). Refreshed by the
-  // SSE classification above whenever the document changes.
+  // scope's event stream above whenever the document changes.
   const { data: documentReview } = useSWR(
     documentRef && isMarkdownDocument(selectedPath, selectedContentType) && scopeReady
       ? documentRefKey('review', documentRef)
       : null,
-    () => getDocumentReview(requireValue(documentRef)),
-    // Tmp documents have no SSE stream (the event source is library-gated),
-    // so poll to keep the conflict badge honest while an agent writes.
-    { refreshInterval: isTmpDocument ? 10_000 : 0 }
+    () => getDocumentReview(requireValue(documentRef))
   );
 
   useEffect(() => {
