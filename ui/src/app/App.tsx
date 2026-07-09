@@ -73,14 +73,12 @@ import {
   createGitPeer,
   createTmpDocument,
   deleteDocument,
-  deleteTmpDocument,
   diffVersion,
   documentHref,
   documentVersion,
   getCapabilities,
   getDocument,
   getDocumentReview,
-  getTmpDocumentReview,
   gitExport,
   gitImport,
   gitPull,
@@ -92,23 +90,25 @@ import {
   listDocuments,
   listGitPeers,
   listLibraries,
-  listTmpAgentPresence,
   moveDocument,
   outgoingLinks,
   postBlockTransaction,
-  postTmpBlockTransaction,
   promoteTmpDocument,
   putBinaryDocument,
   putDocument,
-  putTmpDocument,
   resolveConflict,
   restoreVersion,
   searchDocuments,
   tmpDocumentHref,
-  tmpDocumentVersion,
-  getTmpDocument,
   versions,
 } from '../api/client';
+import {
+  type DocumentRef,
+  documentRefKey,
+  documentRefPath,
+  libraryDocumentRef,
+  tmpDocumentRef,
+} from '../api/document-ref';
 import type {
   AgentReviewResponse,
   BlockTransactionRequest,
@@ -435,29 +435,27 @@ function Workspace() {
   }
 
   const clearDeletedDocumentCaches = useCallback(
-    (library: string, path: string) =>
-      Promise.all([
-        mutate(['/v1/document', library, path], undefined, { revalidate: false }),
-        mutate(['/v1/versions', library, path], [], { revalidate: false }),
-        mutate(['/v1/outgoing', library, path], { path, links: [] }, { revalidate: false }),
-        mutate(['/v1/backlinks', library, path], { path, links: [] }, { revalidate: false }),
-      ]),
-    [mutate]
-  );
-
-  const clearTmpDocumentCaches = useCallback(
-    (path: string) =>
-      Promise.all([
-        mutate(['/v1/tmp-document', path], undefined, { revalidate: false }),
-        mutate(['/v1/tmp-versions', path], [], { revalidate: false }),
-      ]),
+    (ref: DocumentRef) => {
+      const path = documentRefPath(ref);
+      const scoped = [
+        mutate(documentRefKey('document', ref), undefined, { revalidate: false }),
+        mutate(documentRefKey('versions', ref), [], { revalidate: false }),
+      ];
+      const libraryOnly =
+        ref.scope === 'library'
+          ? [
+              mutate(['/v1/outgoing', ref.library, path], { path, links: [] }, { revalidate: false }),
+              mutate(['/v1/backlinks', ref.library, path], { path, links: [] }, { revalidate: false }),
+            ]
+          : [];
+      return Promise.all([...scoped, ...libraryOnly]);
+    },
     [mutate]
   );
 
   const seedCreatedDocumentCaches = useCallback(
     (
-      library: string,
-      path: string,
+      ref: DocumentRef,
       createdContent: string,
       createdContentType: string,
       created: Awaited<ReturnType<typeof createDocument>>
@@ -466,18 +464,18 @@ function Workspace() {
       const documentId = created.outcome.document?.id ?? '';
       return Promise.all([
         mutate(
-          ['/v1/document', library, path],
+          documentRefKey('document', ref),
           {
             content: createdContent,
             contentType: createdContentType,
             documentId,
             etag: createdEtag,
-            path,
+            path: documentRefPath(ref),
           },
           { revalidate: false }
         ),
         mutate(
-          ['/v1/versions', library, path],
+          documentRefKey('versions', ref),
           [historyEntryFromVersion(created.outcome.version)],
           { revalidate: false }
         ),
@@ -531,14 +529,15 @@ function Workspace() {
     };
 
     function invalidateDocumentState(path: string) {
-      void mutate(['/v1/document', activeLibrary, path]);
-      void mutate(['/v1/versions', activeLibrary, path]);
+      const ref = libraryDocumentRef(activeLibrary, path);
+      void mutate(documentRefKey('document', ref));
+      void mutate(documentRefKey('versions', ref));
       void mutate(['/v1/outgoing', activeLibrary, path]);
       void mutate(['/v1/backlinks', activeLibrary, path]);
     }
 
     function clearDeletedDocumentState(path: string) {
-      void clearDeletedDocumentCaches(activeLibrary, path);
+      void clearDeletedDocumentCaches(libraryDocumentRef(activeLibrary, path));
     }
 
     function invalidateCurrentBacklinks() {
@@ -611,8 +610,9 @@ function Workspace() {
         // Every write to the session document reaches the editor through
         // the live doc; the event only refreshes metadata caches.
         if (currentPath) {
-          void mutate(['/v1/versions', activeLibrary, currentPath]);
-          void mutate(['/v1/review', activeLibrary, currentPath]);
+          const ref = libraryDocumentRef(activeLibrary, currentPath);
+          void mutate(documentRefKey('versions', ref));
+          void mutate(documentRefKey('review', ref));
           void mutate(['/v1/outgoing', activeLibrary, currentPath]);
           void mutate(['/v1/backlinks', activeLibrary, currentPath]);
         }
@@ -707,6 +707,13 @@ function Workspace() {
   const scopeReady = isTmpDocument
     ? tmpDocumentsEnabled
     : libDocumentsEnabled && Boolean(activeLibrary);
+  // The selected document's scope-resolved address — the one value every
+  // document-scoped client call and SWR key derives from.
+  const documentRef: DocumentRef | null = selectedPath
+    ? isTmpDocument
+      ? tmpDocumentRef(selectedPath)
+      : libraryDocumentRef(activeLibrary, selectedPath)
+    : null;
 
   const { data: libraryDocuments = [] } = useSWR(
     libDocumentsEnabled && activeLibrary ? ['/v1/documents', activeLibrary] : null,
@@ -714,12 +721,8 @@ function Workspace() {
   );
   const documents = isTmpDocument ? [] : libraryDocuments;
   const { data: document } = useSWR(
-    selectedPath && scopeReady
-      ? isTmpDocument
-        ? ['/v1/tmp-document', selectedPath]
-        : ['/v1/document', activeLibrary, selectedPath]
-      : null,
-    () => (isTmpDocument ? getTmpDocument(selectedPath) : getDocument(activeLibrary, selectedPath)),
+    documentRef && scopeReady ? documentRefKey('document', documentRef) : null,
+    () => getDocument(requireValue(documentRef)),
     { revalidateOnFocus: false }
   );
   const { data: search = { results: [], cursor: null } } = useSWR(
@@ -795,29 +798,24 @@ function Workspace() {
   // The versions pane is hidden in the tmp island layout, so the version
   // list only ever loads for library documents.
   const { data: versionList = [] } = useSWR(
-    isLibraryDocument && scopeReady && selectedPath
-      ? ['/v1/versions', activeLibrary, selectedPath]
+    isLibraryDocument && scopeReady && documentRef
+      ? documentRefKey('versions', documentRef)
       : null,
-    () => versions(activeLibrary, selectedPath)
+    () => versions(requireValue(documentRef))
   );
   const headVersionId = versionList[0]?.latest_version_id;
   const { data: selectedVersionContent } = useSWR(
-    selectedPath && selectedVersionId && scopeReady
-      ? isTmpDocument
-        ? ['/v1/tmp-version-content', selectedPath, selectedVersionId]
-        : ['/v1/version-content', activeLibrary, selectedPath, selectedVersionId]
+    documentRef && selectedVersionId && scopeReady
+      ? [...documentRefKey('version-content', documentRef), selectedVersionId]
       : null,
-    () =>
-      isTmpDocument
-        ? tmpDocumentVersion(selectedPath, selectedVersionId!)
-        : documentVersion(activeLibrary, selectedPath, selectedVersionId!)
+    () => documentVersion(requireValue(documentRef), requireValue(selectedVersionId))
   );
   const selectedDiffAgainstVersionId = compareVersionId ?? headVersionId;
   const { data: selectedVersionDiff } = useSWR(
     libDocumentsEnabled && isLibraryDocument && activeLibrary && selectedPath && selectedVersionId
       ? ['/v1/version-diff', activeLibrary, selectedPath, selectedVersionId, selectedDiffAgainstVersionId ?? '']
       : null,
-    () => diffVersion(activeLibrary, selectedPath, selectedVersionId!, selectedDiffAgainstVersionId)
+    () => diffVersion(activeLibrary, selectedPath, requireValue(selectedVersionId), selectedDiffAgainstVersionId)
   );
   const currentEditorDiff = useMemo(
     () => unifiedLineDiff(document?.content ?? '', content, 'latest server', 'current editor'),
@@ -928,30 +926,20 @@ function Workspace() {
   const rightPaneVisible = !isTmpDocument || isMarkdownDocument(selectedPath, selectedContentType);
   const mergeConflict = conflicts.find((conflict) => conflict.id === mergeConflictId) ?? null;
   const { data: agentPresence = { presence: [] } } = useSWR(
-    selectedPath && isTextContentType(selectedContentType) && scopeReady
-      ? isTmpDocument
-        ? ['/v1/tmp-agent-presence', selectedPath]
-        : ['/v1/agent-presence', activeLibrary, selectedPath]
+    documentRef && isTextContentType(selectedContentType) && scopeReady
+      ? documentRefKey('presence', documentRef)
       : null,
-    () =>
-      isTmpDocument
-        ? listTmpAgentPresence(selectedPath)
-        : listAgentPresence(activeLibrary, selectedPath),
+    () => listAgentPresence(requireValue(documentRef)),
     { refreshInterval: 3_000 }
   );
   // The rows-backed review projection feeds the Comments panel (states,
   // orphaned/invalidated badges, diff3 conflict items). Refreshed by the
   // SSE classification above whenever the document changes.
   const { data: documentReview } = useSWR(
-    selectedPath && isMarkdownDocument(selectedPath, selectedContentType) && scopeReady
-      ? isTmpDocument
-        ? ['/v1/tmp-review', selectedPath]
-        : ['/v1/review', activeLibrary, selectedPath]
+    documentRef && isMarkdownDocument(selectedPath, selectedContentType) && scopeReady
+      ? documentRefKey('review', documentRef)
       : null,
-    () =>
-      isTmpDocument
-        ? getTmpDocumentReview(selectedPath)
-        : getDocumentReview(activeLibrary, selectedPath),
+    () => getDocumentReview(requireValue(documentRef)),
     // Tmp documents have no SSE stream (the event source is library-gated),
     // so poll to keep the conflict badge honest while an agent writes.
     { refreshInterval: isTmpDocument ? 10_000 : 0 }
@@ -998,7 +986,7 @@ function Workspace() {
       initialContentType,
       browserMutationOptions()
     );
-    await seedCreatedDocumentCaches(activeLibrary, path, initialContent, initialContentType, created);
+    await seedCreatedDocumentCaches(libraryDocumentRef(activeLibrary, path), initialContent, initialContentType, created);
     await mutate(['/v1/documents', activeLibrary]);
     setSelectedPath(path);
   }
@@ -1014,23 +1002,12 @@ function Workspace() {
     });
     const secret = created.outcome.document?.path ?? '';
     if (!secret) throw new Error('tmp document creation did not return a secret');
-    const createdEtag = created.etag || `"${created.outcome.version.id}"`;
-    await Promise.all([
-      mutate(
-        ['/v1/tmp-document', secret],
-        {
-          content: initialContent,
-          contentType: initialContentType,
-          documentId: created.outcome.document?.id ?? '',
-          etag: createdEtag,
-          path: secret,
-        },
-        { revalidate: false }
-      ),
-      mutate(['/v1/tmp-versions', secret], [historyEntryFromVersion(created.outcome.version)], {
-        revalidate: false,
-      }),
-    ]);
+    await seedCreatedDocumentCaches(
+      tmpDocumentRef(secret),
+      initialContent,
+      initialContentType,
+      created
+    );
     setSelectedPath(secret);
     return secret;
   }
@@ -1069,7 +1046,7 @@ function Workspace() {
       initialContentType,
       browserMutationOptions()
     );
-    await seedCreatedDocumentCaches(activeLibrary, path, initialContent, initialContentType, created);
+    await seedCreatedDocumentCaches(libraryDocumentRef(activeLibrary, path), initialContent, initialContentType, created);
     await Promise.all([
       mutate(['/v1/documents', activeLibrary]),
       selectedPath ? mutate(['/v1/outgoing', activeLibrary, selectedPath]) : Promise.resolve(),
@@ -1113,17 +1090,12 @@ function Workspace() {
   };
 
   async function deleteCurrent() {
-    if (!selectedPath || (isLibraryDocument && !activeLibrary)) return;
-    const deletingPath = selectedPath;
-    if (!window.confirm(`Delete ${deletingPath}?`)) return;
-    if (isTmpDocument) {
-      await deleteTmpDocument(deletingPath, browserMutationOptions());
-      await clearTmpDocumentCaches(deletingPath);
-    } else {
-      await deleteDocument(activeLibrary, deletingPath, browserMutationOptions());
-      await clearDeletedDocumentCaches(activeLibrary, deletingPath);
-      await mutate(['/v1/documents', activeLibrary]);
-    }
+    if (!documentRef || (isLibraryDocument && !activeLibrary)) return;
+    const deletingRef = documentRef;
+    if (!window.confirm(`Delete ${documentRefPath(deletingRef)}?`)) return;
+    await deleteDocument(deletingRef, browserMutationOptions());
+    await clearDeletedDocumentCaches(deletingRef);
+    if (deletingRef.scope === 'library') await mutate(['/v1/documents', activeLibrary]);
     setSelectedPath('');
   }
 
@@ -1138,7 +1110,7 @@ function Workspace() {
       path: targetPath,
       ifMatch: etag.trim().replace(/^"|"$/g, ''),
     });
-    await clearTmpDocumentCaches(selectedPath);
+    await clearDeletedDocumentCaches(tmpDocumentRef(selectedPath));
     await mutate(['/v1/documents', library]);
     setDocumentScope('library');
     setActiveLibrary(library);
@@ -1197,37 +1169,29 @@ function Workspace() {
       if (uploadMarkdownInputRef.current) uploadMarkdownInputRef.current.value = '';
       return;
     }
-    const path = selectedPath;
-    const library = activeLibrary;
-    const tmp = isTmpDocument;
+    const ref = documentRef;
+    if (!ref) return;
     try {
-      const [text, latest] = await Promise.all([
-        file.text(),
-        tmp ? getTmpDocument(path) : getDocument(library, path),
-      ]);
-      const saved = tmp
-        ? await putTmpDocument(path, text, latest.etag, browserMutationOptions())
-        : await putDocument(library, path, text, latest.etag, 'text/markdown', browserMutationOptions());
+      const [text, latest] = await Promise.all([file.text(), getDocument(ref)]);
+      const saved = await putDocument(ref, text, latest.etag, 'text/markdown', browserMutationOptions());
       setEtag(saved.etag || `"${saved.outcome.version.id}"`);
       setSelectedVersionId(null);
       setCompareVersionId(null);
       setCurrentDiffOpen(false);
-      if (tmp) {
-        await Promise.all([
-          mutate(['/v1/tmp-document', path]),
-          mutate(['/v1/tmp-versions', path]),
-          mutate(['/v1/tmp-review', path]),
-        ]);
-      } else {
-        await Promise.all([
-          mutate(['/v1/document', library, path]),
-          mutate(['/v1/documents', library]),
-          mutate(['/v1/versions', library, path]),
-          mutate(['/v1/review', library, path]),
-          mutate(['/v1/outgoing', library, path]),
-          mutate(['/v1/backlinks', library, path]),
-        ]);
-      }
+      const scoped = [
+        mutate(documentRefKey('document', ref)),
+        mutate(documentRefKey('versions', ref)),
+        mutate(documentRefKey('review', ref)),
+      ];
+      const libraryOnly =
+        ref.scope === 'library'
+          ? [
+              mutate(['/v1/documents', ref.library]),
+              mutate(['/v1/outgoing', ref.library, ref.path]),
+              mutate(['/v1/backlinks', ref.library, ref.path]),
+            ]
+          : [];
+      await Promise.all([...scoped, ...libraryOnly]);
     } catch (error) {
       window.alert(
         `Upload Markdown failed: ${error instanceof Error ? error.message : String(error)}`
@@ -1301,22 +1265,23 @@ function Workspace() {
   async function deleteDocumentPath(path: string) {
     if (!libDocumentsEnabled || !activeLibrary) return;
     if (!window.confirm(`Delete ${path}?`)) return;
-    await deleteDocument(activeLibrary, path, browserMutationOptions());
-    await clearDeletedDocumentCaches(activeLibrary, path);
+    await deleteDocument(libraryDocumentRef(activeLibrary, path), browserMutationOptions());
+    await clearDeletedDocumentCaches(libraryDocumentRef(activeLibrary, path));
     await mutate(['/v1/documents', activeLibrary]);
     if (selectedPath === path) setSelectedPath('');
   }
 
   async function restoreSelectedVersion(versionId: string) {
     if (!libDocumentsEnabled || !isLibraryDocument || !activeLibrary || !selectedPath) return;
+    const ref = libraryDocumentRef(activeLibrary, selectedPath);
     const restored = await restoreVersion(activeLibrary, selectedPath, versionId, browserMutationOptions());
     setEtag(restored.etag || `"${restored.outcome.version.id}"`);
     setSelectedVersionId(null);
     setCompareVersionId(null);
     await Promise.all([
-      mutate(['/v1/document', activeLibrary, selectedPath]),
+      mutate(documentRefKey('document', ref)),
       mutate(['/v1/documents', activeLibrary]),
-      mutate(['/v1/versions', activeLibrary, selectedPath]),
+      mutate(documentRefKey('versions', ref)),
       mutate(['/v1/outgoing', activeLibrary, selectedPath]),
       mutate(['/v1/backlinks', activeLibrary, selectedPath]),
     ]);
@@ -1331,20 +1296,15 @@ function Workspace() {
   // Diff3 conflict review items (whole-file merge leftovers) dismiss through
   // the block-transaction gateway; resolution never mutates the document.
   async function dismissReviewConflict(conflictId: string) {
-    if (!selectedPath) return;
+    if (!documentRef) return;
     const request: BlockTransactionRequest = {
       client_tx_id: crypto.randomUUID(),
       actor: { kind: 'user', id: storedAuthor() },
       ops: [{ op: 'comment.resolve', item_id: conflictId }],
     };
     try {
-      if (isTmpDocument) {
-        await postTmpBlockTransaction(selectedPath, request);
-        await mutate(['/v1/tmp-review', selectedPath]);
-      } else {
-        await postBlockTransaction(activeLibrary, selectedPath, request);
-        await mutate(['/v1/review', activeLibrary, selectedPath]);
-      }
+      await postBlockTransaction(documentRef, request);
+      await mutate(documentRefKey('review', documentRef));
     } catch (error) {
       window.alert(
         `Dismiss conflict failed: ${error instanceof Error ? error.message : String(error)}`
@@ -1390,8 +1350,8 @@ function Workspace() {
     if (node.kind !== 'document') return;
     if (isTmpDocument) {
       if (!window.confirm(`Delete ${node.path}?`)) return;
-      await deleteTmpDocument(node.path, browserMutationOptions());
-      await clearTmpDocumentCaches(node.path);
+      await deleteDocument(tmpDocumentRef(node.path), browserMutationOptions());
+      await clearDeletedDocumentCaches(tmpDocumentRef(node.path));
       if (selectedPath === node.path) setSelectedPath('');
     } else {
       await deleteDocumentPath(node.path);
@@ -2445,21 +2405,26 @@ function ConflictMergeDialog({
   const [error, setError] = useState('');
   const dialogRef = useDialogFocusTrap(true, onClose);
   const theirsPath = conflict.conflict_path ?? conflict.path;
+  const conflictDocumentRef = libraryDocumentRef(activeLibrary, conflict.path);
   const { data: head } = useSWR(
     activeLibrary ? ['/v1/conflict-head', activeLibrary, conflict.path, conflict.id] : null,
-    () => getDocument(activeLibrary, conflict.path)
+    () => getDocument(conflictDocumentRef)
   );
   const { data: ours } = useSWR(
     activeLibrary && conflict.ours_version_id
       ? ['/v1/conflict-version', activeLibrary, conflict.path, conflict.ours_version_id]
       : null,
-    () => documentVersion(activeLibrary, conflict.path, conflict.ours_version_id!)
+    () => documentVersion(conflictDocumentRef, requireValue(conflict.ours_version_id))
   );
   const { data: theirs } = useSWR(
     activeLibrary && conflict.theirs_version_id
       ? ['/v1/conflict-version', activeLibrary, theirsPath, conflict.theirs_version_id]
       : null,
-    () => documentVersion(activeLibrary, theirsPath, conflict.theirs_version_id!)
+    () =>
+      documentVersion(
+        libraryDocumentRef(activeLibrary, theirsPath),
+        requireValue(conflict.theirs_version_id)
+      )
   );
 
   useEffect(() => {
@@ -2468,10 +2433,10 @@ function ConflictMergeDialog({
 
   async function refreshConflictState() {
     await Promise.all([
-      mutate(['/v1/document', activeLibrary, conflict.path]),
+      mutate(documentRefKey('document', conflictDocumentRef)),
       mutate(['/v1/documents', activeLibrary]),
       mutate(['/v1/conflicts', activeLibrary]),
-      mutate(['/v1/versions', activeLibrary, conflict.path]),
+      mutate(documentRefKey('versions', conflictDocumentRef)),
       mutate(['/v1/outgoing', activeLibrary, conflict.path]),
       mutate(['/v1/backlinks', activeLibrary, conflict.path]),
     ]);
@@ -2482,14 +2447,7 @@ function ConflictMergeDialog({
     setBusy(true);
     setError('');
     try {
-      await putDocument(
-        activeLibrary,
-        conflict.path,
-        content,
-        head.etag,
-        head.contentType,
-        mutationOptions
-      );
+      await putDocument(conflictDocumentRef, content, head.etag, head.contentType, mutationOptions);
       await resolveConflict(activeLibrary, conflict.id);
       await refreshConflictState();
       onClose();
@@ -2504,7 +2462,7 @@ function ConflictMergeDialog({
     setBusy(true);
     setError('');
     try {
-      await deleteDocument(activeLibrary, conflict.path, mutationOptions);
+      await deleteDocument(conflictDocumentRef, mutationOptions);
       await resolveConflict(activeLibrary, conflict.id);
       await refreshConflictState();
       onClose();
@@ -4025,7 +3983,7 @@ function LinkList({
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const { data: previewDocument } = useSWR(
     activeLibrary && previewPath ? ['/v1/link-preview', activeLibrary, previewPath] : null,
-    () => getDocument(activeLibrary, previewPath!)
+    () => getDocument(libraryDocumentRef(activeLibrary, requireValue(previewPath)))
   );
 
   if (!links.length) return <p className="text-xs text-muted">None</p>;
@@ -4641,6 +4599,13 @@ const treeMenuItem =
 const menuItem =
   'flex w-full cursor-pointer items-center gap-2 rounded px-2.5 py-1.5 text-left text-sm text-body outline-none select-none data-highlighted:bg-well';
 const rightHeading = 'mb-2.5 flex items-center gap-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-faint';
+// Narrows an SWR fetcher's captured value: the fetcher only runs when the key
+// is non-null, but TypeScript cannot see that guard from inside the closure.
+function requireValue<T>(value: T | null | undefined): T {
+  if (value === null || value === undefined) throw new Error('value required by SWR key guard');
+  return value;
+}
+
 const rightPaneTabs: Array<{ key: RightPaneTab; label: string }> = [
   { key: 'comments', label: 'Comments' },
   { key: 'links', label: 'Links' },

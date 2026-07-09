@@ -17,6 +17,13 @@ import type {
   VersionDiff,
   WriteOutcome,
 } from './generated/types';
+import {
+  type DocumentRef,
+  documentRefPath,
+  documentRefUrl,
+  pathSegments,
+  segment,
+} from './document-ref';
 
 export interface LoadedDocument {
   documentId: string;
@@ -81,6 +88,9 @@ export interface GitExportResult {
   commit_id: string | null;
 }
 
+// Library presence entries carry extra `library`/`path` fields on the wire;
+// the UI displays only this scope-agnostic shape, so one response type serves
+// both scopes.
 export interface AgentPresenceDisplayEntry {
   documentId: string;
   agentId: string;
@@ -89,19 +99,8 @@ export interface AgentPresenceDisplayEntry {
   updatedAt: string;
 }
 
-export interface AgentPresenceEntry extends AgentPresenceDisplayEntry {
-  library: string | null;
-  path: string;
-}
-
-export type TmpAgentPresenceEntry = AgentPresenceDisplayEntry;
-
 export interface AgentPresenceListResponse {
-  presence: AgentPresenceEntry[];
-}
-
-export interface TmpAgentPresenceListResponse {
-  presence: TmpAgentPresenceEntry[];
+  presence: AgentPresenceDisplayEntry[];
 }
 
 export class ApiError extends Error {
@@ -166,27 +165,13 @@ export const createLibrary = (slug: string) =>
 export const listDocuments = (library: string) =>
   jsonRequest<DocumentListEntry[]>(`/v1/libraries/${segment(library)}/documents`);
 
-export async function getDocument(library: string, path: string): Promise<LoadedDocument> {
-  const response = await fetch(documentHref(library, path));
+export async function getDocument(ref: DocumentRef): Promise<LoadedDocument> {
+  const response = await fetch(documentRefUrl(ref));
   await assertOk(response);
   const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
   return {
     documentId: response.headers.get('x-quarry-document-id') ?? '',
-    path,
-    content: isTextContentType(contentType) ? await response.text() : '',
-    contentType,
-    etag: response.headers.get('etag') ?? '',
-    expiresAt: response.headers.get('x-quarry-expires-at') ?? undefined,
-  };
-}
-
-export async function getTmpDocument(secret: string): Promise<LoadedDocument> {
-  const response = await fetch(tmpDocumentHref(secret));
-  await assertOk(response);
-  const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
-  return {
-    documentId: response.headers.get('x-quarry-document-id') ?? '',
-    path: secret,
+    path: documentRefPath(ref),
     content: isTextContentType(contentType) ? await response.text() : '',
     contentType,
     etag: response.headers.get('etag') ?? '',
@@ -215,31 +200,17 @@ export async function createTmpDocument(
 }
 
 export function putDocument(
-  library: string,
-  path: string,
+  ref: DocumentRef,
   content: string,
   etag: string,
   contentType = 'text/markdown',
   options: DocumentMutationOptions = {}
-) {
+): Promise<SavedDocument> {
   const headers = mutationHeaders(options, {
     'If-Match': etag,
     'content-type': contentType,
   });
-  return writeDocument(library, path, content, headers);
-}
-
-export function putTmpDocument(
-  secret: string,
-  content: string,
-  etag: string,
-  options: DocumentMutationOptions = {}
-) {
-  const headers = mutationHeaders(options, {
-    'If-Match': etag,
-    'content-type': 'text/markdown',
-  });
-  return writeTmpDocument(secret, content, headers);
+  return writeDocument(ref, content, headers);
 }
 
 export function createDocument(
@@ -249,7 +220,7 @@ export function createDocument(
   contentType = 'text/markdown',
   options: DocumentMutationOptions = {}
 ) {
-  return writeDocument(library, path, content, mutationHeaders(options, {
+  return writeDocument({ scope: 'library', library, path }, content, mutationHeaders(options, {
     'If-None-Match': '*',
     'content-type': contentType,
   }));
@@ -286,19 +257,8 @@ export async function moveDocument(
   });
 }
 
-export async function deleteDocument(
-  library: string,
-  path: string,
-  options: DocumentMutationOptions = {}
-) {
-  return jsonRequest(`/v1/libraries/${segment(library)}/documents/${pathSegments(path)}`, {
-    method: 'DELETE',
-    headers: mutationHeaders(options),
-  });
-}
-
-export async function deleteTmpDocument(secret: string, options: DocumentMutationOptions = {}) {
-  return jsonRequest(tmpDocumentHref(secret), {
+export async function deleteDocument(ref: DocumentRef, options: DocumentMutationOptions = {}) {
+  return jsonRequest(documentRefUrl(ref), {
     method: 'DELETE',
     headers: mutationHeaders(options),
   });
@@ -338,13 +298,8 @@ export async function fetchAgentPrompt(
   return response.text();
 }
 
-export const listAgentPresence = (library: string, path: string) =>
-  jsonRequest<AgentPresenceListResponse>(
-    `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/presence`
-  );
-
-export const listTmpAgentPresence = (secret: string) =>
-  jsonRequest<TmpAgentPresenceListResponse>(`/v1/tmp/documents/${segment(secret)}/presence`);
+export const listAgentPresence = (ref: DocumentRef) =>
+  jsonRequest<AgentPresenceListResponse>(documentRefUrl(ref, '/presence'));
 
 export const searchDocuments = (library: string, query: string) =>
   jsonRequest<SearchResponse>(
@@ -366,45 +321,23 @@ export const backlinks = (library: string, path: string) =>
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/backlinks`
   );
 
-export const versions = (library: string, path: string) =>
-  jsonRequest<DocumentHistoryEntry[]>(
-    `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/versions`
-  );
-
-export const tmpVersions = (secret: string) =>
-  jsonRequest<DocumentHistoryEntry[]>(`/v1/tmp/documents/${segment(secret)}/versions`);
+export const versions = (ref: DocumentRef) =>
+  jsonRequest<DocumentHistoryEntry[]>(documentRefUrl(ref, '/versions'));
 
 export const rawVersions = (library: string, path: string) =>
   jsonRequest<DocumentVersion[]>(
     `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/versions/raw`
   );
 
-export const documentVersion = (library: string, path: string, version: string) =>
-  jsonRequest<DocumentVersionContent>(
-    `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/versions/${segment(version)}`
-  );
+export const documentVersion = (ref: DocumentRef, version: string) =>
+  jsonRequest<DocumentVersionContent>(documentRefUrl(ref, `/versions/${segment(version)}`));
 
-export const tmpDocumentVersion = (secret: string, version: string) =>
-  jsonRequest<DocumentVersionContent>(
-    `/v1/tmp/documents/${segment(secret)}/versions/${segment(version)}`
-  );
-
-export const setTmpDocumentTtl = (secret: string, expiresAt: string) =>
-  jsonRequest<{ expires_at: string | null }>(`/v1/tmp/documents/${segment(secret)}/ttl`, {
+export const setDocumentTtl = (ref: DocumentRef, expiresAt: string | null) =>
+  jsonRequest<{ expires_at: string | null }>(documentRefUrl(ref, '/ttl'), {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ expires_at: expiresAt }),
   });
-
-export const setDocumentTtl = (library: string, path: string, expiresAt: string | null) =>
-  jsonRequest<{ expires_at: string | null }>(
-    `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/ttl`,
-    {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ expires_at: expiresAt }),
-    }
-  );
 
 export const promoteTmpDocument = (secret: string, request: PromoteTmpDocumentRequest) =>
   jsonRequest<DocumentListEntry>(`/v1/tmp/documents/${segment(secret)}/promote`, {
@@ -446,50 +379,24 @@ export async function restoreVersion(
 // Canonical block rows plus the current document clock. Reading a markdown
 // document that has no stored projection materializes one server-side, so the
 // returned block ids are durable and addressable by transactions.
-export const getDocumentBlocks = (library: string, path: string) =>
-  jsonRequest<BlockTreeResponse>(
-    `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/blocks`
-  );
-
-export const getTmpDocumentBlocks = (secret: string) =>
-  jsonRequest<BlockTreeResponse>(`/v1/tmp/documents/${segment(secret)}/blocks`);
+export const getDocumentBlocks = (ref: DocumentRef) =>
+  jsonRequest<BlockTreeResponse>(documentRefUrl(ref, '/blocks'));
 
 // The rows-backed review projection: comments and suggestions with their
 // row anchors and states (open/resolved/orphaned/invalidated), plus diff3
 // conflict review items. Resolved items are included so the Comments panel
 // can show the document's full review record.
-export const getDocumentReview = (library: string, path: string) =>
-  jsonRequest<AgentReviewResponse>(
-    `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/review?includeResolved=1`
-  );
-
-export const getTmpDocumentReview = (secret: string) =>
-  jsonRequest<AgentReviewResponse>(`/v1/tmp/documents/${segment(secret)}/review?includeResolved=1`);
+export const getDocumentReview = (ref: DocumentRef) =>
+  jsonRequest<AgentReviewResponse>(documentRefUrl(ref, '/review?includeResolved=1'));
 
 // Submits one semantic block transaction. Non-2xx responses with the gateway's
 // typed `{code, retryable, message}` body throw BlockTransactionError; other
 // failures fall back to the generic ApiError mapping.
 export async function postBlockTransaction(
-  library: string,
-  path: string,
+  ref: DocumentRef,
   request: BlockTransactionRequest
 ): Promise<BlockTransactionAck> {
-  const response = await fetch(
-    `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}/transactions`,
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(request),
-    }
-  );
-  return readBlockTransactionResponse(response);
-}
-
-export async function postTmpBlockTransaction(
-  secret: string,
-  request: BlockTransactionRequest
-): Promise<BlockTransactionAck> {
-  const response = await fetch(`/v1/tmp/documents/${segment(secret)}/transactions`, {
+  const response = await fetch(documentRefUrl(ref, '/transactions'), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(request),
@@ -573,29 +480,11 @@ function gitPeerOperation(library: string, peer: string, operation: 'pull' | 'pu
 }
 
 async function writeDocument(
-  library: string,
-  path: string,
+  ref: DocumentRef,
   content: string,
   headers: Record<string, string>
 ): Promise<SavedDocument> {
-  const response = await fetch(documentHref(library, path), {
-    method: 'PUT',
-    headers,
-    body: content,
-  });
-  await assertOk(response);
-  return {
-    outcome: (await response.json()) as WriteOutcome,
-    etag: response.headers.get('etag') ?? '',
-  };
-}
-
-async function writeTmpDocument(
-  secret: string,
-  content: string,
-  headers: Record<string, string>
-): Promise<SavedDocument> {
-  const response = await fetch(tmpDocumentHref(secret), {
+  const response = await fetch(documentRefUrl(ref), {
     method: 'PUT',
     headers,
     body: content,
@@ -655,11 +544,11 @@ async function readErrorPayload(response: Response) {
 }
 
 export function documentHref(library: string, path: string) {
-  return `/v1/libraries/${segment(library)}/documents/${pathSegments(path)}`;
+  return documentRefUrl({ scope: 'library', library, path });
 }
 
 export function tmpDocumentHref(secret: string) {
-  return `/v1/tmp/documents/${segment(secret)}`;
+  return documentRefUrl({ scope: 'tmp', secret });
 }
 
 export function isTextContentType(contentType: string) {
@@ -685,10 +574,3 @@ export function isTextContentType(contentType: string) {
   );
 }
 
-function segment(value: string) {
-  return encodeURIComponent(value);
-}
-
-function pathSegments(path: string) {
-  return path.split('/').map(segment).join('/');
-}

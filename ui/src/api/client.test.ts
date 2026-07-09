@@ -7,27 +7,21 @@ import {
   createDocument,
   createTmpDocument,
   deleteDocument,
-  deleteTmpDocument,
+  documentVersion,
   getDocument,
   getDocumentBlocks,
-  getTmpDocumentBlocks,
-  getTmpDocumentReview,
-  getTmpDocument,
+  getDocumentReview,
   isTextContentType,
   moveDocument,
   listAgentPresence,
-  listTmpAgentPresence,
   postBlockTransaction,
-  postTmpBlockTransaction,
   putDocument,
-  putTmpDocument,
   restoreVersion,
   setDocumentTtl,
   promoteTmpDocument,
-  setTmpDocumentTtl,
-  tmpDocumentVersion,
-  tmpVersions,
+  versions,
 } from './client';
+import { libraryDocumentRef, tmpDocumentRef } from './document-ref';
 
 describe('Quarry API client', () => {
   afterEach(() => {
@@ -48,7 +42,7 @@ describe('Quarry API client', () => {
       )
     );
 
-    await expect(getDocument('notes', 'a.md')).resolves.toMatchObject({
+    await expect(getDocument(libraryDocumentRef('notes', 'a.md'))).resolves.toMatchObject({
       content: 'body',
       documentId: 'doc-1',
       etag: '"v1"',
@@ -65,7 +59,7 @@ describe('Quarry API client', () => {
     );
     vi.stubGlobal('fetch', fetch);
 
-    await putDocument('notes', 'a.md', 'next', '"v1"', 'text/markdown');
+    await putDocument(libraryDocumentRef('notes', 'a.md'), 'next', '"v1"', 'text/markdown');
 
     expect(fetch).toHaveBeenCalledWith(
       '/v1/libraries/notes/documents/a.md',
@@ -84,7 +78,7 @@ describe('Quarry API client', () => {
     );
     vi.stubGlobal('fetch', fetch);
 
-    await putDocument('notes', 'a.md', 'next', '"v1"', 'text/markdown', {
+    await putDocument(libraryDocumentRef('notes', 'a.md'), 'next', '"v1"', 'text/markdown', {
       originId: 'browser:session-1',
     });
 
@@ -104,7 +98,7 @@ describe('Quarry API client', () => {
     );
     vi.stubGlobal('fetch', fetch);
 
-    await putDocument('notes', 'a.md', 'next', '"v1"', 'text/markdown', {
+    await putDocument(libraryDocumentRef('notes', 'a.md'), 'next', '"v1"', 'text/markdown', {
       transactionActor: 'José Avery',
     });
 
@@ -126,7 +120,7 @@ describe('Quarry API client', () => {
     );
     vi.stubGlobal('fetch', fetch);
 
-    await putDocument('notes', 'a.md', 'next', '"v1"', 'text/markdown', {
+    await putDocument(libraryDocumentRef('notes', 'a.md'), 'next', '"v1"', 'text/markdown', {
       originId: 'browser:session-1',
     });
 
@@ -143,7 +137,7 @@ describe('Quarry API client', () => {
     );
     vi.stubGlobal('fetch', fetch);
 
-    await putDocument('notes', 'a.md', 'next', '"v1"', 'text/markdown', {
+    await putDocument(libraryDocumentRef('notes', 'a.md'), 'next', '"v1"', 'text/markdown', {
       transactionActor: 'browser',
       transactionMessage: 'Autosaved edits',
       transactionProvenance: {
@@ -218,7 +212,7 @@ describe('Quarry API client', () => {
     );
     vi.stubGlobal('fetch', fetch);
 
-    await expect(listAgentPresence('notes', 'folder/live.md')).resolves.toMatchObject({
+    await expect(listAgentPresence(libraryDocumentRef('notes', 'folder/live.md'))).resolves.toMatchObject({
       presence: [{ agentId: 'ai:codex:abc', status: 'waiting' }],
     });
 
@@ -291,14 +285,14 @@ describe('Quarry API client', () => {
     vi.stubGlobal('fetch', fetch);
     const secret = '72cb58585aa73e35758bc1141f79e32e';
 
-    await expect(getTmpDocument(secret)).resolves.toMatchObject({
+    await expect(getDocument(tmpDocumentRef(secret))).resolves.toMatchObject({
       content: 'tmp body',
       documentId: 'tmp-1',
       etag: '"v1"',
       expiresAt: '2099-01-01T00:00:00Z',
       path: secret,
     });
-    await putTmpDocument(secret, 'next', '"v1"');
+    await putDocument(tmpDocumentRef(secret), 'next', '"v1"');
 
     expect(fetch).toHaveBeenNthCalledWith(
       1,
@@ -324,15 +318,15 @@ describe('Quarry API client', () => {
     vi.stubGlobal('fetch', fetch);
     const secret = '72cb58585aa73e35758bc1141f79e32e';
 
-    await tmpVersions(secret);
-    await tmpDocumentVersion(secret, 'v1');
-    await setTmpDocumentTtl(secret, '2099-01-01T00:00:00Z');
+    await versions(tmpDocumentRef(secret));
+    await documentVersion(tmpDocumentRef(secret), 'v1');
+    await setDocumentTtl(tmpDocumentRef(secret), '2099-01-01T00:00:00Z');
     await promoteTmpDocument(secret, {
       library: 'notes',
       path: 'promoted/note.txt',
       ifMatch: 'v2',
     });
-    await deleteTmpDocument(secret);
+    await deleteDocument(tmpDocumentRef(secret));
 
     expect(fetch).toHaveBeenNthCalledWith(
       1,
@@ -406,22 +400,22 @@ describe('Quarry API client', () => {
     vi.stubGlobal('fetch', fetch);
     const secret = '72cb58585aa73e35758bc1141f79e32e';
 
-    const tmpPresence = await listTmpAgentPresence(secret);
+    const tmpPresence = await listAgentPresence(tmpDocumentRef(secret));
     expect(tmpPresence.presence[0]).toMatchObject({
       documentId: 'tmp-1',
       agentId: 'agent-tmp',
       status: 'waiting',
     });
     expect(tmpPresence.presence[0]).not.toHaveProperty('path');
-    await getTmpDocumentBlocks(secret);
-    await getTmpDocumentReview(secret);
+    await getDocumentBlocks(tmpDocumentRef(secret));
+    await getDocumentReview(tmpDocumentRef(secret));
     const transaction: BlockTransactionRequest = {
       client_tx_id: 'tmp-tx-1',
       base_clock: 'tmp-v1',
       actor: { kind: 'browser', id: 'browser:1' },
       ops: [{ op: 'replace_block_content', block_id: 'b1', text: 'Updated' }],
     };
-    await postTmpBlockTransaction(secret, transaction);
+    await postBlockTransaction(tmpDocumentRef(secret), transaction);
 
     expect(fetch).toHaveBeenNthCalledWith(
       1,
@@ -457,8 +451,8 @@ describe('Quarry API client', () => {
     );
     vi.stubGlobal('fetch', fetch);
 
-    await setDocumentTtl('notes', 'folder/live.md', '2099-01-01T00:00:00Z');
-    await setDocumentTtl('notes', 'folder/live.md', null);
+    await setDocumentTtl(libraryDocumentRef('notes', 'folder/live.md'), '2099-01-01T00:00:00Z');
+    await setDocumentTtl(libraryDocumentRef('notes', 'folder/live.md'), null);
 
     expect(fetch).toHaveBeenNthCalledWith(
       1,
@@ -505,7 +499,7 @@ describe('Quarry API client', () => {
     }));
     vi.stubGlobal('fetch', fetch);
 
-    await deleteDocument('notes', 'old.md', { originId: 'browser:session-1' });
+    await deleteDocument(libraryDocumentRef('notes', 'old.md'), { originId: 'browser:session-1' });
 
     expect(fetch).toHaveBeenCalledWith(
       '/v1/libraries/notes/documents/old.md',
@@ -563,7 +557,7 @@ describe('Quarry API client', () => {
       )
     );
 
-    await expect(putDocument('notes', 'a.md', 'next', '"old"')).rejects.toBeInstanceOf(
+    await expect(putDocument(libraryDocumentRef('notes', 'a.md'), 'next', '"old"')).rejects.toBeInstanceOf(
       ApiPreconditionError
     );
   });
@@ -596,7 +590,7 @@ describe('Quarry API client', () => {
     );
     vi.stubGlobal('fetch', fetch);
 
-    await expect(getDocumentBlocks('notes', 'folder/doc.md')).resolves.toMatchObject({
+    await expect(getDocumentBlocks(libraryDocumentRef('notes', 'folder/doc.md'))).resolves.toMatchObject({
       document_clock: 'v2',
       blocks: [{ block_id: 'b1', text: 'Hello' }],
     });
@@ -627,7 +621,7 @@ describe('Quarry API client', () => {
       actor: { kind: 'agent', id: 'agent-1' },
       ops: [{ op: 'replace_block_content', block_id: 'b1', text: 'Updated' }],
     };
-    await expect(postBlockTransaction('notes', 'doc.md', request)).resolves.toMatchObject({
+    await expect(postBlockTransaction(libraryDocumentRef('notes', 'doc.md'), request)).resolves.toMatchObject({
       status: 'committed',
       document_clock: 'v3',
       changed_block_ids: ['b1'],
@@ -658,7 +652,7 @@ describe('Quarry API client', () => {
       )
     );
 
-    const failure = await postBlockTransaction('notes', 'doc.md', {
+    const failure = await postBlockTransaction(libraryDocumentRef('notes', 'doc.md'), {
       client_tx_id: 'tx-1',
       actor: { kind: 'agent' },
       ops: [{ op: 'delete_block', block_id: 'b1' }],
@@ -687,7 +681,7 @@ describe('Quarry API client', () => {
       )
     );
 
-    const failure = await postBlockTransaction('notes', 'doc.md', {
+    const failure = await postBlockTransaction(libraryDocumentRef('notes', 'doc.md'), {
       client_tx_id: 'tx-1',
       actor: { kind: 'agent' },
       ops: [{ op: 'delete_block', block_id: 'b1' }],
