@@ -1,4 +1,4 @@
-use crate::{ApiError, AppState, ErrorResponse};
+use crate::{ApiError, ApiErrorResponse, AppState};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -15,7 +15,7 @@ pub(crate) struct CreateLibraryRequest {
     post,
     path = "/v1/libraries",
     request_body = CreateLibraryRequest,
-    responses((status = 201, body = Library), (status = 409, body = ErrorResponse))
+    responses((status = 201, body = Library), (status = 409, body = ApiErrorResponse))
 )]
 pub(crate) async fn create_library(
     State(state): State<AppState>,
@@ -38,7 +38,7 @@ pub(crate) async fn list_libraries(
     get,
     path = "/v1/libraries/{library}",
     params(("library" = String, Path)),
-    responses((status = 200, body = Library), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = Library), (status = 404, body = ApiErrorResponse))
 )]
 pub(crate) async fn get_library(
     State(state): State<AppState>,

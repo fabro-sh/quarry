@@ -1,7 +1,8 @@
 import type {
   AgentReviewResponse,
+  ApiErrorCode,
+  ApiErrorResponse,
   BlockTransactionAck,
-  BlockTransactionErrorCode,
   BlockTransactionRequest,
   BlockTreeResponse,
   ConflictRecord,
@@ -107,35 +108,12 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
+    public readonly code: ApiErrorCode,
+    public readonly retryable: boolean,
     public readonly payload: unknown = null
   ) {
     super(message);
     this.name = 'ApiError';
-  }
-}
-
-export class ApiPreconditionError extends ApiError {
-  constructor(message: string, payload: unknown = null) {
-    super(message, 412, payload);
-    this.name = 'ApiPreconditionError';
-  }
-}
-
-/**
- * A typed `{code, retryable, message}` failure from the block transaction
- * gateway. `retryable: true` means "refetch blocks and resubmit with a fresh
- * clock"; `retryable: false` means the ops as stated can never succeed.
- */
-export class BlockTransactionError extends ApiError {
-  constructor(
-    message: string,
-    status: number,
-    public readonly code: BlockTransactionErrorCode,
-    public readonly retryable: boolean,
-    payload: unknown = null
-  ) {
-    super(message, status, payload);
-    this.name = 'BlockTransactionError';
   }
 }
 
@@ -228,7 +206,7 @@ export function createDocument(
 
 // Create a binary document (e.g. a dropped image) from raw bytes. Uses
 // If-None-Match:* so an identical asset already at the path stays put — callers
-// treat the resulting 412 (ApiPreconditionError) as success.
+// treat the resulting PRECONDITION_FAILED response as success.
 export async function putBinaryDocument(
   library: string,
   path: string,
@@ -388,9 +366,7 @@ export const getDocumentBlocks = (ref: DocumentRef) =>
 export const getDocumentReview = (ref: DocumentRef) =>
   jsonRequest<AgentReviewResponse>(documentRefUrl(ref, '/review?includeResolved=1'));
 
-// Submits one semantic block transaction. Non-2xx responses with the gateway's
-// typed `{code, retryable, message}` body throw BlockTransactionError; other
-// failures fall back to the generic ApiError mapping.
+// Submits one semantic block transaction using the common `/v1` error contract.
 export async function postBlockTransaction(
   ref: DocumentRef,
   request: BlockTransactionRequest
@@ -400,31 +376,11 @@ export async function postBlockTransaction(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(request),
   });
-  return readBlockTransactionResponse(response);
+  await assertOk(response);
+  return (await response.json()) as BlockTransactionAck;
 }
 
-async function readBlockTransactionResponse(response: Response): Promise<BlockTransactionAck> {
-  if (response.ok) return (await response.json()) as BlockTransactionAck;
-  const payload = await readErrorPayload(response);
-  if (isBlockTransactionFailure(payload)) {
-    throw new BlockTransactionError(
-      payload.message,
-      response.status,
-      payload.code,
-      payload.retryable,
-      payload
-    );
-  }
-  const message =
-    payload && typeof payload === 'object' && 'error' in payload
-      ? String(payload.error)
-      : response.statusText;
-  throw new ApiError(message, response.status, payload);
-}
-
-function isBlockTransactionFailure(
-  payload: unknown
-): payload is { code: BlockTransactionErrorCode; retryable: boolean; message: string } {
+function isApiErrorResponse(payload: unknown): payload is ApiErrorResponse {
   return (
     typeof payload === 'object' &&
     payload !== null &&
@@ -522,14 +478,10 @@ async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
 async function assertOk(response: Response) {
   if (response.ok) return;
   const payload = await readErrorPayload(response);
-  const message =
-    payload && typeof payload === 'object' && 'error' in payload
-      ? String((payload as { error: unknown }).error)
-      : response.statusText;
-  if (response.status === 412) {
-    throw new ApiPreconditionError(message, payload);
+  if (isApiErrorResponse(payload)) {
+    throw new ApiError(payload.message, response.status, payload.code, payload.retryable, payload);
   }
-  throw new ApiError(message, response.status, payload);
+  throw new ApiError(response.statusText, response.status, 'INTERNAL_ERROR', false, payload);
 }
 
 async function readErrorPayload(response: Response) {
@@ -572,4 +524,3 @@ export function isTextContentType(contentType: string) {
     normalized.endsWith('+yaml')
   );
 }
-

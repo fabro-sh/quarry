@@ -1,4 +1,4 @@
-use crate::{ALLOW_DOCUMENT_KIND_CHANGE_HEADER, ApiError};
+use crate::{ALLOW_DOCUMENT_KIND_CHANGE_HEADER, ApiError, ApiErrorCode};
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Response;
@@ -18,14 +18,16 @@ pub(crate) fn content_type(headers: &HeaderMap) -> String {
 
 pub(crate) fn require_tmp_markdown_content_type(headers: &HeaderMap) -> Result<String, ApiError> {
     let Some(value) = headers.get(header::CONTENT_TYPE) else {
-        return Err(ApiError {
-            status: StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            message: "tmp writes require Content-Type: text/markdown".to_string(),
-        });
+        return Err(ApiError::new(
+            ApiErrorCode::UnsupportedMediaType,
+            "tmp writes require Content-Type: text/markdown",
+        ));
     };
-    let content_type = value.to_str().map_err(|_| ApiError {
-        status: StatusCode::UNSUPPORTED_MEDIA_TYPE,
-        message: "tmp writes require Content-Type: text/markdown".to_string(),
+    let content_type = value.to_str().map_err(|_| {
+        ApiError::new(
+            ApiErrorCode::UnsupportedMediaType,
+            "tmp writes require Content-Type: text/markdown",
+        )
     })?;
     Ok(quarry_storage::normalize_tmp_markdown_content_type(content_type)?.to_string())
 }
@@ -129,7 +131,7 @@ pub(crate) fn precondition_from_headers(
     if let Some(value) = headers.get(header::IF_MATCH) {
         let value = value
             .to_str()
-            .map_err(|_| QuarryError::PreconditionFailed("invalid If-Match".to_string()))?
+            .map_err(|_| ApiError::new(ApiErrorCode::InvalidRequest, "invalid If-Match"))?
             .trim()
             .trim_matches('"')
             .to_string();

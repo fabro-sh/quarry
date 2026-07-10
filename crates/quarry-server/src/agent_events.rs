@@ -1,5 +1,5 @@
 use crate::sse::{StoreEventPayloadMode, store_event_payload, store_event_type};
-use crate::{ApiError, AppState, ErrorResponse, agent_id_from_headers_or_body};
+use crate::{ApiError, ApiErrorResponse, AppState, agent_id_from_headers_or_body};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
@@ -48,7 +48,7 @@ pub(crate) struct AgentEventsAckResponse {
     get,
     path = "/v1/libraries/{library}/events/pending",
     params(("library" = String, Path), ("after" = Option<u64>, Query), ("limit" = Option<usize>, Query)),
-    responses((status = 200, body = AgentPendingEventsResponse), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = AgentPendingEventsResponse), (status = 404, body = ApiErrorResponse))
 )]
 pub(crate) async fn agent_events_pending(
     State(state): State<AppState>,
@@ -92,7 +92,7 @@ pub(crate) async fn agent_events_pending(
     path = "/v1/libraries/{library}/events/ack",
     params(("library" = String, Path)),
     request_body = AgentEventsAckRequest,
-    responses((status = 200, body = AgentEventsAckResponse), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = AgentEventsAckResponse), (status = 404, body = ApiErrorResponse))
 )]
 pub(crate) async fn agent_events_ack(
     State(state): State<AppState>,

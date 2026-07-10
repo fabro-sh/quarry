@@ -432,7 +432,7 @@ async fn tmp_put_requires_markdown_content_type() -> anyhow::Result<()> {
     let body = response_json(response).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert_eq!(
-        body["error"],
+        body["message"],
         "tmp writes require Content-Type: text/markdown"
     );
 
@@ -453,7 +453,7 @@ async fn tmp_put_requires_markdown_content_type() -> anyhow::Result<()> {
     let body = response_json(response).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert_eq!(
-        body["error"],
+        body["message"],
         "unsupported media type: tmp documents are Markdown-only; unsupported content type application/x-www-form-urlencoded"
     );
 
@@ -474,7 +474,7 @@ async fn tmp_put_requires_markdown_content_type() -> anyhow::Result<()> {
     let body = response_json(response).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert_eq!(
-        body["error"],
+        body["message"],
         "unsupported media type: tmp documents are Markdown-only; unsupported content type application/json"
     );
 
@@ -745,7 +745,7 @@ async fn tmp_markdown_put_rejects_non_markdown_content_type() -> anyhow::Result<
     let body = response_json(response).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert_eq!(
-        body["error"],
+        body["message"],
         "unsupported media type: tmp documents are Markdown-only; unsupported content type text/plain"
     );
 
@@ -787,7 +787,7 @@ async fn tmp_markdown_put_rejects_non_markdown_content_type() -> anyhow::Result<
     let body = response_json(response).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert_eq!(
-        body["error"],
+        body["message"],
         "unsupported media type: tmp documents are Markdown-only; unsupported content type text/plain"
     );
     let document = store
@@ -823,7 +823,7 @@ async fn tmp_create_rejects_non_markdown_content_type() -> anyhow::Result<()> {
     let body = response_json(response).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert_eq!(
-        body["error"],
+        body["message"],
         "unsupported media type: tmp documents are Markdown-only; unsupported content type text/plain"
     );
     Ok(())

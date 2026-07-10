@@ -1392,9 +1392,20 @@ transaction: quarry_storage::TransactionMetadata::default(),
             .is_object()
     );
     assert!(
-        openapi["components"]["schemas"]["BlockTransactionError"]["properties"]["retryable"]
-            .is_object()
+        openapi["components"]["schemas"]["ApiErrorResponse"]["properties"]["retryable"].is_object()
     );
+    assert_schema_enum_contains(
+        &openapi,
+        &openapi["components"]["schemas"]["ApiErrorCode"],
+        &[
+            "INVALID_REQUEST",
+            "STALE_BASE",
+            "SERVICE_BUSY",
+            "INTERNAL_ERROR",
+        ],
+    );
+    assert!(openapi["components"]["schemas"]["ErrorResponse"].is_null());
+    assert!(openapi["components"]["schemas"]["BlockTransactionError"].is_null());
     assert!(
         openapi["components"]["schemas"]["AgentReviewResponse"]["properties"]["suggestions"]
             .is_object()

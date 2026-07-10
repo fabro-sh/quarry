@@ -1,8 +1,6 @@
 import type { BlockTransactionRequest } from './generated/types';
 import {
   ApiError,
-  ApiPreconditionError,
-  BlockTransactionError,
   createCollabInvite,
   createDocument,
   createTmpDocument,
@@ -552,16 +550,25 @@ describe('Quarry API client', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
-        new Response(JSON.stringify({ error: 'head changed' }), {
+        new Response(JSON.stringify({
+          code: 'PRECONDITION_FAILED',
+          retryable: true,
+          message: 'head changed',
+        }), {
           status: 412,
           headers: { 'content-type': 'application/json' },
         })
       )
     );
 
-    await expect(putDocument(libraryDocumentRef('notes', 'a.md'), 'next', '"old"')).rejects.toBeInstanceOf(
-      ApiPreconditionError
+    const failure = await putDocument(libraryDocumentRef('notes', 'a.md'), 'next', '"old"').catch(
+      (error: unknown) => error
     );
+    expect(failure).toBeInstanceOf(ApiError);
+    if (failure instanceof ApiError) {
+      expect(failure.code).toBe('PRECONDITION_FAILED');
+      expect(failure.retryable).toBe(true);
+    }
   });
 
   it('does not classify XML-based image formats as editable text', () => {
@@ -664,19 +671,23 @@ describe('Quarry API client', () => {
       },
       (error: unknown) => error
     );
-    expect(failure).toBeInstanceOf(BlockTransactionError);
-    if (failure instanceof BlockTransactionError) {
+    expect(failure).toBeInstanceOf(ApiError);
+    if (failure instanceof ApiError) {
       expect(failure.code).toBe('STALE_BASE');
       expect(failure.retryable).toBe(true);
       expect(failure.status).toBe(412);
     }
   });
 
-  it('falls back to the generic error mapping for untyped transaction failures', async () => {
+  it('uses the common error mapping for non-semantic transaction failures', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
-        new Response(JSON.stringify({ error: 'not found: doc.md' }), {
+        new Response(JSON.stringify({
+          code: 'NOT_FOUND',
+          retryable: false,
+          message: 'not found: doc.md',
+        }), {
           status: 404,
           headers: { 'content-type': 'application/json' },
         })
@@ -694,10 +705,11 @@ describe('Quarry API client', () => {
       (error: unknown) => error
     );
     expect(failure).toBeInstanceOf(ApiError);
-    expect(failure).not.toBeInstanceOf(BlockTransactionError);
     if (failure instanceof ApiError) {
       expect(failure.message).toBe('not found: doc.md');
       expect(failure.status).toBe(404);
+      expect(failure.code).toBe('NOT_FOUND');
+      expect(failure.retryable).toBe(false);
     }
   });
 });

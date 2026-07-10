@@ -4,7 +4,7 @@ use crate::presence::PresenceStreamGuard;
 use crate::review::{DocumentReviewQuery, agent_tmp_document_review};
 use crate::sse::events_for_tmp_document;
 use crate::{
-    AgentPresenceRequest, ApiError, AppState, ErrorResponse, PromoteTmpDocumentRequest,
+    AgentPresenceRequest, ApiError, ApiErrorResponse, AppState, PromoteTmpDocumentRequest,
     QuarryError, TmpAgentPresenceListResponse, TmpAgentPresenceResponse, TmpDocumentSubResource,
     TtlRequest, TtlResponse, agent_presence_tmp_document, bytes_response_with_expiry, gateway,
     insert_document_headers, json_response, json_with_etag, markdown_write, optional_header,
@@ -50,8 +50,8 @@ pub(crate) struct TmpDocumentGetQuery {
     ),
     responses(
         (status = 201, body = WriteOutcome),
-        (status = 413, description = "Tmp Markdown content exceeds 1 MiB", body = ErrorResponse),
-        (status = 415, description = "Tmp documents are Markdown-only", body = ErrorResponse)
+        (status = 413, description = "Tmp Markdown content exceeds 1 MiB", body = ApiErrorResponse),
+        (status = 415, description = "Tmp documents are Markdown-only", body = ApiErrorResponse)
     )
 )]
 pub(crate) async fn create_tmp_document(
@@ -128,7 +128,7 @@ pub(crate) async fn tmp_document_version_openapi() {}
     path = "/v1/tmp/documents/{secret}/ttl",
     params(("secret" = String, Path)),
     request_body = TtlRequest,
-    responses((status = 200, body = TtlResponse), (status = 400, body = ErrorResponse))
+    responses((status = 200, body = TtlResponse), (status = 400, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -141,7 +141,7 @@ pub(crate) async fn tmp_document_ttl_openapi() {}
     path = "/v1/tmp/documents/{secret}/promote",
     params(("secret" = String, Path)),
     request_body = PromoteTmpDocumentRequest,
-    responses((status = 200, body = DocumentListEntry), (status = 409, body = ErrorResponse))
+    responses((status = 200, body = DocumentListEntry), (status = 409, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -155,7 +155,7 @@ pub(crate) async fn tmp_document_promote_openapi() {}
     params(("secret" = String, Path)),
     responses(
         (status = 200, description = "Ready-to-paste AI agent connect instructions", body = String),
-        (status = 404, body = ErrorResponse)
+        (status = 404, body = ApiErrorResponse)
     )
 )]
 #[expect(
@@ -170,8 +170,8 @@ pub(crate) async fn tmp_document_agent_prompt_openapi() {}
     params(("secret" = String, Path)),
     responses(
         (status = 200, body = gateway::BlockTreeResponse),
-        (status = 404, body = ErrorResponse),
-        (status = 422, body = gateway::BlockTransactionError)
+        (status = 404, body = ApiErrorResponse),
+        (status = 422, body = ApiErrorResponse)
     )
 )]
 #[expect(
@@ -187,11 +187,11 @@ pub(crate) async fn tmp_document_blocks_openapi() {}
     request_body = gateway::BlockTransactionRequest,
     responses(
         (status = 200, body = gateway::BlockTransactionAck),
-        (status = 400, body = gateway::BlockTransactionError),
-        (status = 404, body = gateway::BlockTransactionError),
-        (status = 412, body = gateway::BlockTransactionError),
-        (status = 413, body = gateway::BlockTransactionError),
-        (status = 422, body = gateway::BlockTransactionError)
+        (status = 400, body = ApiErrorResponse),
+        (status = 404, body = ApiErrorResponse),
+        (status = 412, body = ApiErrorResponse),
+        (status = 413, body = ApiErrorResponse),
+        (status = 422, body = ApiErrorResponse)
     )
 )]
 #[expect(
@@ -204,7 +204,7 @@ pub(crate) async fn tmp_document_block_transactions_openapi() {}
     get,
     path = "/v1/tmp/documents/{secret}/events/stream",
     params(("secret" = String, Path)),
-    responses((status = 200, description = "Tmp document-scoped server-sent event stream"), (status = 404, body = ErrorResponse))
+    responses((status = 200, description = "Tmp document-scoped server-sent event stream"), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -216,7 +216,7 @@ pub(crate) async fn tmp_document_events_stream_openapi() {}
     get,
     path = "/v1/tmp/documents/{secret}/versions/{version}/diff",
     params(("secret" = String, Path), ("version" = String, Path), ("against" = Option<String>, Query)),
-    responses((status = 200, body = VersionDiff), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = VersionDiff), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -228,7 +228,7 @@ pub(crate) async fn tmp_document_version_diff_openapi() {}
     post,
     path = "/v1/tmp/documents/{secret}/versions/{version}/restore",
     params(("secret" = String, Path), ("version" = String, Path)),
-    responses((status = 200, body = WriteOutcome), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = WriteOutcome), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -240,7 +240,7 @@ pub(crate) async fn tmp_document_version_restore_openapi() {}
     get,
     path = "/v1/tmp/documents/{secret}/presence",
     params(("secret" = String, Path)),
-    responses((status = 200, body = TmpAgentPresenceListResponse), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = TmpAgentPresenceListResponse), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -253,7 +253,7 @@ pub(crate) async fn tmp_agent_presence_list_openapi() {}
     path = "/v1/tmp/documents/{secret}/presence",
     params(("secret" = String, Path)),
     request_body = AgentPresenceRequest,
-    responses((status = 200, body = TmpAgentPresenceResponse), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = TmpAgentPresenceResponse), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -265,7 +265,7 @@ pub(crate) async fn tmp_agent_presence_openapi() {}
     get,
     path = "/v1/tmp/documents/{secret}",
     params(("secret" = String, Path)),
-    responses((status = 200, body = String), (status = 410, body = ErrorResponse))
+    responses((status = 200, body = String), (status = 410, body = ApiErrorResponse))
 )]
 pub(crate) async fn get_tmp_document(
     State(state): State<AppState>,
@@ -390,7 +390,7 @@ pub(crate) async fn get_tmp_document(
     head,
     path = "/v1/tmp/documents/{secret}",
     params(("secret" = String, Path)),
-    responses((status = 200), (status = 410, body = ErrorResponse))
+    responses((status = 200), (status = 410, body = ApiErrorResponse))
 )]
 pub(crate) async fn head_tmp_document(
     State(state): State<AppState>,
@@ -433,9 +433,9 @@ pub(crate) async fn head_tmp_document(
     ),
     responses(
         (status = 200, body = markdown_write::PutDocumentOutcome),
-        (status = 412, body = ErrorResponse),
-        (status = 413, description = "Tmp Markdown body exceeds 1 MiB", body = ErrorResponse),
-        (status = 415, description = "Tmp writes require a Markdown Content-Type", body = ErrorResponse)
+        (status = 412, body = ApiErrorResponse),
+        (status = 413, description = "Tmp Markdown body exceeds 1 MiB", body = ApiErrorResponse),
+        (status = 415, description = "Tmp writes require a Markdown Content-Type", body = ApiErrorResponse)
     )
 )]
 pub(crate) async fn put_tmp_document(

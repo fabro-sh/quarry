@@ -108,9 +108,8 @@ I can edit directly, or leave comments and suggestions for you to review. What w
 5. Before each write, use `block_id`s and the `document_clock` from the latest
    `/blocks` read.
 6. After any event, re-read both `/blocks` and `/review` because review-only
-   changes do not put comment or suggestion bodies in the block tree. After a
-   retryable error, re-read `/blocks` and rebuild the request with a fresh
-   `base_clock` and a NEW `client_tx_id`.
+   changes do not put comment or suggestion bodies in the block tree. For an
+   error, follow the code-specific recovery under Error Handling.
 
 ## Presence
 
@@ -328,14 +327,17 @@ event stream open, periodically re-read both `$DOC/blocks` and `$DOC/review`.
 
 ## Error Handling
 
-Failures are typed `{code, retryable, message}`. `retryable: true` = re-read
-`/blocks`, rebuild with a fresh `base_clock` and NEW `client_tx_id`, retry
-once. `retryable: false` = the ops as stated can never succeed; rebuild.
+Every `/v1` HTTP failure is `{code, retryable, message}`. `retryable: true`
+means the code-specific recovery may succeed; it does not mean blindly replay
+the same request. Retry at most once. `retryable: false` means no automatic
+retry is safe; fix, rebuild, or report the request.
 
 | Error | Action |
 |---|---|
 | `STALE_BASE` (412) | Re-read `/blocks`, resubmit with the fresh `document_clock` |
 | `BLOCK_MOVE_CONFLICT` (412) | A concurrent structural change won; re-read and retry once |
+| `PRECONDITION_FAILED` (412) | Re-read current state, rebuild with the current precondition, retry once |
+| `SERVICE_BUSY` (503) | Honor `Retry-After`; replay the unchanged idempotent request, preserving `client_tx_id` |
 | `BLOCK_DELETED` (404) | The `block_id` is gone; re-read `/blocks` and rebuild |
 | `ANCHOR_NOT_FOUND` (404) | The review `item_id`/anchor does not exist; re-read `/review` |
 | `SUGGESTION_INVALIDATED` (422) | Accept impossible; `suggestion.reject` dismisses it |
@@ -345,9 +347,14 @@ once. `retryable: false` = the ops as stated can never succeed; rebuild.
 | `PAYLOAD_TOO_LARGE` (413) | Tmp Markdown content exceeds 1 MiB; shorten it |
 | `INVALID_TRANSACTION` (400) | Malformed envelope/op; fix the request |
 | `UNKNOWN_BLOCK_TYPE` (400) | `block_type` outside the vocabulary; the message lists valid types |
+| `INVALID_REQUEST` / `METHOD_NOT_ALLOWED` (400/405) | Fix the HTTP request |
+| `NOT_FOUND` / `GONE` (404/410) | Check the locator or document lifecycle |
+| `CONFLICT` (409) | Re-read state and reconsider the requested operation |
+| `UNSUPPORTED_MEDIA_TYPE` / `UNPROCESSABLE_ENTITY` (415/422) | Fix the content type or body |
+| `INTERNAL_ERROR` (500) | Stop and report; do not blindly retry a write |
 
-If a retryable write still fails after one fresh read, stop and report the raw
-error instead of guessing.
+If a retryable write still fails after its one code-specific recovery, stop
+and report the raw error instead of guessing.
 
 ## When Quarry Looks Wrong
 

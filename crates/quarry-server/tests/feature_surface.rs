@@ -349,7 +349,9 @@ async fn tmp_not_found_error_body_redacts_the_secret() -> anyhow::Result<()> {
         .context("send tmp read request for missing secret")?;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let body: Value = response_json(response).await;
-    let error = body["error"]
+    assert_eq!(body["code"], "NOT_FOUND");
+    assert_eq!(body["retryable"], false);
+    let error = body["message"]
         .as_str()
         .context("error body should carry a string message")?;
     assert!(

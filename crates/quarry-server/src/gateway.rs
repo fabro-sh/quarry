@@ -153,8 +153,8 @@
 
 use crate::{
     AgentBlockRef, AgentReviewComment, AgentReviewReply, AgentReviewResponse,
-    AgentReviewSuggestion, AgentSuggestionKind, AgentSuggestionPreview, ApiError, AppState,
-    json_response, json_with_etag,
+    AgentReviewSuggestion, AgentSuggestionKind, AgentSuggestionPreview, ApiError, ApiErrorCode,
+    AppState, json_with_etag,
 };
 use axum::http::StatusCode;
 use axum::response::Response;
@@ -203,55 +203,7 @@ pub(crate) const PUBLIC_TRANSACTION_OPERATIONS: [&str; 17] = [
 // Typed errors
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum GatewayErrorCode {
-    StaleBase,
-    BlockDeleted,
-    AnchorNotFound,
-    BlockMoveConflict,
-    SuggestionInvalidated,
-    SuggestionAlreadyResolved,
-    UnsupportedMarkdown,
-    InvalidTransaction,
-    UnknownBlockType,
-    UnsupportedBlockDocument,
-    PayloadTooLarge,
-}
-
-impl GatewayErrorCode {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::StaleBase => "STALE_BASE",
-            Self::BlockDeleted => "BLOCK_DELETED",
-            Self::AnchorNotFound => "ANCHOR_NOT_FOUND",
-            Self::BlockMoveConflict => "BLOCK_MOVE_CONFLICT",
-            Self::SuggestionInvalidated => "SUGGESTION_INVALIDATED",
-            Self::SuggestionAlreadyResolved => "SUGGESTION_ALREADY_RESOLVED",
-            Self::UnsupportedMarkdown => "UNSUPPORTED_MARKDOWN",
-            Self::InvalidTransaction => "INVALID_TRANSACTION",
-            Self::UnknownBlockType => "UNKNOWN_BLOCK_TYPE",
-            Self::UnsupportedBlockDocument => "UNSUPPORTED_BLOCK_DOCUMENT",
-            Self::PayloadTooLarge => "PAYLOAD_TOO_LARGE",
-        }
-    }
-
-    fn retryable(self) -> bool {
-        matches!(self, Self::StaleBase | Self::BlockMoveConflict)
-    }
-
-    fn status(self) -> StatusCode {
-        match self {
-            Self::StaleBase | Self::BlockMoveConflict => StatusCode::PRECONDITION_FAILED,
-            Self::BlockDeleted | Self::AnchorNotFound => StatusCode::NOT_FOUND,
-            Self::InvalidTransaction | Self::UnknownBlockType => StatusCode::BAD_REQUEST,
-            Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            Self::SuggestionInvalidated
-            | Self::SuggestionAlreadyResolved
-            | Self::UnsupportedMarkdown
-            | Self::UnsupportedBlockDocument => StatusCode::UNPROCESSABLE_ENTITY,
-        }
-    }
-}
+pub(crate) type GatewayErrorCode = ApiErrorCode;
 
 #[derive(Clone, Debug)]
 pub(crate) struct GatewayError {
@@ -286,23 +238,13 @@ impl GatewayError {
         )
     }
 
-    fn into_response(self) -> Response {
-        let status = self.code.status();
-        let payload = BlockTransactionError {
-            code: self.code.as_str().to_string(),
-            retryable: self.code.retryable(),
-            message: self.message,
-        };
-        json_response(status, &payload).unwrap_or_else(|error| {
-            // Serializing three plain fields cannot fail; keep the ApiError
-            // fallback rather than panicking in a response path.
-            axum::response::IntoResponse::into_response(error)
-        })
+    fn into_api_error(self) -> ApiError {
+        ApiError::new(self.code, self.message)
     }
 }
 
-/// A gateway call fails either with a typed `{code, retryable, message}`
-/// payload or with an ordinary [`ApiError`] (not found, busy, internal).
+/// Gateway operations retain semantic errors internally so retry paths can
+/// branch on codes before every failure projects to [`ApiError`].
 pub(crate) enum GatewayFailure {
     Typed(GatewayError),
     Api(ApiError),
@@ -341,7 +283,7 @@ pub(crate) fn gateway_reply(
 ) -> Result<Response, ApiError> {
     match result {
         Ok(response) => Ok(response),
-        Err(GatewayFailure::Typed(error)) => Ok(error.into_response()),
+        Err(GatewayFailure::Typed(error)) => Err(error.into_api_error()),
         Err(GatewayFailure::Api(error)) => Err(error),
     }
 }
@@ -349,14 +291,6 @@ pub(crate) fn gateway_reply(
 // ---------------------------------------------------------------------------
 // Wire payloads
 // ---------------------------------------------------------------------------
-
-/// Typed error payload returned by the gateway routes.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct BlockTransactionError {
-    pub code: String,
-    pub retryable: bool,
-    pub message: String,
-}
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]

@@ -368,7 +368,18 @@ export interface BlockTransactionAck {
   changed_block_ids: string[];
 }
 
-export type BlockTransactionErrorCode =
+export type ApiErrorCode =
+  | 'INVALID_REQUEST'
+  | 'NOT_FOUND'
+  | 'GONE'
+  | 'PRECONDITION_FAILED'
+  | 'CONFLICT'
+  | 'METHOD_NOT_ALLOWED'
+  | 'UNSUPPORTED_MEDIA_TYPE'
+  | 'PAYLOAD_TOO_LARGE'
+  | 'UNPROCESSABLE_ENTITY'
+  | 'SERVICE_BUSY'
+  | 'INTERNAL_ERROR'
   | 'STALE_BASE'
   | 'BLOCK_DELETED'
   | 'ANCHOR_NOT_FOUND'
@@ -378,11 +389,10 @@ export type BlockTransactionErrorCode =
   | 'UNSUPPORTED_MARKDOWN'
   | 'INVALID_TRANSACTION'
   | 'UNKNOWN_BLOCK_TYPE'
-  | 'UNSUPPORTED_BLOCK_DOCUMENT'
-  | 'PAYLOAD_TOO_LARGE';
+  | 'UNSUPPORTED_BLOCK_DOCUMENT';
 
-export interface BlockTransactionErrorPayload {
-  code: BlockTransactionErrorCode;
+export interface ApiErrorResponse {
+  code: ApiErrorCode;
   retryable: boolean;
   message: string;
 }

@@ -2562,7 +2562,11 @@ describe('Quarry Browser workspace', () => {
         ]);
       }
       if (url === '/v1/libraries/fail-lib/documents/fail.md' && init?.method === 'PUT') {
-        return new Response(JSON.stringify({ error: 'write failed' }), {
+        return new Response(JSON.stringify({
+          code: 'INTERNAL_ERROR',
+          retryable: false,
+          message: 'internal error',
+        }), {
           status: 500,
           headers: { 'content-type': 'application/json' },
         });
@@ -2598,7 +2602,7 @@ describe('Quarry Browser workspace', () => {
       markdownFile('# Replacement\n')
     );
 
-    await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringContaining('write failed')));
+    await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringContaining('internal error')));
     expect(editor).toHaveTextContent('Current');
   });
 

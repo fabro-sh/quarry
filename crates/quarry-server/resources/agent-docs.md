@@ -21,8 +21,8 @@ every mutation — edits, comments, suggestions — as one semantic transaction 
    share the same vocabulary and commit atomically). To author or restructure
    a whole document, `PUT` it as plain Markdown instead (see Whole-Document
    Markdown Writes).
-7. On a retryable error (`retryable: true`), re-read `/blocks` and resubmit
-   once with a fresh `base_clock` and a NEW `client_tx_id`.
+7. On an error, follow the code-specific recovery under Errors And Retry Rules;
+   retry at most once.
 
 ## I Just Received A Quarry Link
 
@@ -202,8 +202,9 @@ The ack:
 
 The ack means the change is durable in canonical storage. If browsers have the
 document open in a live session, the transaction is applied into that session
-as another collaborator and checkpointed before the ack — you never need to
-wait, retry, or coordinate with live editors.
+as another collaborator and checkpointed before the ack. After a successful
+ack, no additional wait or retry is needed for live delivery; failures before
+the ack still use the recovery rules below.
 
 ### Edit Operations
 
@@ -487,15 +488,17 @@ those document calls also keep presence fresh.
 
 ## Errors And Retry Rules
 
-Failures return a typed payload: `{code, retryable, message}`.
-`retryable: true` means "re-read `/blocks` and resubmit with a fresh
-`base_clock` and a new `client_tx_id`"; `retryable: false` means the ops as
-stated can never succeed — rebuild the request instead of retrying it.
+Every `/v1` HTTP failure returns `{code, retryable, message}`. `retryable: true`
+means the code-specific recovery may succeed; it does not mean blindly replay
+the same request. Retry at most once. `retryable: false` means no automatic
+retry is safe; fix, rebuild, or report the request.
 
 | code | status | retryable | meaning |
 |---|---|---|---|
 | `STALE_BASE` | 412 | yes | `base_clock` does not name a known version |
 | `BLOCK_MOVE_CONFLICT` | 412 | yes | concurrent structural change beat your move |
+| `PRECONDITION_FAILED` | 412 | yes | re-read current state and rebuild the precondition |
+| `SERVICE_BUSY` | 503 | yes | honor `Retry-After`; replay unchanged, preserving `client_tx_id` |
 | `BLOCK_DELETED` | 404 | no | a referenced `block_id` no longer exists |
 | `ANCHOR_NOT_FOUND` | 404 | no | a referenced review `item_id`/anchor does not exist |
 | `SUGGESTION_INVALIDATED` | 422 | no | the suggestion's text changed; reject to dismiss |
@@ -505,9 +508,18 @@ stated can never succeed — rebuild the request instead of retrying it.
 | `PAYLOAD_TOO_LARGE` | 413 | no | tmp Markdown content exceeds 1 MiB |
 | `INVALID_TRANSACTION` | 400 | no | malformed envelope or op |
 | `UNKNOWN_BLOCK_TYPE` | 400 | no | a `block_type` outside the vocabulary; the message lists valid types |
+| `INVALID_REQUEST` | 400 | no | malformed HTTP input outside the transaction vocabulary |
+| `NOT_FOUND` / `GONE` | 404/410 | no | bad locator or expired/deleted document |
+| `CONFLICT` | 409 | no | requested operation conflicts with current state |
+| `METHOD_NOT_ALLOWED` | 405 | no | unsupported method for the route |
+| `UNSUPPORTED_MEDIA_TYPE` | 415 | no | wrong content type |
+| `UNPROCESSABLE_ENTITY` | 422 | no | body understood but unsupported |
+| `INTERNAL_ERROR` | 500 | no | safe public message; report instead of replaying a write |
 
-If a retryable write still fails after one fresh `/blocks` read, stop and
-report the raw error to the user instead of guessing.
+For `STALE_BASE`, `BLOCK_MOVE_CONFLICT`, or `PRECONDITION_FAILED`, re-read and
+rebuild with a fresh clock and NEW `client_tx_id`. For `SERVICE_BUSY`, honor
+`Retry-After` and retry the unchanged idempotent request with the SAME
+`client_tx_id`. If that one recovery fails, stop and report the raw error.
 
 ## Discovery And Schemas
 

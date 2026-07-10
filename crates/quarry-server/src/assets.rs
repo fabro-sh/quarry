@@ -1,8 +1,9 @@
-use crate::ErrorResponse;
+use crate::{ApiError, ApiErrorCode};
 use axum::Json;
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
+use serde::Serialize;
 
 #[derive(rust_embed::RustEmbed)]
 #[folder = "../../ui/dist"]
@@ -90,6 +91,9 @@ pub(crate) async fn browser_asset(uri: Uri, headers: HeaderMap) -> Response {
             None => browser_ui_not_built(),
         },
         BrowserResponse::NotBuilt => browser_ui_not_built(),
+        BrowserResponse::NotFound if path.starts_with("/v1/") || path == "/v1" => {
+            ApiError::new(ApiErrorCode::NotFound, "not found").into_response()
+        }
         BrowserResponse::NotFound => browser_not_found(),
     }
 }
@@ -117,9 +121,14 @@ fn embedded_asset_response(asset_path: &str, asset: rust_embed::EmbeddedFile) ->
 }
 
 fn browser_not_found() -> Response {
+    #[derive(Serialize)]
+    struct BrowserErrorResponse {
+        error: String,
+    }
+
     (
         StatusCode::NOT_FOUND,
-        Json(ErrorResponse {
+        Json(BrowserErrorResponse {
             error: "not found".to_string(),
         }),
     )
@@ -127,9 +136,14 @@ fn browser_not_found() -> Response {
 }
 
 fn browser_ui_not_built() -> Response {
+    #[derive(Serialize)]
+    struct BrowserErrorResponse {
+        error: String,
+    }
+
     (
         StatusCode::SERVICE_UNAVAILABLE,
-        Json(ErrorResponse {
+        Json(BrowserErrorResponse {
             error: "browser UI not built — run `bun run build` in ui/ or use the Vite dev server on :5173"
                 .to_string(),
         }),

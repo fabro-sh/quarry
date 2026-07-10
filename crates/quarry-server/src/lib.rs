@@ -32,14 +32,15 @@ use agent_events::{
 };
 use assets::{browser_asset, browser_ui_bundle_embedded};
 use axum::Router;
+use axum::body::{Body, to_bytes};
 use axum::extract::DefaultBodyLimit;
 use axum::extract::{MatchedPath, Request};
 use axum::http::{HeaderMap, HeaderValue, header};
 use axum::middleware::{self, Next};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use discovery::{agent_discovery, agent_docs, quarry_skill};
-pub use error::{ApiError, ErrorResponse};
+pub use error::{ApiError, ApiErrorCode, ApiErrorResponse};
 pub(crate) use headers::{
     agent_id_from_headers_or_body, bytes_response_with_expiry, content_type,
     insert_document_headers, json_response, json_with_etag, metadata_from_headers,
@@ -174,10 +175,66 @@ pub fn router_with_state(state: AppState) -> Router {
     let router = install_library_document_routes(router);
     let router = router.fallback(get(browser_asset));
 
+    let router = router.layer(middleware::from_fn(api_error_envelope_middleware));
     let router = router.layer(middleware::from_fn(request_tracing_middleware));
     let router = router.layer(middleware::from_fn(security_headers_middleware));
 
     router.with_state(state)
+}
+
+/// Axum extractor and routing rejections bypass [`ApiError`]. Normalize those
+/// final non-JSON responses so every `/v1` HTTP failure keeps one wire shape.
+async fn api_error_envelope_middleware(request: Request, next: Next) -> Response {
+    let is_api = request.uri().path() == "/v1" || request.uri().path().starts_with("/v1/");
+    let response = next.run(request).await;
+    if !is_api || !response.status().is_client_error() && !response.status().is_server_error() {
+        return response;
+    }
+    let is_json = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/json"));
+    if is_json {
+        let (mut parts, body) = response.into_parts();
+        let status = parts.status;
+        let original_headers = parts.headers.clone();
+        const ERROR_BODY_LIMIT: usize = 64 * 1024;
+        if let Ok(bytes) = to_bytes(body, ERROR_BODY_LIMIT).await {
+            if let Ok(payload) = serde_json::from_slice::<ApiErrorResponse>(&bytes)
+                && payload.code.status() == status
+            {
+                if status == axum::http::StatusCode::SERVICE_UNAVAILABLE {
+                    parts
+                        .headers
+                        .entry(header::RETRY_AFTER)
+                        .or_insert(HeaderValue::from_static("1"));
+                }
+                return Response::from_parts(parts, Body::from(bytes));
+            }
+        }
+        return normalized_error_response(status, original_headers);
+    }
+
+    let status = response.status();
+    let original_headers = response.headers().clone();
+    normalized_error_response(status, original_headers)
+}
+
+fn normalized_error_response(
+    status: axum::http::StatusCode,
+    original_headers: HeaderMap,
+) -> Response {
+    let mut normalized = error::fallback_error_for_status(status).into_response();
+    for (name, value) in original_headers {
+        if let Some(name) = name
+            && name != header::CONTENT_TYPE
+            && name != header::CONTENT_LENGTH
+        {
+            normalized.headers_mut().insert(name, value);
+        }
+    }
+    normalized
 }
 
 /// Strict Content-Security-Policy for the tmp-only public build. `'unsafe-inline'`
@@ -675,7 +732,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         CreateLibraryRequest,
         system_handlers::Capabilities,
         BeginTransactionRequest,
-        ErrorResponse,
+        ApiErrorResponse,
         MoveRequest,
         DryRunValue,
         Library,
@@ -715,7 +772,6 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         gateway::BlockTransactionRequest,
         gateway::BlockTransactionActor,
         gateway::BlockTransactionAck,
-        gateway::BlockTransactionError,
         CollabInviteToken,
         CreateCollabInviteRequest,
         TransactionRecord,
@@ -895,7 +951,6 @@ mod tests {
 
     use super::*;
     use crate::sse::{StoreEventPayloadMode, store_event_payload, store_event_type};
-    #[cfg(any(feature = "lib-documents", feature = "tmp-documents"))]
     use axum::body::{Body, to_bytes};
     #[cfg(any(feature = "lib-documents", feature = "tmp-documents"))]
     use axum::http::Method;
@@ -989,13 +1044,19 @@ mod tests {
         (logs, guard)
     }
 
-    #[test]
-    fn busy_errors_map_to_service_unavailable_with_retry_after() {
+    #[tokio::test]
+    async fn busy_errors_map_to_service_unavailable_with_retry_after() {
         let response =
             ApiError::from(QuarryError::Busy("database locked".to_string())).into_response();
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers()[header::RETRY_AFTER], "1");
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["code"], "SERVICE_BUSY");
+        assert_eq!(body["retryable"], true);
+        assert_eq!(body["message"], "service temporarily unavailable");
     }
 
     #[test]

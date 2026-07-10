@@ -189,7 +189,7 @@ async fn markdown_put_rejects_raw_downgrade_without_opt_in() -> anyhow::Result<(
     let body = response_json(response).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert!(
-        body["error"]
+        body["message"]
             .as_str()
             .context("raw downgrade error should be a string")?
             .contains("Markdown block document")

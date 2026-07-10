@@ -129,7 +129,7 @@ Document path: {document_path}
    Public ops: {transaction_operations}.
    To author or restructure the whole document, instead PUT {document_api} with a plain Markdown body and headers Content-Type: text/markdown, If-Match: "<document_clock>", X-Agent-Id: <agent-id>, and X-Quarry-Transaction-Actor: <agent name> — concurrent edits diff3-merge rather than being overwritten (details in the skill). A 200 response is not enough: inspect changed and conflicts. If conflicts is non-zero, re-read GET {document_api}/blocks and GET {document_api}/review, incorporate any canonical edits that should survive, and only then re-PUT the reconciled Markdown with the fresh clock. Do not blindly resend the old file.
    To read existing comments, suggestions, and merge conflicts, GET {document_api}/review.
-   Errors are typed {{code, retryable, message}}; when retryable, refresh GET {document_api}/blocks, rebuild the request with the new document_clock and a NEW client_tx_id, and resubmit once."#
+   Every /v1 HTTP failure uses {{code, retryable, message}}. retryable means the code-specific recovery may succeed, not that the identical request is always safe to replay. For STALE_BASE, BLOCK_MOVE_CONFLICT, or PRECONDITION_FAILED, refresh GET {document_api}/blocks, rebuild with the new document_clock and a NEW client_tx_id, and resubmit once. For SERVICE_BUSY, honor Retry-After and retry the unchanged idempotent request, preserving client_tx_id. Never retry destructive writes without a bounded, code-specific recovery."#
     )
 }
 
@@ -255,6 +255,8 @@ mod tests {
         assert!(prompt.contains("A 200 response is not enough: inspect changed and conflicts"));
         assert!(prompt.contains("Do not blindly resend the old file"));
         assert!(prompt.contains("{code, retryable, message}"));
+        assert!(prompt.contains("SERVICE_BUSY"));
+        assert!(prompt.contains("honor Retry-After"));
         assert!(prompt.contains("a NEW client_tx_id"));
         // The quarantined legacy facades are no longer advertised.
         assert!(!prompt.contains("/edit"));

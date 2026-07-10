@@ -64,7 +64,6 @@ import useSWR, { useSWRConfig } from 'swr';
 
 import {
   ApiError,
-  ApiPreconditionError,
   type AgentPresenceDisplayEntry,
   backlinks,
   createCollabInvite,
@@ -865,7 +864,7 @@ function Workspace() {
           );
         } catch (error) {
           // 412 means an identical asset is already stored at this path — reuse it.
-          if (!(error instanceof ApiPreconditionError)) throw error;
+          if (!(error instanceof ApiError) || error.code !== 'PRECONDITION_FAILED') throw error;
         }
         void mutate(['/v1/documents', activeLibrary]);
         return path;

@@ -184,7 +184,7 @@ pub(crate) enum AgentSuggestionKind {
     get,
     path = "/v1/tmp/documents/{secret}/review",
     params(("secret" = String, Path), ("includeResolved" = Option<DryRunValue>, Query)),
-    responses((status = 200, body = AgentReviewResponse), (status = 404, body = crate::ErrorResponse))
+    responses((status = 200, body = AgentReviewResponse), (status = 404, body = crate::ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -196,7 +196,7 @@ pub(crate) async fn tmp_document_review_openapi() {}
     get,
     path = "/v1/libraries/{library}/documents/{path}/review",
     params(("library" = String, Path), ("path" = String, Path), ("includeResolved" = Option<DryRunValue>, Query)),
-    responses((status = 200, body = AgentReviewResponse), (status = 404, body = crate::ErrorResponse))
+    responses((status = 200, body = AgentReviewResponse), (status = 404, body = crate::ApiErrorResponse))
 )]
 #[expect(
     dead_code,

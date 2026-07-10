@@ -134,7 +134,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -144,7 +144,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -184,7 +184,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -257,7 +257,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -267,7 +267,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -277,7 +277,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -336,7 +336,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -376,7 +376,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -416,7 +416,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -426,7 +426,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BlockTransactionError"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -459,7 +459,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -499,7 +499,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -547,7 +547,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -595,7 +595,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -645,7 +645,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BlockTransactionError"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -655,7 +655,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BlockTransactionError"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -665,7 +665,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BlockTransactionError"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -675,7 +675,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BlockTransactionError"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -685,7 +685,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BlockTransactionError"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -735,7 +735,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -895,7 +895,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -943,7 +943,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
@@ -1457,6 +1457,52 @@
           }
         }
       },
+      "ApiErrorCode": {
+        "type": "string",
+        "description": "Stable machine-readable codes returned by every `/v1` HTTP error.",
+        "enum": [
+          "INVALID_REQUEST",
+          "NOT_FOUND",
+          "GONE",
+          "PRECONDITION_FAILED",
+          "CONFLICT",
+          "METHOD_NOT_ALLOWED",
+          "UNSUPPORTED_MEDIA_TYPE",
+          "PAYLOAD_TOO_LARGE",
+          "UNPROCESSABLE_ENTITY",
+          "SERVICE_BUSY",
+          "INTERNAL_ERROR",
+          "STALE_BASE",
+          "BLOCK_DELETED",
+          "ANCHOR_NOT_FOUND",
+          "BLOCK_MOVE_CONFLICT",
+          "SUGGESTION_INVALIDATED",
+          "SUGGESTION_ALREADY_RESOLVED",
+          "UNSUPPORTED_MARKDOWN",
+          "INVALID_TRANSACTION",
+          "UNKNOWN_BLOCK_TYPE",
+          "UNSUPPORTED_BLOCK_DOCUMENT"
+        ]
+      },
+      "ApiErrorResponse": {
+        "type": "object",
+        "required": [
+          "code",
+          "retryable",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ApiErrorCode"
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        }
+      },
       "BeginTransactionRequest": {
         "type": "object",
         "properties": {
@@ -1656,26 +1702,6 @@
           }
         },
         "additionalProperties": false
-      },
-      "BlockTransactionError": {
-        "type": "object",
-        "description": "Typed error payload returned by the gateway routes.",
-        "required": [
-          "code",
-          "retryable",
-          "message"
-        ],
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "retryable": {
-            "type": "boolean"
-          }
-        }
       },
       "BlockTransactionRequest": {
         "type": "object",
@@ -2245,17 +2271,6 @@
           "false",
           "no"
         ]
-      },
-      "ErrorResponse": {
-        "type": "object",
-        "required": [
-          "error"
-        ],
-        "properties": {
-          "error": {
-            "type": "string"
-          }
-        }
       },
       "GraphEdge": {
         "type": "object",

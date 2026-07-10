@@ -6,8 +6,8 @@ use crate::review::{DocumentReviewQuery, agent_document_review, agent_document_s
 use crate::sse::events_for_library;
 use crate::{
     AgentDocumentSnapshot, AgentPresenceListResponse, AgentPresenceRequest, AgentPresenceResponse,
-    ApiError, AppState, CreateCollabInviteRequest, DocumentSubResource, ErrorResponse, MoveRequest,
-    QuarryError, TtlRequest, TtlResponse, agent_id_from_headers_or_body,
+    ApiError, ApiErrorResponse, AppState, CreateCollabInviteRequest, DocumentSubResource,
+    MoveRequest, QuarryError, TtlRequest, TtlResponse, agent_id_from_headers_or_body,
     bytes_response_with_expiry, content_type, gateway, insert_document_headers, json_response,
     json_with_etag, metadata_from_headers, normalized_agent_status, optional_header,
     parse_document_subresource, precondition_from_headers,
@@ -65,7 +65,7 @@ pub(crate) async fn list_documents(
     get,
     path = "/v1/libraries/{library}/documents/{path}/backlinks",
     params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = LinkCollection), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = LinkCollection), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -77,7 +77,7 @@ pub(crate) async fn document_backlinks_openapi() {}
     get,
     path = "/v1/libraries/{library}/documents/{path}/outgoing-links",
     params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = LinkCollection), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = LinkCollection), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -89,7 +89,7 @@ pub(crate) async fn document_outgoing_links_openapi() {}
     get,
     path = "/v1/libraries/{library}/documents/{path}/snapshot",
     params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = AgentDocumentSnapshot), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = AgentDocumentSnapshot), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -103,8 +103,8 @@ pub(crate) async fn document_snapshot_openapi() {}
     params(("library" = String, Path), ("path" = String, Path)),
     responses(
         (status = 200, body = gateway::BlockTreeResponse),
-        (status = 404, body = ErrorResponse),
-        (status = 422, body = gateway::BlockTransactionError)
+        (status = 404, body = ApiErrorResponse),
+        (status = 422, body = ApiErrorResponse)
     )
 )]
 #[expect(
@@ -120,10 +120,10 @@ pub(crate) async fn document_blocks_openapi() {}
     request_body = gateway::BlockTransactionRequest,
     responses(
         (status = 200, body = gateway::BlockTransactionAck),
-        (status = 400, body = gateway::BlockTransactionError),
-        (status = 404, body = gateway::BlockTransactionError),
-        (status = 412, body = gateway::BlockTransactionError),
-        (status = 422, body = gateway::BlockTransactionError)
+        (status = 400, body = ApiErrorResponse),
+        (status = 404, body = ApiErrorResponse),
+        (status = 412, body = ApiErrorResponse),
+        (status = 422, body = ApiErrorResponse)
     )
 )]
 #[expect(
@@ -136,7 +136,7 @@ pub(crate) async fn document_block_transactions_openapi() {}
     get,
     path = "/v1/libraries/{library}/documents/{path}/events/stream",
     params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, description = "Document-scoped server-sent event stream"), (status = 404, body = ErrorResponse))
+    responses((status = 200, description = "Document-scoped server-sent event stream"), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -148,7 +148,7 @@ pub(crate) async fn document_events_stream_openapi() {}
     get,
     path = "/v1/libraries/{library}/documents/{path}/share",
     params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = [CollabInviteToken]), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = [CollabInviteToken]), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -161,7 +161,7 @@ pub(crate) async fn document_share_openapi() {}
     path = "/v1/libraries/{library}/documents/{path}/share",
     params(("library" = String, Path), ("path" = String, Path)),
     request_body = CreateCollabInviteRequest,
-    responses((status = 201, body = CollabInviteToken), (status = 404, body = ErrorResponse))
+    responses((status = 201, body = CollabInviteToken), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -173,7 +173,7 @@ pub(crate) async fn document_share_create_openapi() {}
     post,
     path = "/v1/libraries/{library}/documents/{path}/share/{token}/revoke",
     params(("library" = String, Path), ("path" = String, Path), ("token" = String, Path)),
-    responses((status = 200, body = CollabInviteToken), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = CollabInviteToken), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -185,7 +185,7 @@ pub(crate) async fn document_share_revoke_openapi() {}
     get,
     path = "/v1/libraries/{library}/documents/{path}/versions",
     params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = [DocumentHistoryEntry]), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = [DocumentHistoryEntry]), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -197,7 +197,7 @@ pub(crate) async fn document_versions_openapi() {}
     get,
     path = "/v1/libraries/{library}/documents/{path}/versions/raw",
     params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = [DocumentVersion]), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = [DocumentVersion]), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -209,7 +209,7 @@ pub(crate) async fn document_versions_raw_openapi() {}
     get,
     path = "/v1/libraries/{library}/documents/{path}/versions/{version}",
     params(("library" = String, Path), ("path" = String, Path), ("version" = String, Path)),
-    responses((status = 200, body = DocumentVersionContent), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = DocumentVersionContent), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -221,7 +221,7 @@ pub(crate) async fn document_version_openapi() {}
     get,
     path = "/v1/libraries/{library}/documents/{path}/versions/{version}/diff",
     params(("library" = String, Path), ("path" = String, Path), ("version" = String, Path), ("against" = Option<String>, Query)),
-    responses((status = 200, body = VersionDiff), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = VersionDiff), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -233,7 +233,7 @@ pub(crate) async fn document_version_diff_openapi() {}
     post,
     path = "/v1/libraries/{library}/documents/{path}/versions/{version}/restore",
     params(("library" = String, Path), ("path" = String, Path), ("version" = String, Path)),
-    responses((status = 200, body = WriteOutcome), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = WriteOutcome), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -246,7 +246,7 @@ pub(crate) async fn document_version_restore_openapi() {}
     path = "/v1/libraries/{library}/documents/{path}/ttl",
     params(("library" = String, Path), ("path" = String, Path)),
     request_body = TtlRequest,
-    responses((status = 200, body = TtlResponse), (status = 410, body = ErrorResponse))
+    responses((status = 200, body = TtlResponse), (status = 410, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -258,7 +258,7 @@ pub(crate) async fn document_ttl_openapi() {}
     get,
     path = "/v1/libraries/{library}/documents/{path}/presence",
     params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = AgentPresenceListResponse), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = AgentPresenceListResponse), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -271,7 +271,7 @@ pub(crate) async fn agent_presence_list_openapi() {}
     path = "/v1/libraries/{library}/documents/{path}/presence",
     params(("library" = String, Path), ("path" = String, Path)),
     request_body = AgentPresenceRequest,
-    responses((status = 200, body = AgentPresenceResponse), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = AgentPresenceResponse), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -289,8 +289,8 @@ pub(crate) async fn agent_presence_openapi() {}
     ),
     responses(
         (status = 200, description = "Ready-to-paste AI agent connect instructions", body = String),
-        (status = 400, body = ErrorResponse),
-        (status = 404, body = ErrorResponse)
+        (status = 400, body = ApiErrorResponse),
+        (status = 404, body = ApiErrorResponse)
     )
 )]
 #[expect(
@@ -303,7 +303,7 @@ pub(crate) async fn document_agent_prompt_openapi() {}
     get,
     path = "/v1/libraries/{library}/documents/{path}",
     params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, body = String), (status = 404, body = ErrorResponse))
+    responses((status = 200, body = String), (status = 404, body = ApiErrorResponse))
 )]
 pub(crate) async fn get_document(
     State(state): State<AppState>,
@@ -497,8 +497,8 @@ pub(crate) async fn get_document(
     ),
     responses(
         (status = 200, body = markdown_write::PutDocumentOutcome),
-        (status = 409, description = "Existing Markdown document would be changed into a raw document without X-Quarry-Allow-Document-Kind-Change: true", body = ErrorResponse),
-        (status = 412, body = ErrorResponse)
+        (status = 409, description = "Existing Markdown document would be changed into a raw document without X-Quarry-Allow-Document-Kind-Change: true", body = ApiErrorResponse),
+        (status = 412, body = ApiErrorResponse)
     )
 )]
 pub(crate) async fn put_document(
@@ -770,7 +770,7 @@ pub(crate) async fn patch_document_metadata(
     head,
     path = "/v1/libraries/{library}/documents/{path}",
     params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200), (status = 404, body = ErrorResponse))
+    responses((status = 200), (status = 404, body = ApiErrorResponse))
 )]
 pub(crate) async fn head_document(
     State(state): State<AppState>,
