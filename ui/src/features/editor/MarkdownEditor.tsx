@@ -1,4 +1,5 @@
 import { lazy, Suspense } from 'react';
+import { cn } from '../../lib/utils';
 import type { CollabEditorConfig, EditorMode } from './PlateMarkdownEditor';
 import type { ImageApi } from './image-element';
 import type { WikiLinkApi } from './wiki-link-element';
@@ -13,17 +14,19 @@ const PlateMarkdownEditor = lazy(() =>
 );
 
 interface MarkdownEditorProps {
-  author?: string;
-  collab?: CollabEditorConfig;
-  content: string;
-  mode: EditorMode;
-  wikiLink?: WikiLinkApi;
-  image?: ImageApi;
-  onChange: (content: string) => void;
+  readonly author?: string;
+  readonly className?: string;
+  readonly collab?: CollabEditorConfig;
+  readonly content: string;
+  readonly image?: ImageApi;
+  readonly mode: EditorMode;
+  readonly onChange: (content: string) => void;
+  readonly wikiLink?: WikiLinkApi;
 }
 
 export function MarkdownEditor({
   author = 'user',
+  className,
   collab,
   content,
   mode,
@@ -32,7 +35,10 @@ export function MarkdownEditor({
   onChange,
 }: MarkdownEditorProps) {
   return (
-    <section className="flex min-h-0 flex-1 flex-col bg-surface" aria-label="Editor">
+    <section
+      className={cn('flex min-h-0 flex-1 flex-col bg-surface', className)}
+      aria-label="Editor"
+    >
       <div className="min-h-0 flex-1 overflow-auto">
         <Suspense
           fallback={

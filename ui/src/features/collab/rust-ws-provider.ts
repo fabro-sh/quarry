@@ -8,6 +8,8 @@ import { Awareness } from 'y-protocols/awareness';
 import { WebsocketProvider } from 'y-websocket';
 import * as Y from 'yjs';
 
+import { recordCollabLifecycleEvent } from './collab-debug';
+
 export const RUST_WS_PROVIDER_TYPE = 'rust-ws';
 
 // Checkpoint-ack frames (Phase 5 save state). The server broadcasts this
@@ -88,6 +90,7 @@ export function tmpCollabWebSocketBaseUrl(
 }
 
 export class RustWsProviderWrapper implements UnifiedProvider {
+  private destroyed = false;
   private _isConnected = false;
   private _isSynced = false;
   private _lastCheckpoint: Uint8Array | null = null;
@@ -111,6 +114,7 @@ export class RustWsProviderWrapper implements UnifiedProvider {
     onSyncChange,
     options,
   }: ProviderConstructorProps<RustWsProviderOptions>) {
+    recordCollabLifecycleEvent('provider_created');
     this.onConnect = onConnect;
     this.onDisconnect = onDisconnect;
     this.onError = onError;
@@ -250,11 +254,14 @@ export class RustWsProviderWrapper implements UnifiedProvider {
   }
 
   destroy() {
+    if (this.destroyed) return;
+    this.destroyed = true;
     this.provider.destroy();
     this._isConnected = false;
     this._isSynced = false;
     this.checkpointListeners.clear();
     this.checkpointFailureListeners.clear();
+    recordCollabLifecycleEvent('provider_destroyed');
   }
 }
 

@@ -16,8 +16,9 @@ import { expect, test, type APIRequestContext, type Browser, type Page } from 'p
 
 import { AgentCollaborator } from './helpers/agent-collaborator';
 
-const API_ORIGIN = 'http://127.0.0.1:7832';
-const COLLAB_WS_BASE = 'ws://127.0.0.1:7832/v1/collab';
+const LIVE_API_PORT = process.env.QUARRY_LIVE_API_PORT ?? '7832';
+const API_ORIGIN = `http://127.0.0.1:${LIVE_API_PORT}`;
+const COLLAB_WS_BASE = `ws://127.0.0.1:${LIVE_API_PORT}/v1/collab`;
 const DOCUMENT_PATH = 'spike.md';
 
 // Disjoint typing alphabets so per-browser keystroke sequences can be

@@ -156,6 +156,82 @@ test.describe('Quarry Browser smoke flows', () => {
     expect(page.workers().some((worker) => worker.url().includes('mirror-serializer'))).toBe(true);
   });
 
+  test('keeps rapid typing responsive in a 100 KiB live document', async ({ page }) => {
+    const largeBody = Array.from(
+      { length: 1_400 },
+      (_, index) => `Paragraph ${index.toString().padStart(4, '0')}: ${'content '.repeat(8)}`
+    ).join('\n\n');
+    const content = `# Performance\n\n${largeBody}\n`;
+    expect(Buffer.byteLength(content)).toBeGreaterThanOrEqual(100 * 1024);
+    await installMockApi(page, {
+      documents: [
+        {
+          content,
+          id: 'doc-performance',
+          metadata: { title: 'Performance' },
+          path: 'performance.md',
+          version: 'v1',
+        },
+      ],
+    });
+
+    await page.goto('/');
+    await page.getByRole('treeitem', { name: /Performance/ }).click();
+    const editor = page.getByLabel('Plate markdown editor');
+    await expect(editor).toContainText('Performance');
+    await expect(page.locator('[aria-label="Save status"]')).toContainText('Saved');
+    await editor.locator('h1').click();
+
+    await page.evaluate(() => {
+      const metrics = { frameGaps: [] as number[], keyToFrame: [] as number[], running: true };
+      const performanceWindow = window as Window & {
+        __quarryTypingMetrics?: typeof metrics;
+      };
+      performanceWindow.__quarryTypingMetrics = metrics;
+      let previousFrame = performance.now();
+      const sampleFrame = (now: number) => {
+        metrics.frameGaps.push(now - previousFrame);
+        previousFrame = now;
+        if (metrics.running) requestAnimationFrame(sampleFrame);
+      };
+      requestAnimationFrame(sampleFrame);
+      document.addEventListener(
+        'keydown',
+        () => {
+          const startedAt = performance.now();
+          requestAnimationFrame(() => metrics.keyToFrame.push(performance.now() - startedAt));
+        },
+        { capture: true }
+      );
+    });
+
+    const typed = 'abcdefghij'.repeat(10);
+    await page.keyboard.type(typed);
+    await expect(editor.locator('h1')).toContainText(typed);
+    const metrics = await page.evaluate(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const performanceWindow = window as Window & {
+        __quarryTypingMetrics?: {
+          frameGaps: number[];
+          keyToFrame: number[];
+          running: boolean;
+        };
+      };
+      const captured = performanceWindow.__quarryTypingMetrics;
+      if (!captured) throw new Error('typing metrics were not installed');
+      captured.running = false;
+      return captured;
+    });
+    const sortedLatency = [...metrics.keyToFrame].sort((left, right) => left - right);
+    const percentileIndex = Math.max(0, Math.ceil(sortedLatency.length * 0.95) - 1);
+    const p95KeyToFrame = sortedLatency[percentileIndex] ?? Number.POSITIVE_INFINITY;
+    const maxFrameGap = Math.max(...metrics.frameGaps);
+
+    expect(metrics.keyToFrame).toHaveLength(typed.length);
+    expect(p95KeyToFrame).toBeLessThanOrEqual(100);
+    expect(maxFrameGap).toBeLessThanOrEqual(250);
+  });
+
   test('inserts and removes a hyperlink from the floating toolbar', async ({ page }) => {
     await installMockApi(page, {
       documents: [
@@ -1497,6 +1573,7 @@ test.describe('Quarry Browser smoke flows', () => {
     await superscript.click();
 
     // Subscript and superscript are mutually exclusive marks.
+    await page.getByText('Format me', { exact: false }).click({ clickCount: 3 });
     await page.getByRole('button', { name: 'More formatting' }).click();
     await page.getByRole('menuitemcheckbox', { name: 'Subscript' }).click();
     await expect(editor.locator('sub')).toContainText('Format me');

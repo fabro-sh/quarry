@@ -23,6 +23,18 @@ export function collabDebugEnabledFrom(search: string, stored: string | null): b
 
 let cached: boolean | null = null;
 
+export type CollabLifecycleEvent =
+  | 'editor_disposed'
+  | 'editor_mounted'
+  | 'mirror_completed'
+  | 'mirror_scheduled'
+  | 'probe_attempted'
+  | 'provider_created'
+  | 'provider_destroyed'
+  | 'session_epoch_started';
+
+const lifecycleCounters = new Map<CollabLifecycleEvent, number>();
+
 function enabled(): boolean {
   if (cached !== null) return cached;
   cached = readEnabled();
@@ -46,4 +58,28 @@ export function collabDebug(event: string, detail?: Record<string, unknown>): vo
   if (!enabled()) return;
   // eslint-disable-next-line no-console
   console.debug(`[collab] ${event}`, detail ?? {});
+}
+
+/** Low-cost lifecycle counters used by regression tests and opt-in debug logs. */
+export function recordCollabLifecycleEvent(event: CollabLifecycleEvent): void {
+  const count = (lifecycleCounters.get(event) ?? 0) + 1;
+  lifecycleCounters.set(event, count);
+  collabDebug(`lifecycle.${event}`, { count });
+}
+
+export function collabLifecycleSnapshot(): Readonly<Record<CollabLifecycleEvent, number>> {
+  return {
+    editor_disposed: lifecycleCounters.get('editor_disposed') ?? 0,
+    editor_mounted: lifecycleCounters.get('editor_mounted') ?? 0,
+    mirror_completed: lifecycleCounters.get('mirror_completed') ?? 0,
+    mirror_scheduled: lifecycleCounters.get('mirror_scheduled') ?? 0,
+    probe_attempted: lifecycleCounters.get('probe_attempted') ?? 0,
+    provider_created: lifecycleCounters.get('provider_created') ?? 0,
+    provider_destroyed: lifecycleCounters.get('provider_destroyed') ?? 0,
+    session_epoch_started: lifecycleCounters.get('session_epoch_started') ?? 0,
+  };
+}
+
+export function resetCollabLifecycleCounters(): void {
+  lifecycleCounters.clear();
 }

@@ -172,24 +172,19 @@ import {
   collabSaveState,
   type CollabSaveState,
 } from '../collab/save-state';
-import { collabDebug } from '../collab/collab-debug';
+import { collabDebug, recordCollabLifecycleEvent } from '../collab/collab-debug';
+import { useCollabEditorSession } from '../collab/use-collab-editor-session';
 import { registerUnloadGuard } from '../collab/unload-guard';
 import { rawMarkdownMdRules } from './raw-markdown';
 import { RawMarkdownPlugin } from './raw-markdown-block';
 import { serializeMirror } from './mirror-serialize';
 import { getMirrorSerializer } from './mirror-serializer';
+import { MarkdownMirrorPublisher } from './markdown-mirror-publisher';
 
 registerRustWsProviderType();
 
 const REVIEW_RESOLUTION_PUBLISH_ATTEMPTS = 20;
 const REVIEW_RESOLUTION_PUBLISH_INTERVAL_MS = 50;
-// Interval between reachability probes while disconnected (bare WebSocket
-// attempts; see the reconnect-probe effect). The editor remounts a fresh
-// doc + provider only once a probe actually connects — never per interval.
-// Reconnects never reuse a Y.Doc: the session was reseeded server-side, and
-// merging a stale doc back in would duplicate content (online-only browsers
-// have no pending local state worth keeping).
-const RECONNECT_RETRY_MS = 2_000;
 // Publishing the App-level markdown mirror serializes the whole document —
 // O(size) work that must never run inside the input event (it was the typing
 // lag on large documents). The mirror only feeds the current-editor diff and
@@ -409,32 +404,22 @@ export function PlateMarkdownEditor({
   const collabRoomName = collab?.roomName ?? collabDocumentId;
   const collabSessionId = collab?.sessionId ?? '';
   const collabToken = collab?.token;
-  // Bumped to reconnect: a new epoch recreates the editor with a FRESH
-  // Y.Doc + provider, which reseeds from the (server-seeded) session.
-  const [collabEpoch, setCollabEpoch] = useState(0);
-  const [collabState, setCollabState] = useState<CollabSaveState>('reconnecting');
-  const [collabInitCompleted, setCollabInitCompleted] = useState(false);
-  // The server refused the session outright (close code 4400): the document
-  // cannot host a live session at all, so reconnecting would refuse again.
-  // Refusal is terminal for this document until it changes — it overrides the
-  // connection-derived save state and halts the reconnect probe.
-  const [collabRefused, setCollabRefused] = useState(false);
+  const collabProbeBaseUrl = collabBaseUrl ?? collabWebSocketBaseUrl();
+  const { session: collabSession, snapshot: collabSessionSnapshot } = useCollabEditorSession({
+    baseUrl: collabProbeBaseUrl,
+    documentId: collabDocumentId,
+    enabled: collabEnabled,
+    onSaveStateChange: collab?.onSaveStateChange,
+    roomName: collabRoomName,
+  });
   const handleSessionRefused = useCallback((reason: string) => {
     console.warn('[collab] session refused by server:', reason);
-    setCollabRefused(true);
-  }, []);
-  useEffect(() => {
-    setCollabRefused(false);
-  }, [collabDocumentId]);
-  const onSaveStateChange = collab?.onSaveStateChange;
+    collabSession.refuse(reason);
+  }, [collabSession]);
   const handleCollabSaveState = useCallback((state: CollabSaveState) => {
-    setCollabState(state);
-  }, []);
-  const effectiveCollabState: CollabSaveState = collabRefused ? 'refused' : collabState;
-  useEffect(() => {
-    onSaveStateChange?.(effectiveCollabState);
-  }, [effectiveCollabState, onSaveStateChange]);
-  const collabLive = collabState !== 'reconnecting';
+    collabSession.observeSaveState(state);
+  }, [collabSession]);
+  const collabLive = collabSessionSnapshot.lifecycle === 'live';
   // Awareness cursor label. Never the 'user' sentinel — the server drops blank
   // names (keeping its "browser" checkpoint fallback), mirroring how REST
   // mutations omit the default author rather than stamping 'user'.
@@ -520,7 +505,12 @@ export function PlateMarkdownEditor({
       skipInitialization: collabEnabled,
       value: collabEnabled ? undefined : (initialValueRef.current as never),
     },
-    [collabDocumentId, collabEpoch]
+    [collabDocumentId, collabSessionSnapshot.epoch]
+  );
+  useEditorLifecycleInstrumentation(
+    collabEnabled,
+    collabDocumentId,
+    collabSessionSnapshot.epoch
   );
 
   useLayoutEffect(() => {
@@ -563,7 +553,6 @@ export function PlateMarkdownEditor({
       ? (initialSerializedRef.current as string)
       : reviewToMarkdown(value as never, meta);
     storeHydrate(meta);
-    setCollabInitCompleted(false);
 
     let disposed = false;
     let initStarted = false;
@@ -577,12 +566,12 @@ export function PlateMarkdownEditor({
           if (!disposed) {
             setCollabInitTick((tick) => tick + 1);
             setExternalValueRevision((revision) => revision + 1);
-            setCollabInitCompleted(true);
+            collabSession.markInitialized();
           }
         })
         .catch((error: unknown) => {
           if (!disposed) console.warn('[collab] failed to initialize Yjs editor', error);
-          if (!disposed) setCollabInitCompleted(true);
+          if (!disposed) collabSession.markInitialized();
         });
     }, 0);
 
@@ -590,7 +579,12 @@ export function PlateMarkdownEditor({
       disposed = true;
       window.clearTimeout(initTimer);
       if (initStarted) {
-        yjs.destroy();
+        // Plate's lifecycle can disconnect the Slate/Yjs binding before this
+        // cleanup runs (notably during Strict Mode replay). Calling disconnect
+        // again emits a false-positive error from slate-yjs.
+        if (YjsEditor.isYjsEditor(editor) && YjsEditor.connected(editor)) {
+          yjs.destroy();
+        }
         // The plugin's destroy() skips providers that never connected, and
         // a never-opened y-websocket would otherwise keep retrying forever
         // with this editor's (stale, possibly bootstrap-seeded) doc — and
@@ -604,58 +598,7 @@ export function PlateMarkdownEditor({
     // `content` is deliberately NOT a dependency: it is only the bootstrap
     // value for an empty room; once live, the session doc is authoritative.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [collabDocumentId, collabEnabled, collabEpoch, editor, storeHydrate]);
-
-  // Reconnect probe: while collab is wanted but not live, poll the collab
-  // endpoint with a bare WebSocket and remount a fresh editor + doc only
-  // once a connection actually establishes. The visible (stale) editor
-  // stays mounted read-only across the whole outage — the surface never
-  // blanks between retries — and only a born-fresh doc ever joins the
-  // recovered session. (Providers themselves never retry; see
-  // rust-ws-provider.ts.)
-  useEffect(() => {
-    if (!collabEnabled || collabLive || !collabInitCompleted || collabRefused) return;
-    let disposed = false;
-    let probe: WebSocket | null = null;
-    let timer: number | null = null;
-
-    const schedule = () => {
-      if (disposed) return;
-      timer = window.setTimeout(attempt, RECONNECT_RETRY_MS);
-    };
-    const attempt = () => {
-      if (disposed) return;
-      try {
-        probe = new WebSocket(`${collabBaseUrl ?? collabWebSocketBaseUrl()}/${collabRoomName}`);
-      } catch {
-        schedule();
-        return;
-      }
-      const socket = probe;
-      socket.onopen = () => {
-        socket.onclose = null;
-        socket.close();
-        probe = null;
-        if (disposed) return;
-        collabDebug('reconnect.probe_succeeded', {});
-        setCollabEpoch((epoch) => epoch + 1);
-      };
-      socket.onclose = () => {
-        probe = null;
-        schedule();
-      };
-    };
-    attempt();
-
-    return () => {
-      disposed = true;
-      if (timer !== null) window.clearTimeout(timer);
-      if (probe) {
-        probe.onclose = null;
-        probe.close();
-      }
-    };
-  }, [collabBaseUrl, collabEnabled, collabInitCompleted, collabLive, collabRefused, collabRoomName]);
+  }, [collabDocumentId, collabEnabled, collabSession, collabSessionSnapshot.epoch, editor, storeHydrate]);
 
   useEffect(() => {
     if (collabEnabled) return;
@@ -705,51 +648,26 @@ export function PlateMarkdownEditor({
     [publishSerializedMarkdown, serialize]
   );
 
-  const mirrorPublishTimerRef = useRef<number | null>(null);
-  const mirrorPublishGuardRef = useRef(false);
-  const mirrorPublishReceiptRef = useRef(0);
-  const cancelMirrorPublish = useCallback(() => {
-    if (mirrorPublishTimerRef.current !== null) {
-      window.clearTimeout(mirrorPublishTimerRef.current);
-      mirrorPublishTimerRef.current = null;
-    }
-    mirrorPublishGuardRef.current = false;
-    // Drop in-flight worker receipts too, not just the pending timer.
-    mirrorPublishReceiptRef.current += 1;
-  }, []);
   // The debounced mirror publish (MIRROR_PUBLISH_DEBOUNCE_MS). Serializes
   // `editor.children` at fire time, so coalesced triggers publish the latest
   // value; the serialization itself runs in the mirror worker so a large
   // document can't block the main thread. The blank guard is sticky across a
   // batch: any trigger that needs it keeps the batch guarded.
-  const scheduleMirrorPublish = useCallback(
-    (options: { guardUnhydratedBlank?: boolean } = {}) => {
-      if (options.guardUnhydratedBlank) mirrorPublishGuardRef.current = true;
-      if (mirrorPublishTimerRef.current !== null) {
-        window.clearTimeout(mirrorPublishTimerRef.current);
-      }
-      mirrorPublishTimerRef.current = window.setTimeout(() => {
-        mirrorPublishTimerRef.current = null;
-        const guardUnhydratedBlank = mirrorPublishGuardRef.current;
-        mirrorPublishGuardRef.current = false;
-        const receipt = ++mirrorPublishReceiptRef.current;
-        void getMirrorSerializer()
-          .serialize(editor.children as never, storeGetMeta())
-          .then((markdown) => {
-            // Superseded in the serializer (null) or here (receipt moved on:
-            // a newer publish, an editor swap, or an unmount).
-            if (markdown === null) return;
-            if (receipt !== mirrorPublishReceiptRef.current) return;
-            publishSerializedMarkdown(markdown, { guardUnhydratedBlank });
-          });
-      }, MIRROR_PUBLISH_DEBOUNCE_MS);
-    },
+  const mirrorPublisher = useMemo(
+    () =>
+      new MarkdownMirrorPublisher({
+        debounceMs: MIRROR_PUBLISH_DEBOUNCE_MS,
+        getMeta: storeGetMeta,
+        getValue: () => editor.children as Descendant[],
+        publish: (markdown, guardUnhydratedBlank) => {
+          publishSerializedMarkdown(markdown, { guardUnhydratedBlank });
+        },
+        serialize: (value, meta) => getMirrorSerializer().serialize(value as never, meta),
+      }),
     [editor, publishSerializedMarkdown, storeGetMeta]
   );
-  // A pending publish belongs to this editor instance: when the editor is
-  // swapped (document change, collab epoch) or unmounted, firing it would
-  // publish the old document into the new mirror.
-  useEffect(() => cancelMirrorPublish, [cancelMirrorPublish, editor]);
+  const scheduleMirrorPublish = mirrorPublisher.schedule;
+  useMirrorPublisherLifetime(mirrorPublisher);
 
   const scheduleReviewResolutionPublish = useCallback((attempt = 0) => {
     if (reviewResolutionPublishTimerRef.current !== null) {
@@ -862,7 +780,7 @@ export function PlateMarkdownEditor({
       >
         <PlateValueRevisionBridge revision={externalValueRevision} />
         {collabEnabled ? (
-          <CollabSaveStateBridge onSaveStateChange={handleCollabSaveState} />
+            <CollabSaveStateBridge onSaveStateChange={handleCollabSaveState} />
         ) : null}
         {collabEnabled ? (
           <ReviewDocBridge documentId={collabDocumentId} onMeta={storeHydrate} />
@@ -874,7 +792,7 @@ export function PlateMarkdownEditor({
         )}
         <div
           className="relative flex h-full min-h-0"
-          data-collab-save-state={collabEnabled ? collabState : undefined}
+            data-collab-save-state={collabEnabled ? collabSessionSnapshot.saveState ?? undefined : undefined}
         >
           {/*
             PlateContainer is the editor's scroll column. It registers the
@@ -911,6 +829,26 @@ export function PlateMarkdownEditor({
      </ImageProvider>
     </WikiLinkProvider>
   );
+}
+
+function useEditorLifecycleInstrumentation(
+  collabEnabled: boolean,
+  documentId: string,
+  epoch: number
+): void {
+  useEffect(() => {
+    if (!collabEnabled) return;
+    recordCollabLifecycleEvent('editor_mounted');
+    collabDebug('editor.mounted', { documentId, epoch });
+    return () => {
+      recordCollabLifecycleEvent('editor_disposed');
+      collabDebug('editor.disposed', { documentId, epoch });
+    };
+  }, [collabEnabled, documentId, epoch]);
+}
+
+function useMirrorPublisherLifetime(publisher: MarkdownMirrorPublisher): void {
+  useEffect(() => () => publisher[Symbol.dispose](), [publisher]);
 }
 
 export function shouldSkipUnhydratedCollabPublish(nextMarkdown: string, lastMarkdown: string) {

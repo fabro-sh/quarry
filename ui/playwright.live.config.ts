@@ -8,8 +8,10 @@ import { defineConfig, devices } from 'playwright/test';
 const configDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(configDir, '..');
 const liveRoot = mkdtempSync(join(tmpdir(), 'quarry-live-'));
-const apiOrigin = 'http://127.0.0.1:7832';
-const uiOrigin = 'http://127.0.0.1:5174';
+const apiPort = process.env.QUARRY_LIVE_API_PORT ?? '7832';
+const uiPort = process.env.QUARRY_LIVE_UI_PORT ?? '5174';
+const apiOrigin = `http://127.0.0.1:${apiPort}`;
+const uiOrigin = `http://127.0.0.1:${uiPort}`;
 
 function inheritedEnv() {
   const env: Record<string, string> = {};
@@ -39,7 +41,7 @@ export default defineConfig({
     {
       // The live suite drives the library surface (`/v1/libraries`, Git
       // sync-backed documents), which is feature-gated off in default builds.
-      command: `cargo run -p quarry --features lib-documents -- server start --root "${liveRoot}" --addr 127.0.0.1:7832`,
+      command: `cargo run -p quarry --features lib-documents -- server start --root "${liveRoot}" --addr 127.0.0.1:${apiPort}`,
       cwd: repoRoot,
       gracefulShutdown: { signal: 'SIGTERM', timeout: 2_000 },
       name: 'quarry',
@@ -48,7 +50,7 @@ export default defineConfig({
       url: `${apiOrigin}/v1/libraries`,
     },
     {
-      command: 'bun run dev -- --host 127.0.0.1 --port 5174',
+      command: `bun run dev -- --host 127.0.0.1 --port ${uiPort}`,
       cwd: configDir,
       env: { ...inheritedEnv(), QUARRY_API_ORIGIN: apiOrigin },
       gracefulShutdown: { signal: 'SIGTERM', timeout: 2_000 },

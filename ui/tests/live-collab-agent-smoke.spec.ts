@@ -42,7 +42,7 @@ interface ReviewResponse {
   suggestions: ReviewItem[];
 }
 
-const API_ORIGIN = 'http://127.0.0.1:7832';
+const API_ORIGIN = `http://127.0.0.1:${process.env.QUARRY_LIVE_API_PORT ?? '7832'}`;
 const DOCUMENT_PATH = 'shared.md';
 
 const INITIAL_MARKDOWN = [

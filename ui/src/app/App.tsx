@@ -12,7 +12,6 @@ import {
   Copy,
   Download,
   Eye,
-  FileArchive,
   FilePlus2,
   FileText,
   FolderInput,
@@ -20,7 +19,6 @@ import {
   GitBranch,
   Hash,
   Heading1,
-  Image as ImageIcon,
   Library,
   Link2,
   MessageSquarePlus,
@@ -59,7 +57,7 @@ import {
   type ImperativePanelGroupHandle,
   type ImperativePanelHandle,
 } from 'react-resizable-panels';
-import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom';
+import { BrowserRouter, useLocation } from 'react-router-dom';
 import useSWR, { useSWRConfig } from 'swr';
 
 import {
@@ -138,8 +136,6 @@ import { collabDebug } from '../features/collab/collab-debug';
 import { saveStateLabel, type CollabSaveState } from '../features/collab/save-state';
 import { tmpCollabWebSocketBaseUrl } from '../features/collab/rust-ws-provider';
 import {
-  MarkdownEditor,
-  type CollabEditorConfig,
   type EditorMode,
   type ImageApi,
   type WikiLinkApi,
@@ -157,14 +153,15 @@ import {
 import { CommentsPanel } from '../features/review/ui/CommentsPanel';
 import { buildDocumentTree, droppedDocumentPath, type TreeNode } from '../features/tree/tree-model';
 import { cn } from '../lib/utils';
-import {
-  tmpWorkspaceRouteForDocument,
-  workspaceRouteForDocument,
-} from './agent-invite';
 import { WELCOME_DOCUMENT } from './welcome-document';
+import { useWorkspaceNavigation } from './workspace-navigation';
+import { useOpenDocumentController } from './open-document-state';
+import { DocumentBody } from './document-body';
+import {
+  type BrowserEventPayload,
+  useWorkspaceEventStream,
+} from './workspace-event-stream';
 
-type EventState = 'idle' | 'connecting' | 'open' | 'polling' | 'error';
-type DocumentScope = 'library' | 'tmp';
 type ThemePreference = 'light' | 'dark';
 type TreeOpenState = Record<string, boolean>;
 type RightPaneTab = 'links' | 'versions' | 'comments';
@@ -174,22 +171,26 @@ const EVENT_POLL_INTERVAL_MS = 5_000;
 // header confirms the save and then gets out of the way.
 const SAVED_STATUS_LINGER_MS = 2_000;
 const RECENT_LIBRARY_LIMIT = 8;
-
-interface BrowserEventPayload {
-  type: string;
-  path?: string | null;
-  from?: string | null;
-  to?: string | null;
-  doc_id?: string | null;
-  version_id?: string | null;
-  etag?: string | null;
-  origin_id?: string | null;
-  source?: string | null;
-  tx_id?: string | null;
-  peer_id?: string | null;
-  applied?: number | null;
-  conflicts?: number | null;
-}
+const LIBRARY_EVENT_TYPES = [
+  'doc.changed',
+  'doc.deleted',
+  'doc.moved',
+  'directory.changed',
+  'stream.lagged',
+  'links.indexed',
+  'library.reindexed',
+  'git.sync.completed',
+  'conflict.created',
+  'conflict.resolved',
+] as const;
+const TMP_EVENT_TYPES = [
+  'doc.changed',
+  'doc.deleted',
+  'doc.moved',
+  'conflict.created',
+  'conflict.resolved',
+  'stream.lagged',
+] as const;
 
 interface TreeMenuState {
   node: TreeNode;
@@ -216,8 +217,6 @@ export function App() {
 
 function Workspace() {
   const location = useLocation();
-  const navigate = useNavigate();
-  const routeSelection = useMemo(() => parseWorkspaceRoute(location.pathname), [location.pathname]);
   const routeCollabToken = useMemo(
     () => new URLSearchParams(location.search).get('token') ?? undefined,
     [location.search]
@@ -231,28 +230,25 @@ function Workspace() {
     libDocumentsEnabled ? '/v1/libraries' : null,
     listLibraries
   );
-  const [activeLibrary, setActiveLibrary] = useState<string>(() => {
-    return routeSelection.library ?? localStorage.getItem('quarry:active-library') ?? '';
+  const defaultLibrary = orderLibrariesByRecent(libraries, '')[0]?.slug ?? libraries[0]?.slug ?? '';
+  const navigation = useWorkspaceNavigation({
+    capabilitiesLoaded,
+    defaultLibrary,
+    libDocumentsEnabled,
+    libraries,
+    tmpDocumentsEnabled,
   });
+  const { activeLibrary, documentScope, routeSelection, selectedPath } = navigation;
   const [treeOpenState, setTreeOpenState] = useState<TreeOpenState>(() =>
     loadTreeOpenState(activeLibrary)
   );
   const [rightPaneTab, setRightPaneTab] = useState<RightPaneTab>(() => loadRightPaneTab(activeLibrary));
-  const [documentScope, setDocumentScope] = useState<DocumentScope>(routeSelection.scope);
-  const [selectedPath, setSelectedPath] = useState(routeSelection.path ?? '');
   const [searchQuery, setSearchQuery] = useState('');
-  const [content, setContent] = useState('');
-  const [etag, setEtag] = useState('');
-  const [contentType, setContentType] = useState('text/markdown');
   // The Phase 5 save state: derived inside the collab editor from
   // connection state + checkpoint-ack coverage; null = no session-backed
   // document open (nothing to save from the browser).
   const [saveState, setSaveState] = useState<CollabSaveState | null>(null);
   const [editorMode, setEditorMode] = useState<EditorMode>('editing');
-  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
-  const [compareVersionId, setCompareVersionId] = useState<string | null>(null);
-  const [currentDiffOpen, setCurrentDiffOpen] = useState(false);
-  const [eventState, setEventState] = useState<EventState>('idle');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState('');
   const [gitOpen, setGitOpen] = useState(false);
@@ -285,91 +281,15 @@ function Workspace() {
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [resizingPanels, setResizingPanels] = useState(false);
   const selectedPathRef = useRef(selectedPath);
-  const activeLibraryRef = useRef(activeLibrary);
-  const contentRef = useRef(content);
   const openDocumentRef = useRef<(path: string) => void>(() => {});
-  const loadedDocumentRef = useRef<{
-    scope: DocumentScope;
-    library: string;
-    path: string;
-    etag: string;
-    documentId: string;
-  } | null>(null);
   const liveCollabSessionRef = useRef<LiveCollabSession | null>(null);
   const collabSessionIdRef = useRef(makeCollabSessionId());
   const searchQueryRef = useRef(searchQuery);
-  const appliedRouteRef = useRef(location.pathname);
 
   useEffect(() => {
-    if (!libDocumentsEnabled) return;
-    if (!activeLibrary && libraries.length >= 1) {
-      const nextLibrary = orderLibrariesByRecent(libraries, '')[0]?.slug ?? libraries[0].slug;
-      setActiveLibrary(nextLibrary);
-      setTreeOpenState(loadTreeOpenState(nextLibrary));
-      setRightPaneTab(loadRightPaneTab(nextLibrary));
-    }
-    if (activeLibrary && libraries.length > 0 && libraries.every((library) => library.slug !== activeLibrary)) {
-      const nextLibrary = libraries[0]?.slug ?? '';
-      setActiveLibrary(nextLibrary);
-      setTreeOpenState(loadTreeOpenState(nextLibrary));
-      setRightPaneTab(loadRightPaneTab(nextLibrary));
-    }
-  }, [activeLibrary, libDocumentsEnabled, libraries]);
-
-  useEffect(() => {
-    if (!capabilitiesLoaded) return;
-    if (documentScope === 'library' && !libDocumentsEnabled && tmpDocumentsEnabled) {
-      setDocumentScope('tmp');
-      setActiveLibrary('');
-      setSelectedPath('');
-      navigate('/tmp', { replace: true });
-    }
-  }, [
-    capabilitiesLoaded,
-    documentScope,
-    libDocumentsEnabled,
-    navigate,
-    tmpDocumentsEnabled,
-  ]);
-
-  useEffect(() => {
-    if (appliedRouteRef.current === location.pathname) return;
-    appliedRouteRef.current = location.pathname;
-    const selection = parseWorkspaceRoute(location.pathname);
-    setDocumentScope(selection.scope);
-    if (selection.library) {
-      setActiveLibrary(selection.library);
-      setTreeOpenState(loadTreeOpenState(selection.library));
-      setRightPaneTab(loadRightPaneTab(selection.library));
-    }
-    if (selection.path !== undefined) setSelectedPath(selection.path);
-  }, [location.pathname]);
-
-  useEffect(() => {
-    if (!capabilitiesLoaded) return;
-    // A create route resolves itself (with `replace`) once the document
-    // exists; syncing it to `/tmp` here would cancel the creation.
-    if (routeSelection.createTmp) return;
-    if (documentScope === 'library' && !libDocumentsEnabled) return;
-    if (documentScope === 'tmp' && !tmpDocumentsEnabled) return;
-    const nextPath =
-      documentScope === 'tmp'
-        ? tmpWorkspaceRouteForDocument(selectedPath)
-        : workspaceRouteForDocument(activeLibrary, selectedPath);
-    if (nextPath && location.pathname !== nextPath) {
-      navigate(nextPath, { replace: location.pathname === '/' });
-    }
-  }, [
-    activeLibrary,
-    capabilitiesLoaded,
-    documentScope,
-    libDocumentsEnabled,
-    location.pathname,
-    navigate,
-    routeSelection.createTmp,
-    selectedPath,
-    tmpDocumentsEnabled,
-  ]);
+    setTreeOpenState(loadTreeOpenState(activeLibrary));
+    setRightPaneTab(loadRightPaneTab(activeLibrary));
+  }, [activeLibrary]);
 
   // `/tmp/new` creates a welcome-seeded scratch document and replaces itself
   // with the document's real route, so reloads and the back button never
@@ -380,13 +300,12 @@ function Workspace() {
     autoCreatedTmpRef.current = true;
     void (async () => {
       try {
-        const secret = await createNewTmpDocument(WELCOME_DOCUMENT);
-        navigate(tmpWorkspaceRouteForDocument(secret ?? ''), { replace: true });
+        await createNewTmpDocument(WELCOME_DOCUMENT, { replace: true });
       } catch {
-        navigate('/tmp', { replace: true });
+        navigation.openTmpDocument('', { replace: true });
       }
     })();
-  }, [navigate, routeSelection.createTmp, tmpDocumentsEnabled]);
+  }, [routeSelection.createTmp, tmpDocumentsEnabled]);
 
   useEffect(() => {
     if (libDocumentsEnabled && activeLibrary) {
@@ -414,14 +333,6 @@ function Workspace() {
   useEffect(() => {
     selectedPathRef.current = selectedPath;
   }, [selectedPath]);
-
-  useEffect(() => {
-    activeLibraryRef.current = activeLibrary;
-  }, [activeLibrary]);
-
-  useEffect(() => {
-    contentRef.current = content;
-  }, [content]);
 
   useEffect(() => {
     openDocumentRef.current = openDocument;
@@ -516,97 +427,55 @@ function Workspace() {
     return () => window.removeEventListener('keydown', handleKeyboard);
   }, []);
 
-  useEffect(() => {
-    if (!libDocumentsEnabled || !activeLibrary) {
-      setEventState('idle');
-      return;
-    }
-    let pollingTimer: number | null = null;
-    const eventTypes = [
-      'doc.changed',
-      'doc.deleted',
-      'doc.moved',
-      'directory.changed',
-      'stream.lagged',
-      'links.indexed',
-      'library.reindexed',
-      'git.sync.completed',
-      'conflict.created',
-      'conflict.resolved',
-    ];
-    const handleEvent = (event: MessageEvent) => {
-      const payload = parseBrowserEvent(event);
-      if (payload) invalidateFromEvent(payload);
-    };
-
-    function invalidateDocumentState(path: string) {
+  const invalidateLibraryDocumentState = useCallback(
+    (path: string) => {
       const ref = libraryDocumentRef(activeLibrary, path);
       void mutate(documentRefKey('document', ref));
       void mutate(documentRefKey('versions', ref));
       void mutate(['/v1/outgoing', activeLibrary, path]);
       void mutate(['/v1/backlinks', activeLibrary, path]);
-    }
-
-    function clearDeletedDocumentState(path: string) {
-      void clearDeletedDocumentCaches(libraryDocumentRef(activeLibrary, path));
-    }
-
-    function invalidateCurrentBacklinks() {
+    },
+    [activeLibrary, mutate]
+  );
+  const invalidateLibrarySearch = useCallback(() => {
+    const query = searchQueryRef.current;
+    if (query) void mutate(['/v1/search', activeLibrary, query]);
+  }, [activeLibrary, mutate]);
+  const invalidateCurrentBacklinks = useCallback(() => {
+    const currentPath = selectedPathRef.current;
+    if (currentPath) void mutate(['/v1/backlinks', activeLibrary, currentPath]);
+  }, [activeLibrary, mutate]);
+  const handleLibraryEvent = useCallback(
+    (payload: BrowserEventPayload) => {
       const currentPath = selectedPathRef.current;
-      if (currentPath) void mutate(['/v1/backlinks', activeLibrary, currentPath]);
-    }
-
-    function invalidateSearch() {
-      const query = searchQueryRef.current;
-      if (query) void mutate(['/v1/search', activeLibrary, query]);
-    }
-
-    function invalidateIndexedState() {
-      const currentPath = selectedPathRef.current;
-      if (currentPath) {
-        void mutate(['/v1/outgoing', activeLibrary, currentPath]);
-        void mutate(['/v1/backlinks', activeLibrary, currentPath]);
-      }
-      invalidateSearch();
-    }
-
-    function invalidateGitSyncState(payload: BrowserEventPayload) {
-      const currentPath = selectedPathRef.current;
-      if (currentPath) {
-        invalidateDocumentState(currentPath);
-      }
-      void mutate(['/v1/conflicts', activeLibrary]);
-      void mutate(['/v1/git-peers', activeLibrary]);
-      setLastSyncResult(gitSyncEventSummary(payload));
-    }
-
-    function invalidateFromEvent(payload: BrowserEventPayload) {
       void mutate(['/v1/documents', activeLibrary]);
-      invalidateSearch();
+      invalidateLibrarySearch();
 
       if (payload.type === 'stream.lagged' || payload.type === 'directory.changed') {
-        const currentPath = selectedPathRef.current;
-        if (currentPath) invalidateDocumentState(currentPath);
+        if (currentPath) invalidateLibraryDocumentState(currentPath);
         void mutate(['/v1/conflicts', activeLibrary]);
         return;
       }
-
       if (payload.type === 'links.indexed' || payload.type === 'library.reindexed') {
-        invalidateIndexedState();
+        if (currentPath) {
+          void mutate(['/v1/outgoing', activeLibrary, currentPath]);
+          void mutate(['/v1/backlinks', activeLibrary, currentPath]);
+        }
+        invalidateLibrarySearch();
         return;
       }
-
       if (payload.type === 'git.sync.completed') {
-        invalidateGitSyncState(payload);
+        if (currentPath) invalidateLibraryDocumentState(currentPath);
+        void mutate(['/v1/conflicts', activeLibrary]);
+        void mutate(['/v1/git-peers', activeLibrary]);
+        setLastSyncResult(gitSyncEventSummary(payload));
         return;
       }
-
       if (payload.type === 'conflict.created' || payload.type === 'conflict.resolved') {
         void mutate(['/v1/conflicts', activeLibrary]);
         return;
       }
 
-      const currentPath = selectedPathRef.current;
       const liveDecision = classifyLiveDocumentEvent(payload, liveCollabSessionRef.current);
       if (liveDecision.action !== 'pass') {
         collabDebug('event.classify', {
@@ -618,8 +487,6 @@ function Workspace() {
         });
       }
       if (liveDecision.action === 'session_refresh') {
-        // Every write to the session document reaches the editor through
-        // the live doc; the event only refreshes metadata caches.
         if (currentPath) {
           invalidateDocumentScopedState(libraryDocumentRef(activeLibrary, currentPath));
           void mutate(['/v1/outgoing', activeLibrary, currentPath]);
@@ -634,79 +501,54 @@ function Workspace() {
             path: liveDecision.path,
           };
         }
-        setSelectedPath(liveDecision.path);
+        navigation.openLibraryDocument(activeLibrary, liveDecision.path, { replace: true });
         invalidateCurrentBacklinks();
         return;
       }
-
       if (payload.type === 'doc.deleted' && payload.path) {
-        clearDeletedDocumentState(payload.path);
-        if (payload.path === currentPath) setSelectedPath('');
+        void clearDeletedDocumentCaches(libraryDocumentRef(activeLibrary, payload.path));
+        if (payload.path === currentPath) navigation.closeDocument();
         else invalidateCurrentBacklinks();
         return;
       }
       if (payload.type === 'doc.moved' && payload.from === currentPath && payload.to) {
-        setSelectedPath(payload.to);
-        invalidateDocumentState(payload.to);
+        navigation.openLibraryDocument(activeLibrary, payload.to, { replace: true });
+        invalidateLibraryDocumentState(payload.to);
         return;
       }
       if (payload.path && payload.path === currentPath) {
-        invalidateDocumentState(payload.path);
+        invalidateLibraryDocumentState(payload.path);
         return;
       }
       invalidateCurrentBacklinks();
-    }
-
-    function pollServerState() {
-      void mutate(['/v1/documents', activeLibrary]);
-      const currentPath = selectedPathRef.current;
-      if (currentPath) {
-        invalidateDocumentState(currentPath);
-      }
-      void mutate(['/v1/conflicts', activeLibrary]);
-      void mutate(['/v1/git-peers', activeLibrary]);
-      invalidateSearch();
-    }
-
-    function startPollingFallback() {
-      setEventState('polling');
-      void pollServerState();
-      if (pollingTimer !== null) return;
-      pollingTimer = window.setInterval(() => {
-        void pollServerState();
-      }, EVENT_POLL_INTERVAL_MS);
-    }
-
-    function stopPollingFallback() {
-      if (pollingTimer === null) return;
-      window.clearInterval(pollingTimer);
-      pollingTimer = null;
-    }
-
-    if (typeof EventSource === 'undefined') {
-      startPollingFallback();
-      return stopPollingFallback;
-    }
-
-    setEventState('connecting');
-    const source = new EventSource(`/v1/events?library=${encodeURIComponent(activeLibrary)}`);
-    for (const eventType of eventTypes) {
-      source.addEventListener(eventType, handleEvent);
-    }
-    source.onopen = () => {
-      stopPollingFallback();
-      setEventState('open');
-    };
-    source.onerror = () => startPollingFallback();
-
-    return () => {
-      for (const eventType of eventTypes) {
-        source.removeEventListener(eventType, handleEvent);
-      }
-      source.close();
-      stopPollingFallback();
-    };
-  }, [activeLibrary, clearDeletedDocumentCaches, invalidateDocumentScopedState, libDocumentsEnabled, mutate]);
+    },
+    [
+      activeLibrary,
+      clearDeletedDocumentCaches,
+      invalidateCurrentBacklinks,
+      invalidateDocumentScopedState,
+      invalidateLibraryDocumentState,
+      invalidateLibrarySearch,
+      mutate,
+      navigation,
+    ]
+  );
+  const pollLibraryState = useCallback(() => {
+    void mutate(['/v1/documents', activeLibrary]);
+    const currentPath = selectedPathRef.current;
+    if (currentPath) invalidateLibraryDocumentState(currentPath);
+    void mutate(['/v1/conflicts', activeLibrary]);
+    void mutate(['/v1/git-peers', activeLibrary]);
+    invalidateLibrarySearch();
+  }, [activeLibrary, invalidateLibraryDocumentState, invalidateLibrarySearch, mutate]);
+  useWorkspaceEventStream({
+    enabled: libDocumentsEnabled && Boolean(activeLibrary),
+    eventTypes: LIBRARY_EVENT_TYPES,
+    onEvent: handleLibraryEvent,
+    onPoll: pollLibraryState,
+    pollIntervalMs: EVENT_POLL_INTERVAL_MS,
+    url: `/v1/events?library=${encodeURIComponent(activeLibrary)}`,
+  });
 
   const isTmpDocument = documentScope === 'tmp';
   const isLibraryDocument = documentScope === 'library';
@@ -724,79 +566,31 @@ function Workspace() {
       : libraryDocumentRef(activeLibrary, selectedPath)
     : null;
 
-  // Tmp documents get their liveness from the document-scoped SSE stream —
-  // the library stream above is library-wide (documents list, git, search)
-  // and gated on lib documents. The server filters this stream to the one
-  // document and redacts paths, so every event here is ours and no doc_id
-  // correlation is needed. Content still arrives over the collab WebSocket;
-  // the stream only refreshes the metadata projections (versions, review —
-  // diff3 conflicts land there). SSE is primary; polling is the error path.
-  useEffect(() => {
-    if (!isTmpDocument || !tmpDocumentsEnabled || !selectedPath) return;
-    const ref = tmpDocumentRef(selectedPath);
-    let pollingTimer: number | null = null;
-
-    function refreshFromEvent(payload: BrowserEventPayload) {
+  // Tmp content arrives over the live session; document events refresh only
+  // metadata projections and diff3 review records.
+  const tmpEventRef = isTmpDocument && selectedPath ? tmpDocumentRef(selectedPath) : null;
+  const handleTmpEvent = useCallback(
+    (payload: BrowserEventPayload) => {
+      if (!tmpEventRef) return;
       if (payload.type === 'doc.deleted') {
-        void clearDeletedDocumentCaches(ref);
+        void clearDeletedDocumentCaches(tmpEventRef);
         return;
       }
-      invalidateDocumentScopedState(ref);
-    }
-
-    function startPollingFallback() {
-      invalidateDocumentScopedState(ref);
-      if (pollingTimer !== null) return;
-      pollingTimer = window.setInterval(
-        () => invalidateDocumentScopedState(ref),
-        EVENT_POLL_INTERVAL_MS
-      );
-    }
-
-    function stopPollingFallback() {
-      if (pollingTimer === null) return;
-      window.clearInterval(pollingTimer);
-      pollingTimer = null;
-    }
-
-    if (typeof EventSource === 'undefined') {
-      startPollingFallback();
-      return stopPollingFallback;
-    }
-
-    const eventTypes = [
-      'doc.changed',
-      'doc.deleted',
-      'doc.moved',
-      'conflict.created',
-      'conflict.resolved',
-      'stream.lagged',
-    ];
-    const handleEvent = (event: MessageEvent) => {
-      const payload = parseBrowserEvent(event);
-      if (payload) refreshFromEvent(payload);
-    };
-    const source = new EventSource(documentRefUrl(ref, '/events/stream'));
-    for (const eventType of eventTypes) {
-      source.addEventListener(eventType, handleEvent);
-    }
-    source.onopen = () => stopPollingFallback();
-    source.onerror = () => startPollingFallback();
-
-    return () => {
-      for (const eventType of eventTypes) {
-        source.removeEventListener(eventType, handleEvent);
-      }
-      source.close();
-      stopPollingFallback();
-    };
-  }, [
-    clearDeletedDocumentCaches,
-    invalidateDocumentScopedState,
-    isTmpDocument,
-    selectedPath,
-    tmpDocumentsEnabled,
-  ]);
+      invalidateDocumentScopedState(tmpEventRef);
+    },
+    [clearDeletedDocumentCaches, invalidateDocumentScopedState, tmpEventRef]
+  );
+  const pollTmpState = useCallback(() => {
+    if (tmpEventRef) invalidateDocumentScopedState(tmpEventRef);
+  }, [invalidateDocumentScopedState, tmpEventRef]);
+  useWorkspaceEventStream({
+    enabled: Boolean(tmpEventRef && tmpDocumentsEnabled),
+    eventTypes: TMP_EVENT_TYPES,
+    onEvent: handleTmpEvent,
+    onPoll: pollTmpState,
+    pollIntervalMs: EVENT_POLL_INTERVAL_MS,
+    url: tmpEventRef ? documentRefUrl(tmpEventRef, '/events/stream') : '',
+  });
 
   const { data: libraryDocuments = [] } = useSWR(
     libDocumentsEnabled && activeLibrary ? ['/v1/documents', activeLibrary] : null,
@@ -808,6 +602,20 @@ function Workspace() {
     () => getDocument(requireValue(documentRef)),
     { revalidateOnFocus: false }
   );
+  const openDocumentState = useOpenDocumentController({
+    activeLibrary,
+    document,
+    documentScope,
+    selectedPath,
+  });
+  const {
+    compareVersionId,
+    content,
+    contentType,
+    currentDiffOpen,
+    etag,
+    selectedVersionId,
+  } = openDocumentState;
   const { data: search = { results: [], cursor: null } } = useSWR(
     libDocumentsEnabled && isLibraryDocument && activeLibrary && searchQuery
       ? ['/v1/search', activeLibrary, searchQuery]
@@ -918,46 +726,6 @@ function Workspace() {
     () => listGitPeers(activeLibrary)
   );
 
-  useEffect(() => {
-    if (!document) return;
-    const loadedDocument = loadedDocumentRef.current;
-    const sameDocument =
-      loadedDocument?.scope === documentScope &&
-      loadedDocument?.library === activeLibrary &&
-      loadedDocument.path === selectedPath;
-    if (sameDocument) {
-      // A head move on the open document (checkpoint, agent transaction,
-      // whole-file merge). A session-backed editor already carries the
-      // state through the live doc — its serialized mirror is fresher than
-      // the refetched canonical content, so only the bookkeeping moves.
-      loadedDocumentRef.current = {
-        scope: documentScope,
-        library: activeLibrary,
-        path: selectedPath,
-        etag: document.etag,
-        documentId: document.documentId,
-      };
-      setEtag(document.etag);
-      setContentType(document.contentType);
-      if (!liveCollabSessionRef.current) setContent(document.content);
-      return;
-    }
-
-    loadedDocumentRef.current = {
-      scope: documentScope,
-      library: activeLibrary,
-      path: selectedPath,
-      etag: document.etag,
-      documentId: document.documentId,
-    };
-    setContent(document.content);
-    setEtag(document.etag);
-    setContentType(document.contentType);
-    setSelectedVersionId(null);
-    setCompareVersionId(null);
-    setCurrentDiffOpen(false);
-  }, [activeLibrary, document, documentScope, selectedPath]);
-
   const tree = useMemo(
     () =>
       buildDocumentTree(
@@ -979,10 +747,10 @@ function Workspace() {
     selectedPath && isMarkdownDocument(selectedPath, selectedContentType)
   );
   const activeLoadedDocument =
-    loadedDocumentRef.current?.scope === documentScope &&
-    loadedDocumentRef.current?.library === activeLibrary &&
-    loadedDocumentRef.current.path === selectedPath
-      ? loadedDocumentRef.current
+    openDocumentState.identity?.scope === documentScope &&
+    openDocumentState.identity.library === activeLibrary &&
+    openDocumentState.identity.path === selectedPath
+      ? openDocumentState.identity
       : null;
   const selectedDocumentBodyReady = Boolean(
     loadedDocumentForSelection && activeLoadedDocument
@@ -1052,14 +820,13 @@ function Workspace() {
 
   // The editor's serialized mirror: feeds downloads and the current-editor
   // diff. Durability belongs to the session checkpoint, never to this state.
-  function changeContent(next: string) {
-    contentRef.current = next;
-    setContent(next);
-  }
+  const changeContent = useCallback(
+    (next: string) => openDocumentState.changeContent(next),
+    [openDocumentState.changeContent]
+  );
 
   async function createNewDocument(defaultPath = 'untitled.md') {
     if (!libDocumentsEnabled || !activeLibrary) return;
-    setDocumentScope('library');
     const path = window.prompt('New document path', defaultPath);
     if (!path) return;
     const initialContent = '# Untitled\n';
@@ -1073,12 +840,14 @@ function Workspace() {
     );
     await seedCreatedDocumentCaches(libraryDocumentRef(activeLibrary, path), initialContent, initialContentType, created);
     await mutate(['/v1/documents', activeLibrary]);
-    setSelectedPath(path);
+    navigation.openLibraryDocument(activeLibrary, path);
   }
 
-  async function createNewTmpDocument(seed = { title: 'Untitled', content: '# Untitled\n' }) {
+  async function createNewTmpDocument(
+    seed = { title: 'Untitled', content: '# Untitled\n' },
+    options: { readonly replace?: boolean } = {}
+  ) {
     if (!tmpDocumentsEnabled) return;
-    setDocumentScope('tmp');
     const initialContent = seed.content;
     const initialContentType = 'text/markdown';
     const created = await createTmpDocument({
@@ -1093,7 +862,7 @@ function Workspace() {
       initialContentType,
       created
     );
-    setSelectedPath(secret);
+    navigation.openTmpDocument(secret, options);
     return secret;
   }
 
@@ -1136,7 +905,7 @@ function Workspace() {
       mutate(['/v1/documents', activeLibrary]),
       selectedPath ? mutate(['/v1/outgoing', activeLibrary, selectedPath]) : Promise.resolve(),
     ]);
-    setSelectedPath(path);
+    navigation.openLibraryDocument(activeLibrary, path);
   }
 
   async function renameCurrent() {
@@ -1145,7 +914,7 @@ function Workspace() {
     if (!toPath || toPath === selectedPath) return;
     await moveDocument(activeLibrary, selectedPath, toPath, browserMutationOptions());
     await mutate(['/v1/documents', activeLibrary]);
-    setSelectedPath(toPath);
+    navigation.openLibraryDocument(activeLibrary, toPath, { replace: true });
   }
 
   async function moveDocumentPath(fromPath: string) {
@@ -1154,7 +923,9 @@ function Workspace() {
     if (!toPath || toPath === fromPath) return;
     await moveDocument(activeLibrary, fromPath, toPath, browserMutationOptions());
     await mutate(['/v1/documents', activeLibrary]);
-    if (selectedPath === fromPath) setSelectedPath(toPath);
+    if (selectedPath === fromPath) {
+      navigation.openLibraryDocument(activeLibrary, toPath, { replace: true });
+    }
   }
 
   const moveDroppedTreeDocuments: MoveHandler<TreeNode> = async ({ dragNodes, parentNode }) => {
@@ -1171,7 +942,9 @@ function Workspace() {
     );
     await mutate(['/v1/documents', activeLibrary]);
     const movedSelection = moves.find((move) => move.from === selectedPath);
-    if (movedSelection) setSelectedPath(movedSelection.to);
+    if (movedSelection) {
+      navigation.openLibraryDocument(activeLibrary, movedSelection.to, { replace: true });
+    }
   };
 
   async function deleteCurrent() {
@@ -1181,7 +954,7 @@ function Workspace() {
     await deleteDocument(deletingRef, browserMutationOptions());
     await clearDeletedDocumentCaches(deletingRef);
     if (deletingRef.scope === 'library') await mutate(['/v1/documents', activeLibrary]);
-    setSelectedPath('');
+    navigation.closeDocument();
   }
 
   async function promoteCurrentTmpDocument() {
@@ -1197,11 +970,9 @@ function Workspace() {
     });
     await clearDeletedDocumentCaches(tmpDocumentRef(selectedPath));
     await mutate(['/v1/documents', library]);
-    setDocumentScope('library');
-    setActiveLibrary(library);
     setTreeOpenState(loadTreeOpenState(library));
     setRightPaneTab(loadRightPaneTab(library));
-    setSelectedPath(targetPath);
+    navigation.openLibraryDocument(library, targetPath, { replace: true });
   }
 
   // Downloads serve the canonical export (frontmatter included) — the same
@@ -1259,10 +1030,8 @@ function Workspace() {
     try {
       const [text, latest] = await Promise.all([file.text(), getDocument(ref)]);
       const saved = await putDocument(ref, text, latest.etag, 'text/markdown', browserMutationOptions());
-      setEtag(saved.etag || `"${saved.outcome.version.id}"`);
-      setSelectedVersionId(null);
-      setCompareVersionId(null);
-      setCurrentDiffOpen(false);
+      openDocumentState.adoptHead(saved.etag || `"${saved.outcome.version.id}"`);
+      openDocumentState.resetHistoryView();
       const scoped = [
         mutate(documentRefKey('document', ref)),
         mutate(documentRefKey('versions', ref)),
@@ -1353,16 +1122,15 @@ function Workspace() {
     await deleteDocument(libraryDocumentRef(activeLibrary, path), browserMutationOptions());
     await clearDeletedDocumentCaches(libraryDocumentRef(activeLibrary, path));
     await mutate(['/v1/documents', activeLibrary]);
-    if (selectedPath === path) setSelectedPath('');
+    if (selectedPath === path) navigation.closeDocument();
   }
 
   async function restoreSelectedVersion(versionId: string) {
     if (!documentRef) return;
     const ref = documentRef;
     const restored = await restoreVersion(ref, versionId, browserMutationOptions());
-    setEtag(restored.etag || `"${restored.outcome.version.id}"`);
-    setSelectedVersionId(null);
-    setCompareVersionId(null);
+    openDocumentState.adoptHead(restored.etag || `"${restored.outcome.version.id}"`);
+    openDocumentState.resetHistoryView();
     const scoped = [
       mutate(documentRefKey('document', ref)),
       mutate(documentRefKey('versions', ref)),
@@ -1405,9 +1173,8 @@ function Workspace() {
 
   function openDocument(path: string) {
     if (!path || (documentScope === 'library' && path === selectedPath)) return;
-    if (isTmpDocument || !libDocumentsEnabled) setDocumentScope('tmp');
-    else setDocumentScope('library');
-    setSelectedPath(path);
+    if (isTmpDocument || !libDocumentsEnabled) navigation.openTmpDocument(path);
+    else navigation.openLibraryDocument(activeLibrary, path);
   }
 
   function openTreeContextMenu(node: TreeNode, event: ReactKeyboardEvent | ReactMouseEvent) {
@@ -1443,7 +1210,7 @@ function Workspace() {
       if (!window.confirm(`Delete ${node.path}?`)) return;
       await deleteDocument(tmpDocumentRef(node.path), browserMutationOptions());
       await clearDeletedDocumentCaches(tmpDocumentRef(node.path));
-      if (selectedPath === node.path) setSelectedPath('');
+      if (selectedPath === node.path) navigation.closeDocument();
     } else {
       await deleteDocumentPath(node.path);
     }
@@ -1456,12 +1223,9 @@ function Workspace() {
 
   function changeActiveLibrary(slug: string) {
     if (!libDocumentsEnabled) return;
-    setDocumentScope('library');
-    setActiveLibrary(slug);
     setTreeOpenState(loadTreeOpenState(slug));
     setRightPaneTab(loadRightPaneTab(slug));
-    setSelectedPath('');
-    navigate(workspaceRouteForDocument(slug, ''), { replace: false });
+    navigation.selectLibrary(slug);
   }
 
   function changeTreeOpenState(id: string) {
@@ -1490,15 +1254,11 @@ function Workspace() {
   }
 
   function viewSelectedVersion(versionId: string) {
-    setCurrentDiffOpen(false);
-    setSelectedVersionId(versionId);
-    setCompareVersionId(null);
+    openDocumentState.viewVersion(versionId);
   }
 
   function diffCurrentEditor() {
-    setSelectedVersionId(null);
-    setCompareVersionId(null);
-    setCurrentDiffOpen(true);
+    openDocumentState.diffCurrent();
   }
 
   function toggleLeftPane() {
@@ -1621,7 +1381,6 @@ function Workspace() {
               />
               {selectedDocumentBodyReady ? (
                 <DocumentBody
-                  activeLibrary={activeLibrary}
                   author={author}
                   byteSize={selectedEntry?.byte_size}
                   collabEnabled={Boolean(collabDocumentId)}
@@ -1677,7 +1436,7 @@ function Workspace() {
                 currentEditorDiff={currentEditorDiff}
                 compareVersionId={compareVersionId}
                 incoming={incoming.links}
-                onCompareVersionChange={setCompareVersionId}
+                onCompareVersionChange={openDocumentState.changeCompareVersion}
                 onCreateDocumentFromLink={createDocumentFromLink}
                 onDiffCurrent={diffCurrentEditor}
                 onOpenDocument={openDocument}
@@ -1788,213 +1547,6 @@ function Workspace() {
         />
       ) : null}
     </main>
-  );
-}
-
-function DocumentBody({
-  activeLibrary,
-  author,
-  byteSize,
-  collabBaseUrl,
-  collabEnabled,
-  collabRoomName,
-  collabSessionId,
-  collabToken,
-  contentHash,
-  content,
-  contentType,
-  documentId,
-  href,
-  image,
-  mode,
-  path,
-  wikiLink,
-  onChange,
-  onSaveStateChange,
-}: {
-  activeLibrary: string;
-  author: string;
-  byteSize?: number;
-  collabBaseUrl?: string;
-  collabEnabled: boolean;
-  collabRoomName?: string;
-  collabSessionId: string;
-  collabToken?: string;
-  contentHash?: string | null;
-  content: string;
-  contentType: string;
-  documentId: string;
-  href: string;
-  image?: ImageApi;
-  mode: EditorMode;
-  path: string;
-  wikiLink: WikiLinkApi;
-  onChange: (content: string) => void;
-  onSaveStateChange: (state: CollabSaveState) => void;
-}) {
-  // Markdown documents edit through the live session — always. Other text
-  // documents are RawDocuments on the byte path: the browser shows their
-  // source read-only (their write surfaces are files, Git, and agents).
-  if (isMarkdownDocument(path, contentType)) {
-    const collab: CollabEditorConfig | undefined = collabEnabled && documentId
-      ? {
-          documentId,
-          baseUrl: collabBaseUrl,
-          onSaveStateChange,
-          roomName: collabRoomName,
-          sessionId: collabSessionId,
-          token: collabToken,
-        }
-      : undefined;
-    return (
-      <MarkdownEditor
-        author={author}
-        collab={collab}
-        content={content}
-        mode={mode}
-        wikiLink={wikiLink}
-        image={image}
-        onChange={onChange}
-      />
-    );
-  }
-
-  if (isTextContentType(contentType)) {
-    return <TextSourcePreview content={content} contentType={contentType} path={path} />;
-  }
-
-  if (isImageContentType(contentType)) {
-    return (
-      <ImagePreview
-        byteSize={byteSize}
-        contentType={contentType}
-        href={href}
-        path={path}
-      />
-    );
-  }
-
-  return (
-    <BinaryPreview
-      byteSize={byteSize}
-      contentHash={contentHash}
-      contentType={contentType}
-      href={href}
-      path={path}
-    />
-  );
-}
-
-// Read-only source view for non-Markdown text documents (JSON, YAML, plain
-// text). They are RawDocuments: the browser never edits them — whole-file
-// writers (files, Git, agents) own their bytes.
-function TextSourcePreview({
-  content,
-  contentType,
-  path,
-}: {
-  content: string;
-  contentType: string;
-  path: string;
-}) {
-  return (
-    <section aria-label="Text document preview" className="flex min-h-0 flex-1 flex-col bg-surface">
-      <div className="flex h-11 shrink-0 items-center gap-3 border-b border-line px-3 text-sm text-body">
-        <FileText size={15} className="shrink-0 text-accent" />
-        <span className="min-w-0 flex-1 truncate">{path}</span>
-        <span className="shrink-0 text-xs text-muted">{contentType}</span>
-        <span className="shrink-0 text-xs text-muted">Read-only</span>
-      </div>
-      <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap px-8 py-6 font-mono text-[13px] leading-6 text-body">
-        {content}
-      </pre>
-    </section>
-  );
-}
-
-function ImagePreview({
-  byteSize,
-  contentType,
-  href,
-  path,
-}: {
-  byteSize?: number;
-  contentType: string;
-  href: string;
-  path: string;
-}) {
-  return (
-    <section aria-label="Image preview" className="flex min-h-0 flex-1 flex-col bg-surface">
-      <div className="flex h-11 shrink-0 items-center gap-3 border-b border-line px-3 text-sm text-body">
-        <ImageIcon size={15} className="shrink-0 text-accent" />
-        <span className="min-w-0 flex-1 truncate">{path}</span>
-        <span className="shrink-0 text-xs text-muted">{contentType}</span>
-        {typeof byteSize === 'number' ? (
-          <span className="shrink-0 text-xs tabular-nums text-muted">{formatBytes(byteSize)}</span>
-        ) : null}
-      </div>
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-6">
-        <img
-          alt={`${path} preview`}
-          className="max-h-full max-w-full rounded-sm object-contain outline-1 -outline-offset-1 outline-black/10"
-          src={href}
-        />
-      </div>
-    </section>
-  );
-}
-
-function BinaryPreview({
-  byteSize,
-  contentHash,
-  contentType,
-  href,
-  path,
-}: {
-  byteSize?: number;
-  contentHash?: string | null;
-  contentType: string;
-  href: string;
-  path: string;
-}) {
-  return (
-    <section
-      aria-label="Binary document preview"
-      className="flex min-h-0 flex-1 items-center justify-center bg-surface p-6"
-    >
-      <div className="w-full max-w-xl rounded-md border border-line bg-raised p-5">
-        <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-accent-tint text-accent">
-            <FileArchive size={20} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <h2 className="truncate text-sm font-semibold text-ink">{path}</h2>
-            <p className="mt-1 text-sm text-muted">This binary document is available for download.</p>
-          </div>
-          <a className={secondaryButton} download={documentBasename(path)} href={href}>
-            <Download size={15} />
-            Download
-          </a>
-        </div>
-
-        <dl className="mt-5 grid grid-cols-[120px_1fr] gap-x-3 gap-y-2 text-sm">
-          <dt className="text-muted">Path</dt>
-          <dd className="min-w-0 truncate font-mono text-body">{path}</dd>
-          <dt className="text-muted">Content type</dt>
-          <dd className="min-w-0 truncate font-mono text-body">{contentType}</dd>
-          <dt className="text-muted">Size</dt>
-          <dd className="tabular-nums text-body">
-            {typeof byteSize === 'number' ? formatBytes(byteSize) : 'Unknown'}
-          </dd>
-          {contentHash ? (
-            <>
-              <dt className="text-muted">Hash</dt>
-              <dd className="min-w-0 truncate font-mono text-body">{contentHash}</dd>
-            </>
-          ) : null}
-        </dl>
-      </div>
-    </section>
   );
 }
 
@@ -4516,21 +4068,6 @@ function isRightPaneTab(value: unknown): value is RightPaneTab {
   return typeof value === 'string' && rightPaneTabs.some((tab) => tab.key === value);
 }
 
-function eventStatusText(state: EventState) {
-  const label: Record<EventState, string> = {
-    idle: 'Events idle',
-    connecting: 'Events connecting',
-    open: 'Live',
-    polling: 'Polling',
-    error: 'Events unavailable',
-  };
-  return label[state];
-}
-
-function isImageContentType(contentType: string) {
-  return contentType.split(';', 1)[0]?.trim().toLowerCase().startsWith('image/') ?? false;
-}
-
 // Mirrors the server's BlockDocument classification (`document_kind`):
 // .md/.markdown paths or a markdown content type edit through live sessions;
 // everything else stays on the raw byte path.
@@ -4607,58 +4144,11 @@ function gitExportSummary(result: GitExportResult) {
   return `Exported ${result.exported_paths.length}${result.commit_id ? ` · Commit ${result.commit_id}` : ''}`;
 }
 
-function parseWorkspaceRoute(pathname: string) {
-  const segments = pathname.split('/').filter(Boolean);
-  if (segments[0] === 'tmp') {
-    // `/tmp/new` (the homepage's "start a document" link) names no document;
-    // it asks the workspace to create one and route to it.
-    if (segments[1] === 'new') {
-      return { scope: 'tmp' as DocumentScope, library: null, path: '', createTmp: true };
-    }
-    return {
-      scope: 'tmp' as DocumentScope,
-      library: null,
-      path: segments[1] ? safeDecodeSegment(segments[1]) : '',
-      createTmp: false,
-    };
-  }
-  if (segments[0] !== 'lib' || !segments[1]) {
-    return { scope: 'library' as DocumentScope, library: null, path: undefined, createTmp: false };
-  }
-  const library = safeDecodeSegment(segments[1]);
-  if (segments[2] !== 'documents') {
-    return { scope: 'library' as DocumentScope, library, path: '', createTmp: false };
-  }
-  return {
-    scope: 'library' as DocumentScope,
-    library,
-    path: segments.slice(3).map(safeDecodeSegment).join('/'),
-    createTmp: false,
-  };
-}
-
-function safeDecodeSegment(segment: string) {
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    return segment;
-  }
-}
-
 function makeCollabSessionId() {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
     return `browser:${crypto.randomUUID()}`;
   }
   return `browser:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
-}
-
-function parseBrowserEvent(event: MessageEvent): BrowserEventPayload | null {
-  try {
-    const payload = JSON.parse(String(event.data)) as BrowserEventPayload;
-    return typeof payload.type === 'string' ? payload : null;
-  } catch {
-    return null;
-  }
 }
 
 const primaryButton =

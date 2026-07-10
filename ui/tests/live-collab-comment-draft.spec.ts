@@ -12,7 +12,7 @@
 
 import { expect, test, type APIRequestContext, type Browser, type Page } from 'playwright/test';
 
-const API_ORIGIN = 'http://127.0.0.1:7832';
+const API_ORIGIN = `http://127.0.0.1:${process.env.QUARRY_LIVE_API_PORT ?? '7832'}`;
 const DOCUMENT_PATH = 'draft-privacy.md';
 
 test.describe.configure({ timeout: 120_000 });

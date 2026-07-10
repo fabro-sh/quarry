@@ -5,6 +5,10 @@ import { PlateMarkdownEditor } from './PlateMarkdownEditor';
 import { useReviewStore } from '../review/review-store';
 import { emptyReviewMeta } from '../review/rfm-types';
 
+vi.mock('../review/ui/ReviewRail', () => ({
+  ReviewRail: () => null,
+}));
+
 // Reconnect-lifecycle teardown (Phase 5 review, Critical): a connection
 // attempt that never OPENS gets no `status: 'disconnected'` from
 // y-websocket, and @platejs/yjs's destroy() skips providers that never
