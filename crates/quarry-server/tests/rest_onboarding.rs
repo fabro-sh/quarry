@@ -62,6 +62,10 @@ async fn onboarding_documents_render_the_forwarded_origin() {
     assert!(body.contains("brew trust --tap fabro-sh/quarry"));
     assert!(body.contains("https://quarry.lithos.computer/prompt.md"));
     assert!(body.contains("https://quarry.lithos.computer/example.md"));
+    assert!(body.contains("## Install or Refresh Your Persistent Instructions"));
+    assert!(body.contains("replace the entire marked block"));
+    assert!(body.contains("legacy unmarked `## Quarry` section"));
+    assert!(body.contains("verify that each marker appears exactly once"));
     assert!(!body.contains("__QUARRY_ORIGIN__"));
 }
 
@@ -71,10 +75,30 @@ async fn prompt_document_teaches_the_review_workflow() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(content_type, "text/markdown; charset=utf-8");
+    assert_eq!(
+        body.matches("<!-- BEGIN QUARRY AGENT INSTRUCTIONS -->")
+            .count(),
+        1
+    );
+    assert_eq!(
+        body.matches("<!-- END QUARRY AGENT INSTRUCTIONS -->")
+            .count(),
+        1
+    );
+    assert!(body.contains(
+        "Use Quarry when a Markdown document needs review, comments, collaboration, or user markup."
+    ));
     assert!(body.contains("quarry open"));
+    assert!(body.contains("creates the shared document"));
+    assert!(body.contains("Follow them exactly, and do not edit until the user asks."));
     assert!(body.contains("suggestion.add"));
+    assert!(body.contains("`suggestion.add` rather than editing directly"));
     assert!(body.contains("bearer capabilities"));
+    assert!(body.contains(
+        "Never put sensitive content on an untrusted server or log/repost a document URL."
+    ));
     assert!(body.contains("http://127.0.0.1:7831/quarry.SKILL.md"));
+    assert!(!body.contains("send `X-Agent-Id` on every request"));
     assert!(!body.contains("__QUARRY_ORIGIN__"));
 }
 

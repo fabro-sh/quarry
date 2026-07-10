@@ -39,7 +39,7 @@ curl -fsSL __QUARRY_ORIGIN__/example.md -o "$example_file"
 quarry open "$example_file"
 ```
 
-`quarry open` creates the document on the server (https://quarry.lithos.computer by default; pass `--server` to target another), opens it in the user's browser, and prints connect instructions for you. Follow them exactly: send `X-Agent-Id` on every request, register presence, read the block tree, and reply "Connected in Quarry and ready."
+`quarry open` creates the shared document on the server (https://quarry.lithos.computer by default; pass `--server` to target another), opens it in the user's browser, and prints connection instructions. Follow them exactly.
 
 Then seed the review so the user has something to react to:
 
@@ -49,7 +49,7 @@ Then seed the review so the user has something to react to:
 
 While the user explores, keep the document's events stream open (`GET .../events/stream`). When a `doc.changed` event arrives, re-read `.../blocks` and `.../review` and respond to the user's comments in the document.
 
-## Update Your Persistent Instructions
+## Install or Refresh Your Persistent Instructions
 
 Add Quarry guidance to the persistent instruction file this agent will actually load. Prefer global or user-level instructions, because Quarry is a cross-project workflow.
 
@@ -80,27 +80,39 @@ find \
   2>/dev/null
 ```
 
-If one or more files exist, choose the one for the current agent and merge in any missing Quarry guidance. If the current agent cannot determine which file it loads, use its built-in memory or settings command when available, such as Claude Code's `/memory`.
+If one or more files exist, choose the one the current agent loads and refresh its Quarry block using the process below. If the current agent cannot determine which file it loads, use its built-in memory or settings command when available, such as Claude Code's `/memory`.
 
 If no persistent instruction file exists and the user has not specified a tool, create a portable canonical file at `${XDG_CONFIG_HOME:-$HOME/.config}/agents/AGENTS.md`, then connect vendor-specific global files to it. Do not overwrite existing files.
 
 Use imports or symlinks only when the target agent supports normal Markdown files at that path. For UI-only settings such as Cursor User Rules or GitHub Copilot personal instructions, tell the user what text to add rather than editing an unknown file.
 
-The canonical Quarry instruction block is hosted at __QUARRY_ORIGIN__/prompt.md. After you identify or create the right instruction file, append or merge that exact block:
+The canonical Quarry instruction block is hosted at __QUARRY_ORIGIN__/prompt.md and delimited by stable markers:
 
-```bash
-agent_instructions_file="/absolute/path/to/AGENTS.md"
-printf "\n\n" >> "$agent_instructions_file"
-curl -fsSL __QUARRY_ORIGIN__/prompt.md >> "$agent_instructions_file"
+```text
+<!-- BEGIN QUARRY AGENT INSTRUCTIONS -->
+<!-- END QUARRY AGENT INSTRUCTIONS -->
 ```
 
-If the instruction file already has Quarry guidance, merge in any missing guidance from __QUARRY_ORIGIN__/prompt.md instead of duplicating the section.
+After identifying or creating the right instruction file, fetch the canonical block:
+
+```bash
+canonical_quarry_block="$(mktemp)"
+curl -fsSL __QUARRY_ORIGIN__/prompt.md -o "$canonical_quarry_block"
+```
+
+Update the instruction file idempotently:
+
+1. If the marker pair already exists, replace the entire marked block with the fetched block.
+2. Otherwise, if a legacy unmarked `## Quarry` section exists, replace that section through the next level-two heading (or end of file) with the fetched block. Preserve any user-authored Quarry rules that are not part of the old canonical section by moving them outside the managed markers.
+3. Otherwise, append the fetched block with one blank line separating it from existing content.
+
+Never add a second Quarry heading or marker pair, and never overwrite unrelated instructions. Re-read the file afterward, verify that each marker appears exactly once and the surrounding content is unchanged, then remove the temporary canonical block.
 
 After updating your instructions, briefly tell the user which file you changed.
 
 ## Key Behaviors
 
-- One command shares a document: `quarry open <file>` (or `quarry new` for an empty one). The printed connect instructions are the source of truth for joining that document.
-- Documents are collaborative and live. You and the user can work in the document at the same time; monitor the events stream rather than polling blindly.
-- Propose, don't impose. While the user is reviewing, prefer `suggestion.add` (tracked changes) and comments over direct edits, and never edit before the user asks.
-- Document URLs are bearer capabilities. Anyone with the URL can read and edit the document, and documents on shared servers expire (30 days by default). Keep sensitive content off servers the user does not control, and do not log or repost document URLs.
+- Share a document with `quarry open <file>` (or use `quarry new` for an empty one). Its printed connection instructions are the source of truth.
+- Documents are live and collaborative. Monitor the events stream while the user reviews, and re-read the document after activity.
+- During review, use comments and `suggestion.add` rather than editing directly. Never edit before the user asks.
+- Document URLs are bearer capabilities, and shared-server documents expire (30 days by default). Never put sensitive content on an untrusted server or log/repost a document URL.
