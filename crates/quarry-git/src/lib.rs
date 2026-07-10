@@ -16,11 +16,22 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::{Arc, LazyLock};
+use std::time::{Duration, Instant};
 use thiserror::Error;
+use tokio::sync::Semaphore;
 use utoipa::ToSchema;
 use uuid::Uuid;
 use walkdir::WalkDir;
+
+const LOCAL_GIT_OPERATION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const REMOTE_GIT_OPERATION_TIMEOUT: Duration = Duration::from_secs(2 * 60);
+
+// Git peer operations are already serialized by QuarryStore's global operation
+// gate. Keeping the blocking lane single-file preserves that invariant for the
+// public import/export helpers too, and keeps a timed-out spawn_blocking job
+// from racing a later job while the first closure finishes in the background.
+static GIT_BLOCKING_LANE: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(1)));
 
 #[derive(Debug, Error)]
 pub enum GitError {
@@ -28,6 +39,19 @@ pub enum GitError {
     Git(#[from] git2::Error),
     #[error("path is outside the git worktree: {0}")]
     WorktreePath(#[from] std::path::StripPrefixError),
+    #[error("Git blocking lane closed during {operation}")]
+    BlockingLaneClosed { operation: &'static str },
+    #[error("Git blocking task failed during {operation}")]
+    BlockingTask {
+        operation: &'static str,
+        #[source]
+        source: tokio::task::JoinError,
+    },
+    #[error("Git operation {operation} timed out after {timeout_seconds} seconds")]
+    OperationTimedOut {
+        operation: &'static str,
+        timeout_seconds: u64,
+    },
 }
 
 impl From<GitError> for QuarryError {
@@ -82,10 +106,100 @@ struct GitFile {
     oid: String,
 }
 
+struct WorktreeImportFile {
+    path: String,
+    file: GitFile,
+}
+
+struct WorktreeExportFile {
+    path: String,
+    content: Vec<u8>,
+    metadata: JsonValue,
+}
+
+struct WorktreeExportPlan {
+    repo_dir: PathBuf,
+    library_id: String,
+    library_slug: String,
+    branch: String,
+    frontmatter_markdown: bool,
+    files: Vec<WorktreeExportFile>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct Marker {
     library_id: String,
     library_slug: String,
+}
+
+async fn run_git_blocking<T, F>(
+    operation: &'static str,
+    repo_dir: PathBuf,
+    timeout_duration: Duration,
+    work: F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    let repo = repo_dir.display().to_string();
+    let operation_future = async move {
+        let permit = GIT_BLOCKING_LANE
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| GitError::BlockingLaneClosed { operation })?;
+        let span = tracing::debug_span!(
+            "git.operation",
+            operation,
+            repo,
+            timeout_ms = timeout_duration.as_millis() as u64
+        );
+        let task = tokio::task::spawn_blocking(move || {
+            // The permit deliberately lives in the closure. spawn_blocking jobs
+            // cannot be cancelled once started, so a caller timeout must not
+            // admit a later Git job until this one has actually stopped.
+            let _permit = permit;
+            span.in_scope(|| {
+                let started = Instant::now();
+                let result = work();
+                match &result {
+                    Ok(_) => tracing::debug!(
+                        event = "git.blocking.completed",
+                        duration_ms = started.elapsed().as_millis() as u64,
+                        "Git blocking operation completed"
+                    ),
+                    Err(error) => tracing::warn!(
+                        event = "git.blocking.failed",
+                        error = ?error,
+                        duration_ms = started.elapsed().as_millis() as u64,
+                        "Git blocking operation failed"
+                    ),
+                }
+                result
+            })
+        });
+        task.await
+            .map_err(|source| GitError::BlockingTask { operation, source })?
+    };
+
+    match tokio::time::timeout(timeout_duration, operation_future).await {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::warn!(
+                event = "git.blocking.timed_out",
+                operation,
+                repo = %repo_dir.display(),
+                timeout_ms = timeout_duration.as_millis() as u64,
+                "Git blocking operation timed out"
+            );
+            Err(GitError::OperationTimedOut {
+                operation,
+                timeout_seconds: timeout_duration.as_secs(),
+            }
+            .into())
+        }
+    }
 }
 
 pub async fn push_peer(store: &QuarryStore, library: &str, peer_id: &str) -> Result<GitSyncResult> {
@@ -127,7 +241,7 @@ async fn push_peer_inner(
     )
     .await?;
     if let Some(remote) = &peer.remote {
-        push_remote(&peer.repo, remote, &branch)?;
+        push_remote(&peer.repo, remote, &branch).await?;
     }
     record_exported_sync_state(store, library, peer_id, &peer.repo).await?;
     tracing::info!(
@@ -180,9 +294,9 @@ async fn pull_peer_inner(
         "Git pull started"
     );
     if let Some(remote) = &peer.remote {
-        fetch_remote_worktree(&peer.repo, remote, &peer.branch)?;
+        fetch_remote_worktree(&peer.repo, remote, &peer.branch).await?;
     }
-    verify_marker(&peer.repo, &store.get_library(library).await?.id)?;
+    verify_marker(&peer.repo, &store.get_library(library).await?.id).await?;
     let import = import_worktree(store, library, &peer.repo).await?;
     record_exported_sync_state(store, library, peer_id, &peer.repo).await?;
     tracing::info!(
@@ -253,10 +367,10 @@ async fn sync_peer_inner(
         "Git sync started"
     );
     if let Some(remote) = &peer.remote {
-        fetch_remote_worktree(&peer.repo, remote, &peer.branch)?;
+        fetch_remote_worktree(&peer.repo, remote, &peer.branch).await?;
     }
     let library_record = store.get_library(library).await?;
-    verify_marker(&peer.repo, &library_record.id)?;
+    verify_marker(&peer.repo, &library_record.id).await?;
 
     let docs = store
         .list_documents(&library_record.slug, None, Some(10_000))
@@ -265,7 +379,7 @@ async fn sync_peer_inner(
         .into_iter()
         .map(|doc| (doc.path.clone(), doc))
         .collect();
-    let git_map = worktree_snapshot(&peer.repo)?;
+    let git_map = worktree_snapshot(&peer.repo).await?;
     let mut paths: BTreeSet<String> = doc_map.keys().cloned().collect();
     paths.extend(git_map.keys().cloned());
     let sync_states: HashMap<String, SyncStateEntry> = store
@@ -327,7 +441,7 @@ async fn sync_peer_inner(
     )
     .await?;
     if let Some(remote) = &peer.remote {
-        push_remote(&peer.repo, remote, &peer.branch)?;
+        push_remote(&peer.repo, remote, &peer.branch).await?;
     }
     record_exported_sync_state(store, &library_record.slug, peer_id, &peer.repo).await?;
     for path in &sync_paths.deleted_sync_paths {
@@ -713,9 +827,7 @@ pub async fn import_worktree(
     library: &str,
     repo_dir: &Path,
 ) -> Result<GitImportResult> {
-    if !repo_dir.exists() {
-        return Err(QuarryError::NotFound(repo_dir.display().to_string()));
-    }
+    ensure_worktree_exists(repo_dir).await?;
     let library_record = store.get_library(library).await?;
     let tx = store
         .begin_transaction(
@@ -727,20 +839,51 @@ pub async fn import_worktree(
         )
         .await?;
 
-    let result = import_worktree_transaction(store, &library_record.slug, repo_dir, &tx.id).await;
+    let result = async {
+        let import_files = read_worktree_import_files(repo_dir).await?;
+        import_worktree_transaction(store, &library_record.slug, import_files, &tx.id).await
+    }
+    .await;
     if result.is_err() {
         let _ = store.rollback_transaction(&tx.id).await;
     }
     result
 }
 
-async fn import_worktree_transaction(
-    store: &QuarryStore,
-    library: &str,
-    repo_dir: &Path,
-    tx_id: &str,
-) -> Result<GitImportResult> {
-    let mut imported_paths = Vec::new();
+async fn ensure_worktree_exists(repo_dir: &Path) -> Result<()> {
+    let repo_dir = repo_dir.to_path_buf();
+    run_git_blocking(
+        "worktree.import.validate",
+        repo_dir.clone(),
+        LOCAL_GIT_OPERATION_TIMEOUT,
+        move || {
+            if repo_dir.exists() {
+                Ok(())
+            } else {
+                Err(QuarryError::NotFound(repo_dir.display().to_string()))
+            }
+        },
+    )
+    .await
+}
+
+async fn read_worktree_import_files(repo_dir: &Path) -> Result<Vec<WorktreeImportFile>> {
+    let repo_dir = repo_dir.to_path_buf();
+    run_git_blocking(
+        "worktree.import.scan",
+        repo_dir.clone(),
+        LOCAL_GIT_OPERATION_TIMEOUT,
+        move || scan_worktree_import_files(&repo_dir),
+    )
+    .await
+}
+
+fn scan_worktree_import_files(repo_dir: &Path) -> Result<Vec<WorktreeImportFile>> {
+    if !repo_dir.exists() {
+        return Err(QuarryError::NotFound(repo_dir.display().to_string()));
+    }
+
+    let mut import_files = Vec::new();
     for entry in WalkDir::new(repo_dir).into_iter().filter_entry(|entry| {
         let name = entry.file_name().to_string_lossy();
         name != ".git" && name != ".quarry"
@@ -771,18 +914,34 @@ async fn import_worktree_transaction(
             .and_then(JsonValue::as_str)
             .unwrap_or("application/octet-stream")
             .to_string();
-        if is_block_file(&path, &content_type) {
+        import_files.push(WorktreeImportFile {
+            path,
+            file: GitFile {
+                content,
+                metadata,
+                content_type,
+                oid: String::new(),
+            },
+        });
+    }
+    import_files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(import_files)
+}
+
+async fn import_worktree_transaction(
+    store: &QuarryStore,
+    library: &str,
+    import_files: Vec<WorktreeImportFile>,
+    tx_id: &str,
+) -> Result<GitImportResult> {
+    let mut imported_paths = Vec::new();
+    for WorktreeImportFile { path, file } in import_files {
+        if is_block_file(&path, &file.content_type) {
             // Phase 4: Markdown imports reconcile per document (two-way —
             // plain `git import` has no peer scope, so the base is the
             // current canonical state). Byte-identical files are no-ops, so
             // re-imports do not churn versions. Raw files keep the staged
             // multi-document transaction below.
-            let file = GitFile {
-                content,
-                metadata,
-                content_type,
-                oid: String::new(),
-            };
             write_markdown_file(
                 store,
                 library,
@@ -793,6 +952,12 @@ async fn import_worktree_transaction(
             )
             .await?;
         } else {
+            let GitFile {
+                content,
+                metadata,
+                content_type,
+                ..
+            } = file;
             store
                 .stage_put(tx_id, &path, content, metadata, &content_type)
                 .await?;
@@ -814,15 +979,11 @@ pub async fn export_worktree(
     repo_dir: &Path,
     options: GitExportOptions,
 ) -> Result<GitExportResult> {
-    fs::create_dir_all(repo_dir)?;
     let library_record = store.get_library(library).await?;
-    verify_or_write_marker(repo_dir, &library_record.id, &library_record.slug)?;
-    clean_worktree(repo_dir)?;
-
     let documents = store
         .list_documents(&library_record.slug, None, Some(10_000))
         .await?;
-    let mut exported_paths = Vec::new();
+    let mut files = Vec::with_capacity(documents.len());
     for entry in documents {
         if is_reserved_git_metadata_path(&entry.path) {
             return Err(QuarryError::InvalidPath(format!(
@@ -839,25 +1000,57 @@ pub async fn export_worktree(
                 document.path
             )));
         }
-        let output = repo_dir.join(&document.path);
+        files.push(WorktreeExportFile {
+            path: document.path,
+            content: document.content,
+            metadata: document.metadata,
+        });
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+
+    let repo_dir = repo_dir.to_path_buf();
+    let plan = WorktreeExportPlan {
+        repo_dir: repo_dir.clone(),
+        library_id: library_record.id,
+        library_slug: library_record.slug,
+        branch: options.branch,
+        frontmatter_markdown: options.frontmatter_markdown,
+        files,
+    };
+    run_git_blocking(
+        "worktree.export",
+        repo_dir,
+        LOCAL_GIT_OPERATION_TIMEOUT,
+        move || execute_worktree_export(plan),
+    )
+    .await
+}
+
+fn execute_worktree_export(plan: WorktreeExportPlan) -> Result<GitExportResult> {
+    fs::create_dir_all(&plan.repo_dir)?;
+    verify_or_write_marker(&plan.repo_dir, &plan.library_id, &plan.library_slug)?;
+    clean_worktree(&plan.repo_dir)?;
+
+    let mut exported_paths = Vec::with_capacity(plan.files.len());
+    for file in plan.files {
+        let output = plan.repo_dir.join(&file.path);
         if let Some(parent) = output.parent() {
             fs::create_dir_all(parent)?;
         }
-        if options.frontmatter_markdown && document.path.ends_with(".md") {
+        if plan.frontmatter_markdown && file.path.ends_with(".md") {
             write_atomic(
                 &output,
-                &markdown_with_frontmatter(&document.metadata, &document.content)?,
+                &markdown_with_frontmatter(&file.metadata, &file.content)?,
             )?;
         } else {
-            write_atomic(&output, &document.content)?;
-            write_sidecar(repo_dir, &document.path, &document.metadata)?;
+            write_atomic(&output, &file.content)?;
+            write_sidecar(&plan.repo_dir, &file.path, &file.metadata)?;
         }
-        exported_paths.push(document.path);
+        exported_paths.push(file.path);
     }
-    write_marker(repo_dir, &library_record.id, &library_record.slug)?;
+    write_marker(&plan.repo_dir, &plan.library_id, &plan.library_slug)?;
 
-    let commit_id = commit_all(repo_dir, &options.branch, "Quarry export")?;
-    exported_paths.sort();
+    let commit_id = commit_all(&plan.repo_dir, &plan.branch, "Quarry export")?;
     Ok(GitExportResult {
         exported_paths,
         commit_id,
@@ -1015,7 +1208,19 @@ fn verify_or_write_marker(repo_dir: &Path, library_id: &str, library_slug: &str)
     Ok(())
 }
 
-fn verify_marker(repo_dir: &Path, library_id: &str) -> Result<()> {
+async fn verify_marker(repo_dir: &Path, library_id: &str) -> Result<()> {
+    let repo_dir = repo_dir.to_path_buf();
+    let library_id = library_id.to_string();
+    run_git_blocking(
+        "worktree.marker.verify",
+        repo_dir.clone(),
+        LOCAL_GIT_OPERATION_TIMEOUT,
+        move || verify_marker_blocking(&repo_dir, &library_id),
+    )
+    .await
+}
+
+fn verify_marker_blocking(repo_dir: &Path, library_id: &str) -> Result<()> {
     let path = marker_path(repo_dir);
     if !path.exists() {
         return Err(QuarryError::Conflict(format!(
@@ -1105,7 +1310,20 @@ fn commit_all(repo_dir: &Path, branch: &str, message: &str) -> Result<Option<Str
     Ok(Some(oid.to_string()))
 }
 
-fn fetch_remote_worktree(repo_dir: &Path, remote_url: &str, branch: &str) -> Result<()> {
+async fn fetch_remote_worktree(repo_dir: &Path, remote_url: &str, branch: &str) -> Result<()> {
+    let repo_dir = repo_dir.to_path_buf();
+    let remote_url = remote_url.to_string();
+    let branch = branch.to_string();
+    run_git_blocking(
+        "remote.fetch",
+        repo_dir.clone(),
+        REMOTE_GIT_OPERATION_TIMEOUT,
+        move || fetch_remote_worktree_blocking(&repo_dir, &remote_url, &branch),
+    )
+    .await
+}
+
+fn fetch_remote_worktree_blocking(repo_dir: &Path, remote_url: &str, branch: &str) -> Result<()> {
     let started = Instant::now();
     if repo_dir.join(".git").exists() {
         let repo = Repository::open(repo_dir).map_err(map_git)?;
@@ -1167,7 +1385,20 @@ fn checkout_remote_branch(repo: &Repository, branch: &str) -> Result<()> {
     Ok(())
 }
 
-fn push_remote(repo_dir: &Path, remote_url: &str, branch: &str) -> Result<()> {
+async fn push_remote(repo_dir: &Path, remote_url: &str, branch: &str) -> Result<()> {
+    let repo_dir = repo_dir.to_path_buf();
+    let remote_url = remote_url.to_string();
+    let branch = branch.to_string();
+    run_git_blocking(
+        "remote.push",
+        repo_dir.clone(),
+        REMOTE_GIT_OPERATION_TIMEOUT,
+        move || push_remote_blocking(&repo_dir, &remote_url, &branch),
+    )
+    .await
+}
+
+fn push_remote_blocking(repo_dir: &Path, remote_url: &str, branch: &str) -> Result<()> {
     let started = Instant::now();
     let repo = Repository::open(repo_dir).map_err(map_git)?;
     let mut remote = ensure_remote(&repo, remote_url)?;
@@ -1285,7 +1516,7 @@ async fn record_exported_sync_state(
     repo_dir: &Path,
 ) -> Result<()> {
     let docs = store.list_documents(library, None, Some(10_000)).await?;
-    let git = worktree_snapshot(repo_dir)?;
+    let git = worktree_snapshot(repo_dir).await?;
     for doc in docs {
         let git_oid = git.get(&doc.path).map(|file| file.oid.clone());
         // Phase 4 shadow-base bookkeeping: what this peer just saw (the
@@ -1329,7 +1560,18 @@ async fn record_exported_sync_state(
     Ok(())
 }
 
-fn worktree_snapshot(repo_dir: &Path) -> Result<HashMap<String, GitFile>> {
+async fn worktree_snapshot(repo_dir: &Path) -> Result<HashMap<String, GitFile>> {
+    let repo_dir = repo_dir.to_path_buf();
+    run_git_blocking(
+        "worktree.snapshot",
+        repo_dir.clone(),
+        LOCAL_GIT_OPERATION_TIMEOUT,
+        move || worktree_snapshot_blocking(&repo_dir),
+    )
+    .await
+}
+
+fn worktree_snapshot_blocking(repo_dir: &Path) -> Result<HashMap<String, GitFile>> {
     let mut files = HashMap::new();
     if !repo_dir.exists() {
         return Ok(files);
@@ -1637,6 +1879,33 @@ mod tests {
             .map(|entry| entry.map(|entry| entry.file_name()))
             .collect::<std::io::Result<_>>()?;
         assert_eq!(names, ["doc.md"]);
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn slow_git_blocking_phase_does_not_delay_tokio_heartbeat() -> Result<()> {
+        let slow_git_work = run_git_blocking(
+            "test.slow_git_work",
+            PathBuf::from("latency-test-worktree"),
+            Duration::from_secs(2),
+            || {
+                std::thread::sleep(Duration::from_millis(400));
+                Ok(())
+            },
+        );
+        let heartbeat = async {
+            let started = Instant::now();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            started.elapsed()
+        };
+
+        let (git_result, heartbeat_latency) = tokio::join!(slow_git_work, heartbeat);
+
+        git_result?;
+        assert!(
+            heartbeat_latency < Duration::from_millis(200),
+            "Tokio heartbeat was delayed by blocking Git work: {heartbeat_latency:?}"
+        );
         Ok(())
     }
 }
