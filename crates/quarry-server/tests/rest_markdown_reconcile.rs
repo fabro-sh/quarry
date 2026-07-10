@@ -711,6 +711,7 @@ async fn markdown_put_overlapping_edits_become_conflict_review_items() -> anyhow
                 .uri("/v1/libraries/blocks/documents/clash.md")
                 .header(header::CONTENT_TYPE, "text/markdown")
                 .header(header::IF_MATCH, format!("\"{base_clock}\""))
+                .header("x-quarry-transaction-actor", "Avery")
                 .body(Body::from(incoming))
                 .unwrap(),
         )
@@ -738,6 +739,7 @@ async fn markdown_put_overlapping_edits_become_conflict_review_items() -> anyhow
         .as_array()
         .context("review should include conflicts array")?;
     assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0]["by"], "Avery");
     assert_eq!(conflicts[0]["afterBlockId"].as_str(), Some(ids[1].as_str()));
     assert_eq!(conflicts[0]["incomingMarkdown"], "Bravo, external.\n");
     assert_eq!(conflicts[0]["baseMarkdown"], "Bravo.\n");

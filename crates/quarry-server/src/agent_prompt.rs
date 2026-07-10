@@ -74,12 +74,13 @@ pub(crate) fn agent_prompt(origin: &str, scope: &AgentPromptScope<'_>) -> String
         };
     let fallback_monitoring = match &pending_api {
         None => format!(
-            "   If you cannot keep a stream open, re-read {document_api}/blocks periodically. Document API calls carrying X-Agent-Id refresh your presence automatically (it expires 60 seconds after your last one)."
+            "   If you cannot keep a stream open, periodically re-read GET {document_api}/blocks and GET {document_api}/review. Document API calls carrying X-Agent-Id refresh your presence automatically (it expires 60 seconds after your last one)."
         ),
         Some(pending_api) => format!(
-            "   If you cannot keep a stream open, poll GET {pending_api} for activity. Document API calls carrying X-Agent-Id refresh your presence automatically (it expires 60 seconds after your last one); if you go quiet for close to a minute, make any document call or re-POST {document_api}/presence."
+            "   If you cannot keep a stream open, poll GET {pending_api} for activity. After activity, re-read GET {document_api}/blocks and GET {document_api}/review. Document API calls carrying X-Agent-Id refresh your presence automatically (it expires 60 seconds after your last one); if you go quiet for close to a minute, make any document call or re-POST {document_api}/presence."
         ),
     };
+    let transaction_operations = crate::gateway::PUBLIC_TRANSACTION_OPERATIONS.join(", ");
 
     format!(
         r#"Quarry is a local-first collaborative Markdown editor with presence, comments, suggestions, and block edit APIs.
@@ -121,14 +122,14 @@ Document path: {document_path}
 5. While working, monitor document activity.
    Prefer GET {document_api}/events/stream with header X-Agent-Id: <agent-id> — the open stream also keeps your presence fresh.
 {fallback_monitoring}
-   When an event arrives, re-read the block tree before replying or editing.
+   When an event arrives, re-read both GET {document_api}/blocks and GET {document_api}/review before replying or editing. Events are sparse wake signals; the block tree does not contain comment or suggestion bodies.
 
 6. Do not edit until the user gives further instructions.
-   For surgical edits and review operations, POST {document_api}/transactions with header X-Agent-Id: <agent-id> and body {{"client_tx_id":"<unique-id>","base_clock":"<document_clock>","actor":{{"kind":"agent","id":"<agent-id>"}},"ops":[...]}}.
-   Ops: insert_block, delete_block, move_block, replace_block_content, set_block_attrs, mark/link ops, comment.add, comment.reply, comment.edit, comment.resolve, comment.delete, suggestion.add, suggestion.accept, suggestion.reject.
-   To author or restructure the whole document, instead PUT {document_api} with a plain Markdown body and headers If-Match: "<document_clock>" and X-Agent-Id: <agent-id> — concurrent edits diff3-merge rather than being overwritten (details in the skill). The reply's conflicts field counts hunks parked in review instead of applied — if non-zero, re-read GET {document_api}/blocks and re-PUT with the fresh clock.
+   For surgical edits and review operations, POST {document_api}/transactions with headers Content-Type: application/json and X-Agent-Id: <agent-id>, and body {{"client_tx_id":"<unique-id>","base_clock":"<document_clock>","actor":{{"kind":"agent","id":"<agent-id>","label":"<agent name>"}},"ops":[...]}}.
+   Public ops: {transaction_operations}.
+   To author or restructure the whole document, instead PUT {document_api} with a plain Markdown body and headers Content-Type: text/markdown, If-Match: "<document_clock>", X-Agent-Id: <agent-id>, and X-Quarry-Transaction-Actor: <agent name> — concurrent edits diff3-merge rather than being overwritten (details in the skill). A 200 response is not enough: inspect changed and conflicts. If conflicts is non-zero, re-read GET {document_api}/blocks and GET {document_api}/review, incorporate any canonical edits that should survive, and only then re-PUT the reconciled Markdown with the fresh clock. Do not blindly resend the old file.
    To read existing comments, suggestions, and merge conflicts, GET {document_api}/review.
-   Errors are typed {{code, retryable, message}}; when retryable, refresh GET {document_api}/blocks and resubmit with the new document_clock."#
+   Errors are typed {{code, retryable, message}}; when retryable, refresh GET {document_api}/blocks, rebuild the request with the new document_clock and a NEW client_tx_id, and resubmit once."#
     )
 }
 
@@ -189,6 +190,9 @@ mod tests {
         assert!(prompt.contains(&format!(
             "GET http://127.0.0.1:5173/v1/tmp/documents/{SECRET}/review"
         )));
+        assert!(prompt.contains(&format!(
+            "periodically re-read GET http://127.0.0.1:5173/v1/tmp/documents/{SECRET}/blocks and GET http://127.0.0.1:5173/v1/tmp/documents/{SECRET}/review"
+        )));
         assert!(prompt.contains(
             "Document API calls carrying X-Agent-Id refresh your presence automatically"
         ));
@@ -236,15 +240,22 @@ mod tests {
         ));
         assert!(prompt.contains("client_tx_id"));
         assert!(prompt.contains("base_clock"));
+        assert!(prompt.contains(r#""label":"<agent name>""#));
+        assert!(prompt.contains("set_block_type"));
+        assert!(prompt.contains("add_mark, remove_mark, set_link"));
         assert!(prompt.contains("suggestion.accept, suggestion.reject"));
         // The whole-document Markdown PUT is advertised as a write path.
         assert!(prompt.contains(
             "PUT http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md with a plain Markdown body"
         ));
         assert!(prompt.contains("If-Match: \"<document_clock>\""));
+        assert!(prompt.contains("Content-Type: text/markdown"));
+        assert!(prompt.contains("X-Quarry-Transaction-Actor: <agent name>"));
         // A 200 PUT can park hunks in review; the prompt says how to notice.
-        assert!(prompt.contains("The reply's conflicts field counts hunks parked in review"));
+        assert!(prompt.contains("A 200 response is not enough: inspect changed and conflicts"));
+        assert!(prompt.contains("Do not blindly resend the old file"));
         assert!(prompt.contains("{code, retryable, message}"));
+        assert!(prompt.contains("a NEW client_tx_id"));
         // The quarantined legacy facades are no longer advertised.
         assert!(!prompt.contains("/edit"));
         assert!(!prompt.contains("/ops"));
@@ -252,6 +263,9 @@ mod tests {
         assert!(prompt.contains("Skill: http://127.0.0.1:5173/quarry.SKILL.md"));
         assert!(prompt.contains("Docs: http://127.0.0.1:5173/agent-docs"));
         assert!(prompt.contains("Discovery: http://127.0.0.1:5173/.well-known/agent.json"));
+        assert!(prompt.contains(
+            "re-read both GET http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md/blocks and GET http://127.0.0.1:5173/v1/libraries/team%20notes/documents/folder/live%20doc.md/review"
+        ));
     }
 
     #[test]

@@ -168,6 +168,10 @@ async fn put_scoped_block_document(
         }
         WritePrecondition::None => BlockWriteBase::CurrentCanonical,
     };
+    // The same explicit actor name that attributes version history also
+    // attributes gateway operations and any conflict review items produced by
+    // this Markdown PUT.
+    let actor_label = transaction.actor.clone();
     let result = write_markdown_with(
         state,
         BlockMarkdownWrite {
@@ -178,7 +182,7 @@ async fn put_scoped_block_document(
             base,
             source: DocumentSource::Rest,
             surface: "rest".to_string(),
-            actor_label: None,
+            actor_label,
         },
         origin_id,
         transaction,

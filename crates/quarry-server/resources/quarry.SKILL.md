@@ -1,6 +1,6 @@
 ---
 name: quarry
-description: Use when a Quarry locator URL is shared, joining a local Quarry collaborative Markdown document, or using localhost Quarry REST APIs.
+description: Use when a Quarry locator URL is shared, joining a Quarry collaborative Markdown document on any origin, or using Quarry REST APIs.
 allowed-tools:
   - Bash
   - WebFetch
@@ -9,16 +9,17 @@ allowed-tools:
 # Quarry
 
 Quarry is a local-first collaborative Markdown editor for humans and agents. Use
-plain HTTP against the local Quarry origin. Browser automation is not needed for
-normal agent work.
+HTTP(S) requests against the same origin as the Quarry locator URL. Browser
+automation is not needed for normal agent work.
 
 A Markdown document is a tree of blocks with stable `block_id`s. Read
 `GET $DOC/blocks`, address blocks by `block_id`, and send every mutation —
 edits, comments, suggestions — as one transaction to `POST $DOC/transactions`.
 
-Every write should use the plain agent name as `actor.label` (`Codex`,
-`Claude`, `Gemini`); this is the visible byline. Presence uses `X-Agent-Id:
-ai:<agent-name>` or another stable session id.
+Every semantic transaction should use the plain agent name as `actor.label`
+(`Codex`, `Claude`, `Gemini`); this is the visible byline. Whole-document PUTs
+use `X-Quarry-Transaction-Actor` for the same attribution. Presence uses
+`X-Agent-Id: ai:<agent-name>` or another stable session id.
 
 ## Default Behavior
 
@@ -59,11 +60,12 @@ Extract:
 - token: locator for browser/collab joins on library documents
 - tmp secret: the single URL segment after `/tmp/`
 
-Quarry REST agent APIs are trusted-localhost for now. Library locator tokens are
-not REST bearer auth unless discovery metadata later says otherwise. For tmp
-documents, the segment after `/tmp/` is the document identifier and capability.
-Do not send a separate bearer token for tmp docs. Use `X-Agent-Id` to identify
-your agent.
+Library REST endpoints in the current full/local Quarry build are
+trusted-localhost. Library locator tokens are not REST bearer auth unless
+discovery metadata later says otherwise. For tmp documents on local or hosted
+origins, the segment after `/tmp/` is both the document identifier and bearer
+capability. Do not send a separate bearer token for tmp docs. Use `X-Agent-Id`
+to identify your agent.
 
 Build the document API URL with each library/path segment URL-encoded:
 
@@ -105,8 +107,10 @@ I can edit directly, or leave comments and suggestions for you to review. What w
 4. Wait for the user's instruction.
 5. Before each write, use `block_id`s and the `document_clock` from the latest
    `/blocks` read.
-6. After events or a retryable error, re-read `/blocks` and rebuild the
-   request with a fresh `base_clock` and a NEW `client_tx_id`.
+6. After any event, re-read both `/blocks` and `/review` because review-only
+   changes do not put comment or suggestion bodies in the block tree. After a
+   retryable error, re-read `/blocks` and rebuild the request with a fresh
+   `base_clock` and a NEW `client_tx_id`.
 
 ## Presence
 
@@ -232,6 +236,7 @@ ordinary syntax, so there is no block/attrs vocabulary to get wrong:
 curl -sS -X PUT "$DOC" \
   -H "Content-Type: text/markdown" \
   -H "X-Agent-Id: $AGENT_ID" \
+  -H "X-Quarry-Transaction-Actor: $AGENT_NAME" \
   -H 'If-Match: "<document_clock>"' \
   --data-binary @article.md
 ```
@@ -247,14 +252,16 @@ curl -sS -X PUT "$DOC" \
   merge against the current document.
 - `block_id`s and review anchors survive the rewrite. Merge leftovers become
   `conflicts` in `GET $DOC/review` — never write failures. A 200 alone does
-  NOT mean your Markdown is now the document: check `conflicts` in the reply.
-  It counts the conflict review items this write recorded; if it is non-zero,
-  the document kept the current text in those regions and your incoming text
-  is parked in review. To make your version win, re-read `GET $DOC/blocks`
-  and re-`PUT` with the fresh clock (this overwrites the concurrent edits in
-  those regions — re-read first if they should survive), then resolve the
-  stale conflict items with `comment.resolve` / `comment.delete`. The reply
-  also carries `changed: false` when a byte-identical write was a no-op.
+  NOT mean your Markdown is now the document: inspect both `changed` and
+  `conflicts` in the reply. `conflicts` counts the conflict review items this
+  write recorded; if it is non-zero, the document kept the current text in
+  those regions and your incoming text is parked in review. Re-read
+  `GET $DOC/blocks` and `GET $DOC/review`, incorporate any canonical edits
+  that should survive into your Markdown, and only then re-`PUT` the
+  reconciled file with the fresh clock. Do not blindly resend the old file.
+  Once the intended content is present, resolve the stale conflict items with
+  `comment.resolve` / `comment.delete`. The reply also carries
+  `changed: false` when a byte-identical write was a no-op.
 - Use `PUT` to create or rewrite documents wholesale; use block transactions
   for surgical edits, comments, and suggestions on existing content.
 - For library documents, Quarry refuses to change an existing Markdown block document into a raw
@@ -269,8 +276,8 @@ After a `PUT`, re-read `GET $DOC/blocks`: ambiguous Markdown can land as
 ## Reading Review State
 
 ```bash
-curl -sS "$DOC/review"
-curl -sS "$DOC/review?includeResolved=1"
+curl -sS -H "X-Agent-Id: $AGENT_ID" "$DOC/review"
+curl -sS -H "X-Agent-Id: $AGENT_ID" "$DOC/review?includeResolved=1"
 ```
 
 Returns `documentId`, `baseToken` (current clock), `comments` with nested
@@ -292,8 +299,10 @@ resolve handled comments, then verify `GET $DOC/review` returns empty
 
 ## Events
 
-Events are activity signals, not document content. Re-read `/blocks` after an
-event before replying, commenting, suggesting, or editing.
+Events are activity signals, not document or review content. After an event,
+re-read both `/blocks` and `/review` before replying, commenting, suggesting,
+or editing. Review-only changes do not put comment or suggestion bodies in the
+block tree.
 
 ```bash
 curl -N -H "X-Agent-Id: $AGENT_ID" "$DOC/events/stream"
@@ -313,6 +322,9 @@ curl -sS -X POST "$ORIGIN/v1/libraries/$LIBRARY_ENCODED/events/ack" \
   -H "X-Agent-Id: $AGENT_ID" \
   -d '{"eventId": 42}'
 ```
+
+Tmp documents do not expose pending-event polling. If you cannot keep their
+event stream open, periodically re-read both `$DOC/blocks` and `$DOC/review`.
 
 ## Error Handling
 
@@ -361,4 +373,5 @@ curl -sS "$ORIGIN/v1/openapi.json"
 ```
 
 Do not assume Proof-only operations exist in Quarry. Quarry does not currently
-support `rewrite.apply` or REST bearer-token enforcement.
+support `rewrite.apply` or REST bearer-token enforcement on library endpoints;
+tmp document path secrets are bearer capabilities.

@@ -176,6 +176,29 @@ use std::collections::{BTreeSet, HashMap};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+/// Operations agents may send through the public semantic transaction API.
+/// `conflict.add` is deliberately excluded: whole-document reconcilers use it
+/// internally to persist merge-conflict review items.
+pub(crate) const PUBLIC_TRANSACTION_OPERATIONS: [&str; 17] = [
+    "insert_block",
+    "delete_block",
+    "move_block",
+    "replace_block_content",
+    "set_block_type",
+    "set_block_attrs",
+    "add_mark",
+    "remove_mark",
+    "set_link",
+    "comment.add",
+    "comment.reply",
+    "comment.edit",
+    "comment.resolve",
+    "comment.delete",
+    "suggestion.add",
+    "suggestion.accept",
+    "suggestion.reject",
+];
+
 // ---------------------------------------------------------------------------
 // Typed errors
 // ---------------------------------------------------------------------------

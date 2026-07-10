@@ -1,8 +1,9 @@
 # Quarry Agent Docs
 
 Quarry is a local-first collaborative Markdown editor for humans and agents. Use
-plain HTTP requests against the local `/v1` API to read, comment, suggest, and
-edit documents. Browser automation is not needed for normal agent work.
+HTTP(S) requests against the `/v1` API on the same origin as the Quarry locator
+URL to read, comment, suggest, and edit documents. Browser automation is not
+needed for normal agent work.
 
 The main Quarry-specific rule: a Markdown document is a tree of blocks with
 stable `block_id`s. Read `GET /blocks`, address blocks by `block_id`, and send
@@ -77,34 +78,36 @@ canonical UTF-8 Markdown larger than 1 MiB is rejected with 413.
 
 ## Auth And Locator Tokens
 
-Quarry REST agent APIs are trusted-localhost for now. For library document
-invite URLs, the `?token=` value identifies the shared document for
-browser/collab joins, but REST agent endpoints on this host do not currently
-enforce bearer-token auth.
+Library REST endpoints in the current full/local Quarry build are
+trusted-localhost. For library document invite URLs, the `?token=` value
+identifies the shared document for browser/collab joins, but library REST agent
+endpoints do not currently enforce bearer-token auth.
 
-For tmp documents, the `/tmp/{secret}` URL segment is the bearer capability and
-the document identifier. Do not treat it as an agent identity; use `X-Agent-Id`
-for that.
+For tmp documents on local or hosted origins, the `/tmp/{secret}` URL segment is
+the bearer capability and the document identifier. Do not treat it as an agent
+identity; use `X-Agent-Id` for that.
 
 ## Headers And Identity
 
 Use a stable agent id for the session, such as `ai:codex:<short-id>` or
 `ai:claude:<short-id>`.
 
-- `Content-Type: application/json`
-- `X-Agent-Id: <agent-id>` for presence and event ack identity
+- `Content-Type: application/json` for JSON POST requests
+- `X-Agent-Id: <agent-id>` on every document API request and for event ack
+  identity
 
 Idempotency rides in the transaction body: `client_tx_id` is unique per
 document, and replaying the same `client_tx_id` returns the original ack
-without re-applying. Use the plain agent name as `actor.label` (`Codex`,
-`Claude`, `Gemini`); this is the visible byline.
+without re-applying. For semantic transactions, use the plain agent name as
+`actor.label` (`Codex`, `Claude`, `Gemini`); this is the visible byline.
+Whole-document PUTs use `X-Quarry-Transaction-Actor` for the same attribution.
 
 ## Read The Document
 
 Read the canonical block tree:
 
 ```sh
-curl -sS "$DOC/blocks"
+curl -sS -H "X-Agent-Id: $AGENT_ID" "$DOC/blocks"
 ```
 
 The response carries the rows and the current document clock:
@@ -145,7 +148,7 @@ Fallback whole-document read (rendered Markdown, with the current clock in the
 `ETag` header):
 
 ```sh
-curl -sS "$DOC"
+curl -sS -H "X-Agent-Id: $AGENT_ID" "$DOC"
 ```
 
 ## Required Ready Reply
@@ -274,9 +277,10 @@ as one atomic batch:
   suggestion, and deletes its replies.
 - `suggestion.reject` — `{item_id}`. Resolves without changing text and deletes
   its replies (also the way to dismiss an orphaned/invalidated suggestion).
-- `conflict.add` — reconciler plumbing that records a merge-conflict review
-  item without mutating the document; agents normally only read these via
-  `GET /review` and resolve them with `comment.resolve` / `comment.delete`.
+
+`conflict.add` is server-internal reconciler plumbing, not a public agent
+operation. Do not send it. Read generated conflict items through `GET /review`
+and resolve them with `comment.resolve` / `comment.delete`.
 
 A full review as one transaction:
 
@@ -312,9 +316,29 @@ syntax:
 curl -sS -X PUT "$DOC" \
   -H "Content-Type: text/markdown" \
   -H "X-Agent-Id: $AGENT_ID" \
+  -H "X-Quarry-Transaction-Actor: $AGENT_NAME" \
   -H 'If-Match: "<document_clock>"' \
   --data-binary @article.md
 ```
+
+`X-Quarry-Transaction-Actor` supplies the visible agent name for version
+history, gateway attribution, and any conflict review items produced by the
+write.
+
+The top-level response includes the merge verdict alongside the document,
+version, and transaction records:
+
+```json
+{
+  "changed": true,
+  "conflicts": 0,
+  "document": { "head_version_id": "version_124" },
+  "version": { "id": "version_124" }
+}
+```
+
+The example is abbreviated; the actual `document` and `version` objects carry
+their normal fields.
 
 Semantics:
 
@@ -331,8 +355,15 @@ Semantics:
 - `block_id`s and review anchors survive the rewrite — unchanged blocks keep
   their ids, so existing comments and suggestions stay anchored.
 - True merge conflicts never fail the write: each one commits atomically as
-  a conflict artifact and surfaces in `GET $DOC/review` under `conflicts`.
-- A byte-identical body is a no-op (no new version).
+  a conflict artifact and surfaces in `GET $DOC/review` under `conflicts`. A
+  200 response alone does not mean all incoming Markdown was applied: inspect
+  the response's `conflicts` count. If it is non-zero, re-read
+  `GET $DOC/blocks` and `GET $DOC/review`, incorporate any canonical edits
+  that should survive into your Markdown, and only then re-PUT the reconciled
+  file with the fresh clock. Do not blindly resend the old file. Once the
+  intended content is present, resolve stale conflict items with
+  `comment.resolve` / `comment.delete`.
+- A byte-identical body returns `changed: false` and creates no new version.
 - For library documents, Quarry refuses to change an existing Markdown block document into a raw
   document unless the request explicitly opts in with
   `X-Quarry-Allow-Document-Kind-Change: true`. Do not send that header for
@@ -353,8 +384,8 @@ by text/marks ops, comments, or suggestions.
 ## Reading Review State
 
 ```sh
-curl -sS "$DOC/review"
-curl -sS "$DOC/review?includeResolved=1"
+curl -sS -H "X-Agent-Id: $AGENT_ID" "$DOC/review"
+curl -sS -H "X-Agent-Id: $AGENT_ID" "$DOC/review?includeResolved=1"
 ```
 
 `GET $DOC/review` projects from the canonical review rows: `documentId`,
@@ -391,16 +422,18 @@ curl -sS -X POST "$DOC/presence" \
 Statuses are `reading`, `thinking`, `acting`, `waiting`, `completed`, and
 `error`.
 
-Presence expires 60 seconds after the last update. Holding the document event
-stream open with your `X-Agent-Id` (see Events) refreshes it automatically for
-as long as the stream stays connected; without a stream, re-POST `/presence`
-at least once per minute while active. When your stream disconnects, your
-presence is removed.
+Presence expires 60 seconds after the last request that refreshes it. Any
+document API call carrying `X-Agent-Id` refreshes the TTL and auto-registers a
+missing entry as `waiting`. Holding the document event stream open with your
+`X-Agent-Id` (see Events) also refreshes it automatically. POST `/presence`
+when declaring a status or display-name change, not merely as a keepalive. When
+the stream disconnects, its heartbeats stop; the presence entry remains until
+the normal TTL expires unless another document request refreshes it.
 
 List presence for the same document:
 
 ```sh
-curl -sS "$DOC/presence"
+curl -sS -H "X-Agent-Id: $AGENT_ID" "$DOC/presence"
 ```
 
 Library presence entries include the document `path`. Tmp presence entries omit
@@ -409,8 +442,9 @@ Library presence entries include the document `path`. Tmp presence entries omit
 ## Events
 
 Events are activity signals for long-lived agents. They are not the source of
-truth for document text. Re-read `/blocks` after an event before replying,
-commenting, suggesting, or editing.
+truth for document or review content. After an event, re-read both `/blocks` and `/review`
+before replying, commenting, suggesting, or editing. Review-only changes do not
+put comment or suggestion bodies in the block tree.
 
 Prefer the document event stream. Send your `X-Agent-Id` so the open stream
 also keeps your presence alive:
@@ -447,8 +481,9 @@ curl -sS -X POST "$ORIGIN/v1/libraries/$LIBRARY_ENCODED/events/ack" \
 ```
 
 Tmp documents do not currently expose a pending-events poll route. Keep the
-tmp document stream open while active, or re-POST `$DOC/presence` at least once
-per minute and re-read `$DOC/blocks` after the user asks you to continue.
+tmp document stream open while active. If a stream is not practical,
+periodically re-read both `$DOC/blocks` and `$DOC/review` with `X-Agent-Id`;
+those document calls also keep presence fresh.
 
 ## Errors And Retry Rules
 
@@ -489,10 +524,10 @@ supported `transaction_operations`, and known limitations.
 
 ## Known Limitations
 
-- REST agent endpoints currently trust localhost and do not enforce bearer-token
-  auth.
-- Library invite URL tokens are document locators for browser/collab joins, not
-  REST auth tokens. Tmp URL secrets are bearer capabilities.
+- Library REST agent endpoints in the current full/local build trust localhost
+  and do not enforce bearer-token auth. Library invite URL tokens are document
+  locators for browser/collab joins, not REST auth tokens.
+- Tmp URL secrets are bearer capabilities on local and hosted origins.
 - Block APIs apply to Markdown documents only; other content types are raw
   bytes (`UNSUPPORTED_BLOCK_DOCUMENT`).
 - Same-block merges with live human typing are convergence-only: concurrent
@@ -520,7 +555,10 @@ Then report the evidence to the user. Do not keep retrying destructive writes.
 - Do not edit until the user gives explicit instructions.
 - Prefer comments and suggestions for review requests.
 - Use direct edits for implementation requests.
-- Re-read `/blocks` after any event and after any stale write.
-- Use the plain agent name as `actor.label`; it is the visible byline.
+- Re-read both `/blocks` and `/review` after any event; re-read `/blocks` after
+  any stale write.
+- Use the plain agent name as `actor.label` on semantic transactions and as
+  `X-Quarry-Transaction-Actor` on whole-document PUTs; it is the visible
+  byline.
 - Fetch `/.well-known/agent.json` and `/v1/openapi.json` when you need current
   route metadata or schemas.

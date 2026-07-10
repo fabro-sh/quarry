@@ -91,6 +91,8 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() -> anyhow::R
         )
         .await?;
     assert_eq!(response.status(), StatusCode::OK);
+    let skill = String::from_utf8(to_bytes(response.into_body(), usize::MAX).await?.to_vec())
+        .context("Quarry skill should be valid UTF-8")?;
 
     let response = app
         .clone()
@@ -132,6 +134,15 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() -> anyhow::R
     assert!(docs.contains("suggestion.accept"));
     assert!(docs.contains("conflict"));
     assert!(docs.contains("GET $DOC/review"));
+    assert!(docs.contains("re-read both `/blocks` and `/review`"));
+    assert!(docs.contains("document API call carrying `X-Agent-Id` refreshes the TTL"));
+    assert!(docs.contains("X-Quarry-Transaction-Actor"));
+    assert!(docs.contains("conflict.add` is server-internal"));
+    assert!(docs.contains("Do not send it"));
+    assert!(docs.contains("local or hosted origins"));
+    assert!(skill.contains("re-read both `/blocks` and `/review`"));
+    assert!(skill.contains("X-Quarry-Transaction-Actor"));
+    assert!(skill.contains("local or hosted"));
     assert!(docs.contains("/v1/tmp/documents/$SECRET"));
     let removed_tmp_signal = ["han", "doff"].join("");
     assert!(!docs.to_lowercase().contains(&removed_tmp_signal));
@@ -157,6 +168,29 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() -> anyhow::R
         .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
+    for operation in body["transaction_operations"]
+        .as_array()
+        .context("discovery should expose transaction operations")?
+    {
+        let operation = operation
+            .as_str()
+            .context("transaction operation should be a string")?;
+        assert!(
+            docs.contains(operation),
+            "agent docs should describe public operation {operation}"
+        );
+        assert!(
+            skill.contains(operation),
+            "Quarry skill should describe public operation {operation}"
+        );
+    }
+    assert!(
+        !body["transaction_operations"]
+            .as_array()
+            .context("discovery should expose transaction operations")?
+            .iter()
+            .any(|operation| operation == "conflict.add")
+    );
     assert_eq!(body["api_base"], "http://127.0.0.1:7831/v1");
     assert_eq!(body["docs_url"], "http://127.0.0.1:7831/agent-docs");
     assert_eq!(body["skill_url"], "http://127.0.0.1:7831/quarry.SKILL.md");
