@@ -1,6 +1,6 @@
 # Linux Install Path
 
-Phase one ships as a single `quarry` binary. GitHub releases attach tarballs for Linux x86_64, Linux ARM64, and macOS (Apple silicon and Intel): `.github/workflows/release-nightly.yml` publishes a nightly prerelease each night when `main` has new commits, and `.github/workflows/release-stable.yml` publishes a stable release on manual dispatch and refreshes the Homebrew formula in `Formula/quarry.rb`. A Debian package can be added later; this documented Linux path is the supported install route for source builds.
+Phase one ships as a single `quarry` binary. GitHub releases attach tarballs for Linux x86_64, Linux ARM64, and macOS (Apple silicon and Intel): `.github/workflows/release-nightly.yml` cuts a nightly tag when `main` has new commits, and `.github/workflows/release.yml` publishes every validated stable or nightly tag. Stable releases deploy production and then refresh `Formula/quarry.rb`. A Debian package can be added later; this documented Linux path is the supported install route for source builds.
 
 Prerequisites:
 

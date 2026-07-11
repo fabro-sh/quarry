@@ -50,3 +50,17 @@ If the Slate/Yjs compatibility fixture check reports stale fixtures, regenerate 
 `cd ui && bun run fixtures:generate`, then rerun `cd ui && bun run fixtures:check`.
 
 Current tests cover storage/CAS lifecycle, concurrent auto-commit writes, explicit transaction commit/rollback behavior, commit-time stale-head rejection, restart safety for open staged CAS writes, REST ETag/precondition/busy handling, OpenAPI exposure, and library scoping; block-model coverage includes rows ↔ session round-trip exactness with review anchors (the Gate A property tests), the gateway's per-op REST matrix with typed errors/idempotency/rebase acks, session lifecycle races (transaction vs seed/checkpoint/discard, checkpoint-before-ack), diff3 reconciliation hunk taxonomy and conflict-as-review-item persistence, and adapter round-trips proving sibling `block_id`s and live anchors survive Git/FUSE/CLI/PUT whole-file writes while RawDocument bytes bypass the block model exactly. Git sync coverage includes marker and reserved-sidecar safety, import rollback, one-sided changes/conflicts/deletes, large-delete safety, and local bare-remote transport. FUSE coverage includes invalidation events, stable inodes, handle-scoped truncate/write publication, and persisted directory metadata. The browser suites pin the save-state model, reconnect-reseed behavior, multi-browser convergence with a live agent collaborator, and the review rail against the rows projection.
+
+## Releases
+
+Release versions, commits, and annotated tags are created by the private `quarry-dev` crate:
+
+```sh
+cargo dev release --dry-run --nightly
+cargo dev release --bump patch
+cargo dev release --bump minor
+```
+
+Stable releases must be cut locally from a clean, synchronized `main`. The nightly workflow runs the same command with a GitHub App token. Its `nightly` environment needs `FABRO_RELEASES_APP_CLIENT_ID` and `FABRO_RELEASES_APP_PRIVATE_KEY`, and the app installation needs repository Contents write access. Nightlies use the next stable line, for example `0.1.4-nightly.20260711` after `v0.1.3`; stable releases support bump selection only. Pushing the resulting `v*` tag starts `.github/workflows/release.yml`.
+
+The release command runs the Rust and browser smoke before changing the repository. Use `--skip-tests` only after running those checks yourself. `--dry-run` does not fetch or mutate; fetch tags first when checking a local release plan. The final branch/tag push is atomic. If a failure leaves a local release commit and tag, inspect them and retry that atomic push rather than rerunning the release command. Never delete and reuse a release tag—cut the next version instead.

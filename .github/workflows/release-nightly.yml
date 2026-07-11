@@ -1,4 +1,4 @@
-name: Release Nightly
+name: Cut Nightly Release
 
 on:
   schedule:
@@ -6,110 +6,67 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: release-nightly
+  group: nightly-release
   cancel-in-progress: false
 
 permissions: {}
 
 jobs:
-  plan:
-    name: Plan
+  tag-nightly:
+    name: Tag nightly
     runs-on: ubuntu-latest
+    environment: nightly
     permissions:
       contents: read
-    outputs:
-      tag: ${{ steps.plan.outputs.tag }}
-      skip: ${{ steps.plan.outputs.skip }}
+    env:
+      CARGO_TERM_COLOR: always
     steps:
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: ${{ vars.FABRO_RELEASES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FABRO_RELEASES_APP_PRIVATE_KEY }}
+
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0 # full history + tags for nightly probing
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Plan nightly release
-        id: plan
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Skip if HEAD is already a nightly tag
+        id: skip
         run: |
           last_tag=$(git describe --tags --match 'v*-nightly.*' --abbrev=0 2>/dev/null || true)
           if [[ -n "$last_tag" ]] && [[ "$(git rev-parse HEAD)" == "$(git rev-parse "$last_tag^{commit}")" ]]; then
-            echo "HEAD already released as $last_tag — nothing to release."
+            echo "HEAD already tagged as $last_tag — nothing to release."
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
           fi
-          version=$(cargo metadata --no-deps --format-version 1 |
-            jq -r '.packages[] | select(.name == "quarry") | .version')
-          # Deleted releases leave their tag name immutable, so probe for the
-          # first free name rather than assuming today's date tag is usable.
-          base="v${version}-nightly.$(date -u +%Y%m%d)"
-          tag="$base"
-          n=1
-          while git rev-parse -q --verify "refs/tags/$tag" >/dev/null ||
-              gh release view "$tag" >/dev/null 2>&1; do
-            n=$((n + 1))
-            tag="$base.$n"
-          done
-          echo "Releasing $tag"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-  build:
-    name: Build
-    needs: plan
-    if: needs.plan.outputs.skip != 'true'
-    permissions:
-      contents: read
-    uses: ./.github/workflows/release-build.yml
-
-  publish:
-    name: Publish
-    needs: [plan, build]
-    if: needs.plan.outputs.skip != 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # create the nightly tag/release and upload artifacts
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          path: dist
-          pattern: artifacts-quarry-*
-          merge-multiple: true
-
-      - name: Create nightly prerelease
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.plan.outputs.tag }}
+      - name: Install system prerequisites
+        if: steps.skip.outputs.skip != 'true'
         run: |
-          gh release create "$TAG" --target "$GITHUB_SHA" \
-            --prerelease --generate-notes --title "$TAG" \
-            dist/*
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libssl-dev fuse3
 
-  docker:
-    name: Publish Docker image
-    needs: [plan, publish]
-    if: needs.plan.outputs.skip != 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-      attestations: write
-    steps:
-      - name: Check out release tag
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ needs.plan.outputs.tag }}
-          persist-credentials: false
+      - name: Install Rust
+        if: steps.skip.outputs.skip != 'true'
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
 
-      - name: Build and publish multi-arch image
-        uses: ./.github/actions/release-docker
+      - name: Install Bun
+        if: steps.skip.outputs.skip != 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          tag: ${{ needs.plan.outputs.tag }}
-          prerelease: "true"
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          no-cache: true
+
+      - name: Cut nightly tag
+        if: steps.skip.outputs.skip != 'true'
+        env:
+          RELEASE_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          git config user.name "fabro-releases[bot]"
+          git config user.email "fabro-releases[bot]@users.noreply.github.com"
+          git remote set-url origin \
+            "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          unset RELEASE_TOKEN
+          cargo --locked dev release --nightly

@@ -14,6 +14,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -59,6 +61,10 @@ jobs:
       - name: Build release binary
         run: cargo build --locked --release -p quarry --target "$TARGET"
 
+      - name: Smoke-test release binary
+        run: |
+          "target/$TARGET/release/quarry" --help
+
       - name: Package artifact
         run: |
           mkdir -p "dist/quarry-$TARGET"
@@ -67,6 +73,12 @@ jobs:
           cp -R docs "dist/quarry-$TARGET/"
           tar -C dist -czf "dist/quarry-$TARGET.tar.gz" "quarry-$TARGET"
           (cd dist && shasum -a 256 "quarry-$TARGET.tar.gz" > "quarry-$TARGET.tar.gz.sha256")
+          (cd dist && shasum -a 256 -c "quarry-$TARGET.tar.gz.sha256")
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: dist/quarry-${{ matrix.target }}.tar.gz
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

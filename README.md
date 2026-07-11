@@ -37,7 +37,7 @@ If Homebrew is configured to require tap trust, run this after `brew tap` and be
 brew trust --tap fabro-sh/quarry
 ```
 
-Stable release tags update the in-repo Homebrew formula automatically after the GitHub Release workflow succeeds. Nightly prereleases are available from GitHub Releases, not Homebrew.
+Stable release tags update the in-repo Homebrew formula after the immutable image deploys and passes production health checks. Nightly prereleases are available from GitHub Releases, not Homebrew.
 
 Or build from source (Rust stable required):
 

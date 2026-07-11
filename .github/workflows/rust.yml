@@ -8,6 +8,9 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "fixtures/**"
+      - ".cargo/**"
+      - ".github/actions/release-docker/**"
+      - ".github/workflows/release*.yml"
       - ".github/workflows/rust.yml"
   pull_request:
     paths:
@@ -15,6 +18,9 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "fixtures/**"
+      - ".cargo/**"
+      - ".github/actions/release-docker/**"
+      - ".github/workflows/release*.yml"
       - ".github/workflows/rust.yml"
   workflow_dispatch:
 
