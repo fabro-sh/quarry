@@ -122,10 +122,19 @@ fn parse_cloudfront_viewer_address(headers: &HeaderMap) -> Result<IpAddr, ApiErr
     let value = value
         .to_str()
         .map_err(|_| client_ip_header_error("non_utf8"))?;
-    let address = value
-        .parse::<SocketAddr>()
-        .map_err(|_| client_ip_header_error("malformed"))?;
-    Ok(address.ip())
+    parse_cloudfront_viewer_address_value(value).ok_or_else(|| client_ip_header_error("malformed"))
+}
+
+fn parse_cloudfront_viewer_address_value(value: &str) -> Option<IpAddr> {
+    if let Ok(address) = value.parse::<SocketAddr>() {
+        return Some(address.ip());
+    }
+
+    // Accept CloudFront's unbracketed IPv6-with-port form by treating the
+    // final colon-delimited component as the required source port.
+    let (address, port) = value.rsplit_once(':')?;
+    port.parse::<u16>().ok()?;
+    address.parse::<IpAddr>().ok()
 }
 
 fn client_ip_header_error(reason_code: &'static str) -> ApiError {
@@ -658,6 +667,17 @@ mod tests {
                 .to_string(),
             "2001:db8::1"
         );
+
+        headers.insert(
+            CLOUDFRONT_VIEWER_ADDRESS_HEADER,
+            HeaderValue::from_static("2001:0db8:0:0::1:46532"),
+        );
+        assert_eq!(
+            parse_cloudfront_viewer_address(&headers)
+                .expect("valid unbracketed CloudFront IPv6 viewer address")
+                .to_string(),
+            "2001:db8::1"
+        );
     }
 
     #[test]
@@ -679,6 +699,12 @@ mod tests {
         headers.insert(
             CLOUDFRONT_VIEWER_ADDRESS_HEADER,
             HeaderValue::from_static("198.51.100.10"),
+        );
+        assert!(parse_cloudfront_viewer_address(&headers).is_err());
+
+        headers.insert(
+            CLOUDFRONT_VIEWER_ADDRESS_HEADER,
+            HeaderValue::from_static("2001:db8::1"),
         );
         assert!(parse_cloudfront_viewer_address(&headers).is_err());
 
