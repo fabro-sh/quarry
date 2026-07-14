@@ -405,7 +405,10 @@ fn serve_sigterm_exits_and_removes_lock_file() {
         .unwrap();
 
     wait_for_path(&lock_path, Duration::from_secs(5));
-    wait_for_tcp(addr, Duration::from_secs(5));
+    // A cold CI runner can spend several seconds opening the local database
+    // after the lock file appears. Keep the readiness deadline generous while
+    // retaining the short post-SIGTERM shutdown deadline below.
+    wait_for_tcp(addr, Duration::from_secs(20));
     let status = Command::new("kill")
         .args(["-TERM", &child.id().to_string()])
         .status()
