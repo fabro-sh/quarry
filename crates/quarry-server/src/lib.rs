@@ -67,6 +67,7 @@ use serde::{Deserialize, Serialize};
 use sse::events;
 use std::future::{Future, IntoFuture};
 use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -77,10 +78,37 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct AppState {
     store: QuarryStore,
+    client_ip_source: ClientIpSource,
     sessions: session::SessionHub,
     agent_events: AgentEventJournal,
     agent_presence: AgentPresenceRegistry,
     shutdown: CancellationToken,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ClientIpSource {
+    #[default]
+    None,
+    CloudFrontViewerAddress,
+}
+
+impl FromStr for ClientIpSource {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "none" => Ok(Self::None),
+            "cloudfront-viewer-address" => Ok(Self::CloudFrontViewerAddress),
+            _ => Err(format!(
+                "unsupported client IP source {value:?}; expected none or cloudfront-viewer-address"
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ServerConfig {
+    pub client_ip_source: ClientIpSource,
 }
 
 const REQUEST_ID_HEADER: &str = "x-quarry-request-id";
@@ -121,12 +149,17 @@ async fn touch_agent_presence(
 /// through the gateway and the session mode switch (one owning process per
 /// database; out-of-process writers cannot open the store at all).
 pub fn app_state(store: QuarryStore) -> AppState {
+    app_state_with_config(store, ServerConfig::default())
+}
+
+pub fn app_state_with_config(store: QuarryStore, config: ServerConfig) -> AppState {
     let shutdown = CancellationToken::new();
     let agent_events = AgentEventJournal::default();
     agent_events.spawn_ingest(store.clone(), shutdown.clone());
     let sessions = session::SessionHub::new(store.clone());
     AppState {
         store,
+        client_ip_source: config.client_ip_source,
         sessions,
         agent_events,
         agent_presence: AgentPresenceRegistry::default(),
@@ -137,6 +170,10 @@ pub fn app_state(store: QuarryStore) -> AppState {
 impl AppState {
     fn shutdown_token(&self) -> CancellationToken {
         self.shutdown.clone()
+    }
+
+    fn client_ip_source(&self) -> ClientIpSource {
+        self.client_ip_source
     }
 }
 
@@ -492,7 +529,15 @@ fn generated_request_id_header() -> HeaderValue {
 }
 
 pub async fn serve(store: QuarryStore, addr: SocketAddr) -> std::io::Result<()> {
-    serve_with_shutdown(store, addr, shutdown_signal()).await
+    serve_with_config(store, addr, ServerConfig::default()).await
+}
+
+pub async fn serve_with_config(
+    store: QuarryStore,
+    addr: SocketAddr,
+    config: ServerConfig,
+) -> std::io::Result<()> {
+    serve_with_config_and_shutdown(store, addr, config, shutdown_signal()).await
 }
 
 pub async fn serve_with_shutdown<F>(
@@ -503,7 +548,19 @@ pub async fn serve_with_shutdown<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let state = app_state(store);
+    serve_with_config_and_shutdown(store, addr, ServerConfig::default(), shutdown).await
+}
+
+pub async fn serve_with_config_and_shutdown<F>(
+    store: QuarryStore,
+    addr: SocketAddr,
+    config: ServerConfig,
+    shutdown: F,
+) -> std::io::Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let state = app_state_with_config(store, config);
     let _markdown_writer = install_markdown_writer(&state);
     serve_state_with_shutdown(state, addr, shutdown).await
 }

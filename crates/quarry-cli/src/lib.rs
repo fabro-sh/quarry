@@ -10,7 +10,7 @@ use quarry_fuse::mount_library_with_shutdown;
 use quarry_git::{
     GitExportOptions, export_worktree, import_worktree, pull_peer, push_peer, sync_peer,
 };
-use quarry_server::serve;
+use quarry_server::{ClientIpSource, ServerConfig, serve_with_config};
 #[cfg(feature = "lib-documents")]
 use quarry_server::{serve_state_with_shutdown, shutdown_signal};
 #[cfg(feature = "lib-documents")]
@@ -260,6 +260,15 @@ struct ServeCommand {
 
     #[arg(long, default_value = "127.0.0.1:7831")]
     addr: SocketAddr,
+
+    /// Trusted source for anonymous tmp-document creation IP addresses.
+    #[arg(
+        long,
+        env = "QUARRY_CLIENT_IP_SOURCE",
+        default_value = "none",
+        value_name = "SOURCE"
+    )]
+    client_ip_source: ClientIpSource,
 }
 
 #[cfg(feature = "lib-documents")]
@@ -445,7 +454,14 @@ pub async fn run() -> Result<()> {
                 ServerSubcommand::Start(command) => {
                     let root = command.root.resolve(parent_root.as_ref());
                     let store = open_at(&root, command.db, command.cas).await?;
-                    serve(store, command.addr).await?;
+                    serve_with_config(
+                        store,
+                        command.addr,
+                        ServerConfig {
+                            client_ip_source: command.client_ip_source,
+                        },
+                    )
+                    .await?;
                     Ok(())
                 }
                 #[cfg(feature = "lib-documents")]
@@ -1207,6 +1223,7 @@ mod tests {
             panic!("expected start command");
         };
         assert_eq!(command.addr, "127.0.0.1:7831".parse().unwrap());
+        assert_eq!(command.client_ip_source, ClientIpSource::None);
 
         let cli =
             Cli::try_parse_from(["quarry", "server", "start", "--addr", "127.0.0.1:9000"]).unwrap();
@@ -1217,6 +1234,39 @@ mod tests {
             panic!("expected start command");
         };
         assert_eq!(command.addr, "127.0.0.1:9000".parse().unwrap());
+    }
+
+    #[test]
+    fn client_ip_source_accepts_only_explicit_trusted_modes() {
+        let cli = Cli::try_parse_from([
+            "quarry",
+            "server",
+            "start",
+            "--client-ip-source",
+            "cloudfront-viewer-address",
+        ])
+        .unwrap();
+        let Command::Server(command) = cli.command else {
+            panic!("expected server command");
+        };
+        let ServerSubcommand::Start(command) = command.command else {
+            panic!("expected start command");
+        };
+        assert_eq!(
+            command.client_ip_source,
+            ClientIpSource::CloudFrontViewerAddress
+        );
+
+        assert!(
+            Cli::try_parse_from([
+                "quarry",
+                "server",
+                "start",
+                "--client-ip-source",
+                "x-forwarded-for",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

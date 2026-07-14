@@ -12,7 +12,7 @@ use quarry_storage::{
     DocumentScopeRef, NewBlockReviewItem, QuarryStore, StoreConfig, StoreEventKind, TmpTtl,
     TransactionMetadata, group_version_history,
 };
-use std::{io, time::Duration};
+use std::{io, net::IpAddr, path::Path, time::Duration};
 
 type TestResult = anyhow::Result<()>;
 
@@ -2790,6 +2790,81 @@ async fn opening_old_schema_migrates_documents_to_active_path_uniqueness() -> Te
 }
 
 #[tokio::test]
+async fn opening_pre_ip_schema_adds_nullable_column_and_partial_index() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let db_path = root.path().join("quarry.db");
+    {
+        let db = turso::Builder::new_local(
+            db_path
+                .to_str()
+                .context("pre-IP database path should be UTF-8")?,
+        )
+        .build()
+        .await?;
+        let conn = db.connect()?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE documents(
+              id TEXT PRIMARY KEY,
+              library_id TEXT,
+              path TEXT NOT NULL,
+              head_version_id TEXT,
+              deleted_at TEXT,
+              document_scope TEXT NOT NULL DEFAULT 'library',
+              expires_at TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              CHECK (document_scope IN ('library', 'tmp')),
+              CHECK (
+                (document_scope = 'library' AND library_id IS NOT NULL)
+                OR (document_scope = 'tmp' AND library_id IS NULL AND expires_at IS NOT NULL)
+              )
+            );
+            INSERT INTO documents
+              (id, library_id, path, head_version_id, deleted_at, document_scope, expires_at, created_at, updated_at)
+            VALUES
+              ('existing-document', 'existing-library', 'existing.md', NULL, NULL, 'library', NULL,
+               '2026-07-14T00:00:00Z', '2026-07-14T00:00:00Z');
+            "#,
+        )
+        .await?;
+    }
+
+    let store = QuarryStore::open(StoreConfig {
+        db_path: db_path.clone(),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await?;
+    drop(store);
+
+    let db = turso::Builder::new_local(
+        db_path
+            .to_str()
+            .context("migrated pre-IP database path should be UTF-8")?,
+    )
+    .build()
+    .await?;
+    let conn = db.connect()?;
+    let mut rows = conn.query("PRAGMA table_info(documents)", ()).await?;
+    let mut columns = std::collections::HashSet::new();
+    while let Some(row) = rows.next().await? {
+        columns.insert(row.get::<String>(1)?);
+    }
+    assert!(columns.contains("created_ip_address"));
+    assert!(
+        index_names(&conn, "documents")
+            .await?
+            .contains("idx_documents_created_ip_address_created_at")
+    );
+    assert_eq!(
+        document_creation_ip(&db_path, "existing-document").await?,
+        None
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() -> TestResult {
     let root = tempfile::tempdir()?;
     let store = QuarryStore::open(StoreConfig {
@@ -2866,6 +2941,87 @@ async fn tmp_documents_are_versioned_live_until_expiry_and_promotable() -> TestR
             .await?
             .len(),
         2
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tmp_document_creation_ip_is_canonical_private_and_immutable() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let db_path = root.path().join("quarry.db");
+    let store = QuarryStore::open(StoreConfig {
+        db_path: db_path.clone(),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await?;
+
+    let ipv4 = store
+        .create_tmp_document_with_creation_ip(
+            b"ipv4".to_vec(),
+            serde_json::json!({}),
+            "text/markdown",
+            TmpTtl::Default,
+            "198.51.100.10".parse::<IpAddr>()?,
+        )
+        .await?;
+    let ipv4_secret = ipv4.document.path.clone();
+    store
+        .put_tmp_document(
+            &ipv4_secret,
+            b"updated".to_vec(),
+            serde_json::json!({}),
+            "text/markdown",
+            TmpTtl::Unchanged,
+            WritePrecondition::IfMatch(ipv4.version.id.to_string()),
+        )
+        .await?;
+    store
+        .set_tmp_document_ttl(&ipv4_secret, Some("2026-08-14T00:00:00Z".to_string()))
+        .await?;
+    let library = store.create_library("ip-preservation").await?;
+    store
+        .promote_tmp_document(
+            &ipv4_secret,
+            &library.slug,
+            "promoted.md",
+            WritePrecondition::None,
+        )
+        .await?;
+
+    let ipv6 = store
+        .create_tmp_document_with_creation_ip(
+            b"ipv6".to_vec(),
+            serde_json::json!({}),
+            "text/markdown",
+            TmpTtl::Default,
+            "2001:0db8:0:0::1".parse::<IpAddr>()?,
+        )
+        .await?;
+    let local = store
+        .create_tmp_document(
+            b"local".to_vec(),
+            serde_json::json!({}),
+            "text/markdown",
+            TmpTtl::Default,
+        )
+        .await?;
+    let serialized = serde_json::to_string(&ipv4)?;
+    assert!(!serialized.contains("created_ip_address"));
+    assert!(!serialized.contains("198.51.100.10"));
+    drop(store);
+
+    assert_eq!(
+        document_creation_ip(&db_path, &ipv4.document.id).await?,
+        Some("198.51.100.10".to_string())
+    );
+    assert_eq!(
+        document_creation_ip(&db_path, &ipv6.document.id).await?,
+        Some("2001:db8::1".to_string())
+    );
+    assert_eq!(
+        document_creation_ip(&db_path, &local.document.id).await?,
+        None
     );
     Ok(())
 }
@@ -3014,6 +3170,24 @@ async fn index_names(
         );
     }
     Ok(names)
+}
+
+async fn document_creation_ip(db_path: &Path, document_id: &str) -> anyhow::Result<Option<String>> {
+    let db = turso::Builder::new_local(db_path.to_str().context("database path should be UTF-8")?)
+        .build()
+        .await?;
+    let conn = db.connect()?;
+    let mut rows = conn
+        .query(
+            "SELECT created_ip_address FROM documents WHERE id = ?1",
+            turso::params![document_id.to_string()],
+        )
+        .await?;
+    let row = rows
+        .next()
+        .await?
+        .context("document row should exist for creation-IP query")?;
+    Ok(row.get::<Option<String>>(0)?)
 }
 
 // ---------------------------------------------------------------------------

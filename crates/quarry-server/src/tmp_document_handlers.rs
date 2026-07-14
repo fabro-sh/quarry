@@ -4,12 +4,13 @@ use crate::presence::PresenceStreamGuard;
 use crate::review::{DocumentReviewQuery, agent_tmp_document_review};
 use crate::sse::events_for_tmp_document;
 use crate::{
-    AgentPresenceRequest, ApiError, ApiErrorResponse, AppState, PromoteTmpDocumentRequest,
-    QuarryError, TmpAgentPresenceListResponse, TmpAgentPresenceResponse, TmpDocumentSubResource,
-    TtlRequest, TtlResponse, agent_presence_tmp_document, bytes_response_with_expiry, gateway,
-    insert_document_headers, json_response, json_with_etag, markdown_write, optional_header,
-    parse_tmp_document_subresource, precondition_from_headers, require_tmp_markdown_content_type,
-    tmp_metadata_from_headers, touch_agent_presence, transaction_metadata_from_headers,
+    AgentPresenceRequest, ApiError, ApiErrorCode, ApiErrorResponse, AppState, ClientIpSource,
+    PromoteTmpDocumentRequest, QuarryError, TmpAgentPresenceListResponse, TmpAgentPresenceResponse,
+    TmpDocumentSubResource, TtlRequest, TtlResponse, agent_presence_tmp_document,
+    bytes_response_with_expiry, gateway, insert_document_headers, json_response, json_with_etag,
+    markdown_write, optional_header, parse_tmp_document_subresource, precondition_from_headers,
+    require_tmp_markdown_content_type, tmp_metadata_from_headers, touch_agent_presence,
+    transaction_metadata_from_headers,
 };
 use axum::Json;
 use axum::body::{Body, Bytes};
@@ -22,7 +23,10 @@ use quarry_core::{
 };
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
+use std::net::{IpAddr, SocketAddr};
 use utoipa::ToSchema;
+
+const CLOUDFRONT_VIEWER_ADDRESS_HEADER: &str = "cloudfront-viewer-address";
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct CreateTmpDocumentRequest {
@@ -56,8 +60,10 @@ pub(crate) struct TmpDocumentGetQuery {
 )]
 pub(crate) async fn create_tmp_document(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<CreateTmpDocumentRequest>,
 ) -> Result<Response, ApiError> {
+    let created_ip_address = creation_ip_address(&state, &headers)?;
     let requested_content_type = request
         .content_type
         .as_deref()
@@ -75,16 +81,64 @@ pub(crate) async fn create_tmp_document(
         .expires_at
         .map(quarry_storage::TmpTtl::ExpiresAt)
         .unwrap_or(quarry_storage::TmpTtl::Default);
-    let outcome = state
-        .store
-        .create_tmp_document(
-            request.content.unwrap_or_default().into_bytes(),
-            metadata,
-            &content_type,
-            ttl,
-        )
-        .await?;
+    let content = request.content.unwrap_or_default().into_bytes();
+    let outcome = if let Some(created_ip_address) = created_ip_address {
+        state
+            .store
+            .create_tmp_document_with_creation_ip(
+                content,
+                metadata,
+                &content_type,
+                ttl,
+                created_ip_address,
+            )
+            .await?
+    } else {
+        state
+            .store
+            .create_tmp_document(content, metadata, &content_type, ttl)
+            .await?
+    };
     json_with_etag(StatusCode::CREATED, &outcome, &outcome.version.id)
+}
+
+fn creation_ip_address(state: &AppState, headers: &HeaderMap) -> Result<Option<IpAddr>, ApiError> {
+    match state.client_ip_source() {
+        ClientIpSource::None => Ok(None),
+        ClientIpSource::CloudFrontViewerAddress => {
+            parse_cloudfront_viewer_address(headers).map(Some)
+        }
+    }
+}
+
+fn parse_cloudfront_viewer_address(headers: &HeaderMap) -> Result<IpAddr, ApiError> {
+    let mut values = headers.get_all(CLOUDFRONT_VIEWER_ADDRESS_HEADER).iter();
+    let Some(value) = values.next() else {
+        return Err(client_ip_header_error("missing"));
+    };
+    if values.next().is_some() {
+        return Err(client_ip_header_error("repeated"));
+    }
+    let value = value
+        .to_str()
+        .map_err(|_| client_ip_header_error("non_utf8"))?;
+    let address = value
+        .parse::<SocketAddr>()
+        .map_err(|_| client_ip_header_error("malformed"))?;
+    Ok(address.ip())
+}
+
+fn client_ip_header_error(reason_code: &'static str) -> ApiError {
+    tracing::warn!(
+        event = "tmp_document.client_ip.rejected",
+        outcome = "rejected",
+        reason_code,
+        "trusted client address header rejected"
+    );
+    ApiError::new(
+        ApiErrorCode::InternalError,
+        "trusted client address unavailable",
+    )
 }
 
 #[utoipa::path(
@@ -573,4 +627,65 @@ pub(crate) async fn delete_tmp_document(
     Path(path): Path<String>,
 ) -> Result<Json<TransactionRecord>, ApiError> {
     Ok(Json(state.store.delete_tmp_document(&path).await?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn cloudfront_viewer_address_parses_ipv4_and_ipv6_without_the_port() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CLOUDFRONT_VIEWER_ADDRESS_HEADER,
+            HeaderValue::from_static("198.51.100.10:46532"),
+        );
+        assert_eq!(
+            parse_cloudfront_viewer_address(&headers).expect("valid IPv4 viewer address"),
+            "198.51.100.10"
+                .parse::<IpAddr>()
+                .expect("valid expected IPv4 address")
+        );
+
+        headers.insert(
+            CLOUDFRONT_VIEWER_ADDRESS_HEADER,
+            HeaderValue::from_static("[2001:0db8:0:0::1]:46532"),
+        );
+        assert_eq!(
+            parse_cloudfront_viewer_address(&headers)
+                .expect("valid IPv6 viewer address")
+                .to_string(),
+            "2001:db8::1"
+        );
+    }
+
+    #[test]
+    fn cloudfront_viewer_address_rejects_missing_repeated_and_malformed_values() {
+        assert!(parse_cloudfront_viewer_address(&HeaderMap::new()).is_err());
+
+        let mut headers = HeaderMap::new();
+        headers.append(
+            CLOUDFRONT_VIEWER_ADDRESS_HEADER,
+            HeaderValue::from_static("198.51.100.10:46532"),
+        );
+        headers.append(
+            CLOUDFRONT_VIEWER_ADDRESS_HEADER,
+            HeaderValue::from_static("198.51.100.11:46533"),
+        );
+        assert!(parse_cloudfront_viewer_address(&headers).is_err());
+
+        headers.clear();
+        headers.insert(
+            CLOUDFRONT_VIEWER_ADDRESS_HEADER,
+            HeaderValue::from_static("198.51.100.10"),
+        );
+        assert!(parse_cloudfront_viewer_address(&headers).is_err());
+
+        headers.insert(
+            CLOUDFRONT_VIEWER_ADDRESS_HEADER,
+            HeaderValue::from_bytes(b"\xff").expect("opaque non-UTF-8 header value"),
+        );
+        assert!(parse_cloudfront_viewer_address(&headers).is_err());
+    }
 }

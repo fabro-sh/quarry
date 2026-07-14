@@ -24,10 +24,30 @@ pub(crate) async fn ensure_links_resolution_status_column(conn: &Connection) -> 
     Ok(())
 }
 
+pub(crate) async fn ensure_documents_created_ip_address_column(conn: &Connection) -> Result<()> {
+    let columns = table_columns_conn(conn, "documents").await?;
+    if columns
+        .iter()
+        .any(|column| column.name == "created_ip_address")
+    {
+        return Ok(());
+    }
+    conn.execute(
+        "ALTER TABLE documents ADD COLUMN created_ip_address TEXT",
+        (),
+    )
+    .await
+    .map_err(map_turso_error)?;
+    Ok(())
+}
+
 pub(crate) async fn migrate_documents_scope_ttl(conn: &Connection) -> Result<()> {
     let columns = table_columns_conn(conn, "documents").await?;
     let has_scope = columns.iter().any(|column| column.name == "document_scope");
     let has_expires_at = columns.iter().any(|column| column.name == "expires_at");
+    let has_created_ip_address = columns
+        .iter()
+        .any(|column| column.name == "created_ip_address");
     let library_id_not_null = columns
         .iter()
         .find(|column| column.name == "library_id")
@@ -48,12 +68,17 @@ pub(crate) async fn migrate_documents_scope_ttl(conn: &Connection) -> Result<()>
             "'library'"
         };
         let expires_expr = if has_expires_at { "expires_at" } else { "NULL" };
+        let created_ip_address_expr = if has_created_ip_address {
+            "created_ip_address"
+        } else {
+            "NULL"
+        };
         let insert_sql = format!(
             r#"
             INSERT INTO documents
-              (id, library_id, path, head_version_id, deleted_at, created_at, updated_at, document_scope, expires_at)
+              (id, library_id, path, head_version_id, deleted_at, created_at, updated_at, document_scope, expires_at, created_ip_address)
             SELECT id, library_id, path, head_version_id, deleted_at, created_at, updated_at,
-                   {scope_expr}, {expires_expr}
+                   {scope_expr}, {expires_expr}, {created_ip_address_expr}
             FROM documents_scope_ttl_migration;
             "#
         );
@@ -69,6 +94,7 @@ pub(crate) async fn migrate_documents_scope_ttl(conn: &Connection) -> Result<()>
               deleted_at TEXT,
               document_scope TEXT NOT NULL DEFAULT 'library',
               expires_at TEXT,
+              created_ip_address TEXT,
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL,
               CHECK (document_scope IN ('library', 'tmp')),
@@ -106,6 +132,9 @@ pub(crate) async fn ensure_document_indexes_conn(conn: &Connection) -> Result<()
         CREATE INDEX IF NOT EXISTS idx_documents_scope_path ON documents(document_scope, path);
         CREATE INDEX IF NOT EXISTS idx_documents_expires_at ON documents(expires_at);
         CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at);
+        CREATE INDEX IF NOT EXISTS idx_documents_created_ip_address_created_at
+          ON documents(created_ip_address, created_at)
+          WHERE created_ip_address IS NOT NULL;
         CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents(updated_at);
         "#,
     )

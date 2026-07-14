@@ -83,14 +83,49 @@ impl QuarryStore {
         content_type: &str,
         ttl: TmpTtl,
     ) -> Result<WriteOutcome> {
+        self.create_tmp_document_inner(content, metadata, content_type, ttl, None)
+            .await
+    }
+
+    /// Creates an anonymous tmp document and records its trusted edge-derived
+    /// creation address for operator-only abuse investigation.
+    pub async fn create_tmp_document_with_creation_ip(
+        &self,
+        content: Vec<u8>,
+        metadata: JsonValue,
+        content_type: &str,
+        ttl: TmpTtl,
+        created_ip_address: IpAddr,
+    ) -> Result<WriteOutcome> {
+        self.create_tmp_document_inner(
+            content,
+            metadata,
+            content_type,
+            ttl,
+            Some(created_ip_address),
+        )
+        .await
+    }
+
+    async fn create_tmp_document_inner(
+        &self,
+        content: Vec<u8>,
+        metadata: JsonValue,
+        content_type: &str,
+        ttl: TmpTtl,
+        created_ip_address: Option<IpAddr>,
+    ) -> Result<WriteOutcome> {
         let secret = TmpDocumentSecret::generate();
-        self.put_tmp_document(
+        self.put_tmp_document_with_transaction_and_creation_ip(
             secret.as_str(),
             content,
             metadata,
             content_type,
             ttl,
             WritePrecondition::IfNoneMatch,
+            None,
+            TransactionMetadata::default(),
+            created_ip_address,
         )
         .await
     }
@@ -109,6 +144,36 @@ impl QuarryStore {
         precondition: WritePrecondition,
         origin_id: Option<String>,
         transaction: TransactionMetadata,
+    ) -> Result<WriteOutcome> {
+        self.put_tmp_document_with_transaction_and_creation_ip(
+            path,
+            content,
+            metadata,
+            content_type,
+            ttl,
+            precondition,
+            origin_id,
+            transaction,
+            None,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "transaction staging needs document, CAS, and private creation metadata"
+    )]
+    async fn put_tmp_document_with_transaction_and_creation_ip(
+        &self,
+        path: &str,
+        content: Vec<u8>,
+        metadata: JsonValue,
+        content_type: &str,
+        ttl: TmpTtl,
+        precondition: WritePrecondition,
+        origin_id: Option<String>,
+        transaction: TransactionMetadata,
+        created_ip_address: Option<IpAddr>,
     ) -> Result<WriteOutcome> {
         let secret = TmpDocumentSecret::parse(path)?;
         let path = secret.as_str().to_string();
@@ -140,9 +205,14 @@ impl QuarryStore {
                         provenance,
                     )
                     .await?;
-                    let (doc_id, old_version_id) =
-                        ensure_tmp_document_conn(conn, &path, &expires_at, &now_timestamp())
-                            .await?;
+                    let (doc_id, old_version_id) = ensure_tmp_document_with_creation_ip_conn(
+                        conn,
+                        &path,
+                        &expires_at,
+                        created_ip_address,
+                        &now_timestamp(),
+                    )
+                    .await?;
                     let version = store
                         .insert_version_conn(
                             conn,

@@ -1,6 +1,6 @@
 # Quarry Lightweight Threat Model
 
-Status: **Draft for review** · 2026-07-03
+Status: **Draft for review** · 2026-07-14
 
 This document is a lightweight threat model of the Quarry platform, following
 Trail of Bits' TRAIL methodology (drawing from Mozilla's Rapid Risk Assessment
@@ -41,7 +41,9 @@ exposure (cleartext secrets, immutable soft-deleted history).
 The owner has, at this stage, explicitly **accepted** three of these as residual
 risks to be addressed with documentation and warnings rather than immediate
 engineering work: prompt injection (T5), at-rest/insider exposure (T10), and
-anonymous-creation content abuse (T3). The recommendations below reflect that:
+anonymous-creation content abuse (T3), now with creation-IP collection as a
+reactive abuse signal rather than a complete prevention control. The
+recommendations below reflect that:
 they lead with the capability-model and defense-in-depth work that is actionable
 now, and record the accepted risks explicitly so the decision is visible and
 revisitable.
@@ -53,9 +55,10 @@ In priority order:
 1. **Confirm the 2026-07-02 deployment blockers are fixed before exposure.**
    This model's scenarios assume TLS at the edge, a locked-down admin GC, removal
    of the unauthenticated `/v1/collab/{document_id}` route, edge rate
-   limiting/quotas/timeouts, `no-store` on secret-bearing responses, generic 5xx
-   bodies, security headers/CSP, and a TTL reaper. If any is not yet merged, it is
-   a gate, not a recommendation.
+   controls, `no-store` on secret-bearing responses, generic 5xx bodies,
+   security headers/CSP, and a TTL reaper. Verify each control against the
+   deployed build. AWS WAF and edge rate limiting are not part of the current
+   posture and must not be described as deployed.
 2. **Give capability secrets a lifecycle: revocation and rotation.** Let a holder
    invalidate a secret (on suspected leak) and rotate to a new one while keeping
    the document, so a leaked link is recoverable without destroying data
@@ -105,11 +108,13 @@ practice of documenting risks that are inherent or out of immediate scope.
   now. Near-term posture: rely on host access controls and backup hygiene.
   _Revisit when:_ staff grows beyond a trusted few, a hosting provider with
   broader access is used, or tenants store regulated/sensitive data.
-- **Anonymous-creation content abuse (T3).** Rely on short TTL expiry and
-  reactive manual takedown. _Revisit when:_ abuse materializes, or domain
-  reputation / hosting-provider AUP becomes a concern. Note this acceptance
-  *depends on* the TTL clamp of T13 — without it, "short TTL expiry" is
-  attacker-defeatable and this risk is not actually bounded.
+- **Anonymous-creation content abuse (T3).** Record the CloudFront-derived
+  creation IP for new tmp documents, retain it with the SQL row and backups,
+  and use aggregate operator queries for reactive investigation and takedown.
+  This is an accountability signal, not authentication, rate limiting, or
+  automatic blocking. _Revisit when:_ abuse materializes, IP-based response is
+  insufficient, or domain reputation / hosting-provider AUP becomes a concern.
+  Short TTL expiry still depends on the clamp of T13.
 
 ## Scope and Assumptions
 
@@ -177,10 +182,10 @@ than repeating its findings.
 **Baseline assumption for the threat scenarios below:** the findings of the
 2026-07-02 review are assumed **already remediated** (TLS enforced at the edge;
 `/v1/admin/gc` locked down; the unauthenticated `/v1/collab/{document_id}` route
-removed; rate limiting, storage quotas, request timeouts, and WebSocket
-message/connection caps in place; `Cache-Control: no-store` on secret-bearing
-responses; generic 5xx bodies; standard security headers including a restrictive
-CSP; a shortened anonymous TTL with a background reaper). The scenarios
+removed; `Cache-Control: no-store` on secret-bearing responses; generic 5xx
+bodies; standard security headers including a restrictive CSP; a shortened
+anonymous TTL with a background reaper). AWS WAF, edge rate limiting, and
+application rate limiting are explicitly **not** assumed. The scenarios
 therefore concentrate on the **design-level risks that persist even after those
 fixes** — the ones inherent to Quarry's architecture and its agent-native model,
 which no single code fix removes. One caveat: the assumed TTL reaper is only
@@ -208,6 +213,10 @@ ultimately against this data (its confidentiality, integrity, or availability).
   discriminated by kind), including suggested text edits an actor can accept.
 - **Presence and identity data.** Self-asserted collaborator names, cursors,
   colors, and agent IDs/labels. None of it is server-verified.
+- **Creation IP addresses.** The canonical full IPv4 or IPv6 address CloudFront
+  reports for a newly created anonymous tmp document. Stored only in SQL for
+  operator abuse investigations, never returned by the public API, and copied
+  into database backups and snapshots.
 - **Collaboration session state.** In-memory Yjs/CRDT documents and awareness
   data, relayed among connected clients over WebSockets.
 - **Agent event journal.** A stream of per-document activity events. The journal
@@ -216,8 +225,10 @@ ultimately against this data (its confidentiality, integrity, or availability).
   poll/ack queue (`/events/pending`, `/events/ack`) is `lib-documents`-only and
   therefore out of scope. The SSE stream is correctly scoped to a single
   document, so it is not a cross-document channel.
-- **Operational data.** Request logs (with document secrets redacted from
-  request paths), health/metrics, and the embedded browser UI bundle.
+- **Operational data.** Application request logs (with document secrets
+  redacted from request paths), privacy-minimized CloudFront logs containing
+  viewer IP but no URI/query/cookie/referrer/user-agent fields, health/metrics,
+  and the embedded browser UI bundle.
 
 ## Data Flow
 
@@ -234,7 +245,7 @@ flowchart TB
     end
 
     subgraph EDGE["Edge zone (operator-run)"]
-        proxy["TLS reverse proxy<br/>(TLS term, rate limit,<br/>headers, cache rules)"]
+        proxy["CloudFront + ALB<br/>(TLS term, headers,<br/>cache rules)"]
     end
 
     subgraph CORE["🖥️ Server Core zone — one shared process"]
@@ -248,7 +259,7 @@ flowchart TB
     end
 
     subgraph STORE["💾 Storage zone (same host)"]
-        db[("SQLite / turso DB<br/>content · secrets · versions<br/>· comments (cleartext)")]
+        db[("SQLite / turso DB<br/>content · secrets · versions<br/>· comments · creation IPs")]
         cas[("CAS blob tree<br/>(blake3, on-disk)")]
     end
 
@@ -297,7 +308,7 @@ document's capability URL.
 | Browser client | External | Anonymous user's browser; loads the embedded SPA and holds the capability secret in its address bar / history. |
 | Agent client | External | Any HTTP-capable agent; joins a document with its secret URL, self-asserts its identity. |
 | On-path observer | External | Any network intermediary (Wi-Fi, ISP, proxy) able to see traffic if TLS is absent. |
-| TLS reverse proxy | Edge | Operator-run. Terminates TLS, and is where rate limiting, connection/timeout caps, security headers, and cache rules must live — the server does none of these. |
+| CloudFront + ALB | Edge | Operator-run. Terminates TLS and applies forwarding, header, and cache rules. The exact creation behavior adds the trusted viewer-address header; no WAF is attached. |
 | axum router + tracing | Server Core | Single entry point; only global middleware is request tracing (redacts secrets from logged paths). No auth/CORS/rate-limit layer. |
 | tmp-document handlers | Server Core | The secret-gated CRUD + sub-resource surface (`/blocks`, `/review`, `/versions`, `/presence`, `/transactions`, `/ttl`, `/promote`, events). The only genuinely access-controlled component. |
 | Collab SessionHub (Yjs) | Server Core | Relays CRDT sync + awareness over WebSockets. `/v1/tmp/collab/{secret}/{room}` is secret-gated (the `{room}` segment is ignored); `/v1/collab/{document_id}` is **not** — it trusts a bare internal UUID. Both routes converge on one session hub keyed by the internal document UUID, which the server echoes back to clients (`x-quarry-document-id`) — the concrete mechanism behind T8. |
@@ -305,7 +316,7 @@ document's capability URL.
 | Agent-event journal | Server Core | Background ingest of document activity events for agent polling/streaming. |
 | Markdown gateway writer | Server Core | Reconciles Markdown writes into the block tree (diff3). Path inputs pass a central traversal guard. |
 | admin/gc · discovery · health · openapi · UI assets | Server Core | Unauthenticated base routes. `POST /v1/admin/gc` triggers a global, write-blocking GC with no auth; discovery/openapi disclose the full API and its "no-auth" posture; UI assets serve the embedded bundle. |
-| SQLite / turso database | Storage | Single shared file holding all documents, cleartext capability secrets, version history, comments, and presence. No encryption at rest. Pre-1.0 engine. |
+| SQLite / turso database | Storage | Single shared file holding all documents, cleartext capability secrets, version history, comments, presence, and document-creation IPs. No application-layer encryption at rest. Pre-1.0 engine. |
 | CAS blob tree | Storage | On-disk content-addressed (blake3) blobs for content >64 KiB. Paths derive only from validated hashes. |
 | Fabro operator + host | Operator | Staff with host/container/volume/log access; can read all data at rest. |
 | Hosting provider | Operator | Underlying platform/insider with volume and network access (third-party-insider actor). |
@@ -400,13 +411,16 @@ to end a former collaborator's access, cannot rotate it — the link keeps worki
 for everyone who ever held it. _Actors: capability holder, former collaborator.
 Component: tmp-document handlers._
 
-**T3 — Anonymous creation enables abuse with no accountability.**
-Anyone can create documents with no identity. Even with rate limits, the service
+**T3 — Anonymous creation enables abuse with limited accountability.**
+Anyone can create documents with no account or verified identity. The service
 can be used to host phishing pages, malware, or illicit content rendered at
-Fabro's own domain, and the operator has no identity or ownership signal on which
-to base takedown, blocking, or attribution. This is a content-moderation and
-domain-reputation exposure, not a resource-exhaustion one. _Actor: anonymous
-internet user. Components: tmp-document handlers, UI assets._
+Fabro's own domain. Quarry records the CloudFront-derived creation IP on each
+new tmp-document SQL row, which supports reactive aggregation, investigation,
+and takedown, but shared/NAT/VPN addresses are not ownership proof and no WAF,
+rate limit, automatic block, or moderation workflow acts on the signal. This is
+a content-moderation and domain-reputation exposure, not only a
+resource-exhaustion one. _Actor: anonymous internet user. Components:
+CloudFront, tmp-document handlers, Storage, UI assets._
 
 ### Identity and social engineering
 
@@ -569,4 +583,3 @@ When a qualifying change lands, work through:
    change introduces or reopens, and update the data-flow diagram to match.
 
 Keep this document versioned with the code so its history tracks the system's.
-

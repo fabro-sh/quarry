@@ -28,8 +28,8 @@ use row::{
     opt_text, text, transaction_from_row,
 };
 use schema::{
-    ensure_document_indexes_conn, ensure_links_resolution_status_column,
-    migrate_documents_scope_ttl,
+    ensure_document_indexes_conn, ensure_documents_created_ip_address_column,
+    ensure_links_resolution_status_column, migrate_documents_scope_ttl,
 };
 pub use store::{GlobalOperationGuard, QuarryStore, StorageError, StoreConfig};
 pub(crate) use store::{begin_immediate, finish_tx, map_turso_error};
@@ -51,6 +51,7 @@ use quarry_core::{
 };
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
+use std::net::IpAddr;
 use std::time::Instant;
 use turso::{Connection, Row, Value, params};
 use uuid::Uuid;
@@ -244,6 +245,7 @@ impl QuarryStore {
         let conn = self.conn()?;
         conn.execute_batch(SCHEMA).await.map_err(map_turso_error)?;
         migrate_documents_scope_ttl(&conn).await?;
+        ensure_documents_created_ip_address_column(&conn).await?;
         ensure_document_indexes_conn(&conn).await?;
         ensure_links_resolution_status_column(&conn).await?;
         // Sessions are discardable (recovery is reseed-from-rows); the legacy
@@ -1059,6 +1061,7 @@ CREATE TABLE IF NOT EXISTS documents(
   deleted_at TEXT,
   document_scope TEXT NOT NULL DEFAULT 'library',
   expires_at TEXT,
+  created_ip_address TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   CHECK (document_scope IN ('library', 'tmp')),
@@ -1438,6 +1441,7 @@ async fn ensure_document_conn(
         DocumentLookupScope::Library { library_id },
         path,
         None,
+        None,
         now,
     )
     .await
@@ -1449,13 +1453,31 @@ async fn ensure_tmp_document_conn(
     expires_at: &str,
     now: &str,
 ) -> Result<(String, Option<String>)> {
+    ensure_tmp_document_with_creation_ip_conn(conn, path, expires_at, None, now).await
+}
+
+async fn ensure_tmp_document_with_creation_ip_conn(
+    conn: &Connection,
+    path: &str,
+    expires_at: &str,
+    created_ip_address: Option<IpAddr>,
+    now: &str,
+) -> Result<(String, Option<String>)> {
     if let Some(identity) =
         document_identity_conn(conn, DocumentLookupScope::Tmp, path, now).await?
     {
         return Ok(identity);
     }
     error_if_tmp_document_expired(conn, path, now).await?;
-    insert_document_conn(conn, DocumentLookupScope::Tmp, path, Some(expires_at), now).await
+    insert_document_conn(
+        conn,
+        DocumentLookupScope::Tmp,
+        path,
+        Some(expires_at),
+        created_ip_address,
+        now,
+    )
+    .await
 }
 
 async fn document_identity_conn(
@@ -1504,6 +1526,7 @@ async fn insert_document_conn(
     scope: DocumentLookupScope<'_>,
     path: &str,
     expires_at: Option<&str>,
+    created_ip_address: Option<IpAddr>,
     now: &str,
 ) -> Result<(String, Option<String>)> {
     let id = Uuid::new_v4().to_string();
@@ -1511,8 +1534,8 @@ async fn insert_document_conn(
         DocumentLookupScope::Library { library_id } => {
             conn.execute(
                 "INSERT INTO documents
-                 (id, library_id, path, head_version_id, deleted_at, created_at, updated_at, document_scope, expires_at)
-                 VALUES (?1, ?2, ?3, NULL, NULL, ?4, ?4, 'library', NULL)",
+                 (id, library_id, path, head_version_id, deleted_at, created_at, updated_at, document_scope, expires_at, created_ip_address)
+                 VALUES (?1, ?2, ?3, NULL, NULL, ?4, ?4, 'library', NULL, NULL)",
                 params![
                     id.clone(),
                     library_id.to_string(),
@@ -1529,13 +1552,14 @@ async fn insert_document_conn(
             })?;
             conn.execute(
                 "INSERT INTO documents
-                 (id, library_id, path, head_version_id, deleted_at, created_at, updated_at, document_scope, expires_at)
-                 VALUES (?1, NULL, ?2, NULL, NULL, ?3, ?3, 'tmp', ?4)",
-                params![
-                    id.clone(),
-                    path.to_string(),
-                    now.to_string(),
-                    expires_at.to_string()
+                 (id, library_id, path, head_version_id, deleted_at, created_at, updated_at, document_scope, expires_at, created_ip_address)
+                 VALUES (?1, NULL, ?2, NULL, NULL, ?3, ?3, 'tmp', ?4, ?5)",
+                vec![
+                    Value::Text(id.clone()),
+                    Value::Text(path.to_string()),
+                    Value::Text(now.to_string()),
+                    Value::Text(expires_at.to_string()),
+                    opt_value(created_ip_address.map(|address| address.to_string())),
                 ],
             )
             .await

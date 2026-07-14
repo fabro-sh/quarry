@@ -33,6 +33,24 @@ quarry server --root .quarry start --addr 127.0.0.1:7831
 
 The server binds to `127.0.0.1` by default. Non-loopback binds print a warning because phase one intentionally has no auth.
 
+### Trusted tmp-document creation addresses
+
+Local servers do not trust forwarding headers and store no creation address by
+default. A deployment behind CloudFront can opt into the CloudFront-generated
+viewer address for anonymous tmp-document creation:
+
+```sh
+QUARRY_CLIENT_IP_SOURCE=cloudfront-viewer-address quarry server start
+# equivalent: quarry server start --client-ip-source cloudfront-viewer-address
+```
+
+In this mode `POST /v1/tmp/documents` requires exactly one valid
+`CloudFront-Viewer-Address` value in `IP:port` form. The server stores the
+canonical IP without the source port and rejects creation if the trusted header
+is missing or malformed. Do not enable this mode on a directly reachable server
+or substitute `X-Forwarded-For`; the deployment must arrange for CloudFront to
+generate the trusted header.
+
 ## Verification
 
 ```sh
