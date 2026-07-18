@@ -17,7 +17,7 @@ Use `quarry new` to start an empty document instead. By default the CLI targets 
 
 Before the first edit, comment, or suggestion, read __QUARRY_ORIGIN__/quarry.SKILL.md for transaction schemas and block types. The full API reference is __QUARRY_ORIGIN__/agent-docs.
 
-While the user reviews, keep the document's events stream open (`GET .../events/stream`). When a `doc.changed` event arrives, re-read `.../blocks` and `.../review`, then respond: reply to comments with `comment.reply`, resolve addressed threads with `comment.resolve`, and propose edits with `suggestion.add` rather than editing directly.
+While the user reviews, keep the document's events stream open (`GET .../events/stream`). When a `doc.changed` event arrives, re-read `.../blocks` and `.../review`, then respond: reply to comments with `comment.reply`, resolve addressed threads with `comment.resolve`, and propose edits with `suggestion.add` or structural deletions with `suggestion.add_block_delete` rather than editing directly.
 
 If the `quarry` CLI is not installed, use plain HTTP instead:
 

@@ -15,11 +15,11 @@ import { ReviewAuthorHeader } from './ReviewAuthorHeader';
 // The Comments tab in the right pane is the document's complete review
 // record, read from the rows-backed `GET .../review` projection: comment
 // threads (including resolved and orphaned ones), suggestions that left the
-// rail (resolved/invalidated), and diff3 conflict review items from
+// rail, structural suggestions, and diff3 conflict review items from
 // whole-file merges. Unlike the rail (which only lists open items bound to
-// live marks), this panel shows row states with badges. It is a read-only
-// overview — the rail stays the place to reply or resolve — except that
-// resolved threads can be reopened, which returns them to the rail.
+// live marks), this panel shows row states with badges. Structural suggestions
+// are resolved here because they deliberately have no inline text mark;
+// resolved threads can also be reopened, which returns them to the rail.
 // Hovering a thread highlights its in-text mark via the shared review store.
 
 type StatusFilter = 'all' | 'open' | 'resolved';
@@ -113,7 +113,28 @@ function CommentItem({ comment }: { comment: AgentReviewComment }) {
   );
 }
 
-function SuggestionItem({ suggestion }: { suggestion: AgentReviewSuggestion }) {
+type SuggestionResolution = 'accept' | 'reject';
+
+function SuggestionItem({
+  suggestion,
+  onResolve,
+}: {
+  suggestion: AgentReviewSuggestion;
+  onResolve?: (suggestionId: string, resolution: SuggestionResolution) => Promise<void>;
+}) {
+  const [resolving, setResolving] = useState<SuggestionResolution | null>(null);
+  const blockDelete = suggestion.kind === 'block_delete';
+
+  async function resolve(resolution: SuggestionResolution) {
+    if (!onResolve || resolving) return;
+    setResolving(resolution);
+    try {
+      await onResolve(suggestion.id, resolution);
+    } finally {
+      setResolving(null);
+    }
+  }
+
   return (
     <li
       className="rounded-lg bg-well/40 p-3"
@@ -128,11 +149,56 @@ function SuggestionItem({ suggestion }: { suggestion: AgentReviewSuggestion }) {
         />
         <StatusBadge status={suggestion.status} />
       </div>
-      <p className="mt-2 text-sm text-body">
-        <span className="text-muted">Replace:</span>{' '}
-        <del className="text-danger/80">{suggestion.preview.before}</del>{' '}
-        <ins className="no-underline text-success">{suggestion.preview.after}</ins>
-      </p>
+      {blockDelete ? (
+        <p className="mt-2 text-sm text-body">
+          <span className="text-muted">Delete block:</span>{' '}
+          <del className="text-danger/80">{suggestion.preview.before}</del>
+        </p>
+      ) : (
+        <p className="mt-2 text-sm text-body">
+          <span className="text-muted">Replace:</span>{' '}
+          <del className="text-danger/80">{suggestion.preview.before}</del>{' '}
+          <ins className="no-underline text-success">{suggestion.preview.after}</ins>
+        </p>
+      )}
+
+      {suggestion.body ? (
+        <p className="mt-2 text-sm whitespace-pre-wrap text-body">{suggestion.body}</p>
+      ) : null}
+
+      {suggestion.replies.length > 0 ? (
+        <div className="mt-5 flex flex-col gap-5">
+          {suggestion.replies.map((reply) => (
+            <div key={reply.id}>
+              <ReviewAuthorHeader at={reply.at} by={reply.by} editedAt={reply.editedAt} />
+              <p className="mt-1 text-sm whitespace-pre-wrap text-body">{reply.body}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {blockDelete && suggestion.status === 'open' && onResolve ? (
+        <div className="mt-3 flex justify-end gap-1">
+          <button
+            className="rounded px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-well hover:text-body disabled:opacity-50"
+            data-testid="reject-block-delete-suggestion"
+            disabled={resolving !== null}
+            onClick={() => void resolve('reject')}
+            type="button"
+          >
+            Reject
+          </button>
+          <button
+            className="rounded bg-danger px-2 py-1 text-xs font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
+            data-testid="accept-block-delete-suggestion"
+            disabled={resolving !== null}
+            onClick={() => void resolve('accept')}
+            type="button"
+          >
+            Delete block
+          </button>
+        </div>
+      ) : null}
     </li>
   );
 }
@@ -220,18 +286,28 @@ function ConflictItem({ conflict, onDismiss }: ConflictItemProps): ReactNode {
 interface CommentsPanelProps {
   readonly review?: AgentReviewResponse;
   readonly onDismissConflict?: (conflictId: string) => Promise<void>;
+  readonly onResolveSuggestion?: (
+    suggestionId: string,
+    resolution: SuggestionResolution
+  ) => Promise<void>;
 }
 
-export function CommentsPanel({ review, onDismissConflict }: CommentsPanelProps): ReactNode {
+export function CommentsPanel({
+  review,
+  onDismissConflict,
+  onResolveSuggestion,
+}: CommentsPanelProps): ReactNode {
   const [filter, setFilter] = useState<StatusFilter>('all');
 
   const comments = (review?.comments ?? []).filter((comment) =>
     matchesFilter(comment.status, filter)
   );
-  // Open suggestions live in the rail next to their marks; the panel records
-  // the ones that left it (resolved, invalidated).
+  // Open inline suggestions live in the rail next to their marks. Structural
+  // suggestions have no text mark, so they remain actionable in this panel.
   const suggestions = (review?.suggestions ?? []).filter(
-    (suggestion) => suggestion.status !== 'open' && matchesFilter(suggestion.status, filter)
+    (suggestion) =>
+      (suggestion.kind === 'block_delete' || suggestion.status !== 'open') &&
+      matchesFilter(suggestion.status, filter)
   );
   const conflicts = (review?.conflicts ?? []).filter((conflict) =>
     matchesFilter(conflict.status, filter)
@@ -273,7 +349,11 @@ export function CommentsPanel({ review, onDismissConflict }: CommentsPanelProps)
             <CommentItem comment={comment} key={comment.id} />
           ))}
           {suggestions.map((suggestion) => (
-            <SuggestionItem key={suggestion.id} suggestion={suggestion} />
+            <SuggestionItem
+              key={suggestion.id}
+              onResolve={onResolveSuggestion}
+              suggestion={suggestion}
+            />
           ))}
         </ul>
       )}

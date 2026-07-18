@@ -735,7 +735,8 @@ async fn block_transaction_comment_reply_targets_open_suggestion_and_edit_update
                 "block_id": block_id,
                 "start": 10,
                 "end": 16,
-                "replacement": "great"
+                "replacement": "great",
+                "body": "Use more confident wording."
             }]),
         ),
     )
@@ -881,7 +882,8 @@ async fn block_transaction_suggestion_accept_applies_replacement_and_resolves() 
                 "block_id": block_id,
                 "start": 10,
                 "end": 16,
-                "replacement": "great"
+                "replacement": "great",
+                "body": "Use more confident wording."
             }]),
         ),
     )
@@ -890,6 +892,7 @@ async fn block_transaction_suggestion_accept_applies_replacement_and_resolves() 
     let suggestion = &review["suggestions"][0];
     assert_eq!(suggestion["status"], "open");
     assert_eq!(suggestion["kind"], "replace");
+    assert_eq!(suggestion["body"], "Use more confident wording.");
     assert_eq!(suggestion["preview"]["before"], "better");
     assert_eq!(suggestion["preview"]["after"], "great");
     let suggestion_id = suggestion["id"].as_str().unwrap().to_string();
@@ -1037,6 +1040,144 @@ async fn block_transaction_suggestion_reject_resolves_without_changing_text() ->
     )
     .await;
     assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn block_delete_suggestion_accept_removes_the_block_instead_of_emptying_it()
+-> anyhow::Result<()> {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "# Obsolete\n\nKeep me.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let heading_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-suggest-block-delete",
+            serde_json::json!([{
+                "op": "suggestion.add_block_delete",
+                "block_id": heading_id,
+                "body": "This section is no longer needed."
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "# Obsolete\n\nKeep me.\n"
+    );
+    let review = get_block_review(&app, "doc.md", false).await;
+    let suggestion = &review["suggestions"][0];
+    assert_eq!(suggestion["kind"], "block_delete");
+    assert_eq!(suggestion["body"], "This section is no longer needed.");
+    assert_eq!(suggestion["preview"]["before"], "Obsolete");
+    assert_eq!(suggestion["preview"]["after"], "");
+    assert_eq!(suggestion["anchor"]["startOffset"], 0);
+    assert_eq!(suggestion["anchor"]["endOffset"], 0);
+    let suggestion_id = suggestion["id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-reply-block-delete",
+            serde_json::json!([{
+                "op": "comment.reply",
+                "item_id": suggestion_id,
+                "body": "Agreed."
+            }]),
+        ),
+    )
+    .await;
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-reword-delete-target",
+            serde_json::json!([{
+                "op": "replace_block_content",
+                "block_id": heading_id,
+                "text": "Still obsolete"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "doc.md", false).await;
+    assert_eq!(review["suggestions"][0]["status"], "open");
+    assert_eq!(
+        review["suggestions"][0]["preview"]["before"],
+        "Still obsolete"
+    );
+    assert_eq!(review["suggestions"][0]["replies"][0]["body"], "Agreed.");
+
+    let ack = commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-accept-block-delete",
+            serde_json::json!([{
+                "op": "suggestion.accept",
+                "item_id": suggestion_id
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(ack["changed_block_ids"], serde_json::json!([heading_id]));
+    assert_eq!(get_document_markdown(&app, "doc.md").await, "Keep me.\n");
+
+    let review = get_block_review(&app, "doc.md", true).await;
+    assert_eq!(review["suggestions"][0]["status"], "resolved");
+    assert_eq!(review["suggestions"][0]["kind"], "block_delete");
+    assert!(review["suggestions"][0].get("anchor").is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn block_delete_suggestion_reject_keeps_the_block() -> anyhow::Result<()> {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Keep this block.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let block_id = tree["blocks"][0]["block_id"].as_str().unwrap();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-suggest-block-delete",
+            serde_json::json!([{
+                "op": "suggestion.add_block_delete",
+                "block_id": block_id
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "doc.md", false).await;
+    let suggestion_id = review["suggestions"][0]["id"].as_str().unwrap();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-reject-block-delete",
+            serde_json::json!([{
+                "op": "suggestion.reject",
+                "item_id": suggestion_id
+            }]),
+        ),
+    )
+    .await;
+
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "Keep this block.\n"
+    );
+    let review = get_block_review(&app, "doc.md", true).await;
+    assert_eq!(review["suggestions"][0]["status"], "resolved");
 
     Ok(())
 }

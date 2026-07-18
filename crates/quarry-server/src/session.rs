@@ -1362,9 +1362,10 @@ impl<'a> ReviewReconciliation<'a> {
     }
 }
 
-/// Anchors of pass-through items must stay valid against the new text:
-/// clamp the range (the item is never open here, so a collapsed result is
-/// legal) rather than failing the whole checkpoint.
+/// Anchors of pass-through items must stay valid against the new text. Most
+/// are dead anchors; an open block-deletion suggestion is the exception and
+/// already carries the stable `[0, 0)` block anchor. Clamp stale ranges rather
+/// than failing the whole checkpoint.
 fn clamped(mut item: BlockReviewItem, texts: &HashMap<&str, &str>) -> BlockReviewItem {
     let Some(text) = texts.get(item.block_id.as_str()) else {
         return item;
@@ -1705,6 +1706,13 @@ mod tests {
             ..item("s-ins", BlockReviewKind::Suggestion, 4, 4)
         };
         assert!(doc_represented(&insertion));
+        let block_delete = BlockReviewItem {
+            start_offset: 0,
+            end_offset: 0,
+            replacement: None,
+            ..item("s-delete", BlockReviewKind::Suggestion, 0, 0)
+        };
+        assert!(!doc_represented(&block_delete));
         let orphaned = BlockReviewItem {
             state: BlockReviewState::Orphaned,
             ..item("c1", BlockReviewKind::Comment, 0, 4)

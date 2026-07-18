@@ -186,7 +186,13 @@ export interface AgentDocumentSnapshot {
   blocks: AgentSnapshotBlock[];
 }
 
-export type AgentSuggestionKind = 'insert' | 'delete' | 'remove' | 'replace' | 'substitution';
+export type AgentSuggestionKind =
+  | 'block_delete'
+  | 'insert'
+  | 'delete'
+  | 'remove'
+  | 'replace'
+  | 'substitution';
 
 export interface AgentSuggestionPreview {
   before: string;
@@ -225,6 +231,7 @@ export interface AgentReviewSuggestion {
   ref: AgentBlockRef;
   quote: string;
   content: string;
+  body?: string | null;
   preview: AgentSuggestionPreview;
   replies: AgentReviewReply[];
   /** Row-anchored position; present when the document has canonical block rows. */
@@ -350,6 +357,7 @@ export type BlockTransactionOp =
       body?: string;
       quote?: string;
     }
+  | { op: 'suggestion.add_block_delete'; block_id: string; body?: string; quote?: string }
   | { op: 'suggestion.accept'; item_id: string }
   | { op: 'suggestion.reject'; item_id: string };
 

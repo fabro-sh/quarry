@@ -1385,6 +1385,12 @@
           "at": {
             "type": "string"
           },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "by": {
             "type": "string"
           },
@@ -1435,6 +1441,7 @@
       "AgentSuggestionKind": {
         "type": "string",
         "enum": [
+          "block_delete",
           "insert",
           "delete",
           "remove",

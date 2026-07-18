@@ -92,7 +92,8 @@ async fn prompt_document_teaches_the_review_workflow() {
     assert!(body.contains("creates the shared document"));
     assert!(body.contains("Follow them exactly, and do not edit until the user asks."));
     assert!(body.contains("suggestion.add"));
-    assert!(body.contains("`suggestion.add` rather than editing directly"));
+    assert!(body.contains("suggestion.add_block_delete"));
+    assert!(body.contains("rather than editing directly"));
     assert!(body.contains("bearer capabilities"));
     assert!(body.contains(
         "Never put sensitive content on an untrusted server or log/repost a document URL."

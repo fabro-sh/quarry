@@ -1889,6 +1889,59 @@ async fn session_review_transaction_renders_marks_and_meta_for_browsers() -> any
 }
 
 #[tokio::test]
+async fn block_delete_suggestion_resolves_through_an_active_session() -> anyhow::Result<()> {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "# Remove me\n\nKeep me.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+    let tree = get_block_tree(&app, "live.md").await;
+    let heading_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    let (mut socket, _doc) = connect_session(addr, &document_id).await;
+    commit_block_transaction(
+        &app,
+        "live.md",
+        block_tx(
+            "tx-suggest-block-delete",
+            serde_json::json!([{
+                "op": "suggestion.add_block_delete",
+                "block_id": heading_id,
+                "body": "Remove the obsolete heading."
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "live.md", false).await;
+    assert_eq!(review["suggestions"][0]["kind"], "block_delete");
+    assert_eq!(
+        review["suggestions"][0]["body"],
+        "Remove the obsolete heading."
+    );
+    let suggestion_id = review["suggestions"][0]["id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "live.md",
+        block_tx(
+            "tx-accept-block-delete",
+            serde_json::json!([{
+                "op": "suggestion.accept",
+                "item_id": suggestion_id
+            }]),
+        ),
+    )
+    .await;
+
+    assert_eq!(get_document_markdown(&app, "live.md").await, "Keep me.\n");
+    let review = get_block_review(&app, "live.md", true).await;
+    assert_eq!(review["suggestions"][0]["status"], "resolved");
+
+    socket.close(None).await.unwrap();
+    server.abort();
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn browser_created_comment_checkpoints_into_review_rows() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Browser comments here.\n").await;

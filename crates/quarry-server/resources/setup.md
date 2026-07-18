@@ -43,7 +43,7 @@ quarry open "$example_file"
 
 Then seed the review so the user has something to react to:
 
-1. Read __QUARRY_ORIGIN__/quarry.SKILL.md first for the exact `comment.add` and `suggestion.add` op shapes. Do not guess them.
+1. Read __QUARRY_ORIGIN__/quarry.SKILL.md first for the exact comment and suggestion op shapes. Do not guess them.
 2. Add one comment anchored to text in the "Try it yourself" section, inviting the user to reply.
 3. Add one suggestion fixing the grammar mistake in the "A sentence that needs work" section, so the user can accept or reject a tracked change.
 
@@ -114,5 +114,5 @@ After updating your instructions, briefly tell the user which file you changed.
 
 - Share a document with `quarry open <file>` (or use `quarry new` for an empty one). Its printed connection instructions are the source of truth.
 - Documents are live and collaborative. Monitor the events stream while the user reviews, and re-read the document after activity.
-- During review, use comments and `suggestion.add` rather than editing directly. Never edit before the user asks.
+- During review, use comments and `suggestion.add` rather than editing directly; use `suggestion.add_block_delete` when the block itself should disappear. Never edit before the user asks.
 - Document URLs are bearer capabilities, and shared-server documents expire (30 days by default). Never put sensitive content on an untrusted server or log/repost a document URL.

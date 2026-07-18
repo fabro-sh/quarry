@@ -7,8 +7,9 @@
 //! the place frontmatter already lives — and the deterministic normalized
 //! export written through the existing `document_versions` path so legacy
 //! read paths keep working. Review anchors are `{block_id, start_offset,
-//! end_offset}` in UTF-16 code units (matching Yjs); a collapsed range
-//! (`start == end`) means orphaned at the row layer.
+//! end_offset}` in UTF-16 code units (matching Yjs). Collapsed ranges normally
+//! represent dead anchors or insertion suggestions; a structural
+//! block-deletion suggestion uses `[0, 0)` as a block-identity anchor.
 //!
 //! Legacy writes and the projection: a version published outside the import
 //! path (`put_document`, staged-transaction commits) or a document delete
@@ -167,6 +168,14 @@ pub struct BlockReviewItem {
     pub parent_item_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+impl BlockReviewItem {
+    /// Whether this suggestion proposes deleting its anchored block and
+    /// descendants rather than replacing an inline text range.
+    pub fn is_block_delete_suggestion(&self) -> bool {
+        self.kind == BlockReviewKind::Suggestion && self.replacement.is_none()
+    }
 }
 
 /// Insert payload for [`QuarryStore::put_block_review_item`]; the store mints
@@ -699,8 +708,9 @@ impl QuarryStore {
 
     /// Stores a review anchor after validating its offsets against the
     /// anchored block's text: offsets are UTF-16 code units, must lie on
-    /// character boundaries (never inside a surrogate pair), and a collapsed
-    /// range (`start == end`) is only legal for orphaned anchors.
+    /// character boundaries (never inside a surrogate pair). A collapsed
+    /// range is legal for orphaned anchors and structural block-deletion
+    /// suggestions.
     pub async fn put_block_review_item(&self, item: NewBlockReviewItem) -> Result<BlockReviewItem> {
         self.write_transaction(move |_store, conn| {
             Box::pin(async move {
@@ -1240,7 +1250,17 @@ fn validate_anchor_offsets(item: &NewBlockReviewItem, block_text: &str) -> Resul
             item.start_offset, item.end_offset
         )));
     }
-    if item.start_offset == item.end_offset && item.state != BlockReviewState::Orphaned {
+    let block_delete_suggestion =
+        item.kind == BlockReviewKind::Suggestion && item.replacement.is_none();
+    if block_delete_suggestion && (item.start_offset != 0 || item.end_offset != 0) {
+        return Err(QuarryError::InvalidInput(
+            "a block-deletion suggestion must use the block anchor [0, 0)".to_string(),
+        ));
+    }
+    if item.start_offset == item.end_offset
+        && item.state != BlockReviewState::Orphaned
+        && !block_delete_suggestion
+    {
         return Err(QuarryError::InvalidInput(
             "a collapsed anchor range means orphaned at the row layer".to_string(),
         ));
@@ -1699,7 +1719,8 @@ async fn document_head_for_scope_conn(
 /// Internal invariant check before a mutation commit: every review item must
 /// either anchor a live block with in-range boundary-aligned offsets, or be a
 /// dead anchor (any non-open state) — open items never reference missing
-/// blocks, and a collapsed range is only legal for insertions or their replies.
+/// blocks, and a collapsed range is only legal for insertion or block-deletion
+/// suggestions and their replies.
 fn validate_review_items_against_rows(rows: &[BlockRow], items: &[BlockReviewItem]) -> Result<()> {
     let texts: HashMap<&str, &str> = rows
         .iter()
@@ -1734,15 +1755,25 @@ fn validate_review_items_against_rows(rows: &[BlockRow], items: &[BlockReviewIte
                 item.id, item.start_offset, item.end_offset, item.block_id
             )));
         }
+        if item.is_block_delete_suggestion() && (item.start_offset != 0 || item.end_offset != 0) {
+            return Err(QuarryError::InvalidInput(format!(
+                "block-deletion suggestion {} must use the block anchor [0, 0)",
+                item.id
+            )));
+        }
         // A collapsed range is meaningful for an open INSERTION suggestion
-        // (the live-session "type in suggesting mode" shape): nothing is
-        // anchored, but the replacement text is the proposal. Replies to that
-        // suggestion inherit the same collapsed anchor.
+        // (the live-session "type in suggesting mode" shape) or a structural
+        // block-deletion suggestion. Replies inherit their root suggestion's
+        // collapsed anchor.
         let collapsed_insertion_reply = is_reply_to_open_insertion_suggestion(item, &items_by_id);
+        let collapsed_block_delete_reply =
+            is_reply_to_open_block_delete_suggestion(item, &items_by_id);
         if item.start_offset == item.end_offset
             && item.state == BlockReviewState::Open
             && !is_open_insertion_suggestion(item)
+            && !is_open_block_delete_suggestion(item)
             && !collapsed_insertion_reply
+            && !collapsed_block_delete_reply
         {
             return Err(QuarryError::InvalidInput(format!(
                 "open review item {} has a collapsed range",
@@ -1763,6 +1794,13 @@ fn is_open_insertion_suggestion(item: &BlockReviewItem) -> bool {
             .is_some_and(|replacement| !replacement.is_empty())
 }
 
+fn is_open_block_delete_suggestion(item: &BlockReviewItem) -> bool {
+    item.is_block_delete_suggestion()
+        && item.state == BlockReviewState::Open
+        && item.start_offset == 0
+        && item.end_offset == 0
+}
+
 fn is_reply_to_open_insertion_suggestion(
     item: &BlockReviewItem,
     items_by_id: &HashMap<&str, &BlockReviewItem>,
@@ -1778,6 +1816,27 @@ fn is_reply_to_open_insertion_suggestion(
         return false;
     };
     is_open_insertion_suggestion(parent)
+        && parent.document_id == item.document_id
+        && parent.block_id == item.block_id
+        && parent.start_offset == item.start_offset
+        && parent.end_offset == item.end_offset
+}
+
+fn is_reply_to_open_block_delete_suggestion(
+    item: &BlockReviewItem,
+    items_by_id: &HashMap<&str, &BlockReviewItem>,
+) -> bool {
+    if item.kind != BlockReviewKind::Comment || item.parent_item_id.is_none() {
+        return false;
+    }
+    let Some(parent) = item
+        .parent_item_id
+        .as_deref()
+        .and_then(|parent_id| items_by_id.get(parent_id))
+    else {
+        return false;
+    };
+    is_open_block_delete_suggestion(parent)
         && parent.document_id == item.document_id
         && parent.block_id == item.block_id
         && parent.start_offset == item.start_offset

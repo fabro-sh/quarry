@@ -166,6 +166,7 @@ describe('CommentsPanel', () => {
       ref: { ordinal: 0 },
       quote: 'rough',
       content: 'specific',
+      body: 'Prefer concrete wording.',
       preview: { before: 'rough', after: 'specific' },
       replies: [],
     };
@@ -175,6 +176,51 @@ describe('CommentsPanel', () => {
     expect(within(item).getByTestId('review-status-badge')).toHaveTextContent(/invalidated/i);
     expect(within(item).getByText('rough')).toBeInTheDocument();
     expect(within(item).getByText('specific')).toBeInTheDocument();
+    expect(within(item).getByText('Prefer concrete wording.')).toBeInTheDocument();
+  });
+
+  it('shows and resolves an open block-deletion suggestion', async () => {
+    const onResolveSuggestion = vi.fn().mockResolvedValue(undefined);
+    const suggestion: AgentReviewSuggestion = {
+      id: 's-delete',
+      status: 'open',
+      kind: 'block_delete',
+      by: 'agent',
+      at,
+      ref: { ordinal: 0 },
+      quote: 'Obsolete heading',
+      content: '',
+      body: 'The section is no longer needed.',
+      preview: { before: 'Obsolete heading', after: '' },
+      replies: [
+        {
+          id: 'r1',
+          status: 'open',
+          by: 'reviewer',
+          at,
+          editedAt: null,
+          body: 'Agreed.',
+        },
+      ],
+    };
+    render(
+      <CommentsPanel
+        onResolveSuggestion={onResolveSuggestion}
+        review={review({ suggestions: [suggestion] })}
+      />
+    );
+
+    const item = screen.getByTestId('comments-panel-suggestion');
+    expect(within(item).getByText('Delete block:')).toBeInTheDocument();
+    expect(within(item).getByText('The section is no longer needed.')).toBeInTheDocument();
+    expect(within(item).getByText('Agreed.')).toBeInTheDocument();
+
+    fireEvent.click(within(item).getByTestId('accept-block-delete-suggestion'));
+
+    expect(onResolveSuggestion).toHaveBeenCalledWith('s-delete', 'accept');
+    await waitFor(() =>
+      expect(within(item).getByTestId('accept-block-delete-suggestion')).toBeEnabled()
+    );
   });
 
   it('shows diff3 conflict review items with kept and incoming text', () => {

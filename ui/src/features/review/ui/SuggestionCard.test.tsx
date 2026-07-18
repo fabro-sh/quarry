@@ -70,6 +70,25 @@ describe('SuggestionCard', () => {
     expect(screen.getByText('new')).toBeInTheDocument();
   });
 
+  it('renders the suggestion rationale from review metadata', () => {
+    useReviewStore.getState().hydrate({
+      comments: {},
+      suggestions: {
+        s1: {
+          at: '2026-01-01T00:00:00.000Z',
+          body: 'This wording is easier to verify.',
+          by: 'AI',
+        },
+      },
+    });
+
+    render(<SuggestionCard suggestion={insert} onAccept={vi.fn()} onReject={vi.fn()} />);
+
+    expect(screen.getByTestId('suggestion-body')).toHaveTextContent(
+      'This wording is easier to verify.'
+    );
+  });
+
   it('renders existing replies and adds a new reply through the composer', async () => {
     useReviewStore.getState().hydrate({
       comments: {

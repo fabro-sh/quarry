@@ -79,9 +79,13 @@
 //!   or reply. It never rewrites anchors, quotes, authors, creation
 //!   timestamps, replies, or document text. Suggestion/conflict ids are
 //!   `ANCHOR_NOT_FOUND`; non-open comments are `INVALID_TRANSACTION`.
-//! - `suggestion.accept` applies the stored replacement to the anchored range
-//!   through the same minimal-diff rules, resolves the suggestion, and
-//!   re-anchors it on the replacement text. `suggestion.reject` resolves
+//! - `suggestion.add_block_delete` proposes deleting a block and its
+//!   descendants. It is anchored to block identity rather than inline text,
+//!   so text and attribute edits do not invalidate it. `suggestion.accept`
+//!   either applies the stored inline replacement through the same
+//!   minimal-diff rules or performs the proposed structural deletion, then
+//!   resolves the suggestion. Accepted inline suggestions re-anchor on their
+//!   replacement text. `suggestion.reject` resolves
 //!   without changing text; rejecting an invalidated/orphaned suggestion is
 //!   allowed (it dismisses the dead item), while accepting one fails with
 //!   `SUGGESTION_INVALIDATED`.
@@ -128,8 +132,9 @@
 //! document has block rows, preserving the legacy response shape: `ref` holds
 //! the anchored block's depth-first ordinal (0 when the block is gone),
 //! `contentHash` is omitted, and each item additionally carries
-//! `anchor: {blockId, startOffset, endOffset}`. Resolved items are filtered
-//! unless `includeResolved`; orphaned and invalidated items always show.
+//! `anchor: {blockId, startOffset, endOffset}` while the block exists.
+//! Resolved items are filtered unless `includeResolved`; orphaned and
+//! invalidated items always show. Suggestion rationale is returned as `body`.
 //! Comments and replies include `editedAt` when `updated_at != created_at`,
 //! otherwise `null`.
 //! `conflict`-kind rows (Phase 4) project as `conflicts[]` with
@@ -179,7 +184,7 @@ use uuid::Uuid;
 /// Operations agents may send through the public semantic transaction API.
 /// `conflict.add` is deliberately excluded: whole-document reconcilers use it
 /// internally to persist merge-conflict review items.
-pub(crate) const PUBLIC_TRANSACTION_OPERATIONS: [&str; 17] = [
+pub(crate) const PUBLIC_TRANSACTION_OPERATIONS: [&str; 18] = [
     "insert_block",
     "delete_block",
     "move_block",
@@ -195,6 +200,7 @@ pub(crate) const PUBLIC_TRANSACTION_OPERATIONS: [&str; 17] = [
     "comment.resolve",
     "comment.delete",
     "suggestion.add",
+    "suggestion.add_block_delete",
     "suggestion.accept",
     "suggestion.reject",
 ];
@@ -487,6 +493,14 @@ pub(crate) enum BlockOp {
         start: u32,
         end: u32,
         replacement: String,
+        #[serde(default)]
+        body: Option<String>,
+        #[serde(default)]
+        quote: Option<String>,
+    },
+    #[serde(rename = "suggestion.add_block_delete")]
+    SuggestionAddBlockDelete {
+        block_id: String,
         #[serde(default)]
         body: Option<String>,
         #[serde(default)]
@@ -969,12 +983,23 @@ impl ApplyContext {
     }
 
     fn delete_block(&mut self, block_id: &str) -> Result<(), GatewayError> {
+        self.delete_block_except(block_id, None)
+    }
+
+    fn delete_block_except(
+        &mut self,
+        block_id: &str,
+        protected_item: Option<&str>,
+    ) -> Result<(), GatewayError> {
         if !self.model.blocks.contains_key(block_id) {
             return Err(GatewayError::block_deleted(block_id));
         }
         let removed = self.model.remove_subtree(block_id);
         for item in &mut self.items {
-            if removed.contains(&item.block_id) && item.state == BlockReviewState::Open {
+            if removed.contains(&item.block_id)
+                && item.state == BlockReviewState::Open
+                && protected_item != Some(item.id.as_str())
+            {
                 item.state = match item.kind {
                     BlockReviewKind::Suggestion => BlockReviewState::Invalidated,
                     _ => BlockReviewState::Orphaned,
@@ -1266,6 +1291,52 @@ impl ApplyContext {
         Ok(())
     }
 
+    fn add_block_delete_suggestion(
+        &mut self,
+        block_id: &str,
+        body: &Option<String>,
+        quote: &Option<String>,
+    ) -> Result<(), GatewayError> {
+        let Some(block) = self.model.blocks.get(block_id) else {
+            return Err(GatewayError::block_deleted(block_id));
+        };
+        let quote = quote.clone().unwrap_or_else(|| {
+            if block.block_type == "raw_markdown" {
+                block
+                    .attrs
+                    .get("markdown")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("raw Markdown block")
+                    .to_string()
+            } else if block.text.is_empty() {
+                format!("{} block", block.block_type)
+            } else {
+                block.text.clone()
+            }
+        });
+        let id = self.minted.mint();
+        require_unused_item_id(self, &id)?;
+        self.items.push(BlockReviewItem {
+            id,
+            document_id: self.document_id.clone(),
+            block_id: block_id.to_string(),
+            kind: BlockReviewKind::Suggestion,
+            start_offset: 0,
+            end_offset: 0,
+            body: body.clone(),
+            replacement: None,
+            author: Some(self.author.clone()),
+            state: BlockReviewState::Open,
+            quote: Some(quote),
+            context_before: None,
+            context_after: None,
+            parent_item_id: None,
+            created_at: self.now.clone(),
+            updated_at: self.now.clone(),
+        });
+        Ok(())
+    }
+
     fn accept_suggestion(&mut self, item_id: &str) -> Result<(), GatewayError> {
         let suggestion = require_suggestion(self, item_id)?;
         match suggestion.state {
@@ -1281,25 +1352,35 @@ impl ApplyContext {
             }
         }
         let block_id = suggestion.block_id.clone();
-        let replacement = suggestion.replacement.clone().unwrap_or_default();
+        let replacement = suggestion.replacement.clone();
         let (start, end) = (suggestion.start_offset, suggestion.end_offset);
-        let Some(block) = self.model.blocks.get(&block_id) else {
-            return Err(suggestion_invalidated(item_id));
+        let replacement_len = match replacement {
+            Some(replacement) => {
+                let Some(block) = self.model.blocks.get(&block_id) else {
+                    return Err(suggestion_invalidated(item_id));
+                };
+                let new_text = format!(
+                    "{}{}{}",
+                    utf16_slice(&block.text, 0, start),
+                    replacement,
+                    utf16_slice(&block.text, end, utf16_len(&block.text)),
+                );
+                replace_block_text(self, &block_id, new_text, Some(item_id))?;
+                Some(utf16_len(&replacement))
+            }
+            None => {
+                self.delete_block_except(&block_id, Some(item_id))?;
+                None
+            }
         };
-        let new_text = format!(
-            "{}{}{}",
-            utf16_slice(&block.text, 0, start),
-            replacement,
-            utf16_slice(&block.text, end, utf16_len(&block.text)),
-        );
-        replace_block_text(self, &block_id, new_text, Some(item_id))?;
-        let replacement_len = utf16_len(&replacement);
         let now = self.now.clone();
         for item in &mut self.items {
             if item.id == item_id {
                 item.state = BlockReviewState::Resolved;
-                item.start_offset = start;
-                item.end_offset = start + replacement_len;
+                if let Some(replacement_len) = replacement_len {
+                    item.start_offset = start;
+                    item.end_offset = start + replacement_len;
+                }
                 item.updated_at = now.clone();
             }
         }
@@ -1519,6 +1600,11 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
             body,
             quote,
         } => ctx.add_suggestion(block_id, *start, *end, replacement, body, quote),
+        BlockOp::SuggestionAddBlockDelete {
+            block_id,
+            body,
+            quote,
+        } => ctx.add_block_delete_suggestion(block_id, body, quote),
         BlockOp::SuggestionAccept { item_id } => ctx.accept_suggestion(item_id),
         BlockOp::SuggestionReject { item_id } => ctx.reject_suggestion(item_id),
         BlockOp::ConflictAdd {
@@ -1588,8 +1674,22 @@ fn replace_block_text(
             })
         })
         .collect();
+    let block_delete_threads: BTreeSet<String> = ctx
+        .items
+        .iter()
+        .filter(|item| item.is_block_delete_suggestion())
+        .map(|item| item.id.clone())
+        .collect();
     for item in &mut ctx.items {
-        if item.block_id != block_id || protected_item == Some(item.id.as_str()) {
+        let belongs_to_block_delete_thread = item.is_block_delete_suggestion()
+            || item
+                .parent_item_id
+                .as_ref()
+                .is_some_and(|parent_id| block_delete_threads.contains(parent_id));
+        if item.block_id != block_id
+            || protected_item == Some(item.id.as_str())
+            || belongs_to_block_delete_thread
+        {
             continue;
         }
         match adjust_anchor_multi(&hunks, item.start_offset, item.end_offset) {
@@ -2642,11 +2742,13 @@ pub(crate) fn review_response_from_rows(
         content_hash: None,
     };
     let anchor = |item: &BlockReviewItem| {
-        Some(BlockReviewAnchor {
-            block_id: item.block_id.clone(),
-            start_offset: item.start_offset,
-            end_offset: item.end_offset,
-        })
+        ordinals
+            .contains_key(item.block_id.as_str())
+            .then(|| BlockReviewAnchor {
+                block_id: item.block_id.clone(),
+                start_offset: item.start_offset,
+                end_offset: item.end_offset,
+            })
     };
     let anchored_text = |item: &BlockReviewItem| {
         texts
@@ -2709,11 +2811,14 @@ pub(crate) fn review_response_from_rows(
         .filter(|item| item.kind == BlockReviewKind::Suggestion)
         .filter(|item| include_resolved || item.state != BlockReviewState::Resolved)
         .map(|item| {
+            let block_delete = item.is_block_delete_suggestion();
             let replacement = item.replacement.clone().unwrap_or_default();
             AgentReviewSuggestion {
                 id: item.id.clone(),
                 status: item.state.as_str().to_string(),
-                kind: if replacement.is_empty() {
+                kind: if block_delete {
+                    AgentSuggestionKind::BlockDelete
+                } else if replacement.is_empty() {
                     AgentSuggestionKind::Delete
                 } else {
                     AgentSuggestionKind::Replace
@@ -2723,8 +2828,17 @@ pub(crate) fn review_response_from_rows(
                 block_ref: block_ref(item),
                 quote: quote(item),
                 content: replacement.clone(),
+                body: item.body.clone(),
                 preview: AgentSuggestionPreview {
-                    before: anchored_text(item).unwrap_or_else(|| quote(item)),
+                    before: if block_delete {
+                        texts
+                            .get(item.block_id.as_str())
+                            .filter(|text| !text.is_empty())
+                            .map(|text| (*text).to_string())
+                            .unwrap_or_else(|| quote(item))
+                    } else {
+                        anchored_text(item).unwrap_or_else(|| quote(item))
+                    },
                     after: replacement,
                 },
                 replies: replies_by_parent.remove(&item.id).unwrap_or_default(),

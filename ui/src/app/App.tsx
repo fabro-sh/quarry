@@ -1171,6 +1171,31 @@ function Workspace() {
     }
   }
 
+  async function resolveReviewSuggestion(
+    suggestionId: string,
+    resolution: 'accept' | 'reject'
+  ) {
+    if (!documentRef) return;
+    const request: BlockTransactionRequest = {
+      client_tx_id: crypto.randomUUID(),
+      actor: { kind: 'user', id: storedAuthor() },
+      ops: [{ op: `suggestion.${resolution}`, item_id: suggestionId }],
+    };
+    try {
+      await postBlockTransaction(documentRef, request);
+      await Promise.all([
+        mutate(documentRefKey('review', documentRef)),
+        mutate(documentRefKey('versions', documentRef)),
+      ]);
+    } catch (error) {
+      window.alert(
+        `${resolution === 'accept' ? 'Accept' : 'Reject'} suggestion failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+
   function openDocument(path: string) {
     if (!path || (documentScope === 'library' && path === selectedPath)) return;
     if (isTmpDocument || !libDocumentsEnabled) navigation.openTmpDocument(path);
@@ -1443,6 +1468,7 @@ function Workspace() {
                 onOpenConflict={setMergeConflictId}
                 onResolveConflict={resolveOpenConflict}
                 onDismissConflict={dismissReviewConflict}
+                onResolveSuggestion={resolveReviewSuggestion}
                 onRestoreVersion={restoreSelectedVersion}
                 onViewVersion={viewSelectedVersion}
                 outgoing={outgoing.links}
@@ -3169,6 +3195,7 @@ function RightPane({
   onOpenConflict,
   onResolveConflict,
   onDismissConflict,
+  onResolveSuggestion,
   onRestoreVersion,
   onToggleCollapsed,
   onViewVersion,
@@ -3197,6 +3224,10 @@ function RightPane({
   onOpenConflict: (conflict: string) => void;
   onResolveConflict: (conflict: string) => void;
   onDismissConflict: (conflictId: string) => Promise<void>;
+  onResolveSuggestion: (
+    suggestionId: string,
+    resolution: 'accept' | 'reject'
+  ) => Promise<void>;
   onRestoreVersion: (version: string) => void;
   onToggleCollapsed: () => void;
   onViewVersion: (version: string) => void;
@@ -3345,7 +3376,11 @@ function RightPane({
         {selectedTab === 'comments' ? (
           <>
             <h2 className={rightHeading}>{selectedTabLabel}</h2>
-            <CommentsPanel onDismissConflict={onDismissConflict} review={review} />
+            <CommentsPanel
+              onDismissConflict={onDismissConflict}
+              onResolveSuggestion={onResolveSuggestion}
+              review={review}
+            />
           </>
         ) : null}
       </section>

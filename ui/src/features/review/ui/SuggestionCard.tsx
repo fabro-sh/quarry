@@ -71,6 +71,7 @@ export function SuggestionCard({ suggestion, onAccept, onReject }: SuggestionCar
   const activeId = useReviewStore((state) => state.activeId);
   const hoverId = useReviewStore((state) => state.hoverId);
   const comments = useReviewStore((state) => state.meta.comments);
+  const body = useReviewStore((state) => state.meta.suggestions[id]?.body);
   const setActiveId = useReviewStore((state) => state.setActiveId);
   const setHoverId = useReviewStore((state) => state.setHoverId);
   const replies = useMemo(
@@ -153,6 +154,12 @@ export function SuggestionCard({ suggestion, onAccept, onReject }: SuggestionCar
       <div className="mt-2">
         <Summary suggestion={suggestion} />
       </div>
+
+      {body ? (
+        <p className="mt-2 text-sm whitespace-pre-wrap text-body" data-testid="suggestion-body">
+          {body}
+        </p>
+      ) : null}
 
       {replies.length > 0 ? (
         <div className="mt-5 flex flex-col gap-5">

@@ -156,6 +156,8 @@ pub(crate) struct AgentReviewSuggestion {
     pub block_ref: AgentBlockRef,
     pub quote: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
     pub preview: AgentSuggestionPreview,
     pub replies: Vec<AgentReviewReply>,
     /// Row-anchored position; present only when the document has canonical
@@ -173,6 +175,7 @@ pub(crate) struct AgentSuggestionPreview {
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AgentSuggestionKind {
+    BlockDelete,
     Insert,
     Delete,
     Remove,
@@ -436,6 +439,7 @@ fn agent_review_suggestions(
                 block_ref: marker.block_ref.clone(),
                 quote: marker.quote.clone(),
                 content: marker.content.clone(),
+                body: entry.body.clone(),
                 preview: marker.preview.clone(),
                 replies: replies.remove(&marker.id).unwrap_or_default(),
                 anchor: None,

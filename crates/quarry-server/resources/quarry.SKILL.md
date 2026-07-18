@@ -217,13 +217,18 @@ Review ops (same envelope, freely mixable with edit ops):
 | `comment.edit` | `{item_id, body}` — open comment roots/replies only |
 | `comment.resolve` / `comment.delete` | `{item_id}` |
 | `suggestion.add` | `{block_id, start, end, replacement, body?, quote?}` |
-| `suggestion.accept` | `{item_id}` — applies the replacement and deletes suggestion replies |
+| `suggestion.add_block_delete` | `{block_id, body?, quote?}` — proposes deleting the block and descendants |
+| `suggestion.accept` | `{item_id}` — applies the replacement or block deletion and deletes suggestion replies |
 | `suggestion.reject` | `{item_id}` — resolves without changing text and deletes suggestion replies |
 
 Anchors are `{block_id, start, end}` offsets into the block's `text`; `quote`
 is an optional copy of the anchored text for display. An empty `replacement`
 proposes a deletion; a collapsed range (`start == end`) proposes an insertion.
 For a tight word-level redline, anchor only the words that change.
+Use `suggestion.add_block_delete` when the block itself should disappear;
+deleting all of a block's text leaves the empty block in place. A block-delete
+suggestion follows the block across text edits and moves. Its optional `body`
+is the rationale shown to the reviewer.
 
 ## Whole-Document Markdown Writes
 
@@ -281,8 +286,9 @@ curl -sS -H "X-Agent-Id: $AGENT_ID" "$DOC/review?includeResolved=1"
 
 Returns `documentId`, `baseToken` (current clock), `comments` with nested
 `replies`, unapplied `suggestions`, and `conflicts`. Comments and suggestions
-carry `anchor: {blockId, startOffset, endOffset}` — feed those straight into
-follow-up ops. Resolved items are omitted unless `includeResolved=1`;
+carry `anchor: {blockId, startOffset, endOffset}` while their block exists —
+feed those straight into follow-up ops. Suggestions expose their optional
+rationale as `body`. Resolved items are omitted unless `includeResolved=1`;
 `orphaned`/`invalidated` items always show.
 
 `conflicts` are diff3 merge leftovers from whole-file writers (Git, FUSE, CLI,

@@ -274,8 +274,12 @@ as one atomic batch:
   `replacement` replaces the anchored range when accepted; an empty
   `replacement` proposes a deletion; a collapsed range (`start == end`)
   proposes an insertion.
-- `suggestion.accept` — `{item_id}`. Applies the replacement, resolves the
-  suggestion, and deletes its replies.
+- `suggestion.add_block_delete` — `{block_id, body?, quote?}`. Proposes
+  deleting the block and all descendants. Use it instead of deleting all text
+  when the block itself should disappear. The suggestion follows the block
+  across text edits and moves; `body` is the rationale shown to the reviewer.
+- `suggestion.accept` — `{item_id}`. Applies the replacement or structural
+  block deletion, resolves the suggestion, and deletes its replies.
 - `suggestion.reject` — `{item_id}`. Resolves without changing text and deletes
   its replies (also the way to dismiss an orphaned/invalidated suggestion).
 
@@ -302,8 +306,9 @@ A full review as one transaction:
 For a tight word-level redline, anchor only the words that change rather than
 the whole sentence.
 
-`GET /review` returns `editedAt` on comments and replies when the latest row
-timestamp differs from the creation timestamp; otherwise it is `null`.
+`GET /review` returns a suggestion's optional rationale as `body`. It returns
+`editedAt` on comments and replies when the latest row timestamp differs from
+the creation timestamp; otherwise it is `null`.
 
 ## Whole-Document Markdown Writes
 
@@ -391,9 +396,9 @@ curl -sS -H "X-Agent-Id: $AGENT_ID" "$DOC/review?includeResolved=1"
 
 `GET $DOC/review` projects from the canonical review rows: `documentId`,
 `baseToken` (the current clock), root `comments` with nested `replies`,
-unapplied `suggestions`, and `conflicts`. Each comment and suggestion carries
-`anchor: {blockId, startOffset, endOffset}` — use those ids and offsets
-directly in follow-up ops. By default resolved items are omitted
+unapplied `suggestions`, and `conflicts`. A comment or suggestion carries
+`anchor: {blockId, startOffset, endOffset}` while its block exists — use those
+ids and offsets directly in follow-up ops. By default resolved items are omitted
 (`includeResolved=1` includes them); `orphaned` and `invalidated` items always
 show.
 
