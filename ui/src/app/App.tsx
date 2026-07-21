@@ -7,6 +7,7 @@ import {
   Bot,
   Braces,
   Check,
+  CheckCheck,
   CheckCircle2,
   ChevronDown,
   Copy,
@@ -17,6 +18,7 @@ import {
   FolderInput,
   FolderTree,
   GitBranch,
+  GitFork,
   Hash,
   Heading1,
   Library,
@@ -65,7 +67,6 @@ import {
   type AgentPresenceDisplayEntry,
   backlinks,
   createCollabInvite,
-  fetchAgentPrompt,
   createDocument,
   createGitPeer,
   createTmpDocument,
@@ -73,6 +74,8 @@ import {
   diffVersion,
   documentHref,
   documentVersion,
+  fetchAgentPrompt,
+  forkTmpDocument,
   getCapabilities,
   getDocument,
   getDocumentReview,
@@ -797,6 +800,9 @@ function Workspace() {
       : null,
     () => getDocumentReview(requireValue(documentRef))
   );
+  const openReviewSuggestionIds = (documentReview?.suggestions ?? [])
+    .filter((suggestion) => suggestion.status === 'open')
+    .map((suggestion) => suggestion.id);
 
   useEffect(() => {
     if (
@@ -973,6 +979,17 @@ function Workspace() {
     setTreeOpenState(loadTreeOpenState(library));
     setRightPaneTab(loadRightPaneTab(library));
     navigation.openLibraryDocument(library, targetPath, { replace: true });
+  }
+
+  async function forkCurrentTmpDocument() {
+    if (!isTmpDocument || !selectedPath) return;
+    try {
+      const fork = await forkTmpDocument(selectedPath);
+      if (!fork.path) throw new Error('fork response did not include a tmp document secret');
+      navigation.openTmpDocument(fork.path);
+    } catch (error) {
+      window.alert(`Fork failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   // Downloads serve the canonical export (frontmatter included) — the same
@@ -1196,6 +1213,26 @@ function Workspace() {
     }
   }
 
+  async function acceptAllReviewSuggestions() {
+    if (!documentRef || openReviewSuggestionIds.length === 0) return;
+    const request: BlockTransactionRequest = {
+      client_tx_id: crypto.randomUUID(),
+      actor: { kind: 'user', id: storedAuthor() },
+      ops: openReviewSuggestionIds.map((item_id) => ({ op: 'suggestion.accept', item_id })),
+    };
+    try {
+      await postBlockTransaction(documentRef, request);
+      await Promise.all([
+        mutate(documentRefKey('review', documentRef)),
+        mutate(documentRefKey('versions', documentRef)),
+      ]);
+    } catch (error) {
+      window.alert(
+        `Accept all suggestions failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
   function openDocument(path: string) {
     if (!path || (documentScope === 'library' && path === selectedPath)) return;
     if (isTmpDocument || !libDocumentsEnabled) navigation.openTmpDocument(path);
@@ -1389,6 +1426,7 @@ function Workspace() {
               <DocumentToolbar
                 agentPresence={agentPresence.presence}
                 canPromote={libDocumentsEnabled}
+                hasOpenSuggestions={openReviewSuggestionIds.length > 0}
                 isMarkdown={isMarkdownDocument(selectedPath, selectedContentType)}
                 isText={isTextContentType(selectedContentType)}
                 isTmp={isTmpDocument}
@@ -1397,8 +1435,10 @@ function Workspace() {
                 path={selectedPath}
                 saveState={saveState}
                 onAddAgent={() => void openAddAgentModal()}
+                onAcceptAllSuggestions={() => void acceptAllReviewSuggestions()}
                 onDelete={deleteCurrent}
                 onDownload={downloadCurrentMarkdown}
+                onFork={() => void forkCurrentTmpDocument()}
                 onCopyRawLink={copyCurrentRawLink}
                 onPromote={() => void promoteCurrentTmpDocument()}
                 onRename={renameCurrent}
@@ -3061,6 +3101,7 @@ function DocumentModeSelect({
 function DocumentToolbar({
   agentPresence,
   canPromote,
+  hasOpenSuggestions,
   isMarkdown,
   isText,
   isTmp,
@@ -3069,15 +3110,18 @@ function DocumentToolbar({
   path,
   saveState,
   onAddAgent,
+  onAcceptAllSuggestions,
   onDelete,
   onCopyRawLink,
   onDownload,
+  onFork,
   onPromote,
   onRename,
   onUploadMarkdown,
 }: {
   agentPresence: AgentPresenceDisplayEntry[];
   canPromote: boolean;
+  hasOpenSuggestions: boolean;
   isMarkdown: boolean;
   isText: boolean;
   isTmp: boolean;
@@ -3086,9 +3130,11 @@ function DocumentToolbar({
   path: string;
   saveState: CollabSaveState | null;
   onAddAgent: () => void;
+  onAcceptAllSuggestions: () => void;
   onDelete: () => void;
   onCopyRawLink: () => void;
   onDownload: () => void;
+  onFork: () => void;
   onPromote: () => void;
   onRename: () => void;
   onUploadMarkdown: () => void;
@@ -3151,8 +3197,28 @@ function DocumentToolbar({
                 Upload Markdown
               </DropdownMenu.Item>
             ) : null}
+            {isMarkdown ? (
+              <>
+                <DropdownMenu.Separator className="my-1 h-px bg-line" />
+                <DropdownMenu.Item
+                  className={cn(
+                    menuItem,
+                    'data-disabled:cursor-not-allowed data-disabled:opacity-45'
+                  )}
+                  disabled={!hasOpenSuggestions}
+                  onSelect={onAcceptAllSuggestions}
+                >
+                  <CheckCheck className="shrink-0" size={15} />
+                  Accept all suggestions
+                </DropdownMenu.Item>
+              </>
+            ) : null}
             {isTmp ? (
               <>
+                <DropdownMenu.Item className={menuItem} onSelect={onFork}>
+                  <GitFork className="shrink-0" size={15} />
+                  Fork
+                </DropdownMenu.Item>
                 {canPromote ? (
                   <DropdownMenu.Item className={menuItem} onSelect={onPromote}>
                     <FolderInput className="shrink-0" size={15} />

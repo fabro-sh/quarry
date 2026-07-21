@@ -738,6 +738,7 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         tmp_document_handlers::tmp_document_version_restore_openapi,
         tmp_document_handlers::tmp_document_ttl_openapi,
         tmp_document_handlers::tmp_document_promote_openapi,
+        tmp_document_handlers::tmp_document_fork_openapi,
         review::tmp_document_review_openapi,
         tmp_document_handlers::tmp_document_blocks_openapi,
         tmp_document_handlers::tmp_document_block_transactions_openapi,
@@ -1207,6 +1208,10 @@ mod tests {
             ("tmp-secret", TmpDocumentSubResource::Promote)
         );
         assert_eq!(
+            parse_tmp_document_subresource("tmp-secret/fork"),
+            ("tmp-secret", TmpDocumentSubResource::Fork)
+        );
+        assert_eq!(
             parse_tmp_document_subresource("tmp-secret/ttl"),
             ("tmp-secret", TmpDocumentSubResource::Ttl)
         );
@@ -1613,6 +1618,7 @@ pub(crate) enum TmpDocumentSubResource<'path> {
     Ttl,
     Transactions,
     Promote,
+    Fork,
 }
 
 pub(crate) fn parse_document_subresource(path: &str) -> (&str, DocumentSubResource<'_>) {
@@ -1681,6 +1687,7 @@ pub(crate) fn parse_tmp_document_subresource(path: &str) -> (&str, TmpDocumentSu
         ("/transactions", TmpDocumentSubResource::Transactions),
         ("/presence", TmpDocumentSubResource::Presence),
         ("/promote", TmpDocumentSubResource::Promote),
+        ("/fork", TmpDocumentSubResource::Fork),
         ("/blocks", TmpDocumentSubResource::Blocks),
         ("/review", TmpDocumentSubResource::Review),
         ("/ttl", TmpDocumentSubResource::Ttl),

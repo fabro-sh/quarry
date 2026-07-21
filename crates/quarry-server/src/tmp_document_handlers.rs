@@ -213,6 +213,21 @@ pub(crate) async fn tmp_document_ttl_openapi() {}
 pub(crate) async fn tmp_document_promote_openapi() {}
 
 #[utoipa::path(
+    post,
+    path = "/v1/tmp/documents/{secret}/fork",
+    params(("secret" = String, Path)),
+    responses(
+        (status = 201, description = "Fork created with cloned version and review history", body = DocumentListEntry),
+        (status = 410, body = ApiErrorResponse)
+    )
+)]
+#[expect(
+    dead_code,
+    reason = "OpenAPI documentation stubs are referenced by utoipa derive, not called at runtime"
+)]
+pub(crate) async fn tmp_document_fork_openapi() {}
+
+#[utoipa::path(
     get,
     path = "/v1/tmp/documents/{secret}/agent-prompt",
     params(("secret" = String, Path)),
@@ -435,6 +450,7 @@ pub(crate) async fn get_tmp_document(
         | TmpDocumentSubResource::Ttl
         | TmpDocumentSubResource::Transactions
         | TmpDocumentSubResource::Promote
+        | TmpDocumentSubResource::Fork
         | TmpDocumentSubResource::VersionRestore(_) => {}
     }
     touch_agent_presence(&state, &headers, None, &path).await?;
@@ -611,6 +627,24 @@ pub(crate) async fn post_tmp_document_action(
                 .promote_tmp_document(document_path, &request.library, &request.path, precondition)
                 .await?;
             json_response(StatusCode::OK, &entry)
+        }
+        TmpDocumentSubResource::Fork => {
+            touch_agent_presence(&state, &headers, None, document_path).await?;
+            let created_ip_address = creation_ip_address(&state, &headers)?;
+            let source = state.store.head_tmp_document(document_path).await?;
+            let guard = state.sessions.lock_document(&source.id).await;
+            if let Some(session) = guard.session() {
+                session.checkpoint_browser_session(&state.store).await?;
+            }
+            let entry = if let Some(created_ip_address) = created_ip_address {
+                state
+                    .store
+                    .fork_tmp_document_with_creation_ip(document_path, created_ip_address)
+                    .await?
+            } else {
+                state.store.fork_tmp_document(document_path).await?
+            };
+            json_response(StatusCode::CREATED, &entry)
         }
         TmpDocumentSubResource::Document
         | TmpDocumentSubResource::AgentPrompt

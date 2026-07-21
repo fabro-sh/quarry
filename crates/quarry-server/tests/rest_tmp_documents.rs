@@ -46,6 +46,28 @@ async fn get_tmp_block_tree(app: &axum::Router, secret: &str) -> Value {
     response_json(response).await
 }
 
+#[cfg(feature = "tmp-documents")]
+async fn get_tmp_review(app: &axum::Router, secret: &str, include_resolved: bool) -> Value {
+    let query = if include_resolved {
+        "?includeResolved=1"
+    } else {
+        ""
+    };
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/tmp/documents/{secret}/review{query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response_json(response).await
+}
+
 fn assert_json_timestamp(value: &Value) {
     let timestamp = value.as_str().expect("timestamp should be a string");
     chrono::DateTime::parse_from_rfc3339(timestamp).expect("timestamp should parse as RFC 3339");
@@ -631,6 +653,247 @@ async fn tmp_documents_expose_version_history_diff_and_restore() -> anyhow::Resu
         .await
         .context("read restored body")?;
     assert_eq!(String::from_utf8_lossy(&body), "# Plan\n\nAlpha.\n");
+    Ok(())
+}
+
+#[cfg(feature = "tmp-documents")]
+#[tokio::test]
+async fn tmp_document_fork_clones_history_and_review_state_independently() -> anyhow::Result<()> {
+    let (_root, app, store) = block_test_app().await;
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/v1/tmp/documents",
+            serde_json::json!({
+                "content": "Draft wording.\n",
+                "content_type": "text/markdown",
+                "metadata": {"title": "Fork source"}
+            }),
+        ))
+        .await
+        .context("create fork source tmp document")?;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created = response_json(response).await;
+    let source_secret = created["document"]["path"]
+        .as_str()
+        .context("fork source should expose its secret")?
+        .to_string();
+    let source_document_id = created["document"]["id"]
+        .as_str()
+        .context("fork source should expose its document id")?
+        .to_string();
+
+    let tree = get_tmp_block_tree(&app, &source_secret).await;
+    let source_block_id = tree["blocks"][0]["block_id"]
+        .as_str()
+        .context("fork source should expose its first block id")?
+        .to_string();
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            &format!("/v1/tmp/documents/{source_secret}/transactions"),
+            serde_json::json!({
+                "client_tx_id": "fork-source-review",
+                "actor": {"kind": "agent", "id": "reviewer", "label": "Reviewer"},
+                "ops": [
+                    {
+                        "op": "comment.add",
+                        "block_id": source_block_id,
+                        "start": 6,
+                        "end": 13,
+                        "body": "Keep this concise."
+                    },
+                    {
+                        "op": "suggestion.add",
+                        "block_id": source_block_id,
+                        "start": 0,
+                        "end": 5,
+                        "replacement": "Final",
+                        "body": "Use stronger wording."
+                    }
+                ]
+            }),
+        ))
+        .await
+        .context("add fork source review items")?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let source_review = get_tmp_review(&app, &source_secret, true).await;
+    let source_comment_id = source_review["comments"][0]["id"]
+        .as_str()
+        .context("fork source comment should have an id")?
+        .to_string();
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            &format!("/v1/tmp/documents/{source_secret}/transactions"),
+            serde_json::json!({
+                "client_tx_id": "fork-source-reply",
+                "actor": {"kind": "user", "id": "author"},
+                "ops": [{
+                    "op": "comment.reply",
+                    "item_id": source_comment_id,
+                    "body": "Agreed."
+                }]
+            }),
+        ))
+        .await
+        .context("reply to fork source comment")?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let source_versions = store
+        .raw_tmp_version_history(&source_secret)
+        .await
+        .context("load fork source version history")?;
+    let source_items = store
+        .list_block_review_items(&source_document_id)
+        .await
+        .context("load fork source review rows")?;
+    assert!(source_versions.len() >= 3);
+    assert_eq!(source_items.len(), 3);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            &format!("/v1/tmp/documents/{source_secret}/fork"),
+            serde_json::json!({}),
+        ))
+        .await
+        .context("fork tmp document")?;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let forked = response_json(response).await;
+    let fork_secret = forked["path"]
+        .as_str()
+        .context("fork response should expose a new secret")?
+        .to_string();
+    let fork_document_id = forked["id"]
+        .as_str()
+        .context("fork response should expose a new document id")?
+        .to_string();
+    assert_ne!(fork_secret, source_secret);
+    assert_ne!(fork_document_id, source_document_id);
+    assert_eq!(fork_secret.len(), 32);
+    assert!(
+        fork_secret
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    );
+
+    let fork_versions = store
+        .raw_tmp_version_history(&fork_secret)
+        .await
+        .context("load forked version history")?;
+    assert_eq!(fork_versions.len(), source_versions.len());
+    for (source, fork) in source_versions.iter().zip(&fork_versions) {
+        assert_ne!(fork.id, source.id);
+        assert_eq!(fork.document_id.as_ref(), fork_document_id);
+        assert_eq!(fork.tx_id, source.tx_id);
+        assert_eq!(fork.transaction_source, source.transaction_source);
+        assert_eq!(fork.transaction_actor, source.transaction_actor);
+        assert_eq!(fork.transaction_message, source.transaction_message);
+        assert_eq!(fork.transaction_provenance, source.transaction_provenance);
+        assert_eq!(fork.metadata, source.metadata);
+        assert_eq!(fork.content_type, source.content_type);
+        assert_eq!(fork.byte_size, source.byte_size);
+        assert_eq!(fork.created_at, source.created_at);
+        let source_content = store
+            .tmp_document_version(&source_secret, &source.id)
+            .await
+            .context("read source historical version")?;
+        let fork_content = store
+            .tmp_document_version(&fork_secret, &fork.id)
+            .await
+            .context("read fork historical version")?;
+        assert_eq!(fork_content.content, source_content.content);
+    }
+
+    let fork_tree = get_tmp_block_tree(&app, &fork_secret).await;
+    let fork_block_id = fork_tree["blocks"][0]["block_id"]
+        .as_str()
+        .context("fork should expose its remapped block id")?;
+    assert_ne!(fork_block_id, source_block_id);
+    assert_eq!(fork_tree["blocks"][0]["text"], "Draft wording.");
+
+    let fork_review = get_tmp_review(&app, &fork_secret, true).await;
+    assert_eq!(fork_review["documentId"], fork_document_id);
+    assert_eq!(fork_review["comments"][0]["body"], "Keep this concise.");
+    assert_eq!(fork_review["comments"][0]["replies"][0]["body"], "Agreed.");
+    assert_eq!(
+        fork_review["suggestions"][0]["body"],
+        "Use stronger wording."
+    );
+    assert_ne!(
+        fork_review["comments"][0]["id"],
+        source_review["comments"][0]["id"]
+    );
+    assert_ne!(
+        fork_review["suggestions"][0]["id"],
+        source_review["suggestions"][0]["id"]
+    );
+    assert_ne!(
+        fork_review["comments"][0]["replies"][0]["id"],
+        get_tmp_review(&app, &source_secret, true).await["comments"][0]["replies"][0]["id"]
+    );
+    assert_eq!(
+        fork_review["comments"][0]["anchor"]["blockId"],
+        fork_block_id
+    );
+
+    let fork_suggestion_id = fork_review["suggestions"][0]["id"]
+        .as_str()
+        .context("fork suggestion should have a remapped id")?
+        .to_string();
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            &format!("/v1/tmp/documents/{fork_secret}/transactions"),
+            serde_json::json!({
+                "client_tx_id": "fork-accept-suggestion",
+                "actor": {"kind": "user", "id": "fork-author"},
+                "ops": [{"op": "suggestion.accept", "item_id": fork_suggestion_id}]
+            }),
+        ))
+        .await
+        .context("accept the suggestion only on the fork")?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let source_content = String::from_utf8(
+        store
+            .get_tmp_document(&source_secret)
+            .await
+            .context("read unchanged fork source")?
+            .content,
+    )?;
+    let fork_content = String::from_utf8(
+        store
+            .get_tmp_document(&fork_secret)
+            .await
+            .context("read independently changed fork")?
+            .content,
+    )?;
+    assert!(source_content.ends_with("Draft wording.\n"));
+    assert!(fork_content.ends_with("Final wording.\n"));
+    assert_eq!(
+        get_tmp_review(&app, &source_secret, true).await["suggestions"][0]["status"],
+        "open"
+    );
+    assert_eq!(
+        get_tmp_review(&app, &fork_secret, true).await["suggestions"][0]["status"],
+        "resolved"
+    );
+    assert_eq!(
+        store.raw_tmp_version_history(&source_secret).await?.len(),
+        source_versions.len()
+    );
+    assert_eq!(
+        store.raw_tmp_version_history(&fork_secret).await?.len(),
+        fork_versions.len() + 1
+    );
     Ok(())
 }
 

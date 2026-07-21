@@ -328,6 +328,13 @@ export const promoteTmpDocument = (secret: string, request: PromoteTmpDocumentRe
     }),
   });
 
+export const forkTmpDocument = (secret: string) =>
+  jsonRequest<DocumentListEntry>(`/v1/tmp/documents/${segment(secret)}/fork`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  });
+
 export const diffVersion = (ref: DocumentRef, version: string, against?: string) =>
   jsonRequest<VersionDiff>(
     documentRefUrl(

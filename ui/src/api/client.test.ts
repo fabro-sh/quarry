@@ -6,6 +6,7 @@ import {
   createTmpDocument,
   deleteDocument,
   documentVersion,
+  forkTmpDocument,
   getDocument,
   getDocumentBlocks,
   getDocumentReview,
@@ -303,6 +304,29 @@ describe('Quarry API client', () => {
         method: 'PUT',
         headers: expect.objectContaining({ 'If-Match': '"v1"', 'content-type': 'text/markdown' }),
         body: 'next',
+      })
+    );
+  });
+
+  it('forks tmp documents through the source capability route', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ path: 'abcdef0123456789abcdef0123456789' }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(forkTmpDocument('72cb58585aa73e35758bc1141f79e32e')).resolves.toMatchObject({
+      path: 'abcdef0123456789abcdef0123456789',
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/v1/tmp/documents/72cb58585aa73e35758bc1141f79e32e/fork',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
       })
     );
   });

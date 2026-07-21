@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 
 pub const TMP_DOCUMENT_SECRET_LEN: usize = 32;
 pub const TMP_DOCUMENT_MARKDOWN_MAX_BYTES: usize = 1024 * 1024;
@@ -414,6 +415,98 @@ impl QuarryStore {
         .await
     }
 
+    pub async fn fork_tmp_document(&self, path: &str) -> Result<DocumentListEntry> {
+        self.fork_tmp_document_inner(path, None).await
+    }
+
+    /// Forks a tmp document and records the trusted edge-derived address that
+    /// created the new capability, matching ordinary tmp document creation.
+    pub async fn fork_tmp_document_with_creation_ip(
+        &self,
+        path: &str,
+        created_ip_address: IpAddr,
+    ) -> Result<DocumentListEntry> {
+        self.fork_tmp_document_inner(path, Some(created_ip_address))
+            .await
+    }
+
+    async fn fork_tmp_document_inner(
+        &self,
+        path: &str,
+        created_ip_address: Option<IpAddr>,
+    ) -> Result<DocumentListEntry> {
+        let source_secret = TmpDocumentSecret::parse(path)?;
+        let source_path = source_secret.as_str().to_string();
+        let target_secret = TmpDocumentSecret::generate();
+        let target_path = target_secret.as_str().to_string();
+        self.write_transaction(move |store, conn| {
+            Box::pin(async move {
+                let (source_document_id, source_head_version_id) = store
+                    .tmp_document_identity_conn(conn, &source_path)
+                    .await?
+                    .ok_or_else(|| QuarryError::NotFound(source_path.clone()))?;
+                let source_head_version_id = source_head_version_id.ok_or_else(|| {
+                    QuarryError::Invariant(format!(
+                        "tmp document {source_path} is missing its head version"
+                    ))
+                })?;
+
+                store
+                    .check_tmp_precondition_conn(
+                        conn,
+                        &target_path,
+                        &WritePrecondition::IfNoneMatch,
+                    )
+                    .await?;
+                let now = now_timestamp();
+                let expires_at = default_tmp_expires_at();
+                let (target_document_id, previous_head) =
+                    ensure_tmp_document_with_creation_ip_conn(
+                        conn,
+                        &target_path,
+                        &expires_at,
+                        created_ip_address,
+                        &now,
+                    )
+                    .await?;
+                if previous_head.is_some() {
+                    return Err(QuarryError::Invariant(format!(
+                        "new tmp fork target {target_path} unexpectedly had a head version"
+                    )));
+                }
+
+                let version_ids = clone_tmp_document_versions_conn(
+                    conn,
+                    &source_document_id,
+                    &target_document_id,
+                )
+                .await?;
+                let target_head_version_id = version_ids
+                    .get(&source_head_version_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        QuarryError::Invariant(format!(
+                            "fork source head {source_head_version_id} is missing from version history"
+                        ))
+                    })?;
+                crate::blocks::clone_block_state_conn(
+                    conn,
+                    &source_document_id,
+                    &target_document_id,
+                )
+                .await?;
+                conn.execute(
+                    "UPDATE documents SET head_version_id = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![target_head_version_id, now, target_document_id],
+                )
+                .await
+                .map_err(map_turso_error)?;
+                store.tmp_document_entry_conn(conn, &target_path).await
+            })
+        })
+        .await
+    }
+
     pub async fn promote_tmp_document(
         &self,
         tmp_path: &str,
@@ -470,6 +563,55 @@ impl QuarryStore {
         })
         .await
     }
+}
+
+async fn clone_tmp_document_versions_conn(
+    conn: &Connection,
+    source_document_id: &str,
+    target_document_id: &str,
+) -> Result<HashMap<String, String>> {
+    let mut rows = conn
+        .query(
+            "SELECT id FROM document_versions
+             WHERE document_id = ?1 ORDER BY created_at, id",
+            params![source_document_id.to_string()],
+        )
+        .await
+        .map_err(map_turso_error)?;
+    let mut source_version_ids = Vec::new();
+    while let Some(row) = rows.next().await.map_err(map_turso_error)? {
+        source_version_ids.push(text(&row, 0)?);
+    }
+    drop(rows);
+
+    let mut version_ids = HashMap::with_capacity(source_version_ids.len());
+    for source_version_id in source_version_ids {
+        let target_version_id = Uuid::new_v4().to_string();
+        let inserted = conn
+            .execute(
+                "INSERT INTO document_versions
+                 (id, document_id, tx_id, content_hash, inline_content, metadata_json,
+                  content_type, byte_size, created_at)
+                 SELECT ?1, ?2, tx_id, content_hash, inline_content, metadata_json,
+                        content_type, byte_size, created_at
+                 FROM document_versions WHERE id = ?3 AND document_id = ?4",
+                params![
+                    target_version_id.clone(),
+                    target_document_id.to_string(),
+                    source_version_id.clone(),
+                    source_document_id.to_string()
+                ],
+            )
+            .await
+            .map_err(map_turso_error)?;
+        if inserted != 1 {
+            return Err(QuarryError::Invariant(format!(
+                "fork source version {source_version_id} disappeared while cloning"
+            )));
+        }
+        version_ids.insert(source_version_id, target_version_id);
+    }
+    Ok(version_ids)
 }
 
 fn validate_tmp_markdown_bytes(content: &[u8]) -> Result<()> {

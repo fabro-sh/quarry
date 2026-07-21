@@ -1425,6 +1425,94 @@ pub(crate) async fn load_block_tree_conn(
     order_depth_first(document_id, loaded)
 }
 
+/// Clones one document's canonical block projection and review state under a
+/// new document id. Block and review ids are database-wide primary keys, so
+/// every id is reminted and parent/anchor references are rewritten together.
+pub(crate) async fn clone_block_state_conn(
+    conn: &Connection,
+    source_document_id: &str,
+    target_document_id: &str,
+) -> Result<()> {
+    let source_rows = load_block_tree_conn(conn, source_document_id).await?;
+    let source_items = list_block_review_items_conn(conn, source_document_id).await?;
+
+    let mut block_ids = HashMap::with_capacity(source_rows.len());
+    for row in &source_rows {
+        block_ids.insert(row.block_id.clone(), Uuid::new_v4().to_string());
+    }
+    // Orphaned/invalidated review items can retain an anchor id after its row
+    // is gone. Remap those ids too so the fork never points back into the
+    // source document's identity space.
+    for item in &source_items {
+        if !item.block_id.is_empty() {
+            block_ids
+                .entry(item.block_id.clone())
+                .or_insert_with(|| Uuid::new_v4().to_string());
+        }
+    }
+
+    let mut target_rows = Vec::with_capacity(source_rows.len());
+    for mut row in source_rows {
+        let source_block_id = row.block_id.clone();
+        row.block_id = block_ids.get(&source_block_id).cloned().ok_or_else(|| {
+            QuarryError::Invariant(format!(
+                "fork source block {source_block_id} is missing an id mapping"
+            ))
+        })?;
+        row.parent_block_id = row
+            .parent_block_id
+            .as_ref()
+            .map(|parent_id| {
+                block_ids.get(parent_id).cloned().ok_or_else(|| {
+                    QuarryError::Invariant(format!(
+                        "fork source parent block {parent_id} is missing an id mapping"
+                    ))
+                })
+            })
+            .transpose()?;
+        target_rows.push(row);
+    }
+
+    let item_ids: HashMap<_, _> = source_items
+        .iter()
+        .map(|item| (item.id.clone(), Uuid::new_v4().to_string()))
+        .collect();
+    let mut target_items = Vec::with_capacity(source_items.len());
+    for mut item in source_items {
+        let source_item_id = item.id.clone();
+        item.id = item_ids.get(&source_item_id).cloned().ok_or_else(|| {
+            QuarryError::Invariant(format!(
+                "fork source review item {source_item_id} is missing an id mapping"
+            ))
+        })?;
+        item.document_id = target_document_id.to_string();
+        if !item.block_id.is_empty() {
+            let source_block_id = item.block_id.clone();
+            item.block_id = block_ids.get(&source_block_id).cloned().ok_or_else(|| {
+                QuarryError::Invariant(format!(
+                    "fork source review anchor {source_block_id} is missing an id mapping"
+                ))
+            })?;
+        }
+        item.parent_item_id = item
+            .parent_item_id
+            .as_ref()
+            .map(|parent_id| {
+                item_ids.get(parent_id).cloned().ok_or_else(|| {
+                    QuarryError::Invariant(format!(
+                        "fork source review parent {parent_id} is missing an id mapping"
+                    ))
+                })
+            })
+            .transpose()?;
+        target_items.push(item);
+    }
+
+    validate_review_items_against_rows(&target_rows, &target_items)?;
+    replace_block_rows_conn(conn, target_document_id, &target_rows).await?;
+    replace_block_review_items_conn(conn, target_document_id, &target_items).await
+}
+
 /// Orders flat rows into depth-first document order: parents before children,
 /// siblings by `position`.
 fn order_depth_first(document_id: &str, rows: Vec<BlockRow>) -> Result<Vec<BlockRow>> {

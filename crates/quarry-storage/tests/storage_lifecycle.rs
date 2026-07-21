@@ -3006,6 +3006,9 @@ async fn tmp_document_creation_ip_is_canonical_private_and_immutable() -> TestRe
             TmpTtl::Default,
         )
         .await?;
+    let forked = store
+        .fork_tmp_document_with_creation_ip(&local.document.path, "203.0.113.7".parse::<IpAddr>()?)
+        .await?;
     let serialized = serde_json::to_string(&ipv4)?;
     assert!(!serialized.contains("created_ip_address"));
     assert!(!serialized.contains("198.51.100.10"));
@@ -3022,6 +3025,10 @@ async fn tmp_document_creation_ip_is_canonical_private_and_immutable() -> TestRe
     assert_eq!(
         document_creation_ip(&db_path, &local.document.id).await?,
         None
+    );
+    assert_eq!(
+        document_creation_ip(&db_path, &forked.id).await?,
+        Some("203.0.113.7".to_string())
     );
     Ok(())
 }

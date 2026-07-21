@@ -90,6 +90,10 @@ mod tests {
             "/v1/tmp/documents/<tmp-secret>/presence"
         );
         assert_eq!(
+            redact_path(&format!("/v1/tmp/documents/{SECRET}/fork")),
+            "/v1/tmp/documents/<tmp-secret>/fork"
+        );
+        assert_eq!(
             redact_path(&format!("/v1/tmp/documents/{SECRET}/events/stream")),
             "/v1/tmp/documents/<tmp-secret>/events/stream"
         );

@@ -384,6 +384,113 @@ describe('Quarry Browser workspace', () => {
     expect(screen.queryByText(/Extend TTL/)).not.toBeInTheDocument();
   });
 
+  it('accepts every open suggestion from the document actions menu in one transaction', async () => {
+    const secret = '0fedcba9876543210fedcba987654321';
+    window.history.pushState({}, '', `/tmp/${secret}`);
+    let accepted = false;
+    const suggestions = [
+      {
+        id: 's-open-1',
+        status: 'open',
+        kind: 'replace',
+        by: 'agent',
+        at: '2026-01-01T00:00:00.000Z',
+        ref: { ordinal: 0 },
+        quote: 'rough',
+        content: 'specific',
+        preview: { before: 'rough', after: 'specific' },
+        replies: [],
+      },
+      {
+        id: 's-resolved',
+        status: 'resolved',
+        kind: 'insert',
+        by: 'agent',
+        at: '2026-01-01T00:01:00.000Z',
+        ref: { ordinal: 1 },
+        quote: '',
+        content: 'already handled',
+        preview: { before: '', after: 'already handled' },
+        replies: [],
+      },
+      {
+        id: 's-open-2',
+        status: 'open',
+        kind: 'delete',
+        by: 'agent',
+        at: '2026-01-01T00:02:00.000Z',
+        ref: { ordinal: 2 },
+        quote: 'extra',
+        content: '',
+        preview: { before: 'extra', after: '' },
+        replies: [],
+      },
+    ];
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/v1/capabilities') {
+        return json({ tmp_documents: true, lib_documents: false });
+      }
+      if (url === `/v1/tmp/documents/${secret}`) {
+        return new Response('# Tmp\n', {
+          headers: {
+            ETag: '"tmp-v1"',
+            'content-type': 'text/markdown',
+            'x-quarry-document-id': 'tmp-accept-all',
+          },
+        });
+      }
+      if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/versions`) return json([]);
+      if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
+        return json({
+          documentId: 'tmp-accept-all',
+          baseToken: accepted ? 'tmp-v2' : 'tmp-v1',
+          comments: [],
+          suggestions: accepted
+            ? suggestions.map((suggestion) => ({ ...suggestion, status: 'resolved' }))
+            : suggestions,
+          conflicts: [],
+        });
+      }
+      if (url === `/v1/tmp/documents/${secret}/transactions` && init?.method === 'POST') {
+        expect(JSON.parse(String(init.body))).toMatchObject({
+          actor: { kind: 'user' },
+          ops: [
+            { op: 'suggestion.accept', item_id: 's-open-1' },
+            { op: 'suggestion.accept', item_id: 's-open-2' },
+          ],
+        });
+        accepted = true;
+        return json({
+          status: 'committed',
+          document_clock: 'tmp-v2',
+          transaction_id: 'tx-accept-all',
+          changed_block_ids: ['b1', 'b3'],
+        });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    await screen.findByRole('button', { name: 'Document mode' });
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Document actions' }));
+    const acceptAll = await screen.findByRole('menuitem', { name: 'Accept all suggestions' });
+    expect(acceptAll).not.toHaveAttribute('data-disabled');
+
+    fireEvent.click(acceptAll);
+
+    await waitFor(() => expect(accepted).toBe(true));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Document actions' }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole('menuitem', { name: 'Accept all suggestions' })
+      ).toHaveAttribute('data-disabled')
+    );
+  });
+
   it('badges open diff3 conflicts on a tmp document and dismisses them from the panel', async () => {
     const secret = '5f1e0d3c2b4a49188c7d6e5f4a3b2c1d';
     window.history.pushState({}, '', `/tmp/${secret}`);
@@ -2259,6 +2366,7 @@ describe('Quarry Browser workspace', () => {
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Raw Link/ }));
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Document actions' }));
+    expect(screen.queryByRole('menuitem', { name: 'Fork' })).not.toBeInTheDocument();
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Copy raw link' }));
 
     expect(writeText).toHaveBeenCalledWith('http://127.0.0.1/v1/libraries/copy-lib/documents/notes/raw.md');
@@ -2301,6 +2409,81 @@ describe('Quarry Browser workspace', () => {
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Copy raw link' }));
 
     expect(writeText).toHaveBeenCalledWith(`http://127.0.0.1/v1/tmp/documents/${secret}`);
+  });
+
+  it('forks a tmp document from the toolbar menu and opens the new capability URL', async () => {
+    const sourceSecret = '11111111111111111111111111111111';
+    const forkSecret = '22222222222222222222222222222222';
+    window.history.pushState({}, '', `/tmp/${sourceSecret}`);
+    let forkRequested = false;
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/v1/libraries') return json([]);
+      if (url === `/v1/tmp/documents/${sourceSecret}/fork` && init?.method === 'POST') {
+        expect(init.headers).toEqual({ 'content-type': 'application/json' });
+        expect(init.body).toBe('{}');
+        forkRequested = true;
+        return new Response(
+          JSON.stringify({
+            id: 'tmp-fork',
+            path: forkSecret,
+            head_version_id: 'fork-v1',
+            content_type: 'text/markdown',
+            byte_size: 13,
+            metadata: { title: 'Fork source' },
+            updated_at: 'now',
+            expires_at: '2099-01-01T00:00:00Z',
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      if (url === `/v1/tmp/documents/${sourceSecret}`) {
+        return new Response('# Fork source\n', {
+          headers: {
+            ETag: '"source-v1"',
+            'content-type': 'text/markdown',
+            'x-quarry-document-id': 'tmp-source',
+            'x-quarry-expires-at': '2099-01-01T00:00:00Z',
+          },
+        });
+      }
+      if (url === `/v1/tmp/documents/${forkSecret}`) {
+        return new Response('# Fork source\n', {
+          headers: {
+            ETag: '"fork-v1"',
+            'content-type': 'text/markdown',
+            'x-quarry-document-id': 'tmp-fork',
+            'x-quarry-expires-at': '2099-01-01T00:00:00Z',
+          },
+        });
+      }
+      if (url.endsWith('/presence')) return json({ presence: [] });
+      if (url.endsWith('/versions')) return json([]);
+      if (url.endsWith('/review?includeResolved=1')) {
+        return json({
+          documentId: url.includes(forkSecret) ? 'tmp-fork' : 'tmp-source',
+          comments: [],
+          suggestions: [],
+          conflicts: [],
+        });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    expect(await screen.findByRole('button', { name: 'Document mode' })).toHaveTextContent(
+      'Editing'
+    );
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Document actions' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Fork' }));
+
+    await waitFor(() => expect(forkRequested).toBe(true));
+    await waitFor(() => expect(window.location.pathname).toBe(`/tmp/${forkSecret}`));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(`/v1/tmp/documents/${forkSecret}`)
+    );
   });
 
   it('shows Upload Markdown for markdown documents and hides it for raw text documents', async () => {

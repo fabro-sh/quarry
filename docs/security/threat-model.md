@@ -336,7 +336,7 @@ the exposure explicit.
 | Origin | Destination | Data | Protocol | Auth / Authz |
 |---|---|---|---|---|
 | External | Server Core (via Edge) | Create a tmp document; server mints and returns the capability secret | HTTPS → HTTP | **None** — anonymous creation by design |
-| External | Server Core (via Edge) | Read / write a tmp document and all sub-resources (blocks, review, versions, presence, transactions, TTL, events) | HTTPS → HTTP | **Capability secret** in URL (shape check + DB lookup) |
+| External | Server Core (via Edge) | Read / write a tmp document and all sub-resources (blocks, review, versions, presence, transactions, fork, TTL, events) | HTTPS → HTTP | **Capability secret** in URL (shape check + DB lookup) |
 | External | Server Core (via Edge) | Real-time collaboration on a tmp document (Yjs sync + awareness) | WSS → WS | **Capability secret** (`/v1/tmp/collab/{secret}/{room}`; the `{room}` segment is ignored) |
 | External | Server Core (via Edge) | Real-time collaboration addressed by internal document UUID | WSS → WS | **None** — `/v1/collab/{document_id}` trusts a bare UUID that the server echoes to clients in headers/bodies; a second, weaker bearer capability parallel to the secret |
 | External | Server Core (via Edge) | Self-declared presence / identity (agent ID, display name, cursor, color) | HTTPS → HTTP + WS awareness | **None beyond the document secret** — identity itself is unverified and freely spoofable |

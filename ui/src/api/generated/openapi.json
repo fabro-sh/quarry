@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "0.1.3"
+    "version": "0.1.4"
   },
   "paths": {
     "/v1/capabilities": {
@@ -455,6 +455,46 @@
             "description": "Tmp document-scoped server-sent event stream"
           },
           "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tmp/documents/{secret}/fork": {
+      "post": {
+        "tags": [
+          "tmp_document_handlers"
+        ],
+        "operationId": "tmp_document_fork_openapi",
+        "parameters": [
+          {
+            "name": "secret",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Fork created with cloned version and review history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentListEntry"
+                }
+              }
+            }
+          },
+          "410": {
             "description": "",
             "content": {
               "application/json": {
