@@ -586,18 +586,20 @@ where
             "browser UI bundle not embedded; serving API-only (run `bun run build` in ui/)"
         );
     }
+    let mut shutdown = Box::pin(shutdown);
+    // Poll shutdown once before the listener can become reachable. In
+    // particular, this installs the process signal handlers before another
+    // process can observe readiness and send SIGTERM.
+    let listener = tokio::select! {
+        biased;
+        () = shutdown.as_mut() => return Ok(()),
+        result = tokio::net::TcpListener::bind(addr) => result?,
+    };
     let (shutdown_requested_tx, shutdown_requested_rx) = tokio::sync::oneshot::channel::<()>();
     let shutdown_task = tokio::spawn(async move {
         shutdown.await;
         let _ = shutdown_requested_tx.send(());
     });
-    let listener = match tokio::net::TcpListener::bind(addr).await {
-        Ok(listener) => listener,
-        Err(error) => {
-            shutdown_task.abort();
-            return Err(error);
-        }
-    };
     tracing::info!(
         event = "server.listening",
         %addr,
