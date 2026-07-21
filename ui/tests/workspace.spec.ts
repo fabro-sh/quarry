@@ -260,7 +260,11 @@ test.describe('Quarry Browser smoke flows', () => {
 
     // Putting the cursor in the link reveals the edit popover; Remove unlinks it.
     await link.click();
-    await expectSelectionText(page, 'example');
+    // A synthetic click can leave Chromium's DOM selection expanded on slow
+    // runners. Plate only opens the edit popover for a collapsed caret, so
+    // collapse it explicitly while it is still inside the link.
+    await page.keyboard.press('ArrowLeft');
+    await expect.poll(() => page.evaluate(() => window.getSelection()?.isCollapsed)).toBe(true);
     const removeLink = page.getByRole('button', { name: 'Remove link' });
     await expect(removeLink).toBeVisible();
     await removeLink.click();
