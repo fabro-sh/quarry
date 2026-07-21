@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "0.1.4"
+    "version": "0.1.5-nightly.20260721"
   },
   "paths": {
     "/v1/capabilities": {
