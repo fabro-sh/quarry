@@ -18,3 +18,23 @@ export function readSuggestionMark(leaf: Record<string, unknown>): SuggestionMar
   }
   return null;
 }
+
+/** Read Plate's element-level representation of a block suggestion. */
+export function readBlockSuggestion(node: Record<string, unknown>): SuggestionMark | null {
+  const raw = node.suggestion;
+  if (typeof raw !== 'object' || raw === null) return null;
+  const data: Record<string, unknown> = { ...raw };
+  const { id, type, userId, createdAt } = data;
+  if (
+    typeof id !== 'string' ||
+    (type !== 'insert' && type !== 'remove' && type !== 'update')
+  ) {
+    return null;
+  }
+  return {
+    id,
+    type,
+    userId: typeof userId === 'string' ? userId : 'user',
+    createdAt: typeof createdAt === 'number' ? createdAt : 0,
+  };
+}

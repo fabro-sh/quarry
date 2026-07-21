@@ -97,6 +97,7 @@ function stableEntries(entries: Record<string, ReviewMetaEntry>): Record<string,
 
 function stableEntry(entry: ReviewMetaEntry): ReviewMetaEntry {
   const stable: ReviewMetaEntry = { by: entry.by, at: entry.at };
+  if (entry.kind === 'block_delete') stable.kind = entry.kind;
   if (entry.editedAt !== undefined) stable.editedAt = entry.editedAt;
   if (entry.body !== undefined) stable.body = entry.body;
   if (entry.re !== undefined) stable.re = entry.re;

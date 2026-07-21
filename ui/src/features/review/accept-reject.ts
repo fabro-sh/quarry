@@ -1,5 +1,6 @@
 import { acceptSuggestion, rejectSuggestion } from '@platejs/suggestion';
 import { SuggestionPlugin } from '@platejs/suggestion/react';
+import { KEYS } from 'platejs';
 import type { PlateEditor } from 'platejs/react';
 import { resolveSuggestions } from './resolve-suggestions';
 import { serializeReviewMeta, splitEndmatter } from './endmatter';
@@ -15,7 +16,14 @@ export type SuggestionResolution = 'accept' | 'reject';
 export function acceptSuggestionById(editor: PlateEditor, id: string): void {
   const desc = resolveSuggestions(editor.children).find((s) => s.suggestionId === id);
   if (!desc) return;
-  editor.getApi(SuggestionPlugin).suggestion.withoutSuggestions(() => acceptSuggestion(editor, desc));
+  editor.getApi(SuggestionPlugin).suggestion.withoutSuggestions(() => {
+    editor.tf.withoutNormalizing(() => {
+      acceptSuggestion(editor, desc);
+      if (editor.children.length === 0) {
+        editor.tf.insertNodes({ type: KEYS.p, children: [{ text: '' }] }, { at: [0] });
+      }
+    });
+  });
   applyReviewMutation((meta) => removeSuggestion(meta, id));
 }
 
@@ -35,6 +43,7 @@ export function resolveSuggestionInMarkdown(
   resolution: SuggestionResolution
 ): string | null {
   const { body, meta } = splitEndmatter(markdown);
+  if (meta?.suggestions[id]?.kind === 'block_delete') return null;
   const escapedId = escapeRegExp(id);
   const replacements: Array<[RegExp, (match: RegExpExecArray) => string]> = [
     [

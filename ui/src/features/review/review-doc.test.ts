@@ -58,6 +58,20 @@ describe('review Yjs document binding', () => {
     expect(metaFromReviewMap(doc.getMap(REVIEW_ROOT))).toEqual(meta);
   });
 
+  it('round-trips block-delete semantics through the shared review map', () => {
+    const doc = new Y.Doc();
+    const meta: ReviewMeta = {
+      comments: {},
+      suggestions: {
+        s1: { by: 'AI', at, kind: 'block_delete' },
+      },
+    };
+
+    reconcileReviewMap(doc.getMap(REVIEW_ROOT), meta);
+
+    expect(metaFromReviewMap(doc.getMap(REVIEW_ROOT))).toEqual(meta);
+  });
+
   it('converges review metadata between synced Yjs documents', () => {
     const a = new Y.Doc();
     const b = new Y.Doc();

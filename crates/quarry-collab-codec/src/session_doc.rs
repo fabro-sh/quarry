@@ -104,6 +104,10 @@ const TRANSIENT_MARKS: [&str; 1] = ["comment_draft"];
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionAnchorKind {
     Comment,
+    BlockDelete {
+        by: Option<String>,
+        at_ms: i64,
+    },
     Suggestion {
         replacement: String,
         by: Option<String>,
@@ -113,8 +117,8 @@ pub enum SessionAnchorKind {
 
 /// A review anchor as the session layer sees it: offsets in row coordinates
 /// (UTF-16, suggestion-insert text excluded). Suggestion-specific fields live
-/// on [`SessionAnchorKind::Suggestion`], so comment anchors cannot carry
-/// meaningless replacement metadata.
+/// on the corresponding [`SessionAnchorKind`] variant, so comment anchors
+/// cannot carry meaningless suggestion metadata.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionAnchor {
     pub id: String,
@@ -353,6 +357,30 @@ fn block_node(
     let mut node_attrs = Attrs::new();
     node_attrs.insert("id".to_string(), json!(row.block_id));
     node_attrs.extend(row.attrs.clone());
+    let mut block_deletes = anchors.iter().filter(|anchor| {
+        anchor.block_id == row.block_id
+            && matches!(&anchor.kind, SessionAnchorKind::BlockDelete { .. })
+    });
+    if let Some(anchor) = block_deletes.next() {
+        let SessionAnchorKind::BlockDelete { by, at_ms } = &anchor.kind else {
+            unreachable!("filtered to block-delete anchors");
+        };
+        node_attrs.insert(
+            "suggestion".to_string(),
+            json!({
+                "id": anchor.id,
+                "type": "remove",
+                "userId": by.clone().unwrap_or_else(|| "unknown".to_string()),
+                "createdAt": at_ms,
+            }),
+        );
+        if block_deletes.next().is_some() {
+            return Err(Unsupported::new(format!(
+                "block {} has multiple block-delete suggestions",
+                row.block_id
+            )));
+        }
+    }
     let nested = build_block_nodes(rows, Some(&row.block_id), anchors)?;
     let children = if nested.is_empty() {
         inline_children_with_anchors(row, anchors)?
@@ -376,7 +404,10 @@ fn inline_children_with_anchors(
     let len = utf16_len(&row.text);
     let block_anchors: Vec<&SessionAnchor> = anchors
         .iter()
-        .filter(|anchor| anchor.block_id == row.block_id)
+        .filter(|anchor| {
+            anchor.block_id == row.block_id
+                && !matches!(&anchor.kind, SessionAnchorKind::BlockDelete { .. })
+        })
         .collect();
     for anchor in &block_anchors {
         if anchor.end > len
@@ -417,6 +448,9 @@ fn anchor_marks(anchor: &SessionAnchor) -> Attrs {
             ("comment".to_string(), json!(true)),
             (format!("comment_{}", anchor.id), json!(true)),
         ]),
+        SessionAnchorKind::BlockDelete { .. } => {
+            unreachable!("block-delete suggestions are stored on elements")
+        }
         SessionAnchorKind::Suggestion { .. } => suggestion_marks(anchor, "remove"),
     }
 }
@@ -545,6 +579,16 @@ fn collect_block(
             id
         }
     };
+    let block_delete = take_block_delete_suggestion(&mut attrs).map(|(id, by, at_ms)| {
+        out.anchors.push(SessionAnchor {
+            id: id.clone(),
+            kind: SessionAnchorKind::BlockDelete { by, at_ms },
+            block_id: block_id.clone(),
+            start: 0,
+            end: 0,
+        });
+        id
+    });
     let is_container = children.iter().any(is_block_element);
     let mut row = BlockRow {
         block_id: block_id.clone(),
@@ -580,7 +624,12 @@ fn collect_block(
         return Ok(());
     }
     match extract_inline(&block_id, children) {
-        Ok(extraction) => {
+        Ok(mut extraction) => {
+            if let Some(block_delete) = &block_delete {
+                extraction
+                    .anchors
+                    .retain(|anchor| &anchor.id != block_delete);
+            }
             row.text = extraction.text;
             row.marks = extraction.marks;
             row.links = extraction.links;
@@ -597,6 +646,26 @@ fn collect_block(
         }
     }
     Ok(())
+}
+
+fn take_block_delete_suggestion(attrs: &mut Attrs) -> Option<(String, Option<String>, i64)> {
+    let suggestion = attrs.get("suggestion")?;
+    if suggestion.get("type").and_then(Value::as_str) != Some("remove")
+        || suggestion.get("isLineBreak").and_then(Value::as_bool) == Some(true)
+    {
+        return None;
+    }
+    let id = suggestion.get("id")?.as_str()?.to_string();
+    let by = suggestion
+        .get("userId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let at_ms = suggestion
+        .get("createdAt")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    attrs.shift_remove("suggestion");
+    Some((id, by, at_ms))
 }
 
 fn is_block_element(child: &Node) -> bool {
@@ -648,7 +717,9 @@ fn strip_review_content(node: &Node) -> Option<Node> {
             children,
         } => {
             let children: Vec<Node> = children.iter().filter_map(strip_review_content).collect();
-            Some(Node::element(ty.clone(), attrs.clone(), children))
+            let mut attrs = attrs.clone();
+            attrs.shift_remove("suggestion");
+            Some(Node::element(ty.clone(), attrs, children))
         }
         Node::Text { text, marks } => {
             let classified = classify_marks(marks);
@@ -891,6 +962,9 @@ impl AnchorAccumulator {
         for (id, range) in std::mem::take(&mut self.ranges) {
             let kind = match range.kind {
                 SessionAnchorKind::Comment => SessionAnchorKind::Comment,
+                SessionAnchorKind::BlockDelete { .. } => {
+                    unreachable!("block-delete suggestions are not inline ranges")
+                }
                 SessionAnchorKind::Suggestion { by, at_ms, .. } => {
                     let replacement = self
                         .inserts

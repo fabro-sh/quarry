@@ -26,4 +26,34 @@ describe('resolveSuggestions', () => {
     const [s] = resolveSuggestions(v);
     expect(s).toMatchObject({ suggestionId: 's3', type: 'replace', text: 'old', newText: 'new' });
   });
+
+  it('resolves an element-level block deletion without inline marks', () => {
+    const [suggestion] = resolveSuggestions([
+      {
+        type: 'h2',
+        suggestion: { id: 's4', type: 'remove', userId: 'AI', createdAt: 42 },
+        children: [{ text: 'Delete this heading' }],
+      },
+    ]);
+
+    expect(suggestion).toMatchObject({
+      suggestionId: 's4',
+      keyId: 'suggestion_s4',
+      type: 'remove',
+      text: 'Delete this heading',
+      userId: 'AI',
+    });
+  });
+
+  it('resolves an empty void block deletion', () => {
+    const [suggestion] = resolveSuggestions([
+      {
+        type: 'hr',
+        suggestion: { id: 's5', type: 'remove', userId: 'AI', createdAt: 42 },
+        children: [{ text: '' }],
+      },
+    ]);
+
+    expect(suggestion).toMatchObject({ suggestionId: 's5', type: 'remove', text: '' });
+  });
 });

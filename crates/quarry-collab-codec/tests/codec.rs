@@ -233,6 +233,7 @@ fn review_seed_update_contains_body_and_review_map() {
         ReviewMetaEntry {
             by: "user".to_string(),
             at: "2026-01-01T00:00:00.000Z".to_string(),
+            kind: None,
             edited_at: None,
             body: Some("note".to_string()),
             re: None,
@@ -322,6 +323,7 @@ fn review_entry(by: &str) -> ReviewMetaEntry {
     ReviewMetaEntry {
         by: by.to_string(),
         at: "2026-01-01T00:00:00.000Z".to_string(),
+        kind: None,
         edited_at: None,
         body: None,
         re: None,

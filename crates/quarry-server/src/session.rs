@@ -1004,7 +1004,8 @@ fn doc_represented(item: &BlockReviewItem) -> bool {
         }
         BlockReviewKind::Suggestion => {
             item.state == BlockReviewState::Open
-                && (item.start_offset < item.end_offset
+                && (item.is_block_delete_suggestion()
+                    || item.start_offset < item.end_offset
                     || item
                         .replacement
                         .as_deref()
@@ -1023,6 +1024,12 @@ pub(crate) fn doc_anchors(items: &[BlockReviewItem]) -> Vec<SessionAnchor> {
         .map(|item| SessionAnchor {
             id: item.id.clone(),
             kind: match item.kind {
+                BlockReviewKind::Suggestion if item.is_block_delete_suggestion() => {
+                    SessionAnchorKind::BlockDelete {
+                        by: item.author.clone(),
+                        at_ms: chrono_ms(&item.created_at),
+                    }
+                }
                 BlockReviewKind::Suggestion => SessionAnchorKind::Suggestion {
                     replacement: item.replacement.clone().unwrap_or_default(),
                     by: item.author.clone(),
@@ -1052,6 +1059,9 @@ pub(crate) fn review_meta_for_items(items: &[BlockReviewItem]) -> ReviewMeta {
         let entry = ReviewMetaEntry {
             by: item.author.clone().unwrap_or_else(|| "unknown".to_string()),
             at: item.created_at.clone(),
+            kind: item
+                .is_block_delete_suggestion()
+                .then(|| "block_delete".to_string()),
             edited_at: edited_at_for_item(item),
             body: item.body.clone(),
             re: item.parent_item_id.clone(),
@@ -1202,6 +1212,7 @@ impl<'a> ReviewReconciliation<'a> {
         updated.end_offset = anchor.end;
         if item.kind == BlockReviewKind::Suggestion {
             updated.replacement = match &anchor.kind {
+                SessionAnchorKind::BlockDelete { .. } => None,
                 SessionAnchorKind::Suggestion { replacement, .. } => Some(replacement.clone()),
                 SessionAnchorKind::Comment => None,
             };
@@ -1244,6 +1255,12 @@ impl<'a> ReviewReconciliation<'a> {
 
     fn browser_created_item(&self, anchor: &SessionAnchor) -> BlockReviewItem {
         let (kind, meta_entry, replacement, anchor_author) = match &anchor.kind {
+            SessionAnchorKind::BlockDelete { by, .. } => (
+                BlockReviewKind::Suggestion,
+                self.meta.suggestions.get(&anchor.id),
+                None,
+                by.clone(),
+            ),
             SessionAnchorKind::Suggestion {
                 replacement, by, ..
             } => (
@@ -1259,10 +1276,13 @@ impl<'a> ReviewReconciliation<'a> {
                 None,
             ),
         };
-        let quote = self
-            .texts
-            .get(anchor.block_id.as_str())
-            .map(|text| utf16_slice_clamped(text, anchor.start, anchor.end));
+        let quote = self.texts.get(anchor.block_id.as_str()).map(|text| {
+            if matches!(&anchor.kind, SessionAnchorKind::BlockDelete { .. }) {
+                (*text).to_string()
+            } else {
+                utf16_slice_clamped(text, anchor.start, anchor.end)
+            }
+        });
         let created_at = meta_entry
             .map(|entry| entry.at.clone())
             .filter(|at| !at.is_empty())
@@ -1649,6 +1669,7 @@ mod tests {
             ReviewMetaEntry {
                 by: "Blair".to_string(),
                 at: "2026-06-09T00:30:00.000Z".to_string(),
+                kind: None,
                 edited_at: None,
                 body: Some("A reply".to_string()),
                 re: Some("c1".to_string()),
@@ -1699,7 +1720,7 @@ mod tests {
     }
 
     #[test]
-    fn insertion_suggestions_and_dead_anchors_are_not_doc_represented() {
+    fn insertion_suggestions_and_block_deletes_are_doc_represented() {
         let insertion = BlockReviewItem {
             start_offset: 4,
             end_offset: 4,
@@ -1712,7 +1733,17 @@ mod tests {
             replacement: None,
             ..item("s-delete", BlockReviewKind::Suggestion, 0, 0)
         };
-        assert!(!doc_represented(&block_delete));
+        assert!(doc_represented(&block_delete));
+        assert!(matches!(
+            &doc_anchors(std::slice::from_ref(&block_delete))[0].kind,
+            SessionAnchorKind::BlockDelete { .. }
+        ));
+        assert_eq!(
+            review_meta_for_items(std::slice::from_ref(&block_delete)).suggestions["s-delete"]
+                .kind
+                .as_deref(),
+            Some("block_delete")
+        );
         let orphaned = BlockReviewItem {
             state: BlockReviewState::Orphaned,
             ..item("c1", BlockReviewKind::Comment, 0, 4)

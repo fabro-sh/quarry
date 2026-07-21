@@ -62,6 +62,7 @@ function toEntryMap(value: unknown): Record<string, ReviewMetaEntry> {
     const by = typeof entry.by === 'string' ? entry.by : 'unknown';
     const at = typeof entry.at === 'string' ? entry.at : '';
     const next: ReviewMetaEntry = { by, at };
+    if (entry.kind === 'block_delete') next.kind = 'block_delete';
     if (typeof entry.editedAt === 'string') next.editedAt = entry.editedAt;
     if (typeof entry.body === 'string') next.body = entry.body;
     if (typeof entry.re === 'string') next.re = entry.re;

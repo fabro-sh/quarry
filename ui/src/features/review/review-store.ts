@@ -7,7 +7,7 @@ import {
   type ReviewMetaEntry,
   type ReviewMetaPatch,
 } from './rfm-types';
-import { readSuggestionMark } from './suggestion-mark';
+import { readBlockSuggestion, readSuggestionMark } from './suggestion-mark';
 
 export function addComment(meta: ReviewMeta, id: string, fields: { by: string; at: string; body?: string }): ReviewMeta {
   const next = cloneMeta(meta);
@@ -111,6 +111,14 @@ export function buildThreads(meta: ReviewMeta): ReviewThread[] {
 export function syncSuggestionsFromValue(meta: ReviewMeta, value: Descendant[]): ReviewMeta {
   const next = cloneMeta(meta);
   const visit = (node: Record<string, unknown>) => {
+    const block = readBlockSuggestion(node);
+    if (block?.type === 'remove') {
+      const at = block.createdAt > 0 ? new Date(block.createdAt).toISOString() : new Date().toISOString();
+      next.suggestions[block.id] = {
+        ...(next.suggestions[block.id] ?? { by: block.userId, at }),
+        kind: 'block_delete',
+      };
+    }
     const mark = readSuggestionMark(node);
     if (mark && !next.suggestions[mark.id]) {
       const at = mark.createdAt > 0 ? new Date(mark.createdAt).toISOString() : new Date().toISOString();

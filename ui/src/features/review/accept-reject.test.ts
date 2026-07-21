@@ -7,7 +7,7 @@ import {
   rejectSuggestionById,
   resolveSuggestionInMarkdown,
 } from './accept-reject';
-import { markdownToReview } from './rfm-codec';
+import { markdownToReview, reviewToMarkdown } from './rfm-codec';
 import { useReviewStore } from './review-store';
 import { emptyReviewMeta } from './rfm-types';
 
@@ -97,6 +97,63 @@ describe('accept/reject suggestions', () => {
     expect(suggestionKeys(editor)).not.toContain('suggestion_s2');
   });
 
+  it.each([
+    ['paragraph', '{--Deleted paragraph--}{#s-full-block}'],
+    ['heading', '# {--Deleted heading--}{#s-full-block}'],
+    ['ordered-list item', '1. {--Deleted ordered item--}{#s-full-block}'],
+    ['bullet-list item', '- {--Deleted bullet item--}{#s-full-block}'],
+    ['task-list item', '- [ ] {--Deleted task item--}{#s-full-block}'],
+    ['blockquote', '> {--Deleted quote--}{#s-full-block}'],
+  ])('accept on a remove covering an entire %s deletes the block', (_name, removedBlock) => {
+    const { meta, value } = markdownToReview(
+      `Before stays.\n\n${removedBlock}\n\nAfter stays.\n\n---\nsuggestions:\n  s-full-block:\n    by: user\n    at: "2026-01-01T00:00:00.000Z"\n`
+    );
+    const editor = createPlateEditor({
+      plugins: [ParagraphPlugin, ...reviewKit],
+      value: value as Value,
+    });
+
+    acceptSuggestionById(editor, 's-full-block');
+
+    expect.soft(editor.children).toHaveLength(2);
+    expect(reviewToMarkdown(editor.children, meta)).toBe('Before stays.\n\nAfter stays.\n');
+  });
+
+  it('accepting several full-block removals leaves no empty structural blocks', () => {
+    const { meta, value } = markdownToReview(
+      'Before stays.\n\n# {--Deleted heading--}{#s-heading}\n\n{--Deleted paragraph--}{#s-paragraph}\n\n1. {--Deleted ordered item--}{#s-ordered}\n\n> {--Deleted quote--}{#s-quote}\n\nAfter stays.\n\n---\nsuggestions:\n  s-heading:\n    by: user\n    at: "2026-01-01T00:00:00.000Z"\n  s-paragraph:\n    by: user\n    at: "2026-01-01T00:00:00.000Z"\n  s-ordered:\n    by: user\n    at: "2026-01-01T00:00:00.000Z"\n  s-quote:\n    by: user\n    at: "2026-01-01T00:00:00.000Z"\n'
+    );
+    const editor = createPlateEditor({
+      plugins: [ParagraphPlugin, ...reviewKit],
+      value: value as Value,
+    });
+
+    for (const id of ['s-heading', 's-paragraph', 's-ordered', 's-quote']) {
+      acceptSuggestionById(editor, id);
+    }
+
+    expect.soft(editor.children).toHaveLength(2);
+    expect(reviewToMarkdown(editor.children, meta)).toBe('Before stays.\n\nAfter stays.\n');
+  });
+
+  it('accepts an explicit deletion of an empty void block', () => {
+    const editor = createPlateEditor({
+      plugins: [ParagraphPlugin, ...reviewKit],
+      value: [
+        {
+          type: 'hr',
+          suggestion: { id: 's-hr', type: 'remove', userId: 'AI', createdAt: 0 },
+          children: [{ text: '' }],
+        },
+        { type: 'p', children: [{ text: 'Keep me.' }] },
+      ] as Value,
+    });
+
+    acceptSuggestionById(editor, 's-hr');
+
+    expect(editor.children).toEqual([{ type: 'p', children: [{ text: 'Keep me.' }] }]);
+  });
+
   it('reject on a remove keeps the text and drops the mark', () => {
     const editor = buildEditor();
 
@@ -175,5 +232,11 @@ describe('accept/reject suggestions', () => {
     const markdown = 'Keep {--this --}{#s1}text.\n';
 
     expect(resolveSuggestionInMarkdown(markdown, 's1', 'reject')).toBe('Keep this text.\n');
+  });
+
+  it('uses the structural editor path for a block-delete suggestion', () => {
+    const markdown = '# {--Delete me--}{#s1}\n\n---\nsuggestions:\n  s1:\n    by: AI\n    at: "2026-01-01T00:00:00.000Z"\n    kind: block_delete\n';
+
+    expect(resolveSuggestionInMarkdown(markdown, 's1', 'accept')).toBeNull();
   });
 });

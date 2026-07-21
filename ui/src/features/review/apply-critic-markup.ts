@@ -1,10 +1,21 @@
 import { ElementApi, TextApi, type Descendant, type TText } from 'platejs';
 
 import { cloneMeta, type ReviewMeta } from './rfm-types';
+import { readSuggestionMark, type SuggestionMark } from './suggestion-mark';
 
 type Props = Record<string, unknown>;
 
 const CODE_BLOCK_TYPES = new Set(['code_block', 'code_line']);
+const LEGACY_BLOCK_DELETE_TYPES = new Set([
+  'p',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'blockquote',
+]);
 
 function createdAtFromEntry(at: string | undefined): number {
   if (!at) return 0;
@@ -128,12 +139,50 @@ function expandLeaf(node: TText, meta: ReviewMeta): TText[] {
   return out;
 }
 
-function walkChildren(value: Descendant[], inCode: boolean, meta: ReviewMeta): Descendant[] {
+function fullTextRemoval(children: Descendant[]): SuggestionMark | null {
+  const marks: SuggestionMark[] = [];
+  const visit = (nodes: Descendant[]) => {
+    for (const node of nodes) {
+      if (TextApi.isText(node)) {
+        if (node.text.length === 0) continue;
+        const mark = readSuggestionMark(node);
+        if (!mark || mark.type !== 'remove') return false;
+        marks.push(mark);
+      } else {
+        const type = typeof node.type === 'string' ? node.type : '';
+        if (type === 'img' || type === 'wikilink' || !visit(node.children)) return false;
+      }
+    }
+    return true;
+  };
+  if (!visit(children) || marks.length === 0) return null;
+  const first = marks[0];
+  return marks.every((mark) => mark.id === first.id) ? first : null;
+}
+
+function walkChildren(
+  value: Descendant[],
+  inCode: boolean,
+  meta: ReviewMeta,
+  topLevel: boolean
+): Descendant[] {
   const out: Descendant[] = [];
   for (const child of value) {
     if (ElementApi.isElement(child)) {
       const nextInCode = inCode || CODE_BLOCK_TYPES.has(typeof child.type === 'string' ? child.type : '');
-      out.push({ ...child, children: walkChildren(child.children, nextInCode, meta) });
+      const children = walkChildren(child.children, nextInCode, meta, false);
+      const next: Record<string, unknown> = { ...child, children };
+      const blockType = typeof child.type === 'string' ? child.type : '';
+      const removal =
+        topLevel && LEGACY_BLOCK_DELETE_TYPES.has(blockType)
+          ? fullTextRemoval(children)
+          : null;
+      if (removal) {
+        next.suggestion = removal;
+        const entry = ensureSuggestion(meta, removal.id);
+        meta.suggestions[removal.id] = { ...entry, kind: 'block_delete' };
+      }
+      out.push(next as Descendant);
     } else if (TextApi.isText(child) && !inCode && child.code !== true) {
       out.push(...expandLeaf(child, meta));
     } else {
@@ -151,5 +200,5 @@ function walkChildren(value: Descendant[], inCode: boolean, meta: ReviewMeta): D
  */
 export function applyCriticMarkup(value: Descendant[], meta: ReviewMeta): { value: Descendant[]; meta: ReviewMeta } {
   const nextMeta = cloneMeta(meta);
-  return { value: walkChildren(value, false, nextMeta), meta: nextMeta };
+  return { value: walkChildren(value, false, nextMeta, true), meta: nextMeta };
 }

@@ -77,6 +77,29 @@ where
     .unwrap();
 }
 
+async fn wait_for_yjs_block_delete<S>(socket: &mut S, doc: &Doc, id: &str)
+where
+    S: Stream<Item = Result<TungsteniteMessage, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    if yjs_has_block_delete(doc, id) {
+        return;
+    }
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let message = socket.next().await.unwrap().unwrap();
+            let TungsteniteMessage::Binary(bytes) = message else {
+                continue;
+            };
+            apply_yjs_message(doc, bytes.as_ref());
+            if yjs_has_block_delete(doc, id) {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+}
+
 async fn wait_for_yjs_review_entry<S>(
     socket: &mut S,
     doc: &Doc,
@@ -143,6 +166,24 @@ fn yjs_has_comment_mark(doc: &Doc, id: &str) -> bool {
         }
     }
     yjs_slate_children(doc).iter().any(|node| visit(node, &key))
+}
+
+fn yjs_has_block_delete(doc: &Doc, id: &str) -> bool {
+    fn visit(node: &Node, id: &str) -> bool {
+        match node {
+            Node::Element {
+                attrs, children, ..
+            } => {
+                let matches = attrs.get("suggestion").is_some_and(|suggestion| {
+                    suggestion.get("id").and_then(Value::as_str) == Some(id)
+                        && suggestion.get("type").and_then(Value::as_str) == Some("remove")
+                });
+                matches || children.iter().any(|child| visit(child, id))
+            }
+            Node::Text { .. } => false,
+        }
+    }
+    yjs_slate_children(doc).iter().any(|node| visit(node, id))
 }
 
 async fn block_test_app() -> (tempfile::TempDir, axum::Router, QuarryStore) {
@@ -1896,7 +1937,7 @@ async fn block_delete_suggestion_resolves_through_an_active_session() -> anyhow:
     let tree = get_block_tree(&app, "live.md").await;
     let heading_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
 
-    let (mut socket, _doc) = connect_session(addr, &document_id).await;
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
     commit_block_transaction(
         &app,
         "live.md",
@@ -1917,6 +1958,13 @@ async fn block_delete_suggestion_resolves_through_an_active_session() -> anyhow:
         "Remove the obsolete heading."
     );
     let suggestion_id = review["suggestions"][0]["id"].as_str().unwrap().to_string();
+    wait_for_yjs_block_delete(&mut socket, &doc, &suggestion_id).await;
+    let entry =
+        wait_for_yjs_review_entry(&mut socket, &doc, "suggestions", &suggestion_id, |entry| {
+            entry["kind"] == "block_delete"
+        })
+        .await;
+    assert_eq!(entry["kind"], "block_delete");
 
     commit_block_transaction(
         &app,

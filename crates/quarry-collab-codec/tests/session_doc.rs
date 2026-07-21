@@ -74,6 +74,19 @@ fn suggestion(id: &str, block_id: &str, start: u32, end: u32, replacement: &str)
     }
 }
 
+fn block_delete(id: &str, block_id: &str) -> SessionAnchor {
+    SessionAnchor {
+        id: id.to_string(),
+        kind: SessionAnchorKind::BlockDelete {
+            by: Some("ai:codex".to_string()),
+            at_ms: 1_780_627_260_480,
+        },
+        block_id: block_id.to_string(),
+        start: 0,
+        end: 0,
+    }
+}
+
 fn fixture_rows() -> Vec<BlockRow> {
     let heading = block("b-heading", None, 0, "h1", "Session 👍 heading");
     let intro = BlockRow {
@@ -309,6 +322,32 @@ fn seeded_suggestion_marks_match_the_browser_shape() {
             }
         ])
     );
+}
+
+#[test]
+fn block_delete_round_trips_as_an_element_suggestion() {
+    let rows = vec![block("b1", None, 0, "h2", "Remove this heading")];
+    let anchors = vec![block_delete("s-block", "b1")];
+
+    let nodes = seed_session_nodes(&rows, &anchors).expect("seed builds");
+    assert_eq!(
+        serde_json::to_value(&nodes).unwrap(),
+        json!([{
+            "type": "h2",
+            "id": "b1",
+            "suggestion": {
+                "id": "s-block",
+                "type": "remove",
+                "userId": "ai:codex",
+                "createdAt": 1_780_627_260_480i64
+            },
+            "children": [{ "text": "Remove this heading" }]
+        }])
+    );
+
+    let projection = project(&nodes);
+    assert_eq!(projection.rows, rows);
+    assert_eq!(projection.anchors, anchors);
 }
 
 #[test]
@@ -1126,6 +1165,7 @@ fn review_meta_map_round_trips_through_the_doc() {
             ReviewMetaEntry {
                 by: "user".to_string(),
                 at: "2026-06-09T00:00:00.000Z".to_string(),
+                kind: None,
                 edited_at: None,
                 body: Some("Check this".to_string()),
                 re: None,
@@ -1140,6 +1180,7 @@ fn review_meta_map_round_trips_through_the_doc() {
             ReviewMetaEntry {
                 by: "ai:codex".to_string(),
                 at: "2026-06-09T00:00:01.000Z".to_string(),
+                kind: None,
                 edited_at: None,
                 body: None,
                 re: None,

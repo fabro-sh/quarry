@@ -14,7 +14,7 @@ import { collapseSubstitutions, expandSubstitutions } from './collapse-substitut
 import { serializeReviewMeta, splitEndmatter } from './endmatter';
 import { emptyReviewMeta, type ReviewMeta, type ReviewMetaEntry } from './rfm-types';
 import { serializeReviewBody } from './review-md-rules';
-import { readSuggestionMark } from './suggestion-mark';
+import { readBlockSuggestion, readSuggestionMark } from './suggestion-mark';
 
 interface ReviewDocument {
   value: Descendant[];
@@ -66,6 +66,8 @@ function collectIds(nodes: Descendant[], live: LiveIds): void {
     }
     const mark = readSuggestionMark(node);
     if (mark) live.suggestions.add(mark.id);
+    const block = readBlockSuggestion(node);
+    if (block) live.suggestions.add(block.id);
     const children = node.children;
     if (Array.isArray(children)) collectIds(children, live);
   }

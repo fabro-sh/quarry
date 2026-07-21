@@ -78,6 +78,18 @@ describe('review-store reducers', () => {
     expect(meta.suggestions.s1).toEqual({ by: 'AI', at });
   });
 
+  it('syncSuggestionsFromValue records block-delete semantics from an element', () => {
+    const value = [{
+      type: 'p',
+      suggestion: { id: 's1', type: 'remove', userId: 'user', createdAt: Date.parse(at) },
+      children: [{ text: 'remove me' }],
+    }];
+
+    const meta = syncSuggestionsFromValue(emptyReviewMeta(), value);
+
+    expect(meta.suggestions.s1).toEqual({ by: 'user', at, kind: 'block_delete' });
+  });
+
   it('mergeReviewMetaPatch preserves an injected root comment body for markdown serialization', () => {
     const value = [
       {

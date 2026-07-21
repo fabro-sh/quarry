@@ -29,6 +29,12 @@ describe('splitEndmatter', () => {
     expect(result.body).toBe('Intro.\n\n---\n\nMore prose with a divider above.');
     expect(result.meta?.suggestions.s1).toEqual({ by: 'AI', at: '2026-04-28T12:00:00.000Z' });
   });
+
+  it('preserves block-delete suggestion semantics', () => {
+    const md = 'Delete me.\n\n---\nsuggestions:\n  s1:\n    by: AI\n    at: "2026-04-28T12:00:00.000Z"\n    kind: block_delete\n';
+
+    expect(splitEndmatter(md).meta?.suggestions.s1.kind).toBe('block_delete');
+  });
 });
 
 describe('serializeReviewMeta', () => {

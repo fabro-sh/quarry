@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::Unsupported;
 use crate::markdown::block_markdown_to_slate_raw;
@@ -57,6 +57,9 @@ pub struct ReviewMetaEntry {
     pub by: String,
     #[serde(default)]
     pub at: String,
+    /// Semantics that cannot be reconstructed from an inline text range.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     #[serde(rename = "editedAt", skip_serializing_if = "Option::is_none")]
     pub edited_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -149,7 +152,7 @@ fn unknown_review_author() -> String {
 pub fn review_block_to_slate(markdown: &str, meta: &ReviewMeta) -> Result<Vec<Node>, Unsupported> {
     let expanded = expand_substitutions(markdown)?;
     let nodes = block_markdown_to_slate_raw(&expanded)?;
-    apply_critic_markup(nodes, false, meta)
+    apply_critic_markup(nodes, false, true, meta)
 }
 
 /// Convert a whole review document (body + trailing YAML endmatter) to Slate
@@ -293,6 +296,7 @@ fn fallback_review_entry(body: Option<String>) -> ReviewMetaEntry {
     ReviewMetaEntry {
         by: unknown_review_author(),
         at: String::new(),
+        kind: None,
         edited_at: None,
         body,
         re: None,
@@ -468,6 +472,7 @@ fn substitution() -> &'static Regex {
 fn apply_critic_markup(
     nodes: Vec<Node>,
     in_code: bool,
+    top_level: bool,
     meta: &ReviewMeta,
 ) -> Result<Vec<Node>, Unsupported> {
     let mut out = Vec::with_capacity(nodes.len());
@@ -479,10 +484,18 @@ fn apply_critic_markup(
                 children,
             } => {
                 let next_in_code = in_code || CODE_BLOCK_TYPES.contains(&ty.as_str());
+                let children = apply_critic_markup(children, next_in_code, false, meta)?;
+                let mut attrs = attrs;
+                if top_level
+                    && LEGACY_BLOCK_DELETE_TYPES.contains(&ty.as_str())
+                    && let Some(suggestion) = full_text_removal(&children)
+                {
+                    attrs.insert("suggestion".to_string(), suggestion);
+                }
                 out.push(Node::Element {
-                    children: apply_critic_markup(children, next_in_code, meta)?,
                     ty,
                     attrs,
+                    children,
                 });
             }
             Node::Text { text, marks } if !in_code && marks.get("code") != Some(&json!(true)) => {
@@ -492,6 +505,41 @@ fn apply_critic_markup(
         }
     }
     Ok(out)
+}
+
+const LEGACY_BLOCK_DELETE_TYPES: [&str; 8] =
+    ["p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote"];
+
+fn full_text_removal(children: &[Node]) -> Option<Value> {
+    fn visit(nodes: &[Node], found: &mut Option<(String, Value)>) -> bool {
+        for node in nodes {
+            match node {
+                Node::Text { text, marks } if !text.is_empty() => {
+                    let Some((id, suggestion)) = marks.iter().find_map(|(key, value)| {
+                        let id = key.strip_prefix("suggestion_")?;
+                        (value.get("type").and_then(Value::as_str) == Some("remove"))
+                            .then(|| (id.to_string(), value.clone()))
+                    }) else {
+                        return false;
+                    };
+                    if found.as_ref().is_some_and(|(found_id, _)| found_id != &id) {
+                        return false;
+                    }
+                    found.get_or_insert((id, suggestion));
+                }
+                Node::Element { ty, .. } if matches!(ty.as_str(), "img" | "wikilink") => {
+                    return false;
+                }
+                Node::Element { children, .. } if !visit(children, found) => return false,
+                _ => {}
+            }
+        }
+        true
+    }
+
+    let mut found = None;
+    visit(children, &mut found).then_some(())?;
+    found.map(|(_, suggestion)| suggestion)
 }
 
 /// Split one text leaf around CriticMarkup tokens, carrying the leaf's other
@@ -628,6 +676,7 @@ mod tests {
             ReviewMetaEntry {
                 by: by.to_string(),
                 at: at.to_string(),
+                kind: None,
                 edited_at: None,
                 body: None,
                 re: None,
@@ -768,6 +817,34 @@ mod tests {
     }
 
     #[test]
+    fn promotes_a_legacy_full_block_removal_to_an_element_suggestion() {
+        assert_eq!(
+            review_with(
+                "{--Delete this block--}{#s2}\n",
+                &suggestion_meta("s2", "ai:claude", AT)
+            ),
+            json!([
+                {
+                    "type": "p",
+                    "suggestion": {
+                        "id": "s2",
+                        "type": "remove",
+                        "userId": "ai:claude",
+                        "createdAt": AT_MS
+                    },
+                    "children": [
+                        {
+                            "text": "Delete this block",
+                            "suggestion": true,
+                            "suggestion_s2": { "id": "s2", "type": "remove", "userId": "ai:claude", "createdAt": AT_MS }
+                        }
+                    ]
+                }
+            ])
+        );
+    }
+
+    #[test]
     fn expands_substitution_into_paired_remove_and_insert() {
         assert_eq!(
             review_with(
@@ -893,6 +970,7 @@ mod tests {
             Some(&ReviewMetaEntry {
                 by: "unknown".to_string(),
                 at: String::new(),
+                kind: None,
                 edited_at: None,
                 body: Some("Needs work".to_string()),
                 re: None,
@@ -911,6 +989,7 @@ mod tests {
             Some(&ReviewMetaEntry {
                 by: "unknown".to_string(),
                 at: String::new(),
+                kind: None,
                 edited_at: None,
                 body: None,
                 re: None,

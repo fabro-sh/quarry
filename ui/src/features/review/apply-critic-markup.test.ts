@@ -20,6 +20,33 @@ describe('applyCriticMarkup', () => {
     expect((leaf.suggestion_s2 as { type: string }).type).toBe('remove');
   });
 
+  it('promotes a legacy full-block removal to Plate block-delete semantics', () => {
+    const { value, meta } = applyCriticMarkup(
+      [p([{ text: '{--delete the block--}{#s2}' }])],
+      { comments: {}, suggestions: { s2: { by: 'user', at: '2026-01-01T00:00:00.000Z' } } }
+    );
+
+    expect(value[0]).toMatchObject({
+      suggestion: {
+        id: 's2',
+        type: 'remove',
+        userId: 'user',
+        createdAt: Date.parse('2026-01-01T00:00:00.000Z'),
+      },
+    });
+    expect(meta.suggestions.s2.kind).toBe('block_delete');
+  });
+
+  it('does not promote a partial text removal to a block deletion', () => {
+    const { value, meta } = applyCriticMarkup(
+      [p([{ text: 'keep {--only this--}{#s2}' }])],
+      { comments: {}, suggestions: { s2: { by: 'user', at: 'x' } } }
+    );
+
+    expect(value[0]).not.toHaveProperty('suggestion');
+    expect(meta.suggestions.s2.kind).toBeUndefined();
+  });
+
   it('splits a substitution into a remove leaf and an insert leaf sharing the id', () => {
     const { value } = applyCriticMarkup([p([{ text: 'use {~~rough~>specific~~}{#s3}' }])], { comments: {}, suggestions: { s3: { by: 'AI', at: 'x' } } });
     const children = (value[0] as { children: Record<string, unknown>[] }).children;

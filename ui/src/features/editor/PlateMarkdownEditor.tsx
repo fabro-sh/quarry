@@ -1050,7 +1050,7 @@ function SuggestionActions({
 }) {
   const editor = useEditorRef();
   const suggestionId = useEditorSelector((ed) => {
-    const entry = ed.getApi(SuggestionPlugin).suggestion.node({ isText: true });
+    const entry = ed.getApi(SuggestionPlugin).suggestion.node();
     return entry ? ed.getApi(SuggestionPlugin).suggestion.nodeId(entry[0]) : undefined;
   }, []);
   if (!suggestionId) return null;
