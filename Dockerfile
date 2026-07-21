@@ -17,6 +17,7 @@ COPY ui/package.json ui/bun.lock ./
 RUN bun install --frozen-lockfile
 
 COPY ui/ ./
+COPY crates/quarry-collab-codec/block-capabilities.json /app/crates/quarry-collab-codec/block-capabilities.json
 RUN bun run build
 
 FROM rust:1-bookworm AS builder

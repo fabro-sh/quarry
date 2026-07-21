@@ -164,8 +164,9 @@ use crate::{
 use axum::http::StatusCode;
 use axum::response::Response;
 use quarry_collab_codec::{
-    Attrs, BlockRow, KNOWN_BLOCK_TYPES, LinkRange, MarkRun, TextDiff, block_rows_to_markdown,
-    is_utf16_boundary, utf16_len, utf16_text_diff_hunks,
+    Attrs, BlockContentModel, BlockRow, LinkRange, MarkRun, TextDiff, block_capabilities,
+    block_rows_to_markdown, carries_inline_content, is_known_block_type, is_utf16_boundary,
+    known_block_types, utf16_len, utf16_text_diff_hunks,
 };
 use quarry_core::{
     DocumentSource, QuarryError, WritePrecondition, now_timestamp, render_markdown_frontmatter,
@@ -956,12 +957,14 @@ impl ApplyContext {
         validate_block_type(block_type)?;
         validate_attrs(attrs)?;
         let attrs = normalize_list_attrs(attrs)?;
+        if !carries_inline_content(block_type)
+            && (!text.is_empty() || !marks.is_empty() || !links.is_empty())
+        {
+            return Err(GatewayError::invalid(format!(
+                "{block_type} blocks carry no flat text, marks, or links"
+            )));
+        }
         if block_type == "raw_markdown" {
-            if !text.is_empty() || !marks.is_empty() || !links.is_empty() {
-                return Err(GatewayError::invalid(
-                    "raw_markdown blocks carry no flat text, marks, or links",
-                ));
-            }
             validate_raw_markdown_attrs(&attrs)?;
         }
         validate_inline_ranges(text, marks, links)?;
@@ -1093,12 +1096,26 @@ impl ApplyContext {
                 normalize_list_attrs(attrs)
             })
             .transpose()?;
+        let has_children = self.model.has_children(block_id);
         let block = require_block_mut(&mut self.model, block_id)?;
         if block.block_type == "raw_markdown" || block_type == "raw_markdown" {
             return Err(GatewayError::invalid(
                 "set_block_type cannot convert to or from raw_markdown; \
                  replace the block instead",
             ));
+        }
+        let target = block_capabilities(block_type).expect("validated block type has capabilities");
+        if target.content != BlockContentModel::Text
+            && (!block.text.is_empty() || !block.marks.is_empty() || !block.links.is_empty())
+        {
+            return Err(GatewayError::invalid(format!(
+                "set_block_type cannot convert block {block_id} with flat content to {block_type}"
+            )));
+        }
+        if has_children && target.content != BlockContentModel::Container {
+            return Err(GatewayError::invalid(format!(
+                "set_block_type cannot convert container block {block_id} to {block_type}"
+            )));
         }
         block.block_type = block_type.to_string();
         if let Some(attrs) = attrs {
@@ -1638,10 +1655,10 @@ fn replace_block_text(
     }
     {
         let block = require_block_mut(&mut ctx.model, block_id)?;
-        if block.block_type == "raw_markdown" {
+        if !carries_inline_content(&block.block_type) {
             return Err(GatewayError::invalid(format!(
-                "block {block_id} is raw_markdown and carries no flat text; \
-                 use set_block_attrs to edit its markdown attribute"
+                "block {block_id} of type {} carries no flat text",
+                block.block_type
             )));
         }
     }
@@ -1742,7 +1759,7 @@ fn add_review_item(
     let Some(block) = ctx.model.blocks.get(block_id) else {
         return Err(GatewayError::block_deleted(block_id));
     };
-    if block.block_type == "raw_markdown" || ctx.model.has_children(block_id) {
+    if !carries_inline_content(&block.block_type) || ctx.model.has_children(block_id) {
         return Err(GatewayError::invalid(format!(
             "block {block_id} carries no inline text to anchor a review item"
         )));
@@ -1794,8 +1811,8 @@ fn require_block_mut<'a>(
         .ok_or_else(|| GatewayError::block_deleted(block_id))
 }
 
-/// A block that can carry inline content: exists, is not a container, and is
-/// not `raw_markdown`.
+/// A block that can carry inline content according to the shared capability
+/// registry and has no structural children.
 fn require_inline_block_mut<'a>(
     ctx: &'a mut ApplyContext,
     block_id: &str,
@@ -1806,9 +1823,10 @@ fn require_inline_block_mut<'a>(
         )));
     }
     let block = require_block_mut(&mut ctx.model, block_id)?;
-    if block.block_type == "raw_markdown" {
+    if !carries_inline_content(&block.block_type) {
         return Err(GatewayError::invalid(format!(
-            "block {block_id} is raw_markdown and carries no flat text"
+            "block {block_id} of type {} carries no flat text",
+            block.block_type
         )));
     }
     Ok(block)
@@ -1935,16 +1953,17 @@ fn suggestion_invalidated(item_id: &str) -> GatewayError {
 }
 
 fn validate_block_type(block_type: &str) -> Result<(), GatewayError> {
-    if KNOWN_BLOCK_TYPES.contains(&block_type) {
+    if is_known_block_type(block_type) {
         return Ok(());
     }
+    let valid_types = known_block_types().collect::<Vec<_>>().join(", ");
     Err(GatewayError::new(
         GatewayErrorCode::UnknownBlockType,
         format!(
             "unknown block_type \"{block_type}\"; valid types: {}. There is no list \
              block type — a list item is a \"p\" block with attrs \
              {{\"indent\": 1, \"listStyleType\": \"disc\" | \"decimal\" | \"todo\"}}",
-            KNOWN_BLOCK_TYPES.join(", ")
+            valid_types
         ),
     ))
 }
@@ -3429,6 +3448,70 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code, GatewayErrorCode::InvalidTransaction);
+    }
+
+    #[test]
+    fn capability_registry_rejects_flat_content_on_void_blocks() {
+        let state = state_with_rows(vec![paragraph("p1", 0, "Text")]);
+        let error = apply_ops(
+            &state,
+            &[op(json!({
+                "op": "insert_block",
+                "position": 1,
+                "block_type": "hr",
+                "text": "silently lost"
+            }))],
+            &actor(),
+            "test-tx",
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, GatewayErrorCode::InvalidTransaction);
+        assert!(error.message.contains("hr blocks carry no flat text"));
+    }
+
+    #[test]
+    fn capability_registry_rejects_text_edits_on_void_blocks() {
+        let mut horizontal_rule = paragraph("hr1", 0, "");
+        horizontal_rule.block_type = "hr".to_string();
+        let state = state_with_rows(vec![horizontal_rule]);
+        let error = apply_ops(
+            &state,
+            &[op(json!({
+                "op": "replace_block_content",
+                "block_id": "hr1",
+                "text": "silently lost"
+            }))],
+            &actor(),
+            "test-tx",
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, GatewayErrorCode::InvalidTransaction);
+        assert!(
+            error
+                .message
+                .contains("block hr1 of type hr carries no flat text")
+        );
+    }
+
+    #[test]
+    fn capability_registry_prevents_type_changes_that_would_drop_text() {
+        let state = state_with_rows(vec![paragraph("p1", 0, "Keep this")]);
+        let error = apply_ops(
+            &state,
+            &[op(json!({
+                "op": "set_block_type",
+                "block_id": "p1",
+                "block_type": "hr"
+            }))],
+            &actor(),
+            "test-tx",
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, GatewayErrorCode::InvalidTransaction);
+        assert!(error.message.contains("with flat content to hr"));
     }
 
     #[test]

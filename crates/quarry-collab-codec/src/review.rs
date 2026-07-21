@@ -17,12 +17,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::Unsupported;
+use crate::block_capabilities::{can_promote_full_text_delete, uses_literal_inline_syntax};
 use crate::markdown::block_markdown_to_slate_raw;
 use crate::slate::{Attrs, Node};
-
-/// Slate element types whose text is literal code; CriticMarkup inside them is
-/// left untouched. Mirrors `CODE_BLOCK_TYPES` in `apply-critic-markup.ts`.
-const CODE_BLOCK_TYPES: [&str; 2] = ["code_block", "code_line"];
 
 /// One combined matcher for every CriticMarkup family, ported from the `TOKEN`
 /// regex in `apply-critic-markup.ts`. JavaScript `.` does not cross line
@@ -483,11 +480,11 @@ fn apply_critic_markup(
                 attrs,
                 children,
             } => {
-                let next_in_code = in_code || CODE_BLOCK_TYPES.contains(&ty.as_str());
+                let next_in_code = in_code || uses_literal_inline_syntax(&ty);
                 let children = apply_critic_markup(children, next_in_code, false, meta)?;
                 let mut attrs = attrs;
                 if top_level
-                    && LEGACY_BLOCK_DELETE_TYPES.contains(&ty.as_str())
+                    && can_promote_full_text_delete(&ty)
                     && let Some(suggestion) = full_text_removal(&children)
                 {
                     attrs.insert("suggestion".to_string(), suggestion);
@@ -506,9 +503,6 @@ fn apply_critic_markup(
     }
     Ok(out)
 }
-
-const LEGACY_BLOCK_DELETE_TYPES: [&str; 8] =
-    ["p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote"];
 
 fn full_text_removal(children: &[Node]) -> Option<Value> {
     fn visit(nodes: &[Node], found: &mut Option<(String, Value)>) -> bool {

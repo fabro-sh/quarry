@@ -1,0 +1,20 @@
+[
+  { "type": "p", "content": "text", "inlineSyntax": "parsed", "promoteFullTextDelete": true },
+  { "type": "h1", "content": "text", "inlineSyntax": "parsed", "promoteFullTextDelete": true },
+  { "type": "h2", "content": "text", "inlineSyntax": "parsed", "promoteFullTextDelete": true },
+  { "type": "h3", "content": "text", "inlineSyntax": "parsed", "promoteFullTextDelete": true },
+  { "type": "h4", "content": "text", "inlineSyntax": "parsed", "promoteFullTextDelete": true },
+  { "type": "h5", "content": "text", "inlineSyntax": "parsed", "promoteFullTextDelete": true },
+  { "type": "h6", "content": "text", "inlineSyntax": "parsed", "promoteFullTextDelete": true },
+  { "type": "blockquote", "content": "text", "inlineSyntax": "parsed", "promoteFullTextDelete": true },
+  { "type": "code_block", "content": "container", "inlineSyntax": "literal", "promoteFullTextDelete": false },
+  { "type": "code_line", "content": "text", "inlineSyntax": "literal", "promoteFullTextDelete": false },
+  { "type": "mermaid", "content": "void", "inlineSyntax": "literal", "promoteFullTextDelete": false },
+  { "type": "table", "content": "container", "inlineSyntax": "parsed", "promoteFullTextDelete": false },
+  { "type": "tr", "content": "container", "inlineSyntax": "parsed", "promoteFullTextDelete": false },
+  { "type": "th", "content": "container", "inlineSyntax": "parsed", "promoteFullTextDelete": false },
+  { "type": "td", "content": "container", "inlineSyntax": "parsed", "promoteFullTextDelete": false },
+  { "type": "img", "content": "void", "inlineSyntax": "literal", "promoteFullTextDelete": false },
+  { "type": "hr", "content": "void", "inlineSyntax": "literal", "promoteFullTextDelete": false },
+  { "type": "raw_markdown", "content": "raw", "inlineSyntax": "literal", "promoteFullTextDelete": false }
+]

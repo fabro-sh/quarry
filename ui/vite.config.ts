@@ -27,6 +27,12 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // The browser and Rust codec consume the same block capability manifest.
+    // It lives one level above the UI package so Cargo includes it when the
+    // codec is packaged; allow Vite's dev server to serve that shared file.
+    fs: {
+      allow: [fileURLToPath(new URL('..', import.meta.url))],
+    },
     // Tailscale serve/funnel fronts the dev server under the tailnet
     // hostname; the leading dot allows any device on this tailnet.
     allowedHosts: ['.manatee-truck.ts.net', '.walleye-rainbow.ts.net'],

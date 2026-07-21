@@ -189,7 +189,7 @@ Edit ops:
 | `delete_block` | `{block_id}` (descendants too) |
 | `move_block` | `{block_id, position, parent_block_id?}` — placement only |
 | `replace_block_content` | `{block_id, text, marks?, links?}` |
-| `set_block_type` | `{block_id, block_type, attrs?}` — id/text/anchors preserved |
+| `set_block_type` | `{block_id, block_type, attrs?}` — compatible content/anchors preserved |
 | `set_block_attrs` | `{block_id, attrs}` — replaces attrs wholesale |
 | `add_mark` | `{block_id, start, end, marks}` — `marks` is an object, e.g. `{"bold": true}` |
 | `remove_mark` | `{block_id, start, end, marks}` — `marks` is a LIST of names, e.g. `["bold"]` |
@@ -201,6 +201,11 @@ children), `mermaid`, `table` (+ `tr`/`th`/`td` children), `img`, `hr`,
 item is a `p` block with attrs
 `{"indent": 1, "listStyleType": "disc" | "decimal" | "todo"}` (`indent`
 defaults to 1; `checked` for todos, `listStart` for ordered lists).
+
+Only text-backed blocks (`p`, headings, `blockquote`, and `code_line`) accept
+flat `text`, `marks`, or `links`. Container, void, and `raw_markdown` blocks
+reject those fields. `set_block_type` also rejects conversions that would
+discard flat text or container children.
 
 A mark run (in `/blocks` reads and in `insert_block`/`replace_block_content`
 `marks`) is `{start, end, marks}` where `marks` is an OBJECT keyed by mark

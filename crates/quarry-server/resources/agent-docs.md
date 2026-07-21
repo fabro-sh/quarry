@@ -219,8 +219,9 @@ the ack still use the recovery rules below.
   outside the changed span survive; anchors overlapping it orphan (comments)
   or invalidate (suggestions).
 - `set_block_type` — `{block_id, block_type, attrs?}`. Changes the type while
-  preserving id, text, marks, links, children, and anchors. Not valid to or
-  from `raw_markdown`.
+  preserving compatible content and anchors. It rejects conversions that
+  would discard flat text or container children, and is not valid to or from
+  `raw_markdown`.
 - `set_block_attrs` — `{block_id, attrs}`. Replaces attrs wholesale (for
   `raw_markdown` blocks, `attrs.markdown` must stay a non-empty string).
 - `add_mark` — `{block_id, start, end, marks}` over UTF-16 offsets. `marks`
@@ -238,6 +239,10 @@ type: a list item is a `p` row whose attrs carry the list shape —
 for todos and `listStart` for ordered lists (`indent` defaults to 1 when
 omitted). Copy unfamiliar shapes from a `GET /blocks` read of a document that
 already contains them.
+
+Only text-backed blocks (`p`, headings, `blockquote`, and `code_line`) accept
+flat `text`, `marks`, or `links`. Container, void, and `raw_markdown` blocks
+reject those fields rather than silently discarding them.
 
 Insert a paragraph after the current second block:
 

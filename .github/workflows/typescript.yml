@@ -5,11 +5,13 @@ on:
     branches: [main]
     paths:
       - "ui/**"
+      - "crates/quarry-collab-codec/block-capabilities.json"
       - "fixtures/**"
       - ".github/workflows/typescript.yml"
   pull_request:
     paths:
       - "ui/**"
+      - "crates/quarry-collab-codec/block-capabilities.json"
       - "fixtures/**"
       - ".github/workflows/typescript.yml"
   workflow_dispatch:

@@ -6,6 +6,7 @@ import {
   type TElement,
   type TText,
 } from 'platejs';
+import { usesLiteralInlineSyntax } from './block-capabilities';
 
 // Obsidian-style wiki-links. The Rust backend already parses `[[...]]` into
 // outgoing links; this mirrors its syntax in the editor so links render, round-
@@ -27,9 +28,6 @@ export interface WikiLinkNode extends TElement {
 // combination. `target` stops at the first `#`, `|`, or `]`; subpaths (`a/b`)
 // are part of the target. Mirrors the backend's split_alias / split_anchor.
 const WIKILINK_RE = /(!?)\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|([^\]]+))?]]/g;
-
-// Element types whose text is literal (no wiki-link parsing inside code).
-const OPAQUE_TYPES = new Set(['code_block', 'code_line']);
 
 function isText(node: Descendant): node is TText {
   return typeof (node as { text?: unknown }).text === 'string';
@@ -66,7 +64,7 @@ function splitChildren(children: Descendant[]): Descendant[] {
   for (const child of children) {
     if (isText(child)) {
       out.push(...splitText(child));
-    } else if (OPAQUE_TYPES.has((child as TElement).type) || (child as TElement).type === WIKILINK_KEY) {
+    } else if (usesLiteralInlineSyntax((child as TElement).type) || (child as TElement).type === WIKILINK_KEY) {
       out.push(child);
     } else {
       out.push({ ...child, children: splitChildren((child as TElement).children) });
@@ -109,7 +107,7 @@ const FIRST_WIKILINK_RE = /(!?)\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|([^\]]+))?]]/;
  */
 export function convertWikiLinkInText(editor: SlateEditor, node: TText, path: Path): boolean {
   if (node.code === true || !node.text.includes('[[')) return false;
-  if (editor.api.above({ at: path, match: (n) => OPAQUE_TYPES.has((n as TElement).type) })) return false;
+  if (editor.api.above({ at: path, match: (n) => usesLiteralInlineSyntax((n as TElement).type) })) return false;
   const match = FIRST_WIKILINK_RE.exec(node.text);
   if (!match) return false;
   const start = { offset: match.index, path };

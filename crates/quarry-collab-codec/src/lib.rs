@@ -1,3 +1,4 @@
+mod block_capabilities;
 mod markdown;
 mod markdown_writer;
 mod normalize;
@@ -10,8 +11,13 @@ mod text_diff;
 mod trailing;
 mod yjs_builder;
 
+pub use block_capabilities::{
+    BlockCapabilities, BlockContentModel, InlineSyntax, block_capabilities,
+    can_promote_full_text_delete, carries_inline_content, is_known_block_type, known_block_types,
+    uses_literal_inline_syntax,
+};
 pub use markdown::{block_markdown_to_slate, block_markdown_to_slate_raw, split_markdown_blocks};
-pub use markdown_writer::{KNOWN_BLOCK_TYPES, is_known_inline_mark, slate_to_markdown};
+pub use markdown_writer::{is_known_inline_mark, slate_to_markdown};
 pub use reconcile::{ReconcileBase, ReconcileConflict, ReconcileOp, ReconcileOutcome, reconcile};
 pub use review::{
     ReviewCommentMarker, ReviewDocument, ReviewMarkers, ReviewMeta, ReviewMetaEntry,

@@ -47,6 +47,25 @@ describe('applyCriticMarkup', () => {
     expect(meta.suggestions.s2.kind).toBeUndefined();
   });
 
+  it('still parses review markup inside inline elements not in the block registry', () => {
+    const { value } = applyCriticMarkup(
+      [
+        p([
+          { text: 'keep ' },
+          { type: 'a', url: '/target', children: [{ text: '{--linked--}{#s2}' }] },
+        ]),
+      ],
+      { comments: {}, suggestions: { s2: { by: 'user', at: 'x' } } }
+    );
+    const link = (value[0] as { children: Array<{ children?: Record<string, unknown>[] }> })
+      .children[1];
+
+    expect(link.children?.[0]).toMatchObject({
+      text: 'linked',
+      suggestion_s2: { id: 's2', type: 'remove' },
+    });
+  });
+
   it('splits a substitution into a remove leaf and an insert leaf sharing the id', () => {
     const { value } = applyCriticMarkup([p([{ text: 'use {~~rough~>specific~~}{#s3}' }])], { comments: {}, suggestions: { s3: { by: 'AI', at: 'x' } } });
     const children = (value[0] as { children: Record<string, unknown>[] }).children;
