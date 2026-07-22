@@ -1482,6 +1482,7 @@
         "type": "string",
         "enum": [
           "block_delete",
+          "markdown_insert",
           "insert",
           "delete",
           "remove",

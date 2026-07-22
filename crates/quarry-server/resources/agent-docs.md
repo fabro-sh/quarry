@@ -208,10 +208,17 @@ the ack still use the recovery rules below.
 
 ### Edit Operations
 
-- `insert_block` — `{position, block_type, text?, attrs?, marks?, links?, parent_block_id?}`.
+- `insert_block` — `{position, block_type, text?, attrs?, marks?, links?, parent_block_id?, block_id?}`.
   `position` is the sibling index under the parent (top level when omitted).
+  Supply `block_id` when later ops in the same transaction need to reference
+  the new block; otherwise Quarry deterministically mints it.
   `marks` uses the run shape above:
   `[{"start": 0, "end": 5, "marks": {"bold": true}}]`.
+- `insert_markdown` — `{after_block_id?, markdown}`. Parses a complete Markdown
+  fragment and inserts its top-level blocks after the named top-level block;
+  omit `after_block_id` for document start. Prefer this for headings, fenced
+  code, tables, lists, or multi-block additions so Quarry creates the complete
+  parent/child tree atomically.
 - `delete_block` — `{block_id}`. Deletes the block and its descendants.
 - `move_block` — `{block_id, position, parent_block_id?}`. Placement only:
   content, children, ids, and review anchors ride along.
@@ -283,8 +290,12 @@ as one atomic batch:
   deleting the block and all descendants. Use it instead of deleting all text
   when the block itself should disappear. The suggestion follows the block
   across text edits and moves; `body` is the rationale shown to the reviewer.
+- `suggestion.add_markdown` — `{after_block_id?, markdown, body?}`. Proposes a
+  structural multi-block insertion without changing the document. The review
+  panel shows the Markdown fragment and can accept or reject it. Omit
+  `after_block_id` to propose inserting at document start.
 - `suggestion.accept` — `{item_id}`. Applies the replacement or structural
-  block deletion, resolves the suggestion, and deletes its replies.
+  insertion/deletion, resolves the suggestion, and deletes its replies.
 - `suggestion.reject` — `{item_id}`. Resolves without changing text and deletes
   its replies (also the way to dismiss an orphaned/invalidated suggestion).
 

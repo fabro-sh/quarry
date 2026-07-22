@@ -188,6 +188,7 @@ export interface AgentDocumentSnapshot {
 
 export type AgentSuggestionKind =
   | 'block_delete'
+  | 'markdown_insert'
   | 'insert'
   | 'delete'
   | 'remove'
@@ -358,6 +359,13 @@ export type BlockTransactionOp =
       quote?: string;
     }
   | { op: 'suggestion.add_block_delete'; block_id: string; body?: string; quote?: string }
+  | { op: 'insert_markdown'; after_block_id?: string | null; markdown: string }
+  | {
+      op: 'suggestion.add_markdown';
+      after_block_id?: string | null;
+      markdown: string;
+      body?: string;
+    }
   | { op: 'suggestion.accept'; item_id: string }
   | { op: 'suggestion.reject'; item_id: string };
 

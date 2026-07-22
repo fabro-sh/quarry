@@ -185,7 +185,8 @@ Edit ops:
 
 | op | shape |
 |---|---|
-| `insert_block` | `{position, block_type, text?, attrs?, marks?, links?, parent_block_id?}` |
+| `insert_block` | `{position, block_type, text?, attrs?, marks?, links?, parent_block_id?, block_id?}` |
+| `insert_markdown` | `{after_block_id?, markdown}` — parses and inserts a multi-block fragment; omit the anchor for document start |
 | `delete_block` | `{block_id}` (descendants too) |
 | `move_block` | `{block_id, position, parent_block_id?}` — placement only |
 | `replace_block_content` | `{block_id, text, marks?, links?}` |
@@ -223,7 +224,8 @@ Review ops (same envelope, freely mixable with edit ops):
 | `comment.resolve` / `comment.delete` | `{item_id}` |
 | `suggestion.add` | `{block_id, start, end, replacement, body?, quote?}` |
 | `suggestion.add_block_delete` | `{block_id, body?, quote?}` — proposes deleting the block and descendants |
-| `suggestion.accept` | `{item_id}` — applies the replacement or block deletion and deletes suggestion replies |
+| `suggestion.add_markdown` | `{after_block_id?, markdown, body?}` — proposes a structural Markdown insertion |
+| `suggestion.accept` | `{item_id}` — applies the replacement or structural insertion/deletion and deletes suggestion replies |
 | `suggestion.reject` | `{item_id}` — resolves without changing text and deletes suggestion replies |
 
 Anchors are `{block_id, start, end}` offsets into the block's `text`; `quote`
@@ -234,12 +236,15 @@ Use `suggestion.add_block_delete` when the block itself should disappear;
 deleting all of a block's text leaves the empty block in place. A block-delete
 suggestion follows the block across text edits and moves. Its optional `body`
 is the rationale shown to the reviewer.
+Use `insert_markdown` or `suggestion.add_markdown` for headings, fenced code,
+tables, lists, and multi-block sections. Quarry parses the fragment and creates
+the full block tree atomically, avoiding hand-built container/child ids.
 
 ## Whole-Document Markdown Writes
 
-To author or restructure substantial content, skip block ops and `PUT` the
-whole document as Markdown — the server parses lists, marks, and links from
-ordinary syntax, so there is no block/attrs vocabulary to get wrong:
+To replace or restructure most of a document, `PUT` the whole document as
+Markdown. For a localized multi-block addition, prefer `insert_markdown` so
+unrelated blocks are not part of the write:
 
 ```bash
 curl -sS -X PUT "$DOC" \

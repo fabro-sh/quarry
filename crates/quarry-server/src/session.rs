@@ -1003,7 +1003,8 @@ fn doc_represented(item: &BlockReviewItem) -> bool {
             ) && item.start_offset < item.end_offset
         }
         BlockReviewKind::Suggestion => {
-            item.state == BlockReviewState::Open
+            !item.is_markdown_insert_suggestion()
+                && item.state == BlockReviewState::Open
                 && (item.is_block_delete_suggestion()
                     || item.start_offset < item.end_offset
                     || item
@@ -1161,7 +1162,7 @@ impl<'a> ReviewReconciliation<'a> {
         for (id, item) in self.prior {
             if !doc_represented(item) {
                 self.items
-                    .insert(id.clone(), clamped(item.clone(), &self.texts));
+                    .insert(id.clone(), clamped(item.clone(), &self.texts, self.now));
                 continue;
             }
             if item.parent_item_id.is_some() {
@@ -1191,7 +1192,7 @@ impl<'a> ReviewReconciliation<'a> {
                 };
                 updated.updated_at = self.now.to_string();
                 self.items
-                    .insert(id.to_string(), clamped(updated, &self.texts));
+                    .insert(id.to_string(), clamped(updated, &self.texts, self.now));
             }
             (None, None) => {
                 // Browser deleted the item (comment delete, suggestion
@@ -1386,7 +1387,17 @@ impl<'a> ReviewReconciliation<'a> {
 /// are dead anchors; an open block-deletion suggestion is the exception and
 /// already carries the stable `[0, 0)` block anchor. Clamp stale ranges rather
 /// than failing the whole checkpoint.
-fn clamped(mut item: BlockReviewItem, texts: &HashMap<&str, &str>) -> BlockReviewItem {
+fn clamped(mut item: BlockReviewItem, texts: &HashMap<&str, &str>, now: &str) -> BlockReviewItem {
+    if item.is_markdown_insert_suggestion() {
+        if item.block_id.is_empty() || texts.contains_key(item.block_id.as_str()) {
+            return item;
+        }
+        if item.state == BlockReviewState::Open {
+            item.state = BlockReviewState::Invalidated;
+            item.updated_at = now.to_string();
+        }
+        return item;
+    }
     let Some(text) = texts.get(item.block_id.as_str()) else {
         return item;
     };

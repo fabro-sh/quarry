@@ -2055,6 +2055,69 @@ async fn block_delete_suggestion_resolves_through_an_active_session() -> anyhow:
 }
 
 #[tokio::test]
+async fn markdown_insert_suggestion_survives_and_accepts_in_an_active_session() -> anyhow::Result<()>
+{
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "# Schema\n\nTail.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+    let tree = get_block_tree(&app, "live.md").await;
+    let heading_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    commit_block_transaction(
+        &app,
+        "live.md",
+        block_tx(
+            "tx-suggest-markdown-live",
+            serde_json::json!([{
+                "op": "suggestion.add_markdown",
+                "after_block_id": heading_id,
+                "markdown": "## Structured Values\n\nDetails.\n"
+            }]),
+        ),
+    )
+    .await;
+    let review = get_block_review(&app, "live.md", false).await;
+    assert_eq!(review["suggestions"][0]["kind"], "markdown_insert");
+    let suggestion_id = review["suggestions"][0]["id"].as_str().unwrap().to_string();
+
+    // A browser checkpoint must carry this server-side structural review
+    // item through even though it has no inline Yjs suggestion mark.
+    send_local_edit(&mut socket, &doc, |txn, _root| {
+        let heading = nth_block_text_in(txn, 0);
+        heading.insert(txn, 6, " v2");
+    })
+    .await;
+    wait_for_markdown_containing(&app, "live.md", "Schema v2").await;
+    let review = get_block_review(&app, "live.md", false).await;
+    assert_eq!(review["suggestions"][0]["id"], suggestion_id);
+    assert_eq!(review["suggestions"][0]["status"], "open");
+
+    commit_block_transaction(
+        &app,
+        "live.md",
+        block_tx(
+            "tx-accept-markdown-live",
+            serde_json::json!([{
+                "op": "suggestion.accept",
+                "item_id": suggestion_id
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(
+        get_document_markdown(&app, "live.md").await,
+        "# Schema v2\n\n## Structured Values\n\nDetails.\n\nTail.\n"
+    );
+    wait_for_yjs_plain_text(&mut socket, &doc, "Schema v2Structured ValuesDetails.Tail.").await;
+
+    socket.close(None).await.unwrap();
+    server.abort();
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn browser_created_comment_checkpoints_into_review_rows() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Browser comments here.\n").await;

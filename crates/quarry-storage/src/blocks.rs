@@ -170,11 +170,27 @@ pub struct BlockReviewItem {
     pub updated_at: String,
 }
 
+/// `context_after` discriminator for a structural suggestion whose
+/// `replacement` is a Markdown fragment and whose `block_id` is the
+/// top-level block after which the fragment should be inserted (empty means
+/// document start). Review items already use kind-specific payload columns;
+/// versioning this marker avoids guessing from an inline replacement.
+pub const MARKDOWN_INSERT_SUGGESTION_CONTEXT: &str = "quarry:markdown_insert:v1";
+
 impl BlockReviewItem {
+    /// Whether this suggestion proposes inserting a parsed Markdown fragment
+    /// between top-level blocks rather than replacing inline text.
+    pub fn is_markdown_insert_suggestion(&self) -> bool {
+        self.kind == BlockReviewKind::Suggestion
+            && self.context_after.as_deref() == Some(MARKDOWN_INSERT_SUGGESTION_CONTEXT)
+    }
+
     /// Whether this suggestion proposes deleting its anchored block and
     /// descendants rather than replacing an inline text range.
     pub fn is_block_delete_suggestion(&self) -> bool {
-        self.kind == BlockReviewKind::Suggestion && self.replacement.is_none()
+        self.kind == BlockReviewKind::Suggestion
+            && self.replacement.is_none()
+            && !self.is_markdown_insert_suggestion()
     }
 }
 
@@ -1824,6 +1840,25 @@ fn validate_review_items_against_rows(rows: &[BlockRow], items: &[BlockReviewIte
             // row-anchored offset validation does not apply.
             continue;
         }
+        let markdown_insert_reply = is_reply_to_open_markdown_insert_suggestion(item, &items_by_id);
+        if item.is_markdown_insert_suggestion() || markdown_insert_reply {
+            if item.start_offset != 0 || item.end_offset != 0 {
+                return Err(QuarryError::InvalidInput(format!(
+                    "Markdown-insertion suggestion thread {} must use the structural anchor [0, 0)",
+                    item.id
+                )));
+            }
+            if item.state == BlockReviewState::Open
+                && !item.block_id.is_empty()
+                && !texts.contains_key(item.block_id.as_str())
+            {
+                return Err(QuarryError::InvalidInput(format!(
+                    "open Markdown-insertion suggestion thread {} anchors missing block {}",
+                    item.id, item.block_id
+                )));
+            }
+            continue;
+        }
         let Some(text) = texts.get(item.block_id.as_str()) else {
             if item.state == BlockReviewState::Open {
                 return Err(QuarryError::InvalidInput(format!(
@@ -1875,6 +1910,7 @@ fn validate_review_items_against_rows(rows: &[BlockRow], items: &[BlockReviewIte
 fn is_open_insertion_suggestion(item: &BlockReviewItem) -> bool {
     item.kind == BlockReviewKind::Suggestion
         && item.state == BlockReviewState::Open
+        && !item.is_markdown_insert_suggestion()
         && item.start_offset == item.end_offset
         && item
             .replacement
@@ -1929,6 +1965,28 @@ fn is_reply_to_open_block_delete_suggestion(
         && parent.block_id == item.block_id
         && parent.start_offset == item.start_offset
         && parent.end_offset == item.end_offset
+}
+
+fn is_reply_to_open_markdown_insert_suggestion(
+    item: &BlockReviewItem,
+    items_by_id: &HashMap<&str, &BlockReviewItem>,
+) -> bool {
+    if item.kind != BlockReviewKind::Comment || item.parent_item_id.is_none() {
+        return false;
+    }
+    let Some(parent) = item
+        .parent_item_id
+        .as_deref()
+        .and_then(|parent_id| items_by_id.get(parent_id))
+    else {
+        return false;
+    };
+    parent.is_markdown_insert_suggestion()
+        && parent.state == BlockReviewState::Open
+        && parent.document_id == item.document_id
+        && parent.block_id == item.block_id
+        && item.start_offset == 0
+        && item.end_offset == 0
 }
 
 async fn block_transaction_conn(

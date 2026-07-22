@@ -73,6 +73,13 @@
 //!   `insert_block` and `set_block_attrs` require raw_markdown attrs to
 //!   carry a non-empty string `markdown` key (attrs replace wholesale, so a
 //!   missing key would silently erase the block's content).
+//! - `insert_markdown` parses one Markdown fragment and inserts its complete
+//!   block tree between top-level blocks (`after_block_id = null` means
+//!   document start). `suggestion.add_markdown` stores the same fragment as a
+//!   structural review item; accepting it runs through `insert_markdown`, and
+//!   rejecting it leaves document content untouched. Structural Markdown
+//!   suggestions live in the rows-backed review projection rather than as an
+//!   inline Yjs mark, so browser checkpoints pass them through unchanged.
 //! - `set_link` replaces every link range that intersects `[start, end)`;
 //!   `url: null` just removes them. Partial overlaps are not trimmed.
 //! - `comment.edit` updates the body and `updated_at` of an open comment root
@@ -105,7 +112,8 @@
 //!   ops in the same transaction, not against the pre-transaction state.
 //! - `changed_block_ids` lists every block an op directly targeted: content,
 //!   attrs, or type changes, the moved block of `move_block`, every deleted
-//!   block (including descendants), inserted blocks, and the block rewritten
+//!   block (including descendants), inserted blocks (including every row
+//!   parsed by `insert_markdown`), and the block rewritten
 //!   by `suggestion.accept`. Siblings displaced by an insert/move/delete
 //!   (position renumbering) are NOT listed; review-metadata-only ops touch
 //!   no blocks. The list is sorted and deduplicated.
@@ -166,7 +174,7 @@ use axum::response::Response;
 use quarry_collab_codec::{
     Attrs, BlockContentModel, BlockRow, LinkRange, MarkRun, TextDiff, block_capabilities,
     block_rows_to_markdown, carries_inline_content, is_known_block_type, is_utf16_boundary,
-    known_block_types, utf16_len, utf16_text_diff_hunks,
+    known_block_types, markdown_to_block_rows, utf16_len, utf16_text_diff_hunks,
 };
 use quarry_core::{
     DocumentSource, QuarryError, WritePrecondition, now_timestamp, render_markdown_frontmatter,
@@ -174,7 +182,7 @@ use quarry_core::{
 use quarry_storage::{
     BlockMutationCommit, BlockMutationOutcome, BlockMutationState, BlockReviewItem,
     BlockReviewKind, BlockReviewState, BlockTransactionRecord, DocumentKind, DocumentScopeRef,
-    document_kind,
+    MARKDOWN_INSERT_SUGGESTION_CONTEXT, document_kind,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
@@ -185,8 +193,9 @@ use uuid::Uuid;
 /// Operations agents may send through the public semantic transaction API.
 /// `conflict.add` is deliberately excluded: whole-document reconcilers use it
 /// internally to persist merge-conflict review items.
-pub(crate) const PUBLIC_TRANSACTION_OPERATIONS: [&str; 18] = [
+pub(crate) const PUBLIC_TRANSACTION_OPERATIONS: [&str; 20] = [
     "insert_block",
+    "insert_markdown",
     "delete_block",
     "move_block",
     "replace_block_content",
@@ -202,6 +211,7 @@ pub(crate) const PUBLIC_TRANSACTION_OPERATIONS: [&str; 18] = [
     "comment.delete",
     "suggestion.add",
     "suggestion.add_block_delete",
+    "suggestion.add_markdown",
     "suggestion.accept",
     "suggestion.reject",
 ];
@@ -415,6 +425,13 @@ pub(crate) enum BlockOp {
         #[serde(default)]
         links: Vec<LinkRange>,
     },
+    /// Parses and inserts a complete Markdown fragment between top-level
+    /// blocks. `after_block_id = None` means document start.
+    InsertMarkdown {
+        #[serde(default)]
+        after_block_id: Option<String>,
+        markdown: String,
+    },
     DeleteBlock {
         block_id: String,
     },
@@ -506,6 +523,14 @@ pub(crate) enum BlockOp {
         body: Option<String>,
         #[serde(default)]
         quote: Option<String>,
+    },
+    #[serde(rename = "suggestion.add_markdown")]
+    SuggestionAddMarkdown {
+        #[serde(default)]
+        after_block_id: Option<String>,
+        markdown: String,
+        #[serde(default)]
+        body: Option<String>,
     },
     #[serde(rename = "suggestion.accept")]
     SuggestionAccept {
@@ -985,6 +1010,63 @@ impl ApplyContext {
         Ok(())
     }
 
+    fn markdown_insert_position(
+        &self,
+        after_block_id: &Option<String>,
+    ) -> Result<u32, GatewayError> {
+        let Some(after_block_id) = after_block_id else {
+            return Ok(0);
+        };
+        let Some(block) = self.model.blocks.get(after_block_id) else {
+            return Err(GatewayError::block_deleted(after_block_id));
+        };
+        if block.parent.is_some() {
+            return Err(GatewayError::invalid(format!(
+                "after_block_id {after_block_id} must name a top-level block"
+            )));
+        }
+        let siblings = self
+            .model
+            .children
+            .get(&None)
+            .ok_or_else(|| GatewayError::invalid("document has no top-level block sequence"))?;
+        let position = siblings
+            .iter()
+            .position(|block_id| block_id == after_block_id)
+            .ok_or_else(|| GatewayError::block_deleted(after_block_id))?;
+        Ok(position as u32 + 1)
+    }
+
+    fn insert_markdown(
+        &mut self,
+        after_block_id: &Option<String>,
+        markdown: &str,
+    ) -> Result<(), GatewayError> {
+        let insertion_position = self.markdown_insert_position(after_block_id)?;
+        let rows = parse_markdown_fragment(markdown, || self.minted.mint())?;
+        let mut root_offset = 0u32;
+        for row in rows {
+            let position = if row.parent_block_id.is_none() {
+                let position = insertion_position + root_offset;
+                root_offset += 1;
+                position
+            } else {
+                row.position
+            };
+            self.insert_block(
+                &Some(row.block_id),
+                &row.parent_block_id,
+                position,
+                &row.block_type,
+                &row.attrs,
+                &row.text,
+                &row.marks,
+                &row.links,
+            )?;
+        }
+        Ok(())
+    }
+
     fn delete_block(&mut self, block_id: &str) -> Result<(), GatewayError> {
         self.delete_block_except(block_id, None)
     }
@@ -1354,6 +1436,66 @@ impl ApplyContext {
         Ok(())
     }
 
+    fn add_markdown_suggestion(
+        &mut self,
+        after_block_id: &Option<String>,
+        markdown: &str,
+        body: &Option<String>,
+    ) -> Result<(), GatewayError> {
+        self.markdown_insert_position(after_block_id)?;
+        let mut fragment_id = 0u32;
+        parse_markdown_fragment(markdown, || {
+            let id = format!("fragment-{fragment_id}");
+            fragment_id += 1;
+            id
+        })?;
+
+        let (block_id, quote) = match after_block_id {
+            Some(block_id) => {
+                let block = self
+                    .model
+                    .blocks
+                    .get(block_id)
+                    .ok_or_else(|| GatewayError::block_deleted(block_id))?;
+                let quote = if block.block_type == "raw_markdown" {
+                    block
+                        .attrs
+                        .get("markdown")
+                        .and_then(JsonValue::as_str)
+                        .unwrap_or("raw Markdown block")
+                        .to_string()
+                } else if block.text.is_empty() {
+                    format!("{} block", block.block_type)
+                } else {
+                    block.text.clone()
+                };
+                (block_id.clone(), quote)
+            }
+            None => (String::new(), "Document start".to_string()),
+        };
+        let id = self.minted.mint();
+        require_unused_item_id(self, &id)?;
+        self.items.push(BlockReviewItem {
+            id,
+            document_id: self.document_id.clone(),
+            block_id,
+            kind: BlockReviewKind::Suggestion,
+            start_offset: 0,
+            end_offset: 0,
+            body: body.clone(),
+            replacement: Some(markdown.to_string()),
+            author: Some(self.author.clone()),
+            state: BlockReviewState::Open,
+            quote: Some(quote),
+            context_before: None,
+            context_after: Some(MARKDOWN_INSERT_SUGGESTION_CONTEXT.to_string()),
+            parent_item_id: None,
+            created_at: self.now.clone(),
+            updated_at: self.now.clone(),
+        });
+        Ok(())
+    }
+
     fn accept_suggestion(&mut self, item_id: &str) -> Result<(), GatewayError> {
         let suggestion = require_suggestion(self, item_id)?;
         match suggestion.state {
@@ -1368,26 +1510,36 @@ impl ApplyContext {
                 return Err(suggestion_invalidated(item_id));
             }
         }
+        let markdown_insert = suggestion.is_markdown_insert_suggestion();
         let block_id = suggestion.block_id.clone();
         let replacement = suggestion.replacement.clone();
         let (start, end) = (suggestion.start_offset, suggestion.end_offset);
-        let replacement_len = match replacement {
-            Some(replacement) => {
-                let Some(block) = self.model.blocks.get(&block_id) else {
-                    return Err(suggestion_invalidated(item_id));
-                };
-                let new_text = format!(
-                    "{}{}{}",
-                    utf16_slice(&block.text, 0, start),
-                    replacement,
-                    utf16_slice(&block.text, end, utf16_len(&block.text)),
-                );
-                replace_block_text(self, &block_id, new_text, Some(item_id))?;
-                Some(utf16_len(&replacement))
-            }
-            None => {
-                self.delete_block_except(&block_id, Some(item_id))?;
-                None
+        let replacement_len = if markdown_insert {
+            let markdown = replacement
+                .as_deref()
+                .ok_or_else(|| suggestion_invalidated(item_id))?;
+            let after_block_id = (!block_id.is_empty()).then_some(block_id.clone());
+            self.insert_markdown(&after_block_id, markdown)?;
+            None
+        } else {
+            match replacement {
+                Some(replacement) => {
+                    let Some(block) = self.model.blocks.get(&block_id) else {
+                        return Err(suggestion_invalidated(item_id));
+                    };
+                    let new_text = format!(
+                        "{}{}{}",
+                        utf16_slice(&block.text, 0, start),
+                        replacement,
+                        utf16_slice(&block.text, end, utf16_len(&block.text)),
+                    );
+                    replace_block_text(self, &block_id, new_text, Some(item_id))?;
+                    Some(utf16_len(&replacement))
+                }
+                None => {
+                    self.delete_block_except(&block_id, Some(item_id))?;
+                    None
+                }
             }
         };
         let now = self.now.clone();
@@ -1461,6 +1613,30 @@ impl ApplyContext {
         });
         Ok(())
     }
+}
+
+fn parse_markdown_fragment(
+    markdown: &str,
+    mint_block_id: impl FnMut() -> String,
+) -> Result<Vec<BlockRow>, GatewayError> {
+    let rows = markdown_to_block_rows(markdown, mint_block_id).map_err(|unsupported| {
+        GatewayError::new(
+            GatewayErrorCode::UnsupportedMarkdown,
+            unsupported.to_string(),
+        )
+    })?;
+    if rows.is_empty() {
+        return Err(GatewayError::invalid(
+            "markdown fragment must contain at least one block",
+        ));
+    }
+    block_rows_to_markdown(&rows).map_err(|unsupported| {
+        GatewayError::new(
+            GatewayErrorCode::UnsupportedMarkdown,
+            unsupported.to_string(),
+        )
+    })?;
+    Ok(rows)
 }
 
 /// Ids the apply engine mints (inserted blocks without a caller id, review
@@ -1562,6 +1738,10 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
             marks,
             links,
         ),
+        BlockOp::InsertMarkdown {
+            after_block_id,
+            markdown,
+        } => ctx.insert_markdown(after_block_id, markdown),
         BlockOp::DeleteBlock { block_id } => ctx.delete_block(block_id),
         BlockOp::MoveBlock {
             block_id,
@@ -1622,6 +1802,11 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
             body,
             quote,
         } => ctx.add_block_delete_suggestion(block_id, body, quote),
+        BlockOp::SuggestionAddMarkdown {
+            after_block_id,
+            markdown,
+            body,
+        } => ctx.add_markdown_suggestion(after_block_id, markdown, body),
         BlockOp::SuggestionAccept { item_id } => ctx.accept_suggestion(item_id),
         BlockOp::SuggestionReject { item_id } => ctx.reject_suggestion(item_id),
         BlockOp::ConflictAdd {
@@ -1691,21 +1876,22 @@ fn replace_block_text(
             })
         })
         .collect();
-    let block_delete_threads: BTreeSet<String> = ctx
+    let structural_threads: BTreeSet<String> = ctx
         .items
         .iter()
-        .filter(|item| item.is_block_delete_suggestion())
+        .filter(|item| item.is_block_delete_suggestion() || item.is_markdown_insert_suggestion())
         .map(|item| item.id.clone())
         .collect();
     for item in &mut ctx.items {
-        let belongs_to_block_delete_thread = item.is_block_delete_suggestion()
+        let belongs_to_structural_thread = item.is_block_delete_suggestion()
+            || item.is_markdown_insert_suggestion()
             || item
                 .parent_item_id
                 .as_ref()
-                .is_some_and(|parent_id| block_delete_threads.contains(parent_id));
+                .is_some_and(|parent_id| structural_threads.contains(parent_id));
         if item.block_id != block_id
             || protected_item == Some(item.id.as_str())
-            || belongs_to_block_delete_thread
+            || belongs_to_structural_thread
         {
             continue;
         }
@@ -2839,11 +3025,14 @@ pub(crate) fn review_response_from_rows(
         .filter(|item| include_resolved || item.state != BlockReviewState::Resolved)
         .map(|item| {
             let block_delete = item.is_block_delete_suggestion();
+            let markdown_insert = item.is_markdown_insert_suggestion();
             let replacement = item.replacement.clone().unwrap_or_default();
             AgentReviewSuggestion {
                 id: item.id.clone(),
                 status: item.state.as_str().to_string(),
-                kind: if block_delete {
+                kind: if markdown_insert {
+                    AgentSuggestionKind::MarkdownInsert
+                } else if block_delete {
                     AgentSuggestionKind::BlockDelete
                 } else if replacement.is_empty() {
                     AgentSuggestionKind::Delete
@@ -2857,7 +3046,9 @@ pub(crate) fn review_response_from_rows(
                 content: replacement.clone(),
                 body: item.body.clone(),
                 preview: AgentSuggestionPreview {
-                    before: if block_delete {
+                    before: if markdown_insert {
+                        String::new()
+                    } else if block_delete {
                         texts
                             .get(item.block_id.as_str())
                             .filter(|text| !text.is_empty())

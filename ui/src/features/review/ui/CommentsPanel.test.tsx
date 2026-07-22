@@ -223,6 +223,41 @@ describe('CommentsPanel', () => {
     );
   });
 
+  it('shows and resolves an open Markdown-insertion suggestion', async () => {
+    const onResolveSuggestion = vi.fn().mockResolvedValue(undefined);
+    const suggestion: AgentReviewSuggestion = {
+      id: 's-markdown',
+      status: 'open',
+      kind: 'markdown_insert',
+      by: 'agent',
+      at,
+      ref: { ordinal: 0 },
+      quote: 'Schema',
+      content: '## Structured Values\n\nDetails.\n',
+      body: 'Add the missing section.',
+      preview: { before: '', after: '## Structured Values\n\nDetails.\n' },
+      replies: [],
+    };
+    render(
+      <CommentsPanel
+        onResolveSuggestion={onResolveSuggestion}
+        review={review({ suggestions: [suggestion] })}
+      />
+    );
+
+    const item = screen.getByTestId('comments-panel-suggestion');
+    expect(within(item).getByText('Insert Markdown:')).toBeInTheDocument();
+    expect(within(item).getByText(/## Structured Values/)).toBeInTheDocument();
+    expect(within(item).getByText('Add the missing section.')).toBeInTheDocument();
+
+    fireEvent.click(within(item).getByTestId('accept-markdown-insert-suggestion'));
+
+    expect(onResolveSuggestion).toHaveBeenCalledWith('s-markdown', 'accept');
+    await waitFor(() =>
+      expect(within(item).getByTestId('accept-markdown-insert-suggestion')).toBeEnabled()
+    );
+  });
+
   it('shows diff3 conflict review items with kept and incoming text', () => {
     render(<CommentsPanel review={review({ conflicts: [conflictItem()] })} />);
 

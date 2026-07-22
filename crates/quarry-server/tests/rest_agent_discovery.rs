@@ -324,6 +324,16 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() -> anyhow::R
             .iter()
             .any(|operation| operation == "suggestion.add_block_delete")
     );
+    assert!(
+        transaction_operations
+            .iter()
+            .any(|operation| operation == "insert_markdown")
+    );
+    assert!(
+        transaction_operations
+            .iter()
+            .any(|operation| operation == "suggestion.add_markdown")
+    );
     let limitations = body["limitations"]
         .as_array()
         .context("discovery should expose limitations")?;

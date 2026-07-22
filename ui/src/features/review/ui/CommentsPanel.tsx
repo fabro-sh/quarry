@@ -124,6 +124,9 @@ function SuggestionItem({
 }) {
   const [resolving, setResolving] = useState<SuggestionResolution | null>(null);
   const blockDelete = suggestion.kind === 'block_delete';
+  const markdownInsert = suggestion.kind === 'markdown_insert';
+  const structural = blockDelete || markdownInsert;
+  const structuralAction = blockDelete ? 'block-delete' : 'markdown-insert';
 
   async function resolve(resolution: SuggestionResolution) {
     if (!onResolve || resolving) return;
@@ -149,7 +152,14 @@ function SuggestionItem({
         />
         <StatusBadge status={suggestion.status} />
       </div>
-      {blockDelete ? (
+      {markdownInsert ? (
+        <div className="mt-2 text-sm text-body">
+          <span className="text-muted">Insert Markdown:</span>
+          <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-raised p-2 font-mono text-xs text-body">
+            {suggestion.preview.after}
+          </pre>
+        </div>
+      ) : blockDelete ? (
         <p className="mt-2 text-sm text-body">
           <span className="text-muted">Delete block:</span>{' '}
           <del className="text-danger/80">{suggestion.preview.before}</del>
@@ -177,11 +187,11 @@ function SuggestionItem({
         </div>
       ) : null}
 
-      {blockDelete && suggestion.status === 'open' && onResolve ? (
+      {structural && suggestion.status === 'open' && onResolve ? (
         <div className="mt-3 flex justify-end gap-1">
           <button
             className="rounded px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-well hover:text-body disabled:opacity-50"
-            data-testid="reject-block-delete-suggestion"
+            data-testid={`reject-${structuralAction}-suggestion`}
             disabled={resolving !== null}
             onClick={() => void resolve('reject')}
             type="button"
@@ -189,13 +199,18 @@ function SuggestionItem({
             Reject
           </button>
           <button
-            className="rounded bg-danger px-2 py-1 text-xs font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
-            data-testid="accept-block-delete-suggestion"
+            className={cn(
+              'rounded px-2 py-1 text-xs font-medium transition-colors disabled:opacity-50',
+              blockDelete
+                ? 'bg-danger text-white hover:opacity-90'
+                : 'bg-accent text-on-accent hover:bg-accent-strong'
+            )}
+            data-testid={`accept-${structuralAction}-suggestion`}
             disabled={resolving !== null}
             onClick={() => void resolve('accept')}
             type="button"
           >
-            Delete block
+            {blockDelete ? 'Delete block' : 'Insert'}
           </button>
         </div>
       ) : null}
@@ -306,7 +321,9 @@ export function CommentsPanel({
   // suggestions have no text mark, so they remain actionable in this panel.
   const suggestions = (review?.suggestions ?? []).filter(
     (suggestion) =>
-      (suggestion.kind === 'block_delete' || suggestion.status !== 'open') &&
+      (suggestion.kind === 'block_delete' ||
+        suggestion.kind === 'markdown_insert' ||
+        suggestion.status !== 'open') &&
       matchesFilter(suggestion.status, filter)
   );
   const conflicts = (review?.conflicts ?? []).filter((conflict) =>

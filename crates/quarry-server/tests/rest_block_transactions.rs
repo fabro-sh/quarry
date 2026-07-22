@@ -302,6 +302,48 @@ async fn block_transaction_insert_block_commits_one_version_and_emits_events() -
 }
 
 #[tokio::test]
+async fn insert_markdown_adds_a_structural_fragment_atomically() -> anyhow::Result<()> {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "# Schema\n\nTail.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let heading_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+    let versions_before = raw_version_count(&app, "doc.md").await;
+
+    let ack = commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-insert-markdown",
+            serde_json::json!([{
+                "op": "insert_markdown",
+                "after_block_id": heading_id,
+                "markdown": "## Structured Values\n\n### context_snapshot\n\n```json\n{\"event\":\"created\"}\n```\n"
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(ack["changed_block_ids"].as_array().unwrap().len(), 4);
+    assert_eq!(raw_version_count(&app, "doc.md").await, versions_before + 1);
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "# Schema\n\n## Structured Values\n\n### context\\_snapshot\n\n```json\n{\"event\":\"created\"}\n```\n\nTail.\n"
+    );
+    let after = get_block_tree(&app, "doc.md").await;
+    let block_types: Vec<&str> = after["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|block| block["block_type"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        block_types,
+        ["h1", "h2", "h3", "code_block", "code_line", "p"]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn block_transaction_replace_block_content_preserves_block_identity() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Original text.\n").await;
@@ -1133,6 +1175,86 @@ async fn block_delete_suggestion_accept_removes_the_block_instead_of_emptying_it
     assert_eq!(review["suggestions"][0]["status"], "resolved");
     assert_eq!(review["suggestions"][0]["kind"], "block_delete");
     assert!(review["suggestions"][0].get("anchor").is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn markdown_insert_suggestion_is_reviewable_and_accepts_structurally() -> anyhow::Result<()> {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "# Schema\n\nTail.\n").await;
+    let tree = get_block_tree(&app, "doc.md").await;
+    let heading_id = tree["blocks"][0]["block_id"].as_str().unwrap().to_string();
+    let fragment = "## Structured Values\n\nDetails.\n";
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-suggest-markdown",
+            serde_json::json!([{
+                "op": "suggestion.add_markdown",
+                "after_block_id": heading_id,
+                "markdown": fragment,
+                "body": "Add the missing schema section."
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "# Schema\n\nTail.\n"
+    );
+
+    let review = get_block_review(&app, "doc.md", false).await;
+    let suggestion = &review["suggestions"][0];
+    assert_eq!(suggestion["kind"], "markdown_insert");
+    assert_eq!(suggestion["content"], fragment);
+    assert_eq!(suggestion["preview"]["before"], "");
+    assert_eq!(suggestion["preview"]["after"], fragment);
+    assert_eq!(suggestion["body"], "Add the missing schema section.");
+    let suggestion_id = suggestion["id"].as_str().unwrap().to_string();
+
+    commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-reply-markdown",
+            serde_json::json!([{
+                "op": "comment.reply",
+                "item_id": suggestion_id,
+                "body": "This is the right location."
+            }]),
+        ),
+    )
+    .await;
+
+    let ack = commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-accept-markdown",
+            serde_json::json!([{
+                "op": "suggestion.accept",
+                "item_id": suggestion_id
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(ack["changed_block_ids"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        get_document_markdown(&app, "doc.md").await,
+        "# Schema\n\n## Structured Values\n\nDetails.\n\nTail.\n"
+    );
+    let review = get_block_review(&app, "doc.md", true).await;
+    assert_eq!(review["suggestions"][0]["status"], "resolved");
+    assert_eq!(review["suggestions"][0]["kind"], "markdown_insert");
+    assert!(
+        review["suggestions"][0]["replies"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
     Ok(())
 }

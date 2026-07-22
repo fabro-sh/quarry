@@ -176,6 +176,7 @@ pub(crate) struct AgentSuggestionPreview {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AgentSuggestionKind {
     BlockDelete,
+    MarkdownInsert,
     Insert,
     Delete,
     Remove,
