@@ -66,6 +66,8 @@ async fn onboarding_documents_render_the_forwarded_origin() {
     assert!(body.contains("replace the entire marked block"));
     assert!(body.contains("legacy unmarked `## Quarry` section"));
     assert!(body.contains("verify that each marker appears exactly once"));
+    assert!(body.contains("A concrete imperative comment is an edit"));
+    assert!(body.contains("Do not merely promise the requested edit"));
     assert!(!body.contains("__QUARRY_ORIGIN__"));
 }
 
@@ -93,7 +95,10 @@ async fn prompt_document_teaches_the_review_workflow() {
     assert!(body.contains("Follow them exactly, and do not edit until the user asks."));
     assert!(body.contains("suggestion.add"));
     assert!(body.contains("suggestion.add_block_delete"));
-    assert!(body.contains("rather than editing directly"));
+    assert!(body.contains("A concrete imperative comment"));
+    assert!(body.contains("authorizes that requested edit"));
+    assert!(body.contains("Do not answer an implementation request only with a promise"));
+    assert!(body.contains("when the user asks for a proposal"));
     assert!(body.contains("bearer capabilities"));
     assert!(body.contains(
         "Never put sensitive content on an untrusted server or log/repost a document URL."

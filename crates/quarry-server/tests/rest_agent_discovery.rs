@@ -143,6 +143,10 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() -> anyhow::R
     assert!(skill.contains("re-read both `/blocks` and `/review`"));
     assert!(skill.contains("X-Quarry-Transaction-Actor"));
     assert!(skill.contains("local or hosted"));
+    assert!(skill.contains("concrete imperative Quarry"));
+    assert!(skill.contains("promise or proposal"));
+    assert!(docs.contains("concrete imperative user comment"));
+    assert!(docs.contains("Never substitute a promise-to-edit reply"));
     assert!(docs.contains("/v1/tmp/documents/$SECRET"));
     let removed_tmp_signal = ["han", "doff"].join("");
     assert!(!docs.to_lowercase().contains(&removed_tmp_signal));

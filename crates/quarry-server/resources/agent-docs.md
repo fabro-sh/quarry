@@ -586,8 +586,11 @@ Then report the evidence to the user. Do not keep retrying destructive writes.
 
 - Register presence before reading, commenting, suggesting, or editing.
 - Do not edit until the user gives explicit instructions.
-- Prefer comments and suggestions for review requests.
-- Use direct edits for implementation requests.
+- Treat a concrete imperative user comment as an implementation request for
+  that scoped change; apply it, reply, and resolve the thread.
+- Prefer comments and suggestions for review requests, requested proposals,
+  and unsolicited recommendations.
+- Never substitute a promise-to-edit reply for an authorized edit.
 - Re-read both `/blocks` and `/review` after any event; re-read `/blocks` after
   any stale write.
 - Use the plain agent name as `actor.label` on semantic transactions and as

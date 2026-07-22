@@ -32,11 +32,17 @@ If the user shares a Quarry locator URL:
 - Work in the Quarry document unless the user asks otherwise.
 - Do not edit until the user gives an edit/review instruction.
 
-Use review ops (`comment.add`, `suggestion.add`, …) for feedback requests. Use
-edit ops (`replace_block_content`, `insert_block`, …) only when the user asks
-you to directly change document content. Both share the same transaction
-envelope. To author or restructure a whole document, prefer the Markdown `PUT`
-(see Whole-Document Markdown Writes) over hand-assembling block ops.
+Use review ops (`comment.add`, `suggestion.add`, …) for feedback requests and
+proposals. Use edit ops (`replace_block_content`, `insert_markdown`, …) when
+the user asks you to change document content. A concrete imperative Quarry
+comment such as “Add this section,” “Change this wording,” or “Remove this
+block” is a direct-edit instruction for that scoped change; do the work, reply
+to the comment, and resolve the addressed thread. Do not respond only with a
+promise or proposal. Unsolicited changes, and changes the user explicitly asks
+to review before applying, stay as suggestions. Both operation families share
+the same transaction envelope. To author or restructure a whole document,
+prefer the Markdown `PUT` (see Whole-Document Markdown Writes) over
+hand-assembling block ops.
 
 ## Locator URLs And Auth
 
@@ -110,6 +116,11 @@ I can edit directly, or leave comments and suggestions for you to review. What w
 6. After any event, re-read both `/blocks` and `/review` because review-only
    changes do not put comment or suggestion bodies in the block tree. For an
    error, follow the code-specific recovery under Error Handling.
+
+When a user comment contains a concrete content request, completing the thread
+means the requested content is present in the document—not merely that a reply
+describes a future change. If the request is ambiguous or explicitly asks for
+a proposal, add a suggestion and leave the thread open for the user's decision.
 
 ## Presence
 
