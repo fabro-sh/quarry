@@ -2446,10 +2446,12 @@ async fn apply_rows_transaction(
 ///    exactly what the agent's transaction saw);
 /// 2. run the same pure apply engine as rows mode against the freshly
 ///    checkpointed rows;
-/// 3. reconcile the live doc in place to the applied result (untouched
+/// 3. validate that the applied rows can be serialized and build the commit
+///    without mutating the live doc;
+/// 4. reconcile the live doc in place to the applied result (untouched
 ///    blocks keep their element identity, so peer cursors survive; review
 ///    ops become mark/meta edits);
-/// 4. commit the applied rows/items as the transaction's version and ack.
+/// 5. commit the applied rows/items as the transaction's version and ack.
 ///
 /// Browser updates queue on the doc write lock for the duration and merge
 /// right after — they land in the NEXT checkpoint. No op needs the
@@ -2501,21 +2503,11 @@ async fn apply_session_transaction(
         &ctx.client_tx_id,
     )?;
 
-    // 3. Write the change into the live doc as a collaborator.
-    let pre = crate::session::doc_image(&session_snapshot.rows, &session_snapshot.review_items)
-        .map_err(GatewayFailure::from)?;
-    let desired = crate::session::doc_image(&applied.rows, &applied.review_items)
-        .map_err(GatewayFailure::from)?;
-    session
-        .apply_desired_state(&awareness, &pre, &desired, &applied.review_items)
-        .map_err(GatewayFailure::from)?;
-
-    // 4. Checkpoint-before-ack: commit the applied state as this
-    //    transaction's version.
-    // In-session browsers classify this as a benign refresh
-    // (`session-events.ts`), exactly like checkpoint commits — for
-    // whole-file writes too, since the session doc already carries the
-    // merged state when the event fires.
+    // 3. Validate the complete desired state before touching the live doc.
+    // `build_block_mutation_commit` renders normalized Markdown and can
+    // reject an otherwise well-formed operation sequence whose resulting
+    // tree is not representable. Keeping that validation ahead of the Yjs
+    // reconciliation makes those request failures genuinely atomic.
     let origin_id = Some(format!("agent-injected:tx:{}", ctx.client_tx_id));
     let commit = build_block_mutation_commit(
         &session_snapshot,
@@ -2526,6 +2518,22 @@ async fn apply_session_transaction(
         status,
         origin_id,
     )?;
+
+    // 4. Write the validated change into the live doc as a collaborator.
+    let pre = crate::session::doc_image(&session_snapshot.rows, &session_snapshot.review_items)
+        .map_err(GatewayFailure::from)?;
+    let desired = crate::session::doc_image(&applied.rows, &applied.review_items)
+        .map_err(GatewayFailure::from)?;
+    session
+        .apply_desired_state(&awareness, &pre, &desired, &applied.review_items)
+        .map_err(GatewayFailure::from)?;
+
+    // 5. Checkpoint-before-ack: commit the applied state as this
+    //    transaction's version.
+    // In-session browsers classify this as a benign refresh
+    // (`session-events.ts`), exactly like checkpoint commits — for
+    // whole-file writes too, since the session doc already carries the
+    // merged state when the event fires.
     match state
         .store
         .commit_block_mutation_for_scope(scope, commit)

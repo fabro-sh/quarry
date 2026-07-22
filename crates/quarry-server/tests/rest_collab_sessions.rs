@@ -1567,6 +1567,71 @@ async fn session_transaction_lands_in_live_doc_and_rows_before_ack() -> anyhow::
 }
 
 #[tokio::test]
+async fn invalid_session_transaction_does_not_poison_the_live_doc() -> anyhow::Result<()> {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "Stable paragraph.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+    let before = get_block_tree(&app, "live.md").await;
+    let versions_before = raw_version_count(&app, "live.md").await;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    assert_eq!(yjs_plain_text(&doc), "Stable paragraph.");
+
+    // An empty code block currently produces a tree the Markdown writer
+    // cannot export. The rejected transaction must not reach the live Yjs
+    // document or make the session dirty.
+    let (status, error) = post_block_transaction(
+        &app,
+        "live.md",
+        block_tx(
+            "tx-invalid-live",
+            serde_json::json!([{
+                "op": "insert_block",
+                "position": 1,
+                "block_type": "code_block"
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["code"], "UNSUPPORTED_MARKDOWN");
+    assert_eq!(get_block_tree(&app, "live.md").await, before);
+    assert_eq!(raw_version_count(&app, "live.md").await, versions_before);
+
+    // A valid request immediately afterward proves the failed preflight did
+    // not leave an unexportable node waiting for the next checkpoint.
+    let ack = commit_block_transaction(
+        &app,
+        "live.md",
+        block_tx(
+            "tx-valid-after-invalid",
+            serde_json::json!([{
+                "op": "insert_block",
+                "position": 1,
+                "block_type": "h2",
+                "text": "Valid heading"
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(ack["status"], "committed");
+    assert_eq!(
+        raw_version_count(&app, "live.md").await,
+        versions_before + 1
+    );
+    assert_eq!(
+        get_document_markdown(&app, "live.md").await,
+        "Stable paragraph.\n\n## Valid heading\n"
+    );
+    wait_for_yjs_plain_text(&mut socket, &doc, "Stable paragraph.Valid heading").await;
+
+    socket.close(None).await.unwrap();
+    server.abort();
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn session_transaction_coalesces_unflushed_typing_first() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Typing block.\n\nAgent block.\n").await;
