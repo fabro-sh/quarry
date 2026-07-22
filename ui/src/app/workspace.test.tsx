@@ -737,6 +737,43 @@ describe('Quarry Browser workspace', () => {
     expect(window.location.pathname).toBe(`/tmp/${secret}`);
   });
 
+  it('decodes Markdown escapes in the page title', async () => {
+    const secret = '93f53c691c504c56a8b795a02a2a7215';
+    window.history.pushState({}, '', `/tmp/${secret}`);
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/v1/capabilities') {
+        return json({ tmp_documents: true, lib_documents: false });
+      }
+      if (url === `/v1/tmp/documents/${secret}`) {
+        return new Response('# card\\_revisions\n', {
+          headers: {
+            ETag: '"tmp-v1"',
+            'content-type': 'text/markdown',
+            'x-quarry-document-id': 'tmp-escaped-title',
+          },
+        });
+      }
+      if (url === `/v1/tmp/documents/${secret}/presence`) return json({ presence: [] });
+      if (url === `/v1/tmp/documents/${secret}/versions`) return json([]);
+      if (url === `/v1/tmp/documents/${secret}/review?includeResolved=1`) {
+        return json({
+          documentId: 'tmp-escaped-title',
+          comments: [],
+          suggestions: [],
+          conflicts: [],
+        });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    renderApp();
+
+    expect(await screen.findByRole('button', { name: 'Document mode' })).toHaveTextContent('Editing');
+    await waitFor(() => expect(window.document.title).toBe('card_revisions · Quarry'));
+  });
+
   it('uses the tmp workspace and hides library controls when library documents are disabled', async () => {
     const secret = '72cb58585aa73e35758bc1141f79e32e';
     window.history.pushState({}, '', `/tmp/${secret}`);

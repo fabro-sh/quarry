@@ -43,6 +43,7 @@
     "comlink": "^4.4.2",
     "lib0": "^0.2.117",
     "lucide-react": "0.555.0",
+    "marked": "15.0.12",
     "mdast-util-mdx-jsx": "^3.2.0",
     "mermaid": "^11.15.0",
     "micromark-extension-mdx-jsx": "^3.0.2",

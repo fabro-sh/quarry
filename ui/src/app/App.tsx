@@ -41,6 +41,7 @@ import {
   Unlink,
   Upload,
 } from 'lucide-react';
+import { lexer } from 'marked';
 import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -3959,15 +3960,32 @@ function documentBasename(path: string) {
   return path.split('/').at(-1) ?? path;
 }
 
+type MarkdownInlineToken = {
+  raw?: string;
+  text?: string;
+  tokens?: MarkdownInlineToken[];
+  type: string;
+};
+
 function extractFirstH1(content: string): string | null {
-  const lines = content.split('\n');
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('# ')) {
-      return trimmed.slice(2).trim();
-    }
-  }
-  return null;
+  const heading = lexer(content).find(
+    (token) => token.type === 'heading' && token.depth === 1
+  );
+  if (!heading || !('tokens' in heading)) return null;
+
+  const title = markdownInlineText(heading.tokens as MarkdownInlineToken[]).trim();
+  return title || null;
+}
+
+function markdownInlineText(tokens: MarkdownInlineToken[]): string {
+  return tokens
+    .map((token) => {
+      if (token.type === 'br') return ' ';
+      if (token.type === 'html') return /^<br\s*\/?\s*>$/i.test(token.raw ?? '') ? ' ' : '';
+      if (token.tokens) return markdownInlineText(token.tokens);
+      return token.text ?? '';
+    })
+    .join('');
 }
 
 function useDialogFocusTrap(open: boolean, onClose: () => void) {
