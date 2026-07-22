@@ -6,21 +6,21 @@ class Quarry < Formula
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/fabro-sh/quarry/releases/download/v0.1.5/quarry-aarch64-apple-darwin.tar.gz"
-      sha256 "fe24f0c7b075035e297482dc76c6db6ede845f4540fe7ba26b6a70ef6924ce02"
+      url "https://github.com/fabro-sh/quarry/releases/download/v0.1.6/quarry-aarch64-apple-darwin.tar.gz"
+      sha256 "16567d187d5af1962d91a2da49f388adfa3d33a9c27fbbc7f677059dc5133776"
     else
-      url "https://github.com/fabro-sh/quarry/releases/download/v0.1.5/quarry-x86_64-apple-darwin.tar.gz"
-      sha256 "8ddea5f9bf75f701cfbfbb0e29083402f579923bfc1ef8867f31c7322f548313"
+      url "https://github.com/fabro-sh/quarry/releases/download/v0.1.6/quarry-x86_64-apple-darwin.tar.gz"
+      sha256 "dd11b2145a838b66707a5ff41554ba3ce3008ac3abc7a42b3f64a9b715893c08"
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/fabro-sh/quarry/releases/download/v0.1.5/quarry-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "df6a8f8735dce0eb1ab4ca473e6d7a44507712f8b16895e11ae95b54239fe106"
+      url "https://github.com/fabro-sh/quarry/releases/download/v0.1.6/quarry-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "5b793b50932af8f8a3be8c7acddcc894360e16c7bf5141e7360575e2be779641"
     else
-      url "https://github.com/fabro-sh/quarry/releases/download/v0.1.5/quarry-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "303d3dcac543f7a3944d9800000fc5a3972994caf3aba9ec848b316f094dd7e9"
+      url "https://github.com/fabro-sh/quarry/releases/download/v0.1.6/quarry-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "1953895a99a017996d79efab976f13eff7d0971242a3532d8e9e1cf2d3db9f04"
     end
   end
 
