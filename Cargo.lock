@@ -1971,7 +1971,7 @@ checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
 
 [[package]]
 name = "quarry"
-version = "0.1.5-nightly.20260721"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "quarry-cli",
@@ -1984,7 +1984,7 @@ dependencies = [
 
 [[package]]
 name = "quarry-cas"
-version = "0.1.5-nightly.20260721"
+version = "0.1.5"
 dependencies = [
  "blake3",
  "quarry-core",
@@ -1994,7 +1994,7 @@ dependencies = [
 
 [[package]]
 name = "quarry-cli"
-version = "0.1.5-nightly.20260721"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -2016,7 +2016,7 @@ dependencies = [
 
 [[package]]
 name = "quarry-collab-codec"
-version = "0.1.5-nightly.20260721"
+version = "0.1.5"
 dependencies = [
  "chrono",
  "indexmap",
@@ -2032,7 +2032,7 @@ dependencies = [
 
 [[package]]
 name = "quarry-core"
-version = "0.1.5-nightly.20260721"
+version = "0.1.5"
 dependencies = [
  "chrono",
  "quarry-collab-codec",
@@ -2046,7 +2046,7 @@ dependencies = [
 
 [[package]]
 name = "quarry-dev"
-version = "0.1.5-nightly.20260721"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2057,7 +2057,7 @@ dependencies = [
 
 [[package]]
 name = "quarry-fuse"
-version = "0.1.5-nightly.20260721"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -2079,7 +2079,7 @@ dependencies = [
 
 [[package]]
 name = "quarry-git"
-version = "0.1.5-nightly.20260721"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2102,7 +2102,7 @@ dependencies = [
 
 [[package]]
 name = "quarry-server"
-version = "0.1.5-nightly.20260721"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -2139,7 +2139,7 @@ dependencies = [
 
 [[package]]
 name = "quarry-storage"
-version = "0.1.5-nightly.20260721"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "chrono",
