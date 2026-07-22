@@ -15,13 +15,18 @@ every mutation — edits, comments, suggestions — as one semantic transaction 
 1. If you received a Quarry link, extract the origin and document locator.
 2. Register presence with a stable `X-Agent-Id`.
 3. Read `GET /blocks` for the block tree, ids, and the current `document_clock`.
-4. Reply with the required ready message.
-5. Wait for the user's instruction before editing.
-6. Send one `POST /transactions` envelope with your ops (edits and review ops
+4. Preserve any concrete Quarry task already given anywhere in the current
+   conversation; connecting does not reset it.
+5. If a task already exists, briefly acknowledge the connection and continue
+   after the required reads. Otherwise, send the ready message and wait.
+6. Keep operations within the task's authority: review requests authorize
+   review operations, while direct content edits require a request to change
+   content and must stay within its scope.
+7. Send one `POST /transactions` envelope with your ops (edits and review ops
    share the same vocabulary and commit atomically). To author or restructure
    a whole document, `PUT` it as plain Markdown instead (see Whole-Document
    Markdown Writes).
-7. On an error, follow the code-specific recovery under Errors And Retry Rules;
+8. On an error, follow the code-specific recovery under Errors And Retry Rules;
    retry at most once.
 
 ## I Just Received A Quarry Link
@@ -151,18 +156,21 @@ Fallback whole-document read (rendered Markdown, with the current clock in the
 curl -sS -H "X-Agent-Id: $AGENT_ID" "$DOC"
 ```
 
-## Required Ready Reply
+## Conditional Ready Reply
 
-After reading the document, reply to the user with exactly this shape:
+Connecting to Quarry does not reset the conversation. Instructions given before
+connecting remain valid. If the user already gave a concrete Quarry task
+anywhere in the current conversation, briefly acknowledge the connection and
+continue after the required reads. Do not ask the user to repeat it.
+
+Only when no concrete Quarry task exists, reply with exactly this shape and
+wait:
 
 ```text
 Connected in Quarry and ready.
 <one-sentence summary of the document>
 I can edit directly, or leave comments and suggestions for you to review. What would you like me to do?
 ```
-
-Do not edit before this reply unless the user already gave a clear edit
-instruction in the same request.
 
 ## Transactions: The Single Mutation Contract
 
@@ -613,7 +621,14 @@ Then report the evidence to the user. Do not keep retrying destructive writes.
 ## Safety Rules
 
 - Register presence before reading, commenting, suggesting, or editing.
-- Do not edit until the user gives explicit instructions.
+- Preserve concrete Quarry tasks already given in the current conversation;
+  connecting does not reset them.
+- If no concrete Quarry task exists, send the ready message and wait without
+  mutating document or review state.
+- A task to review or leave feedback, comments, or suggestions authorizes
+  review operations only; it does not authorize direct content edits.
+- Use direct edit operations only when the user requests a content change, and
+  stay within the requested scope.
 - Treat a concrete imperative user comment as an implementation request for
   that scoped change; apply it, reply, and resolve the thread.
 - Prefer comments and suggestions for review requests, requested proposals,

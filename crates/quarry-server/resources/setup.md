@@ -39,7 +39,7 @@ curl -fsSL __QUARRY_ORIGIN__/example.md -o "$example_file"
 quarry open "$example_file"
 ```
 
-`quarry open` creates the shared document on the server (https://quarry.lithos.computer by default; pass `--server` to target another), opens it in the user's browser, and prints connection instructions. Follow them exactly.
+`quarry open` creates the shared document on the server (https://quarry.lithos.computer by default; pass `--server` to target another), opens it in the user's browser, and prints connection instructions. Follow the connection mechanics. The instruction below to seed the review is already authorized, so continue after the required reads without asking the user to repeat it.
 
 Then seed the review so the user has something to react to:
 

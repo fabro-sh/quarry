@@ -108,7 +108,10 @@ Document path: {document_path}
    Prefer GET {document_api}/blocks (stable block_ids plus the current document_clock)
    Fallback GET {document_api}
 
-3. After reading, reply to the user with exactly this shape:
+3. Preserve the user's existing Quarry task.
+   Connecting to Quarry does not reset the conversation. Instructions given before connecting remain valid.
+   If the user already gave a concrete Quarry task anywhere in the current conversation, briefly acknowledge the connection and continue through the remaining prerequisites before performing that task. Do not ask the user to repeat it.
+   If no concrete Quarry task exists, reply to the user with exactly this shape, then wait for an instruction:
    Connected in Quarry and ready.
    <one-sentence summary of the document>
    I can edit directly, or leave comments and suggestions for you to review. What would you like me to do?
@@ -124,7 +127,8 @@ Document path: {document_path}
 {fallback_monitoring}
    When an event arrives, re-read both GET {document_api}/blocks and GET {document_api}/review before replying or editing. Events are sparse wake signals; the block tree does not contain comment or suggestion bodies.
 
-6. Do not edit until the user gives further instructions.
+6. Work only within the user's authorization.
+   A task to review or leave feedback, comments, or suggestions authorizes review operations only; it does not authorize direct content edits. A request to change document content authorizes direct edits only within the requested scope. If no concrete Quarry task exists, wait.
    For surgical edits and review operations, POST {document_api}/transactions with headers Content-Type: application/json and X-Agent-Id: <agent-id>, and body {{"client_tx_id":"<unique-id>","base_clock":"<document_clock>","actor":{{"kind":"agent","id":"<agent-id>","label":"<agent name>"}},"ops":[...]}}.
    Public ops: {transaction_operations}.
    To author or restructure the whole document, instead PUT {document_api} with a plain Markdown body and headers Content-Type: text/markdown, If-Match: "<document_clock>", X-Agent-Id: <agent-id>, and X-Quarry-Transaction-Actor: <agent name> — concurrent edits diff3-merge rather than being overwritten (details in the skill). A 200 response is not enough: inspect changed and conflicts. If conflicts is non-zero, re-read GET {document_api}/blocks and GET {document_api}/review, incorporate any canonical edits that should survive, and only then re-PUT the reconciled Markdown with the fresh clock. Do not blindly resend the old file.
@@ -287,9 +291,29 @@ mod tests {
             .find("Read the skill document")
             .expect("prompt should mention the skill document");
         let edit_step = prompt
-            .find("Do not edit until the user gives further instructions")
-            .expect("prompt should defer edits to the user");
+            .find("Work only within the user's authorization")
+            .expect("prompt should scope writes to the user's authorization");
         assert!(skill_step < edit_step);
+    }
+
+    #[test]
+    fn existing_quarry_tasks_survive_connection_and_ready_reply_is_conditional() {
+        let prompt = library_prompt();
+
+        assert!(prompt.contains("Connecting to Quarry does not reset the conversation"));
+        assert!(prompt.contains("Instructions given before connecting remain valid"));
+        assert!(prompt.contains(
+            "If the user already gave a concrete Quarry task anywhere in the current conversation"
+        ));
+        assert!(prompt.contains("Do not ask the user to repeat it"));
+        assert!(prompt.contains("If no concrete Quarry task exists"));
+        assert!(prompt.contains(
+            "A task to review or leave feedback, comments, or suggestions authorizes review operations only"
+        ));
+        assert!(prompt.contains(
+            "A request to change document content authorizes direct edits only within the requested scope"
+        ));
+        assert!(!prompt.contains("further instructions"));
     }
 
     #[test]

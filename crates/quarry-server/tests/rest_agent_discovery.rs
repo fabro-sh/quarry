@@ -147,6 +147,20 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() -> anyhow::R
     assert!(skill.contains("promise or proposal"));
     assert!(docs.contains("concrete imperative user comment"));
     assert!(docs.contains("Never substitute a promise-to-edit reply"));
+    let compact_skill = skill.split_whitespace().collect::<Vec<_>>().join(" ");
+    let compact_docs = docs.split_whitespace().collect::<Vec<_>>().join(" ");
+    for surface in [&compact_skill, &compact_docs] {
+        assert!(surface.contains("connecting does not reset"));
+        assert!(surface.contains("Instructions given before connecting remain valid"));
+        assert!(surface.contains("Do not ask the user to repeat it"));
+        assert!(surface.contains(
+            "A task to review or leave feedback, comments, or suggestions authorizes review operations only"
+        ));
+        assert!(surface.contains("it does not authorize direct content edits"));
+        assert!(surface.contains("If no concrete Quarry task exists"));
+    }
+    assert!(!skill.contains("Wait for the user's instruction"));
+    assert!(!docs.contains("instruction in the same request"));
     assert!(docs.contains("/v1/tmp/documents/$SECRET"));
     let removed_tmp_signal = ["han", "doff"].join("");
     assert!(!docs.to_lowercase().contains(&removed_tmp_signal));

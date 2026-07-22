@@ -28,21 +28,27 @@ If the user shares a Quarry locator URL:
 - Join immediately.
 - Send `X-Agent-Id` on every request; POST `/presence` to announce your status.
 - Read `GET $DOC/blocks` before editing or reviewing.
-- Reply with the required ready message.
+- Preserve any concrete Quarry task already given anywhere in the current
+  conversation; connecting does not reset it.
+- If a task already exists, briefly acknowledge the connection and continue
+  after the required reads. Do not ask the user to repeat it.
+- If no concrete Quarry task exists, reply with the ready message and wait.
 - Work in the Quarry document unless the user asks otherwise.
-- Do not edit until the user gives an edit/review instruction.
 
 Use review ops (`comment.add`, `suggestion.add`, …) for feedback requests and
-proposals. Use edit ops (`replace_block_content`, `insert_markdown`, …) when
-the user asks you to change document content. A concrete imperative Quarry
-comment such as “Add this section,” “Change this wording,” or “Remove this
-block” is a direct-edit instruction for that scoped change; do the work, reply
-to the comment, and resolve the addressed thread. Do not respond only with a
-promise or proposal. Unsolicited changes, and changes the user explicitly asks
-to review before applying, stay as suggestions. Both operation families share
-the same transaction envelope. To author or restructure a whole document,
-prefer the Markdown `PUT` (see Whole-Document Markdown Writes) over
-hand-assembling block ops.
+proposals. A task to review or leave feedback, comments, or suggestions
+authorizes review operations only; it does not authorize direct content edits.
+Use edit ops (`replace_block_content`, `insert_markdown`, …) when the user asks
+you to change document content. Stay within the requested scope.
+
+A concrete imperative Quarry comment such as “Add this section,” “Change this
+wording,” or “Remove this block” is a direct-edit instruction for that scoped
+change; do the work, reply to the comment, and resolve the addressed thread. Do
+not respond only with a promise or proposal. Unsolicited changes, and changes
+the user explicitly asks to review before applying, stay as suggestions. Both
+operation families share the same transaction envelope. To author or
+restructure a whole document, prefer the Markdown `PUT` (see Whole-Document
+Markdown Writes) over hand-assembling block ops.
 
 ## Locator URLs And Auth
 
@@ -102,7 +108,10 @@ canonical UTF-8 Markdown over 1 MiB returns 413.
 
 1. Show presence.
 2. Read `GET $DOC/blocks`.
-3. Reply exactly:
+3. Check the current conversation for a concrete Quarry task. Instructions
+   given before connecting remain valid.
+4. If a task already exists, briefly acknowledge the connection and continue
+   without asking the user to repeat it. Otherwise, reply exactly and wait:
 
 ```text
 Connected in Quarry and ready.
@@ -110,7 +119,6 @@ Connected in Quarry and ready.
 I can edit directly, or leave comments and suggestions for you to review. What would you like me to do?
 ```
 
-4. Wait for the user's instruction.
 5. Before each write, use `block_id`s and the `document_clock` from the latest
    `/blocks` read.
 6. After any event, re-read both `/blocks` and `/review` because review-only

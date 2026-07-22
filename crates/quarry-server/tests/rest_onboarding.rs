@@ -68,6 +68,8 @@ async fn onboarding_documents_render_the_forwarded_origin() {
     assert!(body.contains("verify that each marker appears exactly once"));
     assert!(body.contains("A concrete imperative comment is an edit"));
     assert!(body.contains("Do not merely promise the requested edit"));
+    assert!(body.contains("already authorized"));
+    assert!(body.contains("without asking the user to repeat it"));
     assert!(!body.contains("__QUARRY_ORIGIN__"));
 }
 
@@ -92,7 +94,11 @@ async fn prompt_document_teaches_the_review_workflow() {
     ));
     assert!(body.contains("quarry open"));
     assert!(body.contains("creates the shared document"));
-    assert!(body.contains("Follow them exactly, and do not edit until the user asks."));
+    assert!(body.contains("instructions given before `quarry open` remain valid"));
+    assert!(body.contains("Only use the ready-message-and-wait handshake"));
+    assert!(body.contains(
+        "A task to review or leave feedback, comments, or suggestions authorizes review operations only"
+    ));
     assert!(body.contains("suggestion.add"));
     assert!(body.contains("suggestion.add_block_delete"));
     assert!(body.contains("A concrete imperative comment"));
