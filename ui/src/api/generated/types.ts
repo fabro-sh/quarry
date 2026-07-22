@@ -409,8 +409,24 @@ export type ApiErrorCode =
   | 'UNKNOWN_BLOCK_TYPE'
   | 'UNSUPPORTED_BLOCK_DOCUMENT';
 
+export interface ApiErrorTarget {
+  kind: string;
+  id: string;
+}
+
+export interface ApiErrorDetails {
+  op_index?: number | null;
+  op?: string | null;
+  target?: ApiErrorTarget | null;
+  field?: string | null;
+  value?: string | null;
+  current_value?: string | null;
+  allowed_values?: string[];
+}
+
 export interface ApiErrorResponse {
   code: ApiErrorCode;
   retryable: boolean;
   message: string;
+  details?: ApiErrorDetails | null;
 }

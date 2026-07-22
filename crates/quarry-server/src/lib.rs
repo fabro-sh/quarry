@@ -40,7 +40,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use discovery::{agent_discovery, agent_docs, quarry_skill};
-pub use error::{ApiError, ApiErrorCode, ApiErrorResponse};
+pub use error::{ApiError, ApiErrorCode, ApiErrorDetails, ApiErrorResponse, ApiErrorTarget};
 pub(crate) use headers::{
     agent_id_from_headers_or_body, bytes_response_with_expiry, content_type,
     insert_document_headers, json_response, json_with_etag, merge_base_from_headers,
@@ -793,6 +793,8 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
         system_handlers::Capabilities,
         BeginTransactionRequest,
         ApiErrorResponse,
+        ApiErrorDetails,
+        ApiErrorTarget,
         MoveRequest,
         DryRunValue,
         Library,

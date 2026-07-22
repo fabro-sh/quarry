@@ -893,6 +893,10 @@ async fn markdown_put_if_match_is_a_strict_head_precondition() -> anyhow::Result
         .context("block tree should include document clock")?
         .to_string();
     put_block_markdown(&app, "strict.md", "Canonical.\n").await;
+    let current_clock = get_block_tree(&app, "strict.md").await["document_clock"]
+        .as_str()
+        .context("block tree should include current document clock")?
+        .to_string();
 
     let response = app
         .clone()
@@ -910,6 +914,9 @@ async fn markdown_put_if_match_is_a_strict_head_precondition() -> anyhow::Result
     assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
     let error = response_json(response).await;
     assert_eq!(error["code"], "PRECONDITION_FAILED");
+    assert_eq!(error["details"]["field"], "If-Match");
+    assert_eq!(error["details"]["value"], base_clock);
+    assert_eq!(error["details"]["current_value"], current_clock);
     assert_eq!(
         get_document_markdown(&app, "strict.md").await,
         "Canonical.\n"

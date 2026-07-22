@@ -189,7 +189,7 @@ fn assert_typed_error(status: StatusCode, body: &Value, code: &str, retryable: b
     let expected = match code {
         "STALE_BASE" | "BLOCK_MOVE_CONFLICT" => StatusCode::PRECONDITION_FAILED,
         "BLOCK_DELETED" | "ANCHOR_NOT_FOUND" => StatusCode::NOT_FOUND,
-        "INVALID_TRANSACTION" => StatusCode::BAD_REQUEST,
+        "INVALID_TRANSACTION" | "UNKNOWN_BLOCK_TYPE" => StatusCode::BAD_REQUEST,
         _ => StatusCode::UNPROCESSABLE_ENTITY,
     };
     assert_eq!(status, expected);
@@ -1551,6 +1551,9 @@ async fn block_transaction_clock_handling_commits_rebases_and_rejects() -> anyho
     )
     .await;
     assert_typed_error(status, &body, "STALE_BASE", true);
+    assert_eq!(body["details"]["field"], "base_clock");
+    assert_eq!(body["details"]["value"], "no-such-version");
+    assert_eq!(body["details"]["current_value"], ack["document_clock"]);
 
     Ok(())
 }
@@ -1575,6 +1578,10 @@ async fn block_transaction_typed_reference_errors() -> anyhow::Result<()> {
     )
     .await;
     assert_typed_error(status, &body, "BLOCK_DELETED", false);
+    assert_eq!(body["details"]["op_index"], 0);
+    assert_eq!(body["details"]["op"], "replace_block_content");
+    assert_eq!(body["details"]["target"]["kind"], "block");
+    assert_eq!(body["details"]["target"]["id"], "no-such-block");
 
     let (status, body) = post_block_transaction(
         &app,
@@ -1691,9 +1698,84 @@ async fn block_transaction_multi_op_failure_rolls_back_the_whole_transaction() -
     )
     .await;
     assert_typed_error(status, &body, "BLOCK_DELETED", false);
+    assert_eq!(body["details"]["op_index"], 1);
+    assert_eq!(body["details"]["op"], "delete_block");
+    assert_eq!(body["details"]["target"]["kind"], "block");
+    assert_eq!(body["details"]["target"]["id"], "no-such-block");
     assert_eq!(get_document_markdown(&app, "doc.md").await, "Atomic.\n");
     assert_eq!(get_block_tree(&app, "doc.md").await, before);
     assert_eq!(raw_version_count(&app, "doc.md").await, versions_before);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn block_transaction_parse_failure_identifies_the_exact_operation_and_field()
+-> anyhow::Result<()> {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Atomic.\n").await;
+    get_block_tree(&app, "doc.md").await;
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-malformed-op",
+            serde_json::json!([
+                {"op": "insert_block", "position": 1, "block_type": "p", "text": "Would apply."},
+                {
+                    "op": "insert_block",
+                    "position": 2,
+                    "block_type": "p",
+                    "text": "Malformed.",
+                    "marks": [{"type": "strong", "start": 0, "end": 10}]
+                }
+            ]),
+        ),
+    )
+    .await;
+
+    assert_typed_error(status, &body, "INVALID_TRANSACTION", false);
+    assert_eq!(body["details"]["op_index"], 1);
+    assert_eq!(body["details"]["op"], "insert_block");
+    assert_eq!(body["details"]["field"], "marks");
+    assert_eq!(get_document_markdown(&app, "doc.md").await, "Atomic.\n");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn block_transaction_validation_failure_names_the_value_and_vocabulary() -> anyhow::Result<()>
+{
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Existing.\n").await;
+    get_block_tree(&app, "doc.md").await;
+
+    let (status, body) = post_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-unknown-block-type",
+            serde_json::json!([{
+                "op": "insert_block",
+                "position": 1,
+                "block_type": "ul",
+                "text": "Item."
+            }]),
+        ),
+    )
+    .await;
+
+    assert_typed_error(status, &body, "UNKNOWN_BLOCK_TYPE", false);
+    assert_eq!(body["details"]["op_index"], 0);
+    assert_eq!(body["details"]["op"], "insert_block");
+    assert_eq!(body["details"]["field"], "block_type");
+    assert_eq!(body["details"]["value"], "ul");
+    let allowed_values = body["details"]["allowed_values"]
+        .as_array()
+        .expect("allowed_values should be an array");
+    assert!(allowed_values.contains(&serde_json::json!("p")));
+    assert!(!allowed_values.contains(&serde_json::json!("ul")));
 
     Ok(())
 }

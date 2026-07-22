@@ -1544,6 +1544,66 @@
           "UNSUPPORTED_BLOCK_DOCUMENT"
         ]
       },
+      "ApiErrorDetails": {
+        "type": "object",
+        "description": "Machine-actionable context for a failed request. Transaction failures\nidentify the exact op and target; validation failures may additionally\nidentify the field, rejected value, current value, or allowed values.",
+        "properties": {
+          "allowed_values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Accepted values for a closed vocabulary."
+          },
+          "current_value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Current server value, when useful for rebuilding a request."
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Request field that failed validation or a precondition."
+          },
+          "op": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Operation discriminator, such as `replace_block_content`."
+          },
+          "op_index": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Zero-based index into a transaction's `ops` array.",
+            "minimum": 0
+          },
+          "target": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiErrorTarget",
+                "description": "Addressable entity involved in the failure."
+              }
+            ]
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Rejected request value."
+          }
+        }
+      },
       "ApiErrorResponse": {
         "type": "object",
         "required": [
@@ -1555,11 +1615,38 @@
           "code": {
             "$ref": "#/components/schemas/ApiErrorCode"
           },
+          "details": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiErrorDetails"
+              }
+            ]
+          },
           "message": {
             "type": "string"
           },
           "retryable": {
             "type": "boolean"
+          }
+        }
+      },
+      "ApiErrorTarget": {
+        "type": "object",
+        "required": [
+          "kind",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable identifier copied from the request or current review state."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Entity category, such as `block`, `review_item`, or `conflict`."
           }
         }
       },

@@ -524,10 +524,20 @@ those document calls also keep presence fresh.
 
 ## Errors And Retry Rules
 
-Every `/v1` HTTP failure returns `{code, retryable, message}`. `retryable: true`
-means the code-specific recovery may succeed; it does not mean blindly replay
-the same request. Retry at most once. `retryable: false` means no automatic
-retry is safe; fix, rebuild, or report the request.
+Every `/v1` HTTP failure returns `{code, retryable, message, details?}`.
+`message` is for people. When `details` is present, use it instead of parsing
+the message:
+
+- `op_index` and `op` identify the failed transaction operation.
+- `target: {kind, id}` identifies its block, review item, suggestion, or
+  conflict when one is addressable.
+- `field`, `value`, `current_value`, and `allowed_values` describe validation
+  or precondition failures when applicable.
+
+Fields that do not apply are omitted. `retryable: true` means the code-specific
+recovery may succeed; it does not mean blindly replay the same request. Retry
+at most once. `retryable: false` means no automatic retry is safe; fix, rebuild,
+or report the request.
 
 | code | status | retryable | meaning |
 |---|---|---|---|
@@ -543,7 +553,7 @@ retry is safe; fix, rebuild, or report the request.
 | `UNSUPPORTED_BLOCK_DOCUMENT` | 422 | no | block APIs on a non-Markdown document |
 | `PAYLOAD_TOO_LARGE` | 413 | no | tmp Markdown content exceeds 1 MiB |
 | `INVALID_TRANSACTION` | 400 | no | malformed envelope or op |
-| `UNKNOWN_BLOCK_TYPE` | 400 | no | a `block_type` outside the vocabulary; the message lists valid types |
+| `UNKNOWN_BLOCK_TYPE` | 400 | no | a `block_type` outside the vocabulary; `details.allowed_values` lists valid types |
 | `INVALID_REQUEST` | 400 | no | malformed HTTP input outside the transaction vocabulary |
 | `NOT_FOUND` / `GONE` | 404/410 | no | bad locator or expired/deleted document |
 | `CONFLICT` | 409 | no | requested operation conflicts with current state |

@@ -42,12 +42,12 @@
 //! designated mover) — the merged order, ids, and anchors are identical
 //! either way, pinned by `sequential_ops_*` tests.
 
-use crate::AppState;
 use crate::gateway::{
     self, BlockOp, BlockTransactionActor, GatewayError, GatewayErrorCode, GatewayFailure,
     TransactionContext, TransactionPlan, TransactionReply, TransactionSettings,
 };
 use crate::log_redaction;
+use crate::{ApiError, ApiErrorCode, ApiErrorDetails, AppState};
 use axum::http::StatusCode;
 use quarry_collab_codec::{
     BlockRow, ReconcileBase, ReconcileConflict, ReconcileOp, block_rows_to_markdown, reconcile,
@@ -166,6 +166,21 @@ impl ConflictHunk {
     }
 }
 
+fn version_input_error(
+    code: ApiErrorCode,
+    message: impl Into<String>,
+    field: &str,
+    value: impl Into<String>,
+    current_value: Option<String>,
+) -> GatewayFailure {
+    GatewayFailure::Api(ApiError::new(code, message).with_details(ApiErrorDetails {
+        field: Some(field.to_string()),
+        value: Some(value.into()),
+        current_value,
+        ..ApiErrorDetails::default()
+    }))
+}
+
 pub(crate) async fn put_block_document(
     state: &AppState,
     library: &str,
@@ -204,19 +219,24 @@ async fn put_scoped_block_document(
         )
     })?;
     if merge_base.is_some() && precondition == WritePrecondition::IfNoneMatch {
-        return Err(GatewayFailure::Api(
-            QuarryError::InvalidInput(
-                "X-Quarry-Merge-Base cannot be combined with If-None-Match".to_string(),
-            )
-            .into(),
+        return Err(version_input_error(
+            ApiErrorCode::InvalidRequest,
+            "X-Quarry-Merge-Base cannot be combined with If-None-Match",
+            "X-Quarry-Merge-Base",
+            merge_base.as_deref().unwrap_or_default(),
+            None,
         ));
     }
     let strict_head = match &precondition {
         WritePrecondition::IfNoneMatch => {
             let head = state.store.head_document_for_scope(&scope, path).await;
-            if head.is_ok() {
-                return Err(GatewayFailure::Api(
-                    QuarryError::PreconditionFailed(format!("{path} already exists")).into(),
+            if let Ok(head) = &head {
+                return Err(version_input_error(
+                    ApiErrorCode::PreconditionFailed,
+                    format!("{path} already exists"),
+                    "If-None-Match",
+                    "*",
+                    Some(head.head_version_id.to_string()),
                 ));
             }
             if let Err(error) = head
@@ -231,20 +251,24 @@ async fn put_scoped_block_document(
             match head {
                 Ok(head) if head.head_version_id == *version_id => Some(version_id.clone()),
                 Ok(head) => {
-                    return Err(GatewayFailure::Api(
-                        QuarryError::PreconditionFailed(format!(
+                    return Err(version_input_error(
+                        ApiErrorCode::PreconditionFailed,
+                        format!(
                             "If-Match {version_id} does not match the current head {} of {path}",
                             head.head_version_id
-                        ))
-                        .into(),
+                        ),
+                        "If-Match",
+                        version_id,
+                        Some(head.head_version_id.to_string()),
                     ));
                 }
                 Err(QuarryError::NotFound(_)) => {
-                    return Err(GatewayFailure::Api(
-                        QuarryError::PreconditionFailed(format!(
-                            "If-Match {version_id} cannot match missing document {path}"
-                        ))
-                        .into(),
+                    return Err(version_input_error(
+                        ApiErrorCode::PreconditionFailed,
+                        format!("If-Match {version_id} cannot match missing document {path}"),
+                        "If-Match",
+                        version_id,
+                        None,
                     ));
                 }
                 Err(error) => return Err(error.into()),
@@ -264,11 +288,12 @@ async fn put_scoped_block_document(
                     version_id: Some(version_id),
                 },
                 Err(QuarryError::NotFound(_)) => {
-                    return Err(GatewayFailure::Api(
-                        QuarryError::PreconditionFailed(format!(
-                            "X-Quarry-Merge-Base does not name a known version of {path}"
-                        ))
-                        .into(),
+                    return Err(version_input_error(
+                        ApiErrorCode::PreconditionFailed,
+                        format!("X-Quarry-Merge-Base does not name a known version of {path}"),
+                        "X-Quarry-Merge-Base",
+                        version_id,
+                        None,
                     ));
                 }
                 Err(error) => return Err(error.into()),
@@ -389,16 +414,21 @@ pub(crate) async fn patch_block_document_metadata(
     // selector).
     match &precondition {
         WritePrecondition::IfMatch(version) if *version != document.version.id => {
-            return Err(GatewayFailure::Api(
-                QuarryError::PreconditionFailed(format!(
-                    "If-Match {version} does not match the head of {path}"
-                ))
-                .into(),
+            return Err(version_input_error(
+                ApiErrorCode::PreconditionFailed,
+                format!("If-Match {version} does not match the head of {path}"),
+                "If-Match",
+                version,
+                Some(document.version.id.to_string()),
             ));
         }
         WritePrecondition::IfNoneMatch => {
-            return Err(GatewayFailure::Api(
-                QuarryError::PreconditionFailed(format!("{path} already exists")).into(),
+            return Err(version_input_error(
+                ApiErrorCode::PreconditionFailed,
+                format!("{path} already exists"),
+                "If-None-Match",
+                "*",
+                Some(document.version.id.to_string()),
             ));
         }
         _ => {}
@@ -502,12 +532,15 @@ async fn write_markdown_with(
         }
         Err(QuarryError::NotFound(_)) => {
             if let Some(expected) = &strict_head {
-                return Err(GatewayFailure::Api(
-                    QuarryError::PreconditionFailed(format!(
+                return Err(version_input_error(
+                    ApiErrorCode::PreconditionFailed,
+                    format!(
                         "If-Match {expected} cannot match missing document {}",
                         write.path
-                    ))
-                    .into(),
+                    ),
+                    "If-Match",
+                    expected,
+                    None,
                 ));
             }
             log_block_write_started(&write, None);
@@ -551,12 +584,15 @@ async fn write_markdown_with(
     if let Some(expected) = &strict_head
         && *expected != document.version.id
     {
-        return Err(GatewayFailure::Api(
-            QuarryError::PreconditionFailed(format!(
+        return Err(version_input_error(
+            ApiErrorCode::PreconditionFailed,
+            format!(
                 "If-Match {expected} does not match the current head {} of {}",
                 document.version.id, write.path
-            ))
-            .into(),
+            ),
+            "If-Match",
+            expected,
+            Some(document.version.id.to_string()),
         ));
     }
 
@@ -628,12 +664,15 @@ async fn write_markdown_with(
         if let Some(expected) = &strict_head
             && *expected != snapshot.head_version_id
         {
-            return Err(GatewayFailure::Api(
-                QuarryError::PreconditionFailed(format!(
+            return Err(version_input_error(
+                ApiErrorCode::PreconditionFailed,
+                format!(
                     "If-Match {expected} does not match the current head {} of {}",
                     snapshot.head_version_id, write.path
-                ))
-                .into(),
+                ),
+                "If-Match",
+                expected,
+                Some(snapshot.head_version_id.clone()),
             ));
         }
         planned_conflicts.clear();

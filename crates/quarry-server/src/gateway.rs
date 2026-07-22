@@ -27,7 +27,11 @@
 //!
 //! ## Typed errors
 //!
-//! Failures return `{code, retryable, message}`:
+//! Failures return `{code, retryable, message, details?}`. `details` is the
+//! machine-actionable part: transaction failures identify `op_index`, `op`,
+//! and (when addressable) `target: {kind, id}`; validation failures may add
+//! `field`, rejected `value`, `current_value`, or `allowed_values`. Clients
+//! should branch on these fields rather than parse the human-facing message.
 //!
 //! | code | status | retryable |
 //! |------|--------|-----------|
@@ -170,7 +174,7 @@
 use crate::{
     AgentBlockRef, AgentReviewComment, AgentReviewReply, AgentReviewResponse,
     AgentReviewSuggestion, AgentSuggestionKind, AgentSuggestionPreview, ApiError, ApiErrorCode,
-    AppState, json_with_etag,
+    ApiErrorDetails, ApiErrorTarget, AppState, json_with_etag,
 };
 use axum::http::StatusCode;
 use axum::response::Response;
@@ -231,6 +235,7 @@ pub(crate) type GatewayErrorCode = ApiErrorCode;
 pub(crate) struct GatewayError {
     code: GatewayErrorCode,
     message: String,
+    details: Option<Box<ApiErrorDetails>>,
 }
 
 impl GatewayError {
@@ -246,7 +251,58 @@ impl GatewayError {
         Self {
             code,
             message: message.into(),
+            details: None,
         }
+    }
+
+    fn with_operation(mut self, op_index: usize, op: impl Into<String>) -> Self {
+        let details = self.details_mut();
+        details.op_index = Some(op_index);
+        details.op = Some(op.into());
+        self
+    }
+
+    fn with_target(mut self, kind: &str, id: impl Into<String>) -> Self {
+        self.details_mut().target = Some(ApiErrorTarget {
+            kind: kind.to_string(),
+            id: id.into(),
+        });
+        self
+    }
+
+    fn with_validation(
+        mut self,
+        field: &str,
+        value: impl Into<String>,
+        allowed_values: Vec<String>,
+    ) -> Self {
+        let details = self.details_mut();
+        details.field = Some(field.to_string());
+        details.value = Some(value.into());
+        details.allowed_values = allowed_values;
+        self
+    }
+
+    fn with_field(mut self, field: impl Into<String>) -> Self {
+        self.details_mut().field = Some(field.into());
+        self
+    }
+
+    fn with_current_value(mut self, current_value: impl Into<String>) -> Self {
+        self.details_mut().current_value = Some(current_value.into());
+        self
+    }
+
+    fn details_mut(&mut self) -> &mut ApiErrorDetails {
+        self.details
+            .get_or_insert_with(|| Box::new(ApiErrorDetails::default()))
+    }
+
+    fn has_target(&self) -> bool {
+        self.details
+            .as_deref()
+            .and_then(|details| details.target.as_ref())
+            .is_some()
     }
 
     fn invalid(message: impl Into<String>) -> Self {
@@ -258,10 +314,15 @@ impl GatewayError {
             GatewayErrorCode::BlockDeleted,
             format!("block {block_id} does not exist in this document"),
         )
+        .with_target("block", block_id)
     }
 
     fn into_api_error(self) -> ApiError {
-        ApiError::new(self.code, self.message)
+        let error = ApiError::new(self.code, self.message);
+        match self.details {
+            Some(details) => error.with_details(*details),
+            None => error,
+        }
     }
 }
 
@@ -575,6 +636,90 @@ pub(crate) enum BlockOp {
     },
 }
 
+impl BlockOp {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::InsertBlock { .. } => "insert_block",
+            Self::InsertMarkdown { .. } => "insert_markdown",
+            Self::DeleteBlock { .. } => "delete_block",
+            Self::MoveBlock { .. } => "move_block",
+            Self::ReplaceBlockContent { .. } => "replace_block_content",
+            Self::SetBlockAttrs { .. } => "set_block_attrs",
+            Self::SetBlockType { .. } => "set_block_type",
+            Self::AddMark { .. } => "add_mark",
+            Self::RemoveMark { .. } => "remove_mark",
+            Self::SetLink { .. } => "set_link",
+            Self::CommentAdd { .. } => "comment.add",
+            Self::CommentReply { .. } => "comment.reply",
+            Self::CommentEdit { .. } => "comment.edit",
+            Self::CommentResolve { .. } => "comment.resolve",
+            Self::CommentDelete { .. } => "comment.delete",
+            Self::SuggestionAdd { .. } => "suggestion.add",
+            Self::SuggestionAddBlockDelete { .. } => "suggestion.add_block_delete",
+            Self::SuggestionAddMarkdown { .. } => "suggestion.add_markdown",
+            Self::SuggestionAccept { .. } => "suggestion.accept",
+            Self::SuggestionReject { .. } => "suggestion.reject",
+            Self::ConflictAdd { .. } => "conflict.add",
+            Self::ConflictKeepCanonical { .. } => "conflict.keep_canonical",
+            Self::ConflictAcceptIncoming { .. } => "conflict.accept_incoming",
+        }
+    }
+
+    fn primary_target(&self) -> Option<(&'static str, &str)> {
+        match self {
+            Self::InsertBlock {
+                block_id: Some(block_id),
+                ..
+            }
+            | Self::DeleteBlock { block_id }
+            | Self::MoveBlock { block_id, .. }
+            | Self::ReplaceBlockContent { block_id, .. }
+            | Self::SetBlockAttrs { block_id, .. }
+            | Self::SetBlockType { block_id, .. }
+            | Self::AddMark { block_id, .. }
+            | Self::RemoveMark { block_id, .. }
+            | Self::SetLink { block_id, .. }
+            | Self::CommentAdd { block_id, .. }
+            | Self::SuggestionAdd { block_id, .. }
+            | Self::SuggestionAddBlockDelete { block_id, .. } => Some(("block", block_id)),
+            Self::InsertMarkdown {
+                after_block_id: Some(block_id),
+                ..
+            }
+            | Self::SuggestionAddMarkdown {
+                after_block_id: Some(block_id),
+                ..
+            }
+            | Self::ConflictAdd {
+                after_block_id: Some(block_id),
+                ..
+            } => Some(("block", block_id)),
+            Self::CommentReply { item_id, .. }
+            | Self::CommentEdit { item_id, .. }
+            | Self::CommentResolve { item_id }
+            | Self::CommentDelete { item_id }
+            | Self::SuggestionAccept { item_id }
+            | Self::SuggestionReject { item_id } => Some(("review_item", item_id)),
+            Self::ConflictKeepCanonical { item_id } | Self::ConflictAcceptIncoming { item_id } => {
+                Some(("conflict", item_id))
+            }
+            Self::InsertBlock { block_id: None, .. }
+            | Self::InsertMarkdown {
+                after_block_id: None,
+                ..
+            }
+            | Self::SuggestionAddMarkdown {
+                after_block_id: None,
+                ..
+            }
+            | Self::ConflictAdd {
+                after_block_id: None,
+                ..
+            } => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ParsedTransaction {
     client_tx_id: String,
@@ -622,14 +767,33 @@ fn parse_transaction(payload: JsonValue) -> Result<ParsedTransaction, GatewayErr
 fn parse_op(index: usize, op: &JsonValue) -> Result<BlockOp, GatewayError> {
     serde_json::from_value::<BlockOp>(op.clone()).map_err(|error| {
         let op_name = op.get("op").and_then(JsonValue::as_str).unwrap_or("?");
-        let message = match marks_hint(op_name, op, &error.to_string()) {
+        let serde_message = error.to_string();
+        let message = match marks_hint(op_name, op, &serde_message) {
             Some(hint) => format!("{error}; {hint}"),
-            None => error.to_string(),
+            None => serde_message.clone(),
         };
-        GatewayError::invalid(format!(
+        let failure = GatewayError::invalid(format!(
             "invalid op at index {index} ({op_name}): {message}"
         ))
+        .with_operation(index, op_name);
+        match invalid_op_field(op_name, &serde_message) {
+            Some(field) => failure.with_field(field),
+            None => failure,
+        }
     })
+}
+
+fn invalid_op_field(op_name: &str, message: &str) -> Option<String> {
+    if message.contains("`marks`") {
+        return Some("marks".to_string());
+    }
+    if message.contains("unknown variant") {
+        return Some("op".to_string());
+    }
+    let field = message.split_once("field `")?.1.split_once('`')?.0;
+    (!field.is_empty())
+        .then(|| field.to_string())
+        .or_else(|| (op_name == "?").then(|| "op".to_string()))
 }
 
 /// The marks vocabulary is the most commonly guessed-wrong shape, so a parse
@@ -1545,7 +1709,8 @@ impl ApplyContext {
                 return Err(GatewayError::new(
                     GatewayErrorCode::SuggestionAlreadyResolved,
                     format!("suggestion {item_id} is already resolved"),
-                ));
+                )
+                .with_target("suggestion", item_id));
             }
             BlockReviewState::Invalidated | BlockReviewState::Orphaned => {
                 return Err(suggestion_invalidated(item_id));
@@ -1605,7 +1770,8 @@ impl ApplyContext {
             return Err(GatewayError::new(
                 GatewayErrorCode::SuggestionAlreadyResolved,
                 format!("suggestion {item_id} is already resolved"),
-            ));
+            )
+            .with_target("suggestion", item_id));
         }
         let now = self.now.clone();
         for item in &mut self.items {
@@ -1682,7 +1848,8 @@ impl ApplyContext {
                 format!(
                     "conflict {item_id} is a conflict-marker warning whose content already landed; keep canonical to dismiss it"
                 ),
-            ));
+            )
+            .with_target("conflict", item_id));
         }
         let after_block_id = (!conflict.block_id.is_empty()).then_some(conflict.block_id.clone());
         let insertion_position = self.markdown_insert_position(&after_block_id)? as usize;
@@ -1821,8 +1988,14 @@ fn apply_ops(
         now: now_timestamp(),
         minted: DeterministicIds::new(client_tx_id),
     };
-    for op in ops {
-        apply_op(&mut ctx, op)?;
+    for (op_index, op) in ops.iter().enumerate() {
+        apply_op(&mut ctx, op).map_err(|error| {
+            let error = error.with_operation(op_index, op.name());
+            match op.primary_target() {
+                Some((kind, id)) if !error.has_target() => error.with_target(kind, id),
+                _ => error,
+            }
+        })?;
     }
     // Deleting the last block leaves the canonical empty-document shape: one
     // empty paragraph row (Phase 1's "zero rows means no projection" rule).
@@ -2267,7 +2440,8 @@ fn require_open_conflict<'a>(
         return Err(GatewayError::new(
             GatewayErrorCode::Conflict,
             format!("conflict {item_id} is no longer open; re-read /review"),
-        ));
+        )
+        .with_target("conflict", item_id));
     }
     Ok(conflict)
 }
@@ -2279,6 +2453,7 @@ fn conflict_hunk_changed(item_id: &str) -> GatewayError {
             "conflict {item_id} no longer matches the canonical document; re-read /blocks and /review"
         ),
     )
+    .with_target("conflict", item_id)
 }
 
 fn require_suggestion<'a>(
@@ -2296,6 +2471,7 @@ fn anchor_not_found(item_id: &str) -> GatewayError {
         GatewayErrorCode::AnchorNotFound,
         format!("review item {item_id} does not exist"),
     )
+    .with_target("review_item", item_id)
 }
 
 fn suggestion_invalidated(item_id: &str) -> GatewayError {
@@ -2303,13 +2479,15 @@ fn suggestion_invalidated(item_id: &str) -> GatewayError {
         GatewayErrorCode::SuggestionInvalidated,
         format!("suggestion {item_id} was invalidated by a content change"),
     )
+    .with_target("suggestion", item_id)
 }
 
 fn validate_block_type(block_type: &str) -> Result<(), GatewayError> {
     if is_known_block_type(block_type) {
         return Ok(());
     }
-    let valid_types = known_block_types().collect::<Vec<_>>().join(", ");
+    let allowed_values: Vec<String> = known_block_types().map(str::to_string).collect();
+    let valid_types = allowed_values.join(", ");
     Err(GatewayError::new(
         GatewayErrorCode::UnknownBlockType,
         format!(
@@ -2318,7 +2496,8 @@ fn validate_block_type(block_type: &str) -> Result<(), GatewayError> {
              {{\"indent\": 1, \"listStyleType\": \"disc\" | \"decimal\" | \"todo\"}}",
             valid_types
         ),
-    ))
+    )
+    .with_validation("block_type", block_type, allowed_values))
 }
 
 /// The `id` attribute is the block identity on exported Slate elements; ops
@@ -3056,22 +3235,24 @@ fn transaction_status(
         return Ok("committed");
     };
     let Some(clock) = unquote_clock(token) else {
-        return Err(stale_base(token));
+        return Err(stale_base(token, &snapshot.head_version_id));
     };
     if clock == snapshot.head_version_id {
         Ok("committed")
     } else if snapshot.version_ids.contains(&clock) {
         Ok("committed_rebased")
     } else {
-        Err(stale_base(token))
+        Err(stale_base(token, &snapshot.head_version_id))
     }
 }
 
-fn stale_base(token: &str) -> GatewayError {
+fn stale_base(token: &str, current_clock: &str) -> GatewayError {
     GatewayError::new(
         GatewayErrorCode::StaleBase,
         format!("base_clock {token} does not name a known version of this document"),
     )
+    .with_validation("base_clock", token, Vec::new())
+    .with_current_value(current_clock)
 }
 
 /// Answers a duplicate `client_tx_id` from the stored history record: the

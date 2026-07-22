@@ -363,10 +363,16 @@ event stream open, periodically re-read both `$DOC/blocks` and `$DOC/review`.
 
 ## Error Handling
 
-Every `/v1` HTTP failure is `{code, retryable, message}`. `retryable: true`
-means the code-specific recovery may succeed; it does not mean blindly replay
-the same request. Retry at most once. `retryable: false` means no automatic
-retry is safe; fix, rebuild, or report the request.
+Every `/v1` HTTP failure is `{code, retryable, message, details?}`. Treat
+`message` as human-readable only. When `details` is present, use its structured
+fields instead of parsing prose: `op_index` and `op` name the failed transaction
+operation; `target: {kind, id}` names the affected entity; and `field`, `value`,
+`current_value`, or `allowed_values` describe validation and precondition
+failures. Inapplicable fields are omitted.
+
+`retryable: true` means the code-specific recovery may succeed; it does not
+mean blindly replay the same request. Retry at most once. `retryable: false`
+means no automatic retry is safe; fix, rebuild, or report the request.
 
 | Error | Action |
 |---|---|
@@ -382,7 +388,7 @@ retry is safe; fix, rebuild, or report the request.
 | `UNSUPPORTED_BLOCK_DOCUMENT` (422) | Not a Markdown document; block APIs do not apply |
 | `PAYLOAD_TOO_LARGE` (413) | Tmp Markdown content exceeds 1 MiB; shorten it |
 | `INVALID_TRANSACTION` (400) | Malformed envelope/op; fix the request |
-| `UNKNOWN_BLOCK_TYPE` (400) | `block_type` outside the vocabulary; the message lists valid types |
+| `UNKNOWN_BLOCK_TYPE` (400) | `block_type` outside the vocabulary; use `details.allowed_values` |
 | `INVALID_REQUEST` / `METHOD_NOT_ALLOWED` (400/405) | Fix the HTTP request |
 | `NOT_FOUND` / `GONE` (404/410) | Check the locator or document lifecycle |
 | `CONFLICT` (409) | Re-read state and reconsider the requested operation |

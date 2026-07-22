@@ -100,6 +100,7 @@ impl ApiErrorCode {
 pub struct ApiError {
     code: ApiErrorCode,
     message: String,
+    details: Option<Box<ApiErrorDetails>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, ToSchema)]
@@ -107,6 +108,67 @@ pub struct ApiErrorResponse {
     pub code: ApiErrorCode,
     pub retryable: bool,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<ApiErrorDetails>,
+}
+
+/// Machine-actionable context for a failed request. Transaction failures
+/// identify the exact op and target; validation failures may additionally
+/// identify the field, rejected value, current value, or allowed values.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ApiErrorDetails {
+    /// Zero-based index into a transaction's `ops` array.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op_index: Option<usize>,
+    /// Operation discriminator, such as `replace_block_content`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op: Option<String>,
+    /// Addressable entity involved in the failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<ApiErrorTarget>,
+    /// Request field that failed validation or a precondition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    /// Rejected request value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// Current server value, when useful for rebuilding a request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_value: Option<String>,
+    /// Accepted values for a closed vocabulary.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_values: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ApiErrorTarget {
+    /// Entity category, such as `block`, `review_item`, or `conflict`.
+    pub kind: String,
+    /// Stable identifier copied from the request or current review state.
+    pub id: String,
+}
+
+impl ApiErrorDetails {
+    pub(crate) fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+
+    fn redacted(mut self) -> Self {
+        fn redact(value: String) -> String {
+            redact_secret_tokens(&value).into_owned()
+        }
+
+        self.op = self.op.map(redact);
+        self.target = self.target.map(|target| ApiErrorTarget {
+            kind: redact(target.kind),
+            id: redact(target.id),
+        });
+        self.field = self.field.map(redact);
+        self.value = self.value.map(redact);
+        self.current_value = self.current_value.map(redact);
+        self.allowed_values = self.allowed_values.into_iter().map(redact).collect();
+        self
+    }
 }
 
 impl ApiError {
@@ -114,7 +176,13 @@ impl ApiError {
         Self {
             code,
             message: message.into(),
+            details: None,
         }
+    }
+
+    pub(crate) fn with_details(mut self, details: ApiErrorDetails) -> Self {
+        self.details = (!details.is_empty()).then(|| Box::new(details));
+        self
     }
 
     pub(crate) fn status(&self) -> StatusCode {
@@ -191,6 +259,7 @@ impl IntoResponse for ApiError {
             code,
             retryable: code.retryable(),
             message,
+            details: self.details.map(|details| (*details).redacted()),
         };
         let mut response = (status, Json(payload)).into_response();
         if status == StatusCode::SERVICE_UNAVAILABLE {
@@ -231,4 +300,42 @@ pub(crate) fn fallback_error_for_status(status: StatusCode) -> ApiError {
         _ => "internal error",
     };
     ApiError::new(code, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SECRET: &str = "0123456789abcdefABCDEF0123456789";
+
+    #[test]
+    fn structured_error_details_redact_tmp_document_secrets() {
+        let details = ApiErrorDetails {
+            op_index: Some(3),
+            op: Some(format!("operation {SECRET}")),
+            target: Some(ApiErrorTarget {
+                kind: SECRET.to_string(),
+                id: SECRET.to_string(),
+            }),
+            field: Some(SECRET.to_string()),
+            value: Some(format!("rejected {SECRET}")),
+            current_value: Some(SECRET.to_string()),
+            allowed_values: vec![SECRET.to_string(), "safe".to_string()],
+        }
+        .redacted();
+
+        assert_eq!(details.op_index, Some(3));
+        assert_eq!(details.op.as_deref(), Some("operation <tmp-secret>"));
+        assert_eq!(
+            details.target,
+            Some(ApiErrorTarget {
+                kind: "<tmp-secret>".to_string(),
+                id: "<tmp-secret>".to_string(),
+            })
+        );
+        assert_eq!(details.field.as_deref(), Some("<tmp-secret>"));
+        assert_eq!(details.value.as_deref(), Some("rejected <tmp-secret>"));
+        assert_eq!(details.current_value.as_deref(), Some("<tmp-secret>"));
+        assert_eq!(details.allowed_values, ["<tmp-secret>", "safe"]);
+    }
 }
