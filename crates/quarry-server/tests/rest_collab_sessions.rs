@@ -1567,6 +1567,70 @@ async fn session_transaction_lands_in_live_doc_and_rows_before_ack() -> anyhow::
 }
 
 #[tokio::test]
+async fn session_transaction_canonicalizes_list_attrs_before_ack() -> anyhow::Result<()> {
+    let (_root, addr, app, store, server) = spawn_session_server().await;
+    put_block_markdown(&app, "live.md", "Existing.\n").await;
+    let document_id = document_id_of(&store, "live.md").await;
+    get_block_tree(&app, "live.md").await;
+
+    let (mut socket, doc) = connect_session(addr, &document_id).await;
+    let ack = commit_block_transaction(
+        &app,
+        "live.md",
+        block_tx(
+            "tx-live-list-attrs",
+            serde_json::json!([{
+                "op": "insert_block",
+                "position": 1,
+                "block_type": "p",
+                "attrs": {
+                    "listStyleType": "disc",
+                    "listStart": 2,
+                    "checked": true
+                },
+                "text": "Bullet."
+            }]),
+        ),
+    )
+    .await;
+
+    let tree = get_block_tree(&app, "live.md").await;
+    assert_eq!(tree["document_clock"], ack["document_clock"]);
+    assert_eq!(
+        tree["blocks"][1]["attrs"],
+        serde_json::json!({"indent": 1, "listStyleType": "disc"})
+    );
+
+    wait_for_yjs_plain_text(&mut socket, &doc, "Existing.Bullet.").await;
+    let live_attrs = yjs_slate_children(&doc)
+        .into_iter()
+        .find_map(|node| match node {
+            Node::Element {
+                mut attrs,
+                children,
+                ..
+            } if children
+                .iter()
+                .any(|child| matches!(child, Node::Text { text, .. } if text == "Bullet.")) =>
+            {
+                attrs.shift_remove("id");
+                Some(attrs)
+            }
+            _ => None,
+        })
+        .expect("live list item should be present");
+    assert_eq!(
+        serde_json::to_value(live_attrs)?,
+        serde_json::json!({"indent": 1, "listStyleType": "disc"})
+    );
+
+    socket.close(None).await.unwrap();
+    server.abort();
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn invalid_session_transaction_does_not_poison_the_live_doc() -> anyhow::Result<()> {
     let (_root, addr, app, store, server) = spawn_session_server().await;
     put_block_markdown(&app, "live.md", "Stable paragraph.\n").await;

@@ -201,7 +201,7 @@ Edit ops:
 | `delete_block` | `{block_id}` (descendants too) |
 | `move_block` | `{block_id, position, parent_block_id?}` — placement only |
 | `replace_block_content` | `{block_id, text, marks?, links?}` |
-| `set_block_type` | `{block_id, block_type, attrs?}` — compatible content/anchors preserved |
+| `set_block_type` | `{block_id, block_type, attrs?}` — compatible content/anchors/attrs preserved; leaving a list paragraph removes its list shape |
 | `set_block_attrs` | `{block_id, attrs}` — replaces attrs wholesale |
 | `add_mark` | `{block_id, start, end, marks}` — `marks` is an object, e.g. `{"bold": true}` |
 | `remove_mark` | `{block_id, start, end, marks}` — `marks` is a LIST of names, e.g. `["bold"]` |
@@ -211,8 +211,11 @@ Block types: `p`, `h1`–`h6`, `blockquote`, `code_block` (+ `code_line`
 children), `mermaid`, `table` (+ `tr`/`th`/`td` children), `img`, `hr`,
 `raw_markdown`. There is NO list type (`ul`/`ol`/`li` are rejected): a list
 item is a `p` block with attrs
-`{"indent": 1, "listStyleType": "disc" | "decimal" | "todo"}` (`indent`
-defaults to 1; `checked` for todos, `listStart` for ordered lists).
+`{"indent": 1, "listStyleType": "disc" | "decimal" | "todo"}`. `indent` is
+a positive integer and defaults to 1. Boolean `checked` defaults to false and
+is kept only for `todo`; non-negative integer `listStart` is kept only for
+`decimal`. Quarry removes those fields from other styles before acknowledging
+the transaction.
 
 Only text-backed blocks (`p`, headings, `blockquote`, and `code_line`) accept
 flat `text`, `marks`, or `links`. Container, void, and `raw_markdown` blocks

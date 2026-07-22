@@ -69,8 +69,9 @@
 //!   insert grows a formatting run — the Gate A formatting-inheritance rule).
 //! - `set_block_type` changes `block_type` while preserving `block_id`, text,
 //!   marks, links, children, and anchors (design delta 3). If `attrs` is
-//!   provided it replaces the block's attrs wholesale (the caller normalizes
-//!   them for the new type); otherwise attrs are kept unchanged.
+//!   provided it replaces the block's attrs wholesale (the gateway normalizes
+//!   them for the new type); otherwise compatible attrs are kept. Converting
+//!   a list paragraph to another type drops its list-only attrs.
 //! - `raw_markdown` blocks carry their source in `attrs.markdown` and have no
 //!   flat text, so text/mark/link/anchor ops against them — and
 //!   `set_block_type` to or from `raw_markdown` — are `INVALID_TRANSACTION`.
@@ -1186,7 +1187,7 @@ impl ApplyContext {
         }
         validate_block_type(block_type)?;
         validate_attrs(attrs)?;
-        let attrs = normalize_list_attrs(attrs)?;
+        let attrs = normalize_list_attrs(block_type, attrs)?;
         if !carries_inline_content(block_type)
             && (!text.is_empty() || !marks.is_empty() || !links.is_empty())
         {
@@ -1357,8 +1358,8 @@ impl ApplyContext {
 
     fn set_block_attrs(&mut self, block_id: &str, attrs: &Attrs) -> Result<(), GatewayError> {
         validate_attrs(attrs)?;
-        let attrs = normalize_list_attrs(attrs)?;
         let block = require_block_mut(&mut self.model, block_id)?;
+        let attrs = normalize_list_attrs(&block.block_type, attrs)?;
         if block.block_type == "raw_markdown" {
             // Attrs replace wholesale: dropping or blanking the markdown
             // attribute would silently erase the block's content.
@@ -1376,13 +1377,9 @@ impl ApplyContext {
         attrs: &Option<Attrs>,
     ) -> Result<(), GatewayError> {
         validate_block_type(block_type)?;
-        let attrs = attrs
-            .as_ref()
-            .map(|attrs| {
-                validate_attrs(attrs)?;
-                normalize_list_attrs(attrs)
-            })
-            .transpose()?;
+        if let Some(attrs) = attrs {
+            validate_attrs(attrs)?;
+        }
         let has_children = self.model.has_children(block_id);
         let block = require_block_mut(&mut self.model, block_id)?;
         if block.block_type == "raw_markdown" || block_type == "raw_markdown" {
@@ -1404,10 +1401,12 @@ impl ApplyContext {
                 "set_block_type cannot convert container block {block_id} to {block_type}"
             )));
         }
+        let attrs = match attrs {
+            Some(attrs) => normalize_list_attrs(block_type, attrs)?,
+            None => normalize_inherited_list_attrs(block_type, &block.attrs)?,
+        };
         block.block_type = block_type.to_string();
-        if let Some(attrs) = attrs {
-            block.attrs = attrs;
-        }
+        block.attrs = attrs;
         self.changed.insert(block_id.to_string());
         Ok(())
     }
@@ -2513,26 +2512,118 @@ fn validate_attrs(attrs: &Attrs) -> Result<(), GatewayError> {
 
 const LIST_STYLE_TYPES: [&str; 3] = ["disc", "decimal", "todo"];
 
-/// Completes and validates the list shape on block attrs. The browser
-/// editor's list plugin requires `indent` next to `listStyleType` and
-/// silently strips the list shape when it is missing — a commit would
-/// succeed and the data would vanish downstream — so the gateway defaults
-/// `indent` to 1 and rejects list styles the editor cannot represent.
-fn normalize_list_attrs(attrs: &Attrs) -> Result<Attrs, GatewayError> {
+/// Canonicalizes the documented list subset before rows or a live session see
+/// it. Plate treats `listStyleType` as authoritative and may later remove
+/// incompatible list-only fields; doing that after the transaction ack would
+/// create a second checkpoint/clock for one logical mutation. Normalize them
+/// here instead: lists are paragraphs with a positive integer `indent`,
+/// `listStart` belongs only to decimal lists, and `checked` belongs only to
+/// todo lists (defaulting to false).
+fn normalize_list_attrs(block_type: &str, attrs: &Attrs) -> Result<Attrs, GatewayError> {
     let mut attrs = attrs.clone();
-    let Some(style) = attrs.get("listStyleType") else {
+    let Some(style_value) = attrs.get("listStyleType") else {
+        attrs.shift_remove("listStart");
+        attrs.shift_remove("checked");
         return Ok(attrs);
     };
-    if !style
+    let Some(style) = style_value
         .as_str()
-        .is_some_and(|style| LIST_STYLE_TYPES.contains(&style))
-    {
+        .filter(|style| LIST_STYLE_TYPES.contains(style))
+        .map(str::to_string)
+    else {
         return Err(GatewayError::invalid(format!(
-            "unknown listStyleType {style}; valid values: \"disc\", \"decimal\", \"todo\""
-        )));
+            "unknown listStyleType {style_value}; valid values: \"disc\", \"decimal\", \"todo\""
+        ))
+        .with_validation(
+            "attrs.listStyleType",
+            display_json_value(style_value),
+            LIST_STYLE_TYPES.map(str::to_string).to_vec(),
+        ));
+    };
+    if block_type != "p" {
+        return Err(GatewayError::invalid(format!(
+            "listStyleType is valid only on p blocks, not {block_type}"
+        ))
+        .with_validation("block_type", block_type, vec!["p".to_string()]));
     }
-    attrs.entry("indent".to_string()).or_insert(json!(1));
+
+    match attrs.get("indent") {
+        None => {
+            attrs.insert("indent".to_string(), json!(1));
+        }
+        Some(indent) if indent.as_u64().is_some_and(|indent| indent >= 1) => {}
+        Some(indent) => {
+            return Err(GatewayError::invalid(format!(
+                "list indent must be a positive integer, got {indent}"
+            ))
+            .with_validation("attrs.indent", display_json_value(indent), Vec::new()));
+        }
+    }
+
+    match style.as_str() {
+        "disc" => {
+            attrs.shift_remove("listStart");
+            attrs.shift_remove("checked");
+        }
+        "decimal" => {
+            attrs.shift_remove("checked");
+            if let Some(list_start) = attrs.get("listStart")
+                && list_start.as_u64().is_none()
+            {
+                return Err(GatewayError::invalid(format!(
+                    "decimal listStart must be a non-negative integer, got {list_start}"
+                ))
+                .with_validation(
+                    "attrs.listStart",
+                    display_json_value(list_start),
+                    Vec::new(),
+                ));
+            }
+        }
+        "todo" => {
+            attrs.shift_remove("listStart");
+            match attrs.get("checked") {
+                None => {
+                    attrs.insert("checked".to_string(), json!(false));
+                }
+                Some(checked) if checked.is_boolean() => {}
+                Some(checked) => {
+                    return Err(GatewayError::invalid(format!(
+                        "todo checked must be a boolean, got {checked}"
+                    ))
+                    .with_validation(
+                        "attrs.checked",
+                        display_json_value(checked),
+                        ["false", "true"].map(str::to_string).to_vec(),
+                    ));
+                }
+            }
+        }
+        _ => unreachable!("list style was checked against LIST_STYLE_TYPES"),
+    }
     Ok(attrs)
+}
+
+/// `set_block_type` without explicit attrs normally preserves them, but list
+/// identity cannot survive a conversion away from `p`: the browser would
+/// remove these fields on receipt. Preserve every non-list attr while
+/// dropping the complete list shape before the ack.
+fn normalize_inherited_list_attrs(block_type: &str, attrs: &Attrs) -> Result<Attrs, GatewayError> {
+    if block_type == "p" || !attrs.contains_key("listStyleType") {
+        return normalize_list_attrs(block_type, attrs);
+    }
+    let mut attrs = attrs.clone();
+    for field in ["listStyleType", "indent", "listStart", "checked"] {
+        attrs.shift_remove(field);
+    }
+    Ok(attrs)
+}
+
+fn display_json_value(value: &JsonValue) -> String {
+    value
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| value.to_string())
 }
 
 /// A raw_markdown block's whole content lives in its `markdown` attribute;
@@ -3619,18 +3710,18 @@ mod tests {
         );
     }
 
-    /// The silent failure that shipped: `listStyleType` without `indent`
-    /// committed, then the browser editor's list plugin stripped the list
-    /// shape. The gateway must complete the pair so the commit and the
-    /// surviving data agree.
+    /// The shape an agent sent during a real structural edit: sequential
+    /// `listStart` and `checked` values on an unordered list are meaningless
+    /// and may be removed by the editor after the ack. The committed row must
+    /// already be the browser-stable shape.
     #[test]
-    fn list_style_type_without_indent_gets_indent_defaulted_to_1() {
+    fn unordered_list_attrs_are_canonicalized_before_commit() {
         let state = state_with_rows(vec![paragraph("b1", 0, "Existing.")]);
         let ops = [op(json!({
             "op": "insert_block",
             "position": 1,
             "block_type": "p",
-            "attrs": {"listStyleType": "disc"},
+            "attrs": {"listStyleType": "disc", "listStart": 2, "checked": true},
             "text": "CPU: AMD Ryzen 5 7600"
         }))];
 
@@ -3643,21 +3734,42 @@ mod tests {
             .expect("inserted row");
         assert_eq!(item.attrs.get("listStyleType"), Some(&json!("disc")));
         assert_eq!(item.attrs.get("indent"), Some(&json!(1)));
+        assert!(!item.attrs.contains_key("listStart"));
+        assert!(!item.attrs.contains_key("checked"));
     }
 
     #[test]
-    fn set_block_attrs_also_defaults_list_indent() {
+    fn todo_list_attrs_default_checked_and_drop_ordering() {
         let state = state_with_rows(vec![paragraph("b1", 0, "Item one.")]);
         let ops = [op(json!({
             "op": "set_block_attrs",
             "block_id": "b1",
-            "attrs": {"listStyleType": "decimal"}
+            "attrs": {"listStyleType": "todo", "listStart": 9}
         }))];
 
         let outcome = apply_ops(&state, &ops, &actor(), "tx-attrs").unwrap();
 
         let item = outcome.rows.first().expect("row");
         assert_eq!(item.attrs.get("indent"), Some(&json!(1)));
+        assert_eq!(item.attrs.get("checked"), Some(&json!(false)));
+        assert!(!item.attrs.contains_key("listStart"));
+    }
+
+    #[test]
+    fn decimal_list_attrs_keep_ordering_and_drop_todo_state() {
+        let state = state_with_rows(vec![paragraph("b1", 0, "Item one.")]);
+        let ops = [op(json!({
+            "op": "set_block_attrs",
+            "block_id": "b1",
+            "attrs": {"indent": 2, "listStyleType": "decimal", "listStart": 7, "checked": true}
+        }))];
+
+        let outcome = apply_ops(&state, &ops, &actor(), "tx-decimal").unwrap();
+
+        let item = outcome.rows.first().expect("row");
+        assert_eq!(item.attrs.get("indent"), Some(&json!(2)));
+        assert_eq!(item.attrs.get("listStart"), Some(&json!(7)));
+        assert!(!item.attrs.contains_key("checked"));
     }
 
     /// An unrepresentable list style would be stripped by the editor just
@@ -3683,6 +3795,77 @@ mod tests {
             "got: {}",
             error.message()
         );
+        let details = error.details.as_deref().expect("structured details");
+        assert_eq!(details.op_index, Some(0));
+        assert_eq!(details.field.as_deref(), Some("attrs.listStyleType"));
+        assert_eq!(details.value.as_deref(), Some("circle"));
+        assert_eq!(details.allowed_values, ["disc", "decimal", "todo"]);
+    }
+
+    #[test]
+    fn malformed_list_attrs_are_rejected_before_commit() {
+        let state = state_with_rows(vec![paragraph("b1", 0, "Existing.")]);
+        let ops = [op(json!({
+            "op": "insert_block",
+            "position": 1,
+            "block_type": "p",
+            "attrs": {"indent": 0, "listStyleType": "todo", "checked": "yes"},
+            "text": "item"
+        }))];
+
+        let error = apply_ops(&state, &ops, &actor(), "tx-bad-list").unwrap_err();
+
+        assert_eq!(error.code(), GatewayErrorCode::InvalidTransaction);
+        let details = error.details.as_deref().expect("structured details");
+        assert_eq!(details.field.as_deref(), Some("attrs.indent"));
+        assert_eq!(details.value.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn list_attrs_are_rejected_on_non_paragraph_blocks() {
+        let state = state_with_rows(vec![paragraph("b1", 0, "Existing.")]);
+        let ops = [op(json!({
+            "op": "insert_block",
+            "position": 1,
+            "block_type": "h2",
+            "attrs": {"indent": 1, "listStyleType": "disc"},
+            "text": "Not a list item"
+        }))];
+
+        let error = apply_ops(&state, &ops, &actor(), "tx-heading-list").unwrap_err();
+
+        assert_eq!(error.code(), GatewayErrorCode::InvalidTransaction);
+        let details = error.details.as_deref().expect("structured details");
+        assert_eq!(details.field.as_deref(), Some("block_type"));
+        assert_eq!(details.value.as_deref(), Some("h2"));
+        assert_eq!(details.allowed_values, ["p"]);
+    }
+
+    #[test]
+    fn changing_a_list_paragraph_type_drops_only_its_list_shape() {
+        let mut item = paragraph("b1", 0, "Former list item.");
+        item.attrs = serde_json::from_value(json!({
+            "indent": 2,
+            "listStyleType": "disc",
+            "listStart": 2,
+            "checked": true,
+            "custom": "keep"
+        }))
+        .expect("attrs");
+        let state = state_with_rows(vec![item]);
+        let ops = [op(json!({
+            "op": "set_block_type",
+            "block_id": "b1",
+            "block_type": "h2"
+        }))];
+
+        let outcome = apply_ops(&state, &ops, &actor(), "tx-list-heading").unwrap();
+
+        let heading = outcome.rows.first().expect("row");
+        let expected_attrs: Attrs =
+            serde_json::from_value(json!({"custom": "keep"})).expect("attrs");
+        assert_eq!(heading.block_type, "h2");
+        assert_eq!(heading.attrs, expected_attrs);
     }
 
     /// A session-mode retry after a failed commit re-runs the same ops; the

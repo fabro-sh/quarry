@@ -1781,6 +1781,62 @@ async fn block_transaction_validation_failure_names_the_value_and_vocabulary() -
 }
 
 #[tokio::test]
+async fn block_transaction_canonicalizes_list_attrs_before_ack() -> anyhow::Result<()> {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "doc.md", "Existing.\n").await;
+    get_block_tree(&app, "doc.md").await;
+
+    let ack = commit_block_transaction(
+        &app,
+        "doc.md",
+        block_tx(
+            "tx-list-attrs",
+            serde_json::json!([
+                {
+                    "op": "insert_block",
+                    "position": 1,
+                    "block_type": "p",
+                    "attrs": {"listStyleType": "disc", "listStart": 2, "checked": true},
+                    "text": "Bullet."
+                },
+                {
+                    "op": "insert_block",
+                    "position": 2,
+                    "block_type": "p",
+                    "attrs": {"listStyleType": "todo", "listStart": 3},
+                    "text": "Task."
+                },
+                {
+                    "op": "insert_block",
+                    "position": 3,
+                    "block_type": "p",
+                    "attrs": {"indent": 2, "listStyleType": "decimal", "listStart": 7, "checked": true},
+                    "text": "Ordered."
+                }
+            ]),
+        ),
+    )
+    .await;
+
+    let tree = get_block_tree(&app, "doc.md").await;
+    assert_eq!(tree["document_clock"], ack["document_clock"]);
+    assert_eq!(
+        tree["blocks"][1]["attrs"],
+        serde_json::json!({"indent": 1, "listStyleType": "disc"})
+    );
+    assert_eq!(
+        tree["blocks"][2]["attrs"],
+        serde_json::json!({"indent": 1, "listStyleType": "todo", "checked": false})
+    );
+    assert_eq!(
+        tree["blocks"][3]["attrs"],
+        serde_json::json!({"indent": 2, "listStyleType": "decimal", "listStart": 7})
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn block_transaction_multi_op_success_commits_one_version() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "doc.md", "Start.\n").await;

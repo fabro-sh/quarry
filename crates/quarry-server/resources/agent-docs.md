@@ -228,7 +228,8 @@ the ack still use the recovery rules below.
 - `set_block_type` — `{block_id, block_type, attrs?}`. Changes the type while
   preserving compatible content and anchors. It rejects conversions that
   would discard flat text or container children, and is not valid to or from
-  `raw_markdown`.
+  `raw_markdown`. Without explicit `attrs`, compatible attrs are preserved;
+  converting a list paragraph to another type removes its list shape.
 - `set_block_attrs` — `{block_id, attrs}`. Replaces attrs wholesale (for
   `raw_markdown` blocks, `attrs.markdown` must stay a non-empty string).
 - `add_mark` — `{block_id, start, end, marks}` over UTF-16 offsets. `marks`
@@ -242,10 +243,12 @@ Block types are `p`, `h1`–`h6` (the heading level IS the type), `blockquote`,
 `code_block` (with `code_line` children), `mermaid`, `table` (with `tr` and
 `th`/`td` children), `img`, `hr`, and `raw_markdown`. There is no list-item
 type: a list item is a `p` row whose attrs carry the list shape —
-`{"indent": 1, "listStyleType": "disc" | "decimal" | "todo"}` plus `checked`
-for todos and `listStart` for ordered lists (`indent` defaults to 1 when
-omitted). Copy unfamiliar shapes from a `GET /blocks` read of a document that
-already contains them.
+`{"indent": 1, "listStyleType": "disc" | "decimal" | "todo"}`. `indent` is
+a positive integer and defaults to 1. `checked` is boolean, defaults to false,
+and is retained only for `todo`; non-negative integer `listStart` is retained
+only for `decimal`. Quarry removes those list-only fields from other styles
+before acknowledging a transaction. Copy unfamiliar shapes from a
+`GET /blocks` read of a document that already contains them.
 
 Only text-backed blocks (`p`, headings, `blockquote`, and `code_line`) accept
 flat `text`, `marks`, or `links`. Container, void, and `raw_markdown` blocks
