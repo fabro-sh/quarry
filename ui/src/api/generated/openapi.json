@@ -208,7 +208,19 @@
           {
             "name": "If-Match",
             "in": "header",
-            "description": "Optional ETag/document clock used as the merge base for Markdown writes",
+            "description": "Optional strict ETag precondition; must match the current document head",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "X-Quarry-Merge-Base",
+            "in": "header",
+            "description": "Optional known version used as the three-way merge base",
             "required": false,
             "schema": {
               "type": [
@@ -1282,7 +1294,7 @@
       },
       "AgentReviewConflict": {
         "type": "object",
-        "description": "A `kind = conflict` review item: a diff3 merge kept the canonical side and\nrecorded the losing incoming hunk here. Resolves and deletes through\n`POST .../transactions` with `comment.resolve` / `comment.delete`;\nresolution never mutates the document.",
+        "description": "A `kind = conflict` review item: a diff3 merge kept the canonical side and\nrecorded the losing incoming hunk here. `conflict.keep_canonical` resolves\nwithout a content change; `conflict.accept_incoming` verifies and replaces\nthe retained hunk atomically.",
         "required": [
           "id",
           "status",
@@ -2492,6 +2504,35 @@
           }
         }
       },
+      "PutConflictOutcome": {
+        "type": "object",
+        "required": [
+          "id",
+          "base_markdown",
+          "incoming_markdown",
+          "canonical_markdown"
+        ],
+        "properties": {
+          "after_block_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "base_markdown": {
+            "type": "string"
+          },
+          "canonical_markdown": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "incoming_markdown": {
+            "type": "string"
+          }
+        }
+      },
       "PutDocumentOutcome": {
         "allOf": [
           {
@@ -2501,11 +2542,18 @@
             "type": "object",
             "required": [
               "changed",
-              "conflicts"
+              "conflicts",
+              "conflict_items"
             ],
             "properties": {
               "changed": {
                 "type": "boolean"
+              },
+              "conflict_items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PutConflictOutcome"
+                }
               },
               "conflicts": {
                 "type": "integer",
@@ -2514,7 +2562,7 @@
             }
           }
         ],
-        "description": "The document `PUT` reply: the committed outcome plus the merge verdict.\nA `PUT` that hits diff3 conflicts still returns 200 — the transaction\nthat committed is the one recording the conflict — so the outcome alone\ncannot tell \"applied\" from \"parked in review\". `conflicts` closes that\ngap: it counts the conflict review items THIS write recorded; any\nnon-zero value means the document kept the current text in those regions\nand the incoming Markdown rides in `GET …/review`. `changed` is `false`\nwhen a byte-identical write short-circuited without a commit. Raw\n(non-Markdown) writes never merge: always `changed: true, conflicts: 0`."
+        "description": "The document `PUT` reply: the committed outcome plus the merge verdict.\nA `PUT` that hits diff3 conflicts still returns 200 — the transaction\nthat committed is the one recording the conflict — so the outcome alone\ncannot tell \"applied\" from \"parked in review\". `conflicts` closes that\ngap: it counts the open conflict review items this write created or reused;\n`conflict_items` returns their stable ids and hunk payloads. Any non-zero\nvalue means the document kept the current text in those regions and the\nincoming Markdown rides in `GET …/review`. `changed` is `false`\nwhen a byte-identical write short-circuited without a commit. Raw\n(non-Markdown) writes never merge: always `changed: true, conflicts: 0`."
       },
       "ReindexReport": {
         "type": "object",

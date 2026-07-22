@@ -9,8 +9,8 @@ use crate::{
     ApiError, ApiErrorResponse, AppState, CreateCollabInviteRequest, DocumentSubResource,
     MoveRequest, QuarryError, TtlRequest, TtlResponse, agent_id_from_headers_or_body,
     bytes_response_with_expiry, content_type, gateway, insert_document_headers, json_response,
-    json_with_etag, metadata_from_headers, normalized_agent_status, optional_header,
-    parse_document_subresource, precondition_from_headers,
+    json_with_etag, merge_base_from_headers, metadata_from_headers, normalized_agent_status,
+    optional_header, parse_document_subresource, precondition_from_headers,
     reject_block_document_downgrade_for_library, touch_agent_presence,
     transaction_metadata_from_headers,
 };
@@ -474,7 +474,12 @@ pub(crate) async fn get_document(
         (
             "If-Match" = Option<String>,
             Header,
-            description = "Optional ETag/document clock used as the merge base for Markdown writes"
+            description = "Optional strict ETag precondition; must match the current document head"
+        ),
+        (
+            "X-Quarry-Merge-Base" = Option<String>,
+            Header,
+            description = "Optional known version used as the three-way merge base for Markdown writes"
         ),
         (
             "If-None-Match" = Option<String>,
@@ -538,6 +543,7 @@ pub(crate) async fn put_document(
                     body: body.to_vec(),
                     metadata,
                     precondition,
+                    merge_base: merge_base_from_headers(&headers)?,
                     origin_id,
                     transaction,
                 },
@@ -564,6 +570,7 @@ pub(crate) async fn put_document(
         outcome,
         changed: true,
         conflicts: 0,
+        conflict_items: Vec::new(),
     };
     json_with_etag(StatusCode::OK, &reply, &reply.outcome.version.id)
 }

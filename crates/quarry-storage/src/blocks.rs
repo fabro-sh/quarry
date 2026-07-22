@@ -244,14 +244,24 @@ pub enum BlockWriteBase {
     /// current canonical state, so nothing can conflict and every incoming
     /// difference applies.
     CurrentCanonical,
-    /// A stored shadow base: Git peer bases, FUSE open-handle bases, REST
-    /// `If-Match` version content. The full text (frontmatter tolerated);
+    /// A stored shadow base: Git peer bases, FUSE open-handle bases, or an
+    /// explicit REST merge-base version. The full text (frontmatter tolerated);
     /// `version_id` engages the gateway's rebase acks when it names a known
     /// version.
     Markdown {
         markdown: String,
         version_id: Option<String>,
     },
+}
+
+/// One open diff3 artifact produced or reused by a whole-file write.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockMarkdownConflict {
+    pub id: String,
+    pub after_block_id: Option<String>,
+    pub base_markdown: String,
+    pub incoming_markdown: String,
+    pub canonical_markdown: String,
 }
 
 /// What a reconciled whole-file write did.
@@ -269,6 +279,9 @@ pub struct BlockMarkdownWriteOutcome {
     pub canonical_body: String,
     /// Conflict review items recorded by this write.
     pub conflicts: usize,
+    /// Stable ids and hunk payloads for the open conflicts relevant to this
+    /// write. Repeated identical merges reuse the existing item.
+    pub conflict_items: Vec<BlockMarkdownConflict>,
 }
 
 /// The Phase 4 whole-file write path. Reconciliation failures never fail the

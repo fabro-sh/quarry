@@ -16,8 +16,9 @@
 //!   handle's base advances to whatever it last wrote).
 //! - **CLI** and missing-base cases use [`BlockWriteBase::CurrentCanonical`]
 //!   — the two-way degenerate merge that can never conflict.
-//! - **REST `PUT`** resolves `If-Match` to that version's stored content as
-//!   the base (falling back to two-way without one).
+//! - **REST `PUT`** treats `If-Match` as a strict head precondition and uses
+//!   `X-Quarry-Merge-Base` to select historical content for diff3 (falling
+//!   back to two-way without one).
 //!
 //! True conflicts never fail the write: each [`ReconcileConflict`] becomes a
 //! `conflict.add` op in the SAME transaction, so artifacts commit atomically
@@ -49,13 +50,13 @@ use crate::gateway::{
 use crate::log_redaction;
 use axum::http::StatusCode;
 use quarry_collab_codec::{
-    BlockRow, ReconcileBase, ReconcileOp, block_rows_to_markdown, reconcile,
+    BlockRow, ReconcileBase, ReconcileConflict, ReconcileOp, block_rows_to_markdown, reconcile,
 };
 use quarry_core::{DocumentSource, QuarryError, WriteOutcome, WritePrecondition};
 use quarry_storage::{
-    BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockMarkdownWriter, BlockReviewKind,
-    BlockWriteBase, DocumentKind, DocumentScopeRef, document_kind, merge_json,
-    split_markdown_frontmatter,
+    BlockMarkdownConflict, BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockMarkdownWriter,
+    BlockReviewItem, BlockReviewKind, BlockReviewState, BlockWriteBase, DocumentKind,
+    DocumentScopeRef, document_kind, merge_json, split_markdown_frontmatter,
 };
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -64,15 +65,15 @@ use std::pin::Pin;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-/// The Markdown `PUT` body for a BlockDocument: `If-Match` selects the base
-/// version (its stored content), `If-None-Match` is a create, no
-/// precondition degenerates to two-way. An `If-Match` naming an unknown
-/// version keeps the legacy 412 (client confusion, not a merge input);
-/// a KNOWN stale version merges instead of failing.
+/// The Markdown `PUT` body for a BlockDocument: `If-Match` is strict
+/// compare-and-swap, `If-None-Match` is a create, and `merge_base` selects a
+/// known historical version for three-way reconciliation. Without an explicit
+/// merge base, reconciliation degenerates to two-way against the current head.
 pub(crate) struct PutBlockDocumentRequest {
     pub body: Vec<u8>,
     pub metadata: JsonValue,
     pub precondition: WritePrecondition,
+    pub merge_base: Option<String>,
     pub origin_id: Option<String>,
     pub transaction: quarry_storage::TransactionMetadata,
 }
@@ -81,9 +82,10 @@ pub(crate) struct PutBlockDocumentRequest {
 /// A `PUT` that hits diff3 conflicts still returns 200 — the transaction
 /// that committed is the one recording the conflict — so the outcome alone
 /// cannot tell "applied" from "parked in review". `conflicts` closes that
-/// gap: it counts the conflict review items THIS write recorded; any
-/// non-zero value means the document kept the current text in those regions
-/// and the incoming Markdown rides in `GET …/review`. `changed` is `false`
+/// gap: it counts the open conflict review items this write created or reused;
+/// `conflict_items` returns their stable ids and hunk payloads. Any non-zero
+/// value means the document kept the current text in those regions and the
+/// incoming Markdown rides in `GET …/review`. `changed` is `false`
 /// when a byte-identical write short-circuited without a commit. Raw
 /// (non-Markdown) writes never merge: always `changed: true, conflicts: 0`.
 #[derive(Serialize, ToSchema)]
@@ -92,6 +94,76 @@ pub(crate) struct PutDocumentOutcome {
     pub(crate) outcome: WriteOutcome,
     pub(crate) changed: bool,
     pub(crate) conflicts: usize,
+    pub(crate) conflict_items: Vec<PutConflictOutcome>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub(crate) struct PutConflictOutcome {
+    pub(crate) id: String,
+    pub(crate) after_block_id: Option<String>,
+    pub(crate) base_markdown: String,
+    pub(crate) incoming_markdown: String,
+    pub(crate) canonical_markdown: String,
+}
+
+impl From<BlockMarkdownConflict> for PutConflictOutcome {
+    fn from(conflict: BlockMarkdownConflict) -> Self {
+        Self {
+            id: conflict.id,
+            after_block_id: conflict.after_block_id,
+            base_markdown: conflict.base_markdown,
+            incoming_markdown: conflict.incoming_markdown,
+            canonical_markdown: conflict.canonical_markdown,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConflictHunk {
+    after_block_id: Option<String>,
+    base_markdown: String,
+    incoming_markdown: String,
+    canonical_markdown: String,
+}
+
+impl From<ReconcileConflict> for ConflictHunk {
+    fn from(conflict: ReconcileConflict) -> Self {
+        Self {
+            after_block_id: conflict.after_block_id,
+            base_markdown: conflict.base_markdown,
+            incoming_markdown: conflict.incoming_markdown,
+            canonical_markdown: conflict.canonical_markdown,
+        }
+    }
+}
+
+impl ConflictHunk {
+    fn marker(hunk: &str) -> Self {
+        Self {
+            after_block_id: None,
+            base_markdown: String::new(),
+            incoming_markdown: hunk.to_string(),
+            canonical_markdown: String::new(),
+        }
+    }
+
+    fn matches(&self, item: &BlockReviewItem) -> bool {
+        item.kind == BlockReviewKind::Conflict
+            && item.block_id.as_str() == self.after_block_id.as_deref().unwrap_or_default()
+            && item.context_before.as_deref().unwrap_or_default() == self.base_markdown.as_str()
+            && item.body.as_deref().unwrap_or_default() == self.incoming_markdown.as_str()
+            && item.quote.as_deref().unwrap_or_default() == self.canonical_markdown.as_str()
+    }
+
+    fn with_id(self, id: String) -> BlockMarkdownConflict {
+        BlockMarkdownConflict {
+            id,
+            after_block_id: self.after_block_id,
+            base_markdown: self.base_markdown,
+            incoming_markdown: self.incoming_markdown,
+            canonical_markdown: self.canonical_markdown,
+        }
+    }
 }
 
 pub(crate) async fn put_block_document(
@@ -121,6 +193,7 @@ async fn put_scoped_block_document(
         body,
         metadata,
         precondition,
+        merge_base,
         origin_id,
         transaction,
     } = request;
@@ -130,7 +203,15 @@ async fn put_scoped_block_document(
                 .into(),
         )
     })?;
-    let base = match precondition {
+    if merge_base.is_some() && precondition == WritePrecondition::IfNoneMatch {
+        return Err(GatewayFailure::Api(
+            QuarryError::InvalidInput(
+                "X-Quarry-Merge-Base cannot be combined with If-None-Match".to_string(),
+            )
+            .into(),
+        ));
+    }
+    let strict_head = match &precondition {
         WritePrecondition::IfNoneMatch => {
             let head = state.store.head_document_for_scope(&scope, path).await;
             if head.is_ok() {
@@ -143,9 +224,36 @@ async fn put_scoped_block_document(
             {
                 return Err(error.into());
             }
-            BlockWriteBase::CurrentCanonical
+            None
         }
         WritePrecondition::IfMatch(version_id) => {
+            let head = state.store.head_document_for_scope(&scope, path).await;
+            match head {
+                Ok(head) if head.head_version_id == *version_id => Some(version_id.clone()),
+                Ok(head) => {
+                    return Err(GatewayFailure::Api(
+                        QuarryError::PreconditionFailed(format!(
+                            "If-Match {version_id} does not match the current head {} of {path}",
+                            head.head_version_id
+                        ))
+                        .into(),
+                    ));
+                }
+                Err(QuarryError::NotFound(_)) => {
+                    return Err(GatewayFailure::Api(
+                        QuarryError::PreconditionFailed(format!(
+                            "If-Match {version_id} cannot match missing document {path}"
+                        ))
+                        .into(),
+                    ));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        WritePrecondition::None => None,
+    };
+    let base = match merge_base {
+        Some(version_id) => {
             let version = state
                 .store
                 .document_version_for_scope(&scope, path, &version_id)
@@ -158,7 +266,7 @@ async fn put_scoped_block_document(
                 Err(QuarryError::NotFound(_)) => {
                     return Err(GatewayFailure::Api(
                         QuarryError::PreconditionFailed(format!(
-                            "If-Match {version_id} does not name a known version of {path}"
+                            "X-Quarry-Merge-Base does not name a known version of {path}"
                         ))
                         .into(),
                     ));
@@ -166,7 +274,7 @@ async fn put_scoped_block_document(
                 Err(error) => return Err(error.into()),
             }
         }
-        WritePrecondition::None => BlockWriteBase::CurrentCanonical,
+        None => BlockWriteBase::CurrentCanonical,
     };
     // The same explicit actor name that attributes version history also
     // attributes gateway operations and any conflict review items produced by
@@ -186,11 +294,17 @@ async fn put_scoped_block_document(
         },
         origin_id,
         transaction,
+        strict_head,
     )
     .await?;
     let reply = PutDocumentOutcome {
         changed: result.changed,
         conflicts: result.conflicts,
+        conflict_items: result
+            .conflict_items
+            .into_iter()
+            .map(PutConflictOutcome::from)
+            .collect(),
         outcome: result.outcome,
     };
     Ok(crate::json_with_etag(
@@ -238,6 +352,7 @@ pub(crate) async fn restore_block_document_version(
                 "history": {"kind": "checkpoint", "reason": "restore"}
             })),
         },
+        None,
     )
     .await?;
     Ok(crate::json_with_etag(
@@ -353,6 +468,7 @@ pub(crate) async fn write_markdown_reconciled(
         write,
         None,
         quarry_storage::TransactionMetadata::default(),
+        None,
     )
     .await
 }
@@ -362,6 +478,7 @@ async fn write_markdown_with(
     write: BlockMarkdownWrite,
     origin_id: Option<String>,
     transaction: quarry_storage::TransactionMetadata,
+    strict_head: Option<String>,
 ) -> Result<BlockMarkdownWriteOutcome, GatewayFailure> {
     let content_type = write
         .metadata
@@ -384,8 +501,17 @@ async fn write_markdown_with(
             document
         }
         Err(QuarryError::NotFound(_)) => {
+            if let Some(expected) = &strict_head {
+                return Err(GatewayFailure::Api(
+                    QuarryError::PreconditionFailed(format!(
+                        "If-Match {expected} cannot match missing document {}",
+                        write.path
+                    ))
+                    .into(),
+                ));
+            }
             log_block_write_started(&write, None);
-            let outcome = state
+            let mut outcome = state
                 .store
                 .import_block_document_for_scope(
                     &write.scope,
@@ -399,20 +525,40 @@ async fn write_markdown_with(
                     transaction,
                 )
                 .await?;
-            let conflicts = match &marker_hunk {
-                Some(hunk) => flag_imported_conflict_markers(state, &write, hunk).await,
-                None => 0,
+            let conflict_items = match &marker_hunk {
+                Some(hunk) => match flag_imported_conflict_markers(state, &write, hunk).await {
+                    Some((flag_outcome, conflict)) => {
+                        outcome = flag_outcome;
+                        vec![conflict]
+                    }
+                    None => Vec::new(),
+                },
+                None => Vec::new(),
             };
+            let conflicts = conflict_items.len();
             let canonical_body = canonical_body(state, &outcome.document.id).await?;
             return Ok(BlockMarkdownWriteOutcome {
                 outcome,
                 changed: true,
                 canonical_body,
                 conflicts,
+                conflict_items,
             });
         }
         Err(error) => return Err(error.into()),
     };
+
+    if let Some(expected) = &strict_head
+        && *expected != document.version.id
+    {
+        return Err(GatewayFailure::Api(
+            QuarryError::PreconditionFailed(format!(
+                "If-Match {expected} does not match the current head {} of {}",
+                document.version.id, write.path
+            ))
+            .into(),
+        ));
+    }
 
     // Byte-identical no-op: nothing to merge, nothing to commit. This check
     // runs OUTSIDE the document mutex (taken later by the dispatch), which
@@ -425,18 +571,21 @@ async fn write_markdown_with(
             .store
             .head_document_for_scope(&write.scope, &write.path)
             .await?;
-        let transaction = state.store.get_transaction(&document.version.tx_id).await?;
-        let canonical_body = canonical_body(state, &document.id).await?;
-        return Ok(BlockMarkdownWriteOutcome {
-            outcome: WriteOutcome {
-                document: entry,
-                version: document.version,
-                transaction,
-            },
-            changed: false,
-            canonical_body,
-            conflicts: 0,
-        });
+        if entry.head_version_id == document.version.id {
+            let transaction = state.store.get_transaction(&document.version.tx_id).await?;
+            let canonical_body = canonical_body(state, &document.id).await?;
+            return Ok(BlockMarkdownWriteOutcome {
+                outcome: WriteOutcome {
+                    document: entry,
+                    version: document.version,
+                    transaction,
+                },
+                changed: false,
+                canonical_body,
+                conflicts: 0,
+                conflict_items: Vec::new(),
+            });
+        }
     }
 
     let (incoming_frontmatter, incoming_body) =
@@ -472,10 +621,22 @@ async fn write_markdown_with(
         transaction,
     };
 
-    let mut conflicts = 0usize;
+    let mut planned_conflicts: Vec<(ConflictHunk, Option<String>)> = Vec::new();
     let mut op_count = 0usize;
     let mut degraded = false;
     let mut plan = |snapshot: &quarry_storage::BlockMutationState| {
+        if let Some(expected) = &strict_head
+            && *expected != snapshot.head_version_id
+        {
+            return Err(GatewayFailure::Api(
+                QuarryError::PreconditionFailed(format!(
+                    "If-Match {expected} does not match the current head {} of {}",
+                    snapshot.head_version_id, write.path
+                ))
+                .into(),
+            ));
+        }
+        planned_conflicts.clear();
         let base = match &base_body {
             Some(body) => ReconcileBase::Markdown(body),
             None => ReconcileBase::CurrentCanonical,
@@ -489,7 +650,6 @@ async fn write_markdown_with(
                 unsupported.to_string(),
             )
         })?;
-        conflicts = reconciled.conflicts.len();
         degraded = reconciled.degraded;
         let top_ids: Vec<String> = snapshot
             .rows
@@ -499,29 +659,39 @@ async fn write_markdown_with(
             .collect();
         let mut ops = sequential_ops(&top_ids, &reconciled.ops);
         op_count = ops.len();
-        ops.extend(
-            reconciled
-                .conflicts
-                .into_iter()
-                .map(|conflict| BlockOp::ConflictAdd {
-                    after_block_id: conflict.after_block_id,
-                    base_markdown: conflict.base_markdown,
-                    incoming_markdown: conflict.incoming_markdown,
-                    canonical_markdown: conflict.canonical_markdown,
-                }),
-        );
+        for conflict in reconciled.conflicts {
+            let hunk = ConflictHunk::from(conflict);
+            let existing_id = snapshot
+                .review_items
+                .iter()
+                .find(|item| item.state == BlockReviewState::Open && hunk.matches(item))
+                .map(|item| item.id.clone());
+            if existing_id.is_none() {
+                ops.push(BlockOp::ConflictAdd {
+                    after_block_id: hunk.after_block_id.clone(),
+                    base_markdown: hunk.base_markdown.clone(),
+                    incoming_markdown: hunk.incoming_markdown.clone(),
+                    canonical_markdown: hunk.canonical_markdown.clone(),
+                });
+            }
+            planned_conflicts.push((hunk, existing_id));
+        }
         // Incoming conflict-marker soup (a half-resolved git merge) commits
         // as content — writes never fail — but flags a review item in the
         // same transaction. Skipping hunks a conflict item already carries
         // keeps repeated saves from stacking flags and honors dismissals.
         if let Some(hunk) = &marker_hunk {
-            let already_flagged = snapshot.review_items.iter().any(|item| {
+            let already_flagged = snapshot.review_items.iter().find(|item| {
                 item.kind == BlockReviewKind::Conflict
                     && item.body.as_deref() == Some(hunk.as_str())
             });
-            if !already_flagged {
-                conflicts += 1;
+            if already_flagged.is_none() {
+                planned_conflicts.push((ConflictHunk::marker(hunk), None));
                 ops.push(conflict_marker_flag_op(hunk));
+            } else if let Some(item) = already_flagged
+                && item.state == BlockReviewState::Open
+            {
+                planned_conflicts.push((ConflictHunk::marker(hunk), Some(item.id.clone())));
             }
         }
         let ops_json = serde_json::to_value(&ops)
@@ -576,6 +746,16 @@ async fn write_markdown_with(
             ));
         }
     };
+    let mut created_conflict_ids = committed.created_conflict_ids.into_iter();
+    let conflict_items: Vec<BlockMarkdownConflict> = planned_conflicts
+        .into_iter()
+        .filter_map(|(hunk, existing_id)| {
+            existing_id
+                .or_else(|| created_conflict_ids.next())
+                .map(|id| hunk.with_id(id))
+        })
+        .collect();
+    let conflicts = conflict_items.len();
     if degraded {
         tracing::warn!(
             event = "document.block_write.lcs_degraded",
@@ -600,6 +780,7 @@ async fn write_markdown_with(
         changed: true,
         canonical_body,
         conflicts,
+        conflict_items,
     })
 }
 
@@ -714,7 +895,7 @@ async fn flag_imported_conflict_markers(
     state: &AppState,
     write: &BlockMarkdownWrite,
     hunk: &str,
-) -> usize {
+) -> Option<(WriteOutcome, BlockMarkdownConflict)> {
     let ctx = TransactionContext {
         client_tx_id: Uuid::new_v4().to_string(),
         base_clock: None,
@@ -746,7 +927,11 @@ async fn flag_imported_conflict_markers(
     )
     .await;
     match result {
-        Ok(_) => 1,
+        Ok(TransactionReply::Committed(committed)) => {
+            let id = committed.created_conflict_ids.into_iter().next()?;
+            Some((*committed.outcome, ConflictHunk::marker(hunk).with_id(id)))
+        }
+        Ok(TransactionReply::Replayed(_)) => None,
         Err(failure) => {
             tracing::warn!(
                 event = "document.block_write.marker_flag_failed",
@@ -754,7 +939,7 @@ async fn flag_imported_conflict_markers(
                 error = %failure_to_quarry(failure),
                 "conflict markers detected but the review flag failed to commit"
             );
-            0
+            None
         }
     }
 }

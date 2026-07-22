@@ -14,10 +14,11 @@ mod transactions;
 mod versions;
 
 pub use blocks::{
-    BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockMarkdownWriter, BlockMutationCommit,
-    BlockMutationOutcome, BlockMutationState, BlockReviewItem, BlockReviewKind, BlockReviewState,
-    BlockShadowBase, BlockTransactionRecord, BlockWriteBase, DocumentKind, DocumentScopeRef,
-    MARKDOWN_INSERT_SUGGESTION_CONTEXT, NewBlockReviewItem, SessionSeedState, document_kind,
+    BlockMarkdownConflict, BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockMarkdownWriter,
+    BlockMutationCommit, BlockMutationOutcome, BlockMutationState, BlockReviewItem,
+    BlockReviewKind, BlockReviewState, BlockShadowBase, BlockTransactionRecord, BlockWriteBase,
+    DocumentKind, DocumentScopeRef, MARKDOWN_INSERT_SUGGESTION_CONTEXT, NewBlockReviewItem,
+    SessionSeedState, document_kind,
 };
 pub use documents::PutDocumentRequest;
 pub use events::{StoreEvent, StoreEventKind};

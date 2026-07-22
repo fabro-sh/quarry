@@ -43,8 +43,8 @@ use discovery::{agent_discovery, agent_docs, quarry_skill};
 pub use error::{ApiError, ApiErrorCode, ApiErrorResponse};
 pub(crate) use headers::{
     agent_id_from_headers_or_body, bytes_response_with_expiry, content_type,
-    insert_document_headers, json_response, json_with_etag, metadata_from_headers,
-    normalized_agent_status, optional_header, precondition_from_headers,
+    insert_document_headers, json_response, json_with_etag, merge_base_from_headers,
+    metadata_from_headers, normalized_agent_status, optional_header, precondition_from_headers,
     reject_block_document_downgrade_for_library, require_tmp_markdown_content_type,
     tmp_metadata_from_headers, transaction_metadata_from_headers,
 };

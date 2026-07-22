@@ -90,9 +90,9 @@ pub(crate) struct AgentReviewResponse {
 }
 
 /// A `kind = conflict` review item: a diff3 merge kept the canonical side and
-/// recorded the losing incoming hunk here. Resolves and deletes through
-/// `POST .../transactions` with `comment.resolve` / `comment.delete`;
-/// resolution never mutates the document.
+/// recorded the losing incoming hunk here. `conflict.keep_canonical` resolves
+/// without a content change; `conflict.accept_incoming` verifies and replaces
+/// the retained hunk atomically.
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub(crate) struct AgentReviewConflict {
     pub id: String,

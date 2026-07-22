@@ -298,10 +298,16 @@ as one atomic batch:
   insertion/deletion, resolves the suggestion, and deletes its replies.
 - `suggestion.reject` — `{item_id}`. Resolves without changing text and deletes
   its replies (also the way to dismiss an orphaned/invalidated suggestion).
+- `conflict.keep_canonical` — `{item_id}`. Resolves an open diff3 conflict
+  without changing the document.
+- `conflict.accept_incoming` — `{item_id}`. Atomically verifies that the saved
+  canonical hunk still matches, replaces it with the incoming hunk, and
+  resolves the conflict. A changed hunk returns `CONFLICT`; re-read first.
 
 `conflict.add` is server-internal reconciler plumbing, not a public agent
 operation. Do not send it. Read generated conflict items through `GET /review`
-and resolve them with `comment.resolve` / `comment.delete`.
+and resolve them with the explicit conflict operations above. The legacy
+`comment.resolve` / `comment.delete` operations remain available for dismissal.
 
 A full review as one transaction:
 
@@ -340,6 +346,7 @@ curl -sS -X PUT "$DOC" \
   -H "X-Agent-Id: $AGENT_ID" \
   -H "X-Quarry-Transaction-Actor: $AGENT_NAME" \
   -H 'If-Match: "<document_clock>"' \
+  -H 'X-Quarry-Merge-Base: "<document_clock>"' \
   --data-binary @article.md
 ```
 
@@ -354,6 +361,7 @@ version, and transaction records:
 {
   "changed": true,
   "conflicts": 0,
+  "conflict_items": [],
   "document": { "head_version_id": "version_124" },
   "version": { "id": "version_124" }
 }
@@ -368,23 +376,29 @@ Semantics:
   writes. Do not rely on client defaults. Tmp document URLs require a Markdown
   media type, reject missing or non-Markdown `Content-Type` with 415, and
   reject canonical UTF-8 Markdown larger than 1 MiB with 413.
-- `If-Match` selects the MERGE BASE, not a strict precondition: the write is
-  diff3-merged (`base`, your file, current canonical) so edits that landed
-  after your read survive instead of being overwritten. A known-but-stale
-  clock still merges cleanly; an unknown clock fails 412. Omitting
-  `If-Match` degenerates to a two-way merge against the current document.
-  `If-None-Match: *` creates a new document.
+- `If-Match` is strict compare-and-swap: it must name the current head or the
+  write fails 412 without changing the document. `If-None-Match: *` creates a
+  new document.
+- `X-Quarry-Merge-Base` independently selects a known historical version for
+  diff3 (`base`, your file, current canonical). This is what preserves edits
+  that landed after your original read. Omitting it degenerates to a two-way
+  merge against the current document; an unknown merge base fails 412. For a
+  safe retry after stale `If-Match`, re-read the current clock, use it for the
+  new `If-Match`, and keep the original `X-Quarry-Merge-Base`.
 - `block_id`s and review anchors survive the rewrite — unchanged blocks keep
   their ids, so existing comments and suggestions stay anchored.
 - True merge conflicts never fail the write: each one commits atomically as
   a conflict artifact and surfaces in `GET $DOC/review` under `conflicts`. A
   200 response alone does not mean all incoming Markdown was applied: inspect
-  the response's `conflicts` count. If it is non-zero, re-read
+  `conflicts` and `conflict_items`. Each item includes its stable `id`,
+  `after_block_id`, and the base/incoming/canonical Markdown hunks. If the
+  count is non-zero, re-read
   `GET $DOC/blocks` and `GET $DOC/review`, incorporate any canonical edits
   that should survive into your Markdown, and only then re-PUT the reconciled
   file with the fresh clock. Do not blindly resend the old file. Once the
-  intended content is present, resolve stale conflict items with
-  `comment.resolve` / `comment.delete`.
+  intended content is present, use `conflict.keep_canonical`; use
+  `conflict.accept_incoming` only when that saved incoming hunk should replace
+  the still-matching canonical one.
 - A byte-identical body returns `changed: false` and creates no new version.
 - For library documents, Quarry refuses to change an existing Markdown block document into a raw
   document unless the request explicitly opts in with
@@ -421,9 +435,10 @@ show.
 `conflicts` are diff3 merge conflicts from whole-file writers (Git, FUSE, CLI,
 Markdown PUT): the canonical side stayed in the document and the losing hunk
 is preserved as data — `afterBlockId` (`null` = document start),
-`baseMarkdown`, `incomingMarkdown`, and `canonicalMarkdown`. Resolve or
-dismiss them with `comment.resolve` / `comment.delete`; resolution never
-mutates the document.
+`baseMarkdown`, `incomingMarkdown`, and `canonicalMarkdown`. Resolve with
+`conflict.keep_canonical` or `conflict.accept_incoming`; the latter verifies
+the canonical hunk before changing content. Conflict-marker warnings already
+landed as content and support only `conflict.keep_canonical`.
 
 To clear a review queue: accept or reject open suggestions, apply any
 comment-requested prose changes with edit ops, resolve the handled comments —

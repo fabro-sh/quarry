@@ -367,7 +367,9 @@ export type BlockTransactionOp =
       body?: string;
     }
   | { op: 'suggestion.accept'; item_id: string }
-  | { op: 'suggestion.reject'; item_id: string };
+  | { op: 'suggestion.reject'; item_id: string }
+  | { op: 'conflict.keep_canonical'; item_id: string }
+  | { op: 'conflict.accept_incoming'; item_id: string };
 
 export interface BlockTransactionRequest {
   client_tx_id: string;

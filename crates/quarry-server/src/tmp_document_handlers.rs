@@ -8,9 +8,9 @@ use crate::{
     PromoteTmpDocumentRequest, QuarryError, TmpAgentPresenceListResponse, TmpAgentPresenceResponse,
     TmpDocumentSubResource, TtlRequest, TtlResponse, agent_presence_tmp_document,
     bytes_response_with_expiry, gateway, insert_document_headers, json_response, json_with_etag,
-    markdown_write, optional_header, parse_tmp_document_subresource, precondition_from_headers,
-    require_tmp_markdown_content_type, tmp_metadata_from_headers, touch_agent_presence,
-    transaction_metadata_from_headers,
+    markdown_write, merge_base_from_headers, optional_header, parse_tmp_document_subresource,
+    precondition_from_headers, require_tmp_markdown_content_type, tmp_metadata_from_headers,
+    touch_agent_presence, transaction_metadata_from_headers,
 };
 use axum::Json;
 use axum::body::{Body, Bytes};
@@ -496,7 +496,12 @@ pub(crate) async fn head_tmp_document(
         (
             "If-Match" = Option<String>,
             Header,
-            description = "Optional ETag/document clock used as the merge base for Markdown writes"
+            description = "Optional strict ETag precondition; must match the current document head"
+        ),
+        (
+            "X-Quarry-Merge-Base" = Option<String>,
+            Header,
+            description = "Optional known version used as the three-way merge base"
         ),
         (
             "If-None-Match" = Option<String>,
@@ -538,6 +543,7 @@ pub(crate) async fn put_tmp_document(
                 body: body.to_vec(),
                 metadata,
                 precondition,
+                merge_base: merge_base_from_headers(&headers)?,
                 origin_id,
                 transaction,
             },

@@ -220,24 +220,29 @@ function SuggestionItem({
 
 interface ConflictItemProps {
   readonly conflict: AgentReviewConflict;
-  readonly onDismiss?: (conflictId: string) => Promise<void>;
+  readonly onResolve?: (
+    conflictId: string,
+    resolution: 'keep_canonical' | 'accept_incoming'
+  ) => Promise<void>;
 }
 
-function ConflictItem({ conflict, onDismiss }: ConflictItemProps): ReactNode {
+function ConflictItem({ conflict, onResolve }: ConflictItemProps): ReactNode {
   const [copied, setCopied] = useState(false);
-  const [dismissing, setDismissing] = useState(false);
+  const [resolving, setResolving] = useState<'keep_canonical' | 'accept_incoming' | null>(null);
+  const markerWarning =
+    conflict.baseMarkdown.trim() === '' && conflict.canonicalMarkdown.trim() === '';
 
   function copyIncoming() {
     void navigator.clipboard.writeText(conflict.incomingMarkdown).then(() => setCopied(true));
   }
 
-  async function dismiss() {
-    if (!onDismiss || dismissing) return;
-    setDismissing(true);
+  async function resolve(resolution: 'keep_canonical' | 'accept_incoming') {
+    if (!onResolve || resolving) return;
+    setResolving(resolution);
     try {
-      await onDismiss(conflict.id);
+      await onResolve(conflict.id, resolution);
     } finally {
-      setDismissing(false);
+      setResolving(null);
     }
   }
 
@@ -252,19 +257,22 @@ function ConflictItem({ conflict, onDismiss }: ConflictItemProps): ReactNode {
         <StatusBadge status={conflict.status === 'open' ? 'conflict' : conflict.status} />
       </div>
       <p className="mt-2 text-xs text-muted">
-        A file write conflicted with newer edits. The document kept the
-        current version; the incoming text is preserved here.
+        {markerWarning
+          ? 'Conflict markers were detected in a file write. The marked content already landed; review it, then dismiss this warning.'
+          : 'A file write conflicted with newer edits. The document kept the current version; the incoming text is preserved here.'}
       </p>
       <div className="mt-2 grid gap-2">
-        <div>
-          <p className="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Kept</p>
-          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded bg-raised p-2 font-mono text-xs text-body">
-            {conflict.canonicalMarkdown || '(deleted)'}
-          </pre>
-        </div>
+        {!markerWarning ? (
+          <div>
+            <p className="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Kept</p>
+            <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded bg-raised p-2 font-mono text-xs text-body">
+              {conflict.canonicalMarkdown || '(deleted)'}
+            </pre>
+          </div>
+        ) : null}
         <div>
           <p className="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
-            Incoming
+            {markerWarning ? 'Detected content' : 'Incoming'}
           </p>
           <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded bg-raised p-2 font-mono text-xs text-body">
             {conflict.incomingMarkdown || '(deleted)'}
@@ -272,7 +280,7 @@ function ConflictItem({ conflict, onDismiss }: ConflictItemProps): ReactNode {
         </div>
       </div>
       {conflict.status === 'open' ? (
-        <div className="mt-2 flex justify-end gap-1">
+        <div className="mt-2 flex flex-wrap justify-end gap-1">
           <button
             className="rounded px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-well hover:text-body"
             data-testid="copy-conflict-incoming"
@@ -281,16 +289,29 @@ function ConflictItem({ conflict, onDismiss }: ConflictItemProps): ReactNode {
           >
             {copied ? 'Copied' : 'Copy incoming'}
           </button>
-          {onDismiss ? (
-            <button
-              className="rounded px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-well hover:text-body disabled:opacity-50"
-              data-testid="dismiss-conflict"
-              disabled={dismissing}
-              onClick={() => void dismiss()}
-              type="button"
-            >
-              Dismiss
-            </button>
+          {onResolve ? (
+            <>
+              <button
+                className="rounded px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-well hover:text-body disabled:opacity-50"
+                data-testid="keep-canonical-conflict"
+                disabled={resolving !== null}
+                onClick={() => void resolve('keep_canonical')}
+                type="button"
+              >
+                {markerWarning ? 'Dismiss warning' : 'Keep current'}
+              </button>
+              {!markerWarning ? (
+                <button
+                  className="rounded bg-accent px-2 py-1 text-xs font-medium text-on-accent transition-colors hover:bg-accent-strong disabled:opacity-50"
+                  data-testid="accept-incoming-conflict"
+                  disabled={resolving !== null}
+                  onClick={() => void resolve('accept_incoming')}
+                  type="button"
+                >
+                  Use incoming
+                </button>
+              ) : null}
+            </>
           ) : null}
         </div>
       ) : null}
@@ -300,7 +321,10 @@ function ConflictItem({ conflict, onDismiss }: ConflictItemProps): ReactNode {
 
 interface CommentsPanelProps {
   readonly review?: AgentReviewResponse;
-  readonly onDismissConflict?: (conflictId: string) => Promise<void>;
+  readonly onResolveConflict?: (
+    conflictId: string,
+    resolution: 'keep_canonical' | 'accept_incoming'
+  ) => Promise<void>;
   readonly onResolveSuggestion?: (
     suggestionId: string,
     resolution: SuggestionResolution
@@ -309,7 +333,7 @@ interface CommentsPanelProps {
 
 export function CommentsPanel({
   review,
-  onDismissConflict,
+  onResolveConflict,
   onResolveSuggestion,
 }: CommentsPanelProps): ReactNode {
   const [filter, setFilter] = useState<StatusFilter>('all');
@@ -353,7 +377,7 @@ export function CommentsPanel({
       {conflicts.length > 0 ? (
         <ul className="mb-3 flex flex-col gap-2">
           {conflicts.map((conflict) => (
-            <ConflictItem conflict={conflict} key={conflict.id} onDismiss={onDismissConflict} />
+            <ConflictItem conflict={conflict} key={conflict.id} onResolve={onResolveConflict} />
           ))}
         </ul>
       ) : null}

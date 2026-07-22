@@ -267,34 +267,56 @@ describe('CommentsPanel', () => {
     expect(within(item).getByTestId('review-status-badge')).toHaveTextContent(/conflict/i);
   });
 
-  it('dismissing an open conflict calls the handler with the conflict id', async () => {
-    const onDismissConflict = vi.fn().mockResolvedValue(undefined);
+  it('resolves an open conflict with either saved side', async () => {
+    const onResolveConflict = vi.fn().mockResolvedValue(undefined);
     render(
       <CommentsPanel
-        onDismissConflict={onDismissConflict}
+        onResolveConflict={onResolveConflict}
         review={review({ conflicts: [conflictItem()] })}
       />
     );
 
-    fireEvent.click(screen.getByTestId('dismiss-conflict'));
+    fireEvent.click(screen.getByTestId('keep-canonical-conflict'));
+    expect(onResolveConflict).toHaveBeenCalledWith('x1', 'keep_canonical');
+    await waitFor(() => expect(screen.getByTestId('keep-canonical-conflict')).toBeEnabled());
 
-    expect(onDismissConflict).toHaveBeenCalledWith('x1');
-    // The button disables while the dismissal is in flight and re-enables
-    // after it settles; waiting keeps the state update inside act().
-    await waitFor(() => expect(screen.getByTestId('dismiss-conflict')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('accept-incoming-conflict'));
+    expect(onResolveConflict).toHaveBeenCalledWith('x1', 'accept_incoming');
+    await waitFor(() => expect(screen.getByTestId('accept-incoming-conflict')).toBeEnabled());
   });
 
   it('hides conflict actions once the conflict is resolved', () => {
-    const onDismissConflict = vi.fn().mockResolvedValue(undefined);
+    const onResolveConflict = vi.fn().mockResolvedValue(undefined);
     render(
       <CommentsPanel
-        onDismissConflict={onDismissConflict}
+        onResolveConflict={onResolveConflict}
         review={review({ conflicts: [conflictItem('resolved')] })}
       />
     );
 
-    expect(screen.queryByTestId('dismiss-conflict')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('keep-canonical-conflict')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('accept-incoming-conflict')).not.toBeInTheDocument();
     expect(screen.queryByTestId('copy-conflict-incoming')).not.toBeInTheDocument();
+  });
+
+  it('does not offer to re-apply conflict-marker content that already landed', () => {
+    const marker = {
+      ...conflictItem(),
+      baseMarkdown: '',
+      canonicalMarkdown: '',
+      incomingMarkdown: '<<<<<<< HEAD\nCurrent\n=======\nIncoming\n>>>>>>> branch\n',
+    };
+    render(
+      <CommentsPanel
+        onResolveConflict={vi.fn().mockResolvedValue(undefined)}
+        review={review({ conflicts: [marker] })}
+      />
+    );
+
+    expect(screen.getByTestId('keep-canonical-conflict')).toBeInTheDocument();
+    expect(screen.getByTestId('keep-canonical-conflict')).toHaveTextContent('Dismiss warning');
+    expect(screen.queryByTestId('accept-incoming-conflict')).not.toBeInTheDocument();
+    expect(screen.getByText(/already landed/i)).toBeInTheDocument();
   });
 
   it('copying an open conflict puts the incoming markdown on the clipboard', async () => {

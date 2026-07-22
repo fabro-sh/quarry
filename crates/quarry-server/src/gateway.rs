@@ -41,6 +41,7 @@
 //! | `UNSUPPORTED_BLOCK_DOCUMENT` | 422 | no |
 //! | `PAYLOAD_TOO_LARGE` | 413 | no |
 //! | `INVALID_TRANSACTION` | 400 | no |
+//! | `CONFLICT` | 409 | no |
 //!
 //! `retryable: true` means "refetch `/blocks` and resubmit with a fresh
 //! clock"; `retryable: false` means the op as stated can never succeed.
@@ -101,10 +102,12 @@
 //!   attachment point rides in the item's `block_id` (`""` = document start,
 //!   from `after_block_id`), the losing incoming hunk in `body`, the base
 //!   context in `context_before`, and the retained canonical side in
-//!   `quote`. Conflict items resolve and delete with `comment.resolve` /
-//!   `comment.delete` (resolution never mutates the document); replies stay
-//!   comment-only. Deleting a conflict's attachment block orphans the item
-//!   like any other anchored item.
+//!   `quote`. `conflict.keep_canonical` resolves it without changing content;
+//!   `conflict.accept_incoming` first verifies that the saved canonical hunk
+//!   still matches the document, then replaces it and resolves the item in the
+//!   same transaction. The legacy `comment.resolve` / `comment.delete` paths
+//!   remain available for dismissal; replies stay comment-only. Deleting a
+//!   conflict's attachment block orphans the item like any other anchored item.
 //! - Deleting the last block re-mints the canonical empty-paragraph row (the
 //!   editor's empty-document shape); its id is listed in `changed_block_ids`.
 //! - Ops apply sequentially: each op's offsets, positions, and block
@@ -193,7 +196,7 @@ use uuid::Uuid;
 /// Operations agents may send through the public semantic transaction API.
 /// `conflict.add` is deliberately excluded: whole-document reconcilers use it
 /// internally to persist merge-conflict review items.
-pub(crate) const PUBLIC_TRANSACTION_OPERATIONS: [&str; 20] = [
+pub(crate) const PUBLIC_TRANSACTION_OPERATIONS: [&str; 22] = [
     "insert_block",
     "insert_markdown",
     "delete_block",
@@ -214,6 +217,8 @@ pub(crate) const PUBLIC_TRANSACTION_OPERATIONS: [&str; 20] = [
     "suggestion.add_markdown",
     "suggestion.accept",
     "suggestion.reject",
+    "conflict.keep_canonical",
+    "conflict.accept_incoming",
 ];
 
 // ---------------------------------------------------------------------------
@@ -556,6 +561,18 @@ pub(crate) enum BlockOp {
         #[serde(default)]
         canonical_markdown: String,
     },
+    /// Resolves an open conflict while retaining the canonical hunk already
+    /// present in the document.
+    #[serde(rename = "conflict.keep_canonical")]
+    ConflictKeepCanonical {
+        item_id: String,
+    },
+    /// Atomically replaces the still-matching canonical hunk with the saved
+    /// incoming side and resolves the conflict.
+    #[serde(rename = "conflict.accept_incoming")]
+    ConflictAcceptIncoming {
+        item_id: String,
+    },
 }
 
 #[derive(Debug)]
@@ -856,19 +873,41 @@ impl DocModel {
             return;
         };
         for (position, block_id) in children.iter().enumerate() {
-            let block = &self.blocks[block_id];
-            out.push(BlockRow {
-                block_id: block_id.clone(),
-                parent_block_id: parent.map(str::to_string),
-                position: position as u32,
-                block_type: block.block_type.clone(),
-                attrs: block.attrs.clone(),
-                text: block.text.clone(),
-                marks: block.marks.clone(),
-                links: block.links.clone(),
-            });
-            self.collect_rows(Some(block_id), out);
+            self.collect_block_rows(block_id, parent, position as u32, out);
         }
+    }
+
+    fn collect_block_rows(
+        &self,
+        block_id: &str,
+        parent: Option<&str>,
+        position: u32,
+        out: &mut Vec<BlockRow>,
+    ) {
+        let block = &self.blocks[block_id];
+        out.push(BlockRow {
+            block_id: block_id.to_string(),
+            parent_block_id: parent.map(str::to_string),
+            position,
+            block_type: block.block_type.clone(),
+            attrs: block.attrs.clone(),
+            text: block.text.clone(),
+            marks: block.marks.clone(),
+            links: block.links.clone(),
+        });
+        self.collect_rows(Some(block_id), out);
+    }
+
+    /// Renders a contiguous top-level region as a standalone row tree. The
+    /// returned root ids are the exact blocks an accepted conflict replaces.
+    fn top_level_region(&self, start: usize, count: usize) -> Option<(Vec<String>, Vec<BlockRow>)> {
+        let roots = self.children.get(&None)?;
+        let region = roots.get(start..start.checked_add(count)?)?;
+        let mut rows = Vec::new();
+        for (position, block_id) in region.iter().enumerate() {
+            self.collect_block_rows(block_id, None, position as u32, &mut rows);
+        }
+        Some((region.to_vec(), rows))
     }
 
     fn has_children(&self, block_id: &str) -> bool {
@@ -930,12 +969,14 @@ struct ApplyResult {
     rows: Vec<BlockRow>,
     review_items: Vec<BlockReviewItem>,
     changed_block_ids: Vec<String>,
+    created_conflict_ids: Vec<String>,
 }
 
 struct ApplyContext {
     model: DocModel,
     items: Vec<BlockReviewItem>,
     changed: BTreeSet<String>,
+    created_conflict_ids: Vec<String>,
     document_id: String,
     author: String,
     now: String,
@@ -1593,7 +1634,7 @@ impl ApplyContext {
         let id = self.minted.mint();
         require_unused_item_id(self, &id)?;
         self.items.push(BlockReviewItem {
-            id,
+            id: id.clone(),
             document_id: self.document_id.clone(),
             // `block_id` holds the attachment point; "" = document start.
             block_id: after_block_id.clone().unwrap_or_default(),
@@ -1611,8 +1652,103 @@ impl ApplyContext {
             created_at: self.now.clone(),
             updated_at: self.now.clone(),
         });
+        self.created_conflict_ids.push(id);
         Ok(())
     }
+
+    fn keep_canonical_conflict(&mut self, item_id: &str) -> Result<(), GatewayError> {
+        let _ = require_open_conflict(self, item_id)?;
+        self.resolve_conflict(item_id);
+        Ok(())
+    }
+
+    fn accept_incoming_conflict(&mut self, item_id: &str) -> Result<(), GatewayError> {
+        let conflict = require_open_conflict(self, item_id)?.clone();
+        if conflict
+            .context_before
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+            && conflict
+                .quote
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
+        {
+            return Err(GatewayError::new(
+                GatewayErrorCode::Conflict,
+                format!(
+                    "conflict {item_id} is a conflict-marker warning whose content already landed; keep canonical to dismiss it"
+                ),
+            ));
+        }
+        let after_block_id = (!conflict.block_id.is_empty()).then_some(conflict.block_id.clone());
+        let insertion_position = self.markdown_insert_position(&after_block_id)? as usize;
+        let canonical_markdown = conflict.quote.as_deref().unwrap_or_default();
+        let (root_count, expected_canonical) = normalize_conflict_fragment(canonical_markdown)?;
+        let (replaced_root_ids, current_rows) = self
+            .model
+            .top_level_region(insertion_position, root_count)
+            .ok_or_else(|| conflict_hunk_changed(item_id))?;
+        let current_canonical = if current_rows.is_empty() {
+            String::new()
+        } else {
+            block_rows_to_markdown(&current_rows).map_err(|unsupported| {
+                GatewayError::new(
+                    GatewayErrorCode::UnsupportedMarkdown,
+                    unsupported.to_string(),
+                )
+            })?
+        };
+        if current_canonical != expected_canonical {
+            return Err(conflict_hunk_changed(item_id));
+        }
+
+        for block_id in replaced_root_ids {
+            self.delete_block_except(&block_id, Some(item_id))?;
+        }
+        let incoming_markdown = conflict.body.as_deref().unwrap_or_default();
+        if !incoming_markdown.trim().is_empty() {
+            self.insert_markdown(&after_block_id, incoming_markdown)?;
+        }
+        self.resolve_conflict(item_id);
+        Ok(())
+    }
+
+    fn resolve_conflict(&mut self, item_id: &str) {
+        let now = self.now.clone();
+        for item in &mut self.items {
+            if item.id == item_id {
+                item.state = BlockReviewState::Resolved;
+                item.updated_at = now.clone();
+            }
+        }
+    }
+}
+
+fn normalize_conflict_fragment(markdown: &str) -> Result<(usize, String), GatewayError> {
+    if markdown.trim().is_empty() {
+        return Ok((0, String::new()));
+    }
+    let mut fragment_id = 0u32;
+    let rows = parse_markdown_fragment(markdown, || {
+        let id = format!("conflict-fragment-{fragment_id}");
+        fragment_id += 1;
+        id
+    })?;
+    let root_count = rows
+        .iter()
+        .filter(|row| row.parent_block_id.is_none())
+        .count();
+    let normalized = block_rows_to_markdown(&rows).map_err(|unsupported| {
+        GatewayError::new(
+            GatewayErrorCode::UnsupportedMarkdown,
+            unsupported.to_string(),
+        )
+    })?;
+    Ok((root_count, normalized))
 }
 
 fn parse_markdown_fragment(
@@ -1679,6 +1815,7 @@ fn apply_ops(
         model: DocModel::from_rows(&state.rows),
         items: state.review_items.clone(),
         changed: BTreeSet::new(),
+        created_conflict_ids: Vec::new(),
         document_id: state.document_id.clone(),
         author: actor.display(),
         now: now_timestamp(),
@@ -1714,6 +1851,7 @@ fn apply_ops(
         rows: ctx.model.to_rows(),
         review_items: ctx.items,
         changed_block_ids: ctx.changed.into_iter().collect(),
+        created_conflict_ids: ctx.created_conflict_ids,
     })
 }
 
@@ -1820,6 +1958,8 @@ fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
             incoming_markdown,
             canonical_markdown,
         ),
+        BlockOp::ConflictKeepCanonical { item_id } => ctx.keep_canonical_conflict(item_id),
+        BlockOp::ConflictAcceptIncoming { item_id } => ctx.accept_incoming_conflict(item_id),
     }
 }
 
@@ -2112,6 +2252,33 @@ fn require_resolvable<'a>(
                 )
         })
         .ok_or_else(|| anchor_not_found(item_id))
+}
+
+fn require_open_conflict<'a>(
+    ctx: &'a ApplyContext,
+    item_id: &str,
+) -> Result<&'a BlockReviewItem, GatewayError> {
+    let conflict = ctx
+        .items
+        .iter()
+        .find(|item| item.id == item_id && item.kind == BlockReviewKind::Conflict)
+        .ok_or_else(|| anchor_not_found(item_id))?;
+    if conflict.state != BlockReviewState::Open {
+        return Err(GatewayError::new(
+            GatewayErrorCode::Conflict,
+            format!("conflict {item_id} is no longer open; re-read /review"),
+        ));
+    }
+    Ok(conflict)
+}
+
+fn conflict_hunk_changed(item_id: &str) -> GatewayError {
+    GatewayError::new(
+        GatewayErrorCode::Conflict,
+        format!(
+            "conflict {item_id} no longer matches the canonical document; re-read /blocks and /review"
+        ),
+    )
 }
 
 fn require_suggestion<'a>(
@@ -2464,6 +2631,7 @@ pub(crate) struct CommittedTransaction {
     pub outcome: Box<quarry_core::WriteOutcome>,
     pub transaction_id: String,
     pub changed_block_ids: Vec<String>,
+    pub created_conflict_ids: Vec<String>,
 }
 
 pub(crate) enum TransactionReply {
@@ -2607,6 +2775,7 @@ async fn apply_rows_transaction(
                     outcome,
                     status,
                     applied.changed_block_ids,
+                    applied.created_conflict_ids,
                 ));
             }
             // Another write moved the head between load and commit: reload
@@ -2726,7 +2895,12 @@ async fn apply_session_transaction(
         .await
     {
         Ok(outcome) => {
-            let reply = block_mutation_reply(outcome, status, applied.changed_block_ids);
+            let reply = block_mutation_reply(
+                outcome,
+                status,
+                applied.changed_block_ids,
+                applied.created_conflict_ids,
+            );
             if let TransactionReply::Committed(committed) = &reply {
                 session.mark_committed(&mut awareness, &committed.outcome, &applied.review_items);
             }
@@ -2776,6 +2950,7 @@ fn block_mutation_reply(
     outcome: BlockMutationOutcome,
     status: &'static str,
     changed_block_ids: Vec<String>,
+    created_conflict_ids: Vec<String>,
 ) -> TransactionReply {
     match outcome {
         BlockMutationOutcome::Applied { outcome, record } => {
@@ -2784,6 +2959,7 @@ fn block_mutation_reply(
                 outcome,
                 transaction_id: record.id,
                 changed_block_ids,
+                created_conflict_ids,
             })
         }
         BlockMutationOutcome::Replayed(record) => TransactionReply::Replayed(record),

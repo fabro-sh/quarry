@@ -876,7 +876,7 @@ async fn metadata_patch_composes_with_an_active_session() -> anyhow::Result<()> 
 
 /// The reviewer's probe, pinned directly: in-flight (un-checkpointed) typing
 /// plus a concurrent whole-file write through the live session. The file
-/// write carries its base clock, so the merge is a true three-way: BOTH
+/// write carries an explicit merge base, so the merge is a true three-way: BOTH
 /// edits survive -- no last-writer-wins in either direction.
 #[tokio::test]
 async fn in_flight_typing_and_concurrent_file_write_both_survive_through_the_session()
@@ -919,7 +919,7 @@ async fn in_flight_typing_and_concurrent_file_write_both_survive_through_the_ses
                 .method(Method::PUT)
                 .uri("/v1/libraries/blocks/documents/race.md")
                 .header(header::CONTENT_TYPE, "text/markdown")
-                .header(header::IF_MATCH, format!("\"{base_clock}\""))
+                .header("x-quarry-merge-base", format!("\"{base_clock}\""))
                 .body(Body::from(incoming))
                 .unwrap(),
         )
@@ -1841,7 +1841,7 @@ async fn browser_origin_markdown_put_is_an_ordinary_reconciled_write() -> anyhow
                 .method(Method::PUT)
                 .uri("/v1/libraries/blocks/documents/live.md")
                 .header(header::CONTENT_TYPE, "text/markdown")
-                .header("If-Match", &base_etag)
+                .header("X-Quarry-Merge-Base", &base_etag)
                 .header("X-Quarry-Origin-Id", "browser:writer-1")
                 .body(Body::from(
                     "Session content.\n\nStable separator.\n\nPut target rewritten.\n",

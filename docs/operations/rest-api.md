@@ -39,4 +39,4 @@ Implemented phase-one core endpoints:
 - `GET /v1/health`
 - `GET /v1/openapi.json`
 
-Document reads return an `ETag` based on the visible document version. Writes support `If-Match` and `If-None-Match: *`. Explicit transaction commits return `412 Precondition Failed` if any staged document head changed before commit, leaving the newer committed document visible.
+Document reads return an `ETag` based on the visible document version. Writes support strict `If-Match` compare-and-swap and `If-None-Match: *`. Markdown writes may separately send `X-Quarry-Merge-Base` with any known version for three-way reconciliation. Explicit transaction commits return `412 Precondition Failed` if any staged document head changed before commit, leaving the newer committed document visible.

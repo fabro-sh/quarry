@@ -504,7 +504,7 @@ describe('Quarry Browser workspace', () => {
       incomingMarkdown: 'Agent rewrite.\n',
       canonicalMarkdown: 'Old items.\n',
     };
-    let dismissed = false;
+    let resolved = false;
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/v1/capabilities') {
@@ -527,15 +527,15 @@ describe('Quarry Browser workspace', () => {
           baseToken: 'tmp-v1',
           comments: [],
           suggestions: [],
-          conflicts: [dismissed ? { ...openConflict, status: 'resolved' } : openConflict],
+          conflicts: [resolved ? { ...openConflict, status: 'resolved' } : openConflict],
         });
       }
       if (url === `/v1/tmp/documents/${secret}/transactions` && init?.method === 'POST') {
         expect(JSON.parse(String(init.body))).toMatchObject({
           actor: { kind: 'user' },
-          ops: [{ op: 'comment.resolve', item_id: 'x1' }],
+          ops: [{ op: 'conflict.keep_canonical', item_id: 'x1' }],
         });
-        dismissed = true;
+        resolved = true;
         return json({
           status: 'committed',
           document_clock: 'tmp-v2',
@@ -550,13 +550,13 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     // The Comments tab is the tmp pane's only tab; the badge carries the
-    // open-conflict count and the card offers the dismiss affordance.
+    // open-conflict count and the card offers explicit resolution choices.
     const badge = await screen.findByTestId('comments-tab-badge');
     expect(badge).toHaveTextContent('1');
     const card = await screen.findByTestId('comments-panel-conflict');
     expect(within(card).getByText('Agent rewrite.')).toBeInTheDocument();
 
-    fireEvent.click(within(card).getByTestId('dismiss-conflict'));
+    fireEvent.click(within(card).getByTestId('keep-canonical-conflict'));
 
     await waitFor(() => expect(screen.queryByTestId('comments-tab-badge')).not.toBeInTheDocument());
     expect(screen.getByTestId('comments-panel-conflict')).toHaveAttribute(

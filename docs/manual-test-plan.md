@@ -89,6 +89,11 @@ directly from these tiers.
 - [ ] Read a document and save its `ETag`.
 - [ ] Write with the current `If-Match` and confirm success plus a new `ETag`.
 - [ ] Write again with the old `If-Match` and confirm `412 Precondition Failed`.
+- [ ] Make disjoint edits from an older version, send that version as
+      `X-Quarry-Merge-Base` with the current `If-Match`, and confirm both sides
+      survive.
+- [ ] Repeat an overlapping merge and confirm the response reuses one conflict
+      id; verify both **Keep current** and **Use incoming** resolve atomically.
 - [ ] Create with `If-None-Match: *` and confirm success for a new path.
 - [ ] Create again with `If-None-Match: *` at the same path and confirm `412`.
 - [ ] Confirm UI stale-save handling shows the conflict workflow instead of overwriting.

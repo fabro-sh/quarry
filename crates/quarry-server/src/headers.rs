@@ -129,15 +129,42 @@ pub(crate) fn precondition_from_headers(
         return Ok(WritePrecondition::IfNoneMatch);
     }
     if let Some(value) = headers.get(header::IF_MATCH) {
-        let value = value
-            .to_str()
-            .map_err(|_| ApiError::new(ApiErrorCode::InvalidRequest, "invalid If-Match"))?
-            .trim()
-            .trim_matches('"')
-            .to_string();
+        let value = entity_tag_token(value, "If-Match")?;
         return Ok(WritePrecondition::IfMatch(value));
     }
     Ok(WritePrecondition::None)
+}
+
+/// An explicit historical base for a whole-document Markdown merge. Unlike
+/// `If-Match`, this header does not constrain the current head.
+pub(crate) fn merge_base_from_headers(headers: &HeaderMap) -> Result<Option<String>, ApiError> {
+    headers
+        .get("x-quarry-merge-base")
+        .map(|value| entity_tag_token(value, "X-Quarry-Merge-Base"))
+        .transpose()
+}
+
+fn entity_tag_token(value: &HeaderValue, name: &str) -> Result<String, ApiError> {
+    let token = value
+        .to_str()
+        .map_err(|_| ApiError::new(ApiErrorCode::InvalidRequest, format!("invalid {name}")))?
+        .trim();
+    let token = token.strip_prefix("W/").unwrap_or(token);
+    let token = if token.starts_with('"') || token.ends_with('"') {
+        token
+            .strip_prefix('"')
+            .and_then(|token| token.strip_suffix('"'))
+            .ok_or_else(|| ApiError::new(ApiErrorCode::InvalidRequest, format!("invalid {name}")))?
+    } else {
+        token
+    };
+    if token.is_empty() || token.contains('"') || token.contains(',') {
+        return Err(ApiError::new(
+            ApiErrorCode::InvalidRequest,
+            format!("invalid {name}"),
+        ));
+    }
+    Ok(token.to_string())
 }
 
 pub(crate) fn optional_header(
@@ -294,4 +321,39 @@ pub(crate) fn json_response<T: Serialize>(
         HeaderValue::from_static("application/json"),
     );
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn document_version_headers_accept_etag_shapes_and_reject_lists() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::IF_MATCH,
+            HeaderValue::from_static("W/\"version-1\""),
+        );
+        headers.insert(
+            "x-quarry-merge-base",
+            HeaderValue::from_static("\"version-0\""),
+        );
+        let Ok(precondition) = precondition_from_headers(&headers) else {
+            panic!("valid If-Match should parse");
+        };
+        assert_eq!(
+            precondition,
+            WritePrecondition::IfMatch("version-1".to_string())
+        );
+        let Ok(merge_base) = merge_base_from_headers(&headers) else {
+            panic!("valid merge base should parse");
+        };
+        assert_eq!(merge_base, Some("version-0".to_string()));
+
+        headers.insert(
+            "x-quarry-merge-base",
+            HeaderValue::from_static("\"version-0\", \"version-1\""),
+        );
+        assert!(merge_base_from_headers(&headers).is_err());
+    }
 }

@@ -1170,21 +1170,29 @@ function Workspace() {
     await mutate(['/v1/conflicts', activeLibrary]);
   }
 
-  // Diff3 conflict review items (whole-file merge leftovers) dismiss through
-  // the block-transaction gateway; resolution never mutates the document.
-  async function dismissReviewConflict(conflictId: string) {
+  // Diff3 review conflicts resolve through one atomic gateway operation. The
+  // incoming choice verifies the retained hunk before replacing it.
+  async function resolveReviewConflict(
+    conflictId: string,
+    resolution: 'keep_canonical' | 'accept_incoming'
+  ) {
     if (!documentRef) return;
     const request: BlockTransactionRequest = {
       client_tx_id: crypto.randomUUID(),
       actor: { kind: 'user', id: storedAuthor() },
-      ops: [{ op: 'comment.resolve', item_id: conflictId }],
+      ops: [{ op: `conflict.${resolution}`, item_id: conflictId }],
     };
     try {
       await postBlockTransaction(documentRef, request);
-      await mutate(documentRefKey('review', documentRef));
+      await Promise.all([
+        mutate(documentRefKey('document', documentRef)),
+        mutate(documentRefKey('blocks', documentRef)),
+        mutate(documentRefKey('review', documentRef)),
+        mutate(documentRefKey('versions', documentRef)),
+      ]);
     } catch (error) {
       window.alert(
-        `Dismiss conflict failed: ${error instanceof Error ? error.message : String(error)}`
+        `Resolve conflict failed: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
@@ -1508,7 +1516,7 @@ function Workspace() {
                 onOpenDocument={openDocument}
                 onOpenConflict={setMergeConflictId}
                 onResolveConflict={resolveOpenConflict}
-                onDismissConflict={dismissReviewConflict}
+                onResolveReviewConflict={resolveReviewConflict}
                 onResolveSuggestion={resolveReviewSuggestion}
                 onRestoreVersion={restoreSelectedVersion}
                 onViewVersion={viewSelectedVersion}
@@ -3261,7 +3269,7 @@ function RightPane({
   onOpenDocument,
   onOpenConflict,
   onResolveConflict,
-  onDismissConflict,
+  onResolveReviewConflict,
   onResolveSuggestion,
   onRestoreVersion,
   onToggleCollapsed,
@@ -3290,7 +3298,10 @@ function RightPane({
   onOpenDocument: (path: string) => void;
   onOpenConflict: (conflict: string) => void;
   onResolveConflict: (conflict: string) => void;
-  onDismissConflict: (conflictId: string) => Promise<void>;
+  onResolveReviewConflict: (
+    conflictId: string,
+    resolution: 'keep_canonical' | 'accept_incoming'
+  ) => Promise<void>;
   onResolveSuggestion: (
     suggestionId: string,
     resolution: 'accept' | 'reject'
@@ -3444,7 +3455,7 @@ function RightPane({
           <>
             <h2 className={rightHeading}>{selectedTabLabel}</h2>
             <CommentsPanel
-              onDismissConflict={onDismissConflict}
+              onResolveConflict={onResolveReviewConflict}
               onResolveSuggestion={onResolveSuggestion}
               review={review}
             />

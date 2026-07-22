@@ -238,6 +238,8 @@ Review ops (same envelope, freely mixable with edit ops):
 | `suggestion.add_markdown` | `{after_block_id?, markdown, body?}` — proposes a structural Markdown insertion |
 | `suggestion.accept` | `{item_id}` — applies the replacement or structural insertion/deletion and deletes suggestion replies |
 | `suggestion.reject` | `{item_id}` — resolves without changing text and deletes suggestion replies |
+| `conflict.keep_canonical` | `{item_id}` — resolves while retaining the current hunk |
+| `conflict.accept_incoming` | `{item_id}` — verifies the current hunk, atomically replaces it with incoming, and resolves |
 
 Anchors are `{block_id, start, end}` offsets into the block's `text`; `quote`
 is an optional copy of the anchored text for display. An empty `replacement`
@@ -263,6 +265,7 @@ curl -sS -X PUT "$DOC" \
   -H "X-Agent-Id: $AGENT_ID" \
   -H "X-Quarry-Transaction-Actor: $AGENT_NAME" \
   -H 'If-Match: "<document_clock>"' \
+  -H 'X-Quarry-Merge-Base: "<document_clock>"' \
   --data-binary @article.md
 ```
 
@@ -270,22 +273,26 @@ curl -sS -X PUT "$DOC" \
   writes. Do not rely on client defaults. Tmp document URLs require a Markdown
   media type, reject missing or non-Markdown `Content-Type` with 415, and
   reject canonical UTF-8 Markdown larger than 1 MiB with 413.
-- Send `If-Match` with the clock you last read. It selects the merge base:
-  the write is diff3-merged against the current document, so concurrent
-  edits survive instead of being overwritten. A known-but-stale clock still
-  merges; an unknown one fails 412. No `If-Match` degenerates to a two-way
-  merge against the current document.
+- Send `If-Match` with the current clock as a strict compare-and-swap
+  precondition. A stale value fails 412 without changing the document.
+- Send `X-Quarry-Merge-Base` with the clock whose content your Markdown was
+  based on. It may be an older known version and drives diff3 independently
+  of `If-Match`; an unknown value fails 412. Omitting it degenerates to a
+  two-way merge. After a stale `If-Match`, re-read the head, update only
+  `If-Match`, and retain the original merge base.
 - `block_id`s and review anchors survive the rewrite. Merge leftovers become
   `conflicts` in `GET $DOC/review` — never write failures. A 200 alone does
   NOT mean your Markdown is now the document: inspect both `changed` and
-  `conflicts` in the reply. `conflicts` counts the conflict review items this
-  write recorded; if it is non-zero, the document kept the current text in
+  `conflicts` in the reply. `conflicts` counts the open conflict review items
+  this write created or reused; `conflict_items` gives their stable ids and
+  hunk payloads. If it is non-zero, the document kept the current text in
   those regions and your incoming text is parked in review. Re-read
   `GET $DOC/blocks` and `GET $DOC/review`, incorporate any canonical edits
   that should survive into your Markdown, and only then re-`PUT` the
   reconciled file with the fresh clock. Do not blindly resend the old file.
-  Once the intended content is present, resolve the stale conflict items with
-  `comment.resolve` / `comment.delete`. The reply also carries
+  Resolve each item with `conflict.keep_canonical` or
+  `conflict.accept_incoming`; accepting first verifies that the canonical hunk
+  has not changed. The reply also carries
   `changed: false` when a byte-identical write was a no-op.
 - Use `PUT` to create or rewrite documents wholesale; use block transactions
   for surgical edits, comments, and suggestions on existing content.
@@ -315,8 +322,10 @@ rationale as `body`. Resolved items are omitted unless `includeResolved=1`;
 `conflicts` are diff3 merge leftovers from whole-file writers (Git, FUSE, CLI,
 Markdown PUT): the document kept the canonical side; the losing hunk is data —
 `afterBlockId`, `baseMarkdown`, `incomingMarkdown`, `canonicalMarkdown`.
-Resolve or dismiss with `comment.resolve` / `comment.delete`; resolution never
-mutates the document.
+Resolve with `conflict.keep_canonical` or `conflict.accept_incoming`; the
+incoming action verifies and replaces the canonical hunk atomically.
+Conflict-marker warnings already landed as content and support only the keep
+action.
 
 To clear a review queue: decide suggestions (`suggestion.accept` /
 `suggestion.reject`), apply comment-requested prose changes with edit ops,

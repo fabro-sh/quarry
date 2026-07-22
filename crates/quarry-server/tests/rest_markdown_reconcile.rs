@@ -142,6 +142,7 @@ fn assert_typed_error(status: StatusCode, body: &Value, code: &str, retryable: b
         "STALE_BASE" | "BLOCK_MOVE_CONFLICT" => StatusCode::PRECONDITION_FAILED,
         "BLOCK_DELETED" | "ANCHOR_NOT_FOUND" => StatusCode::NOT_FOUND,
         "INVALID_TRANSACTION" => StatusCode::BAD_REQUEST,
+        "CONFLICT" => StatusCode::CONFLICT,
         _ => StatusCode::UNPROCESSABLE_ENTITY,
     };
     assert_eq!(status, expected);
@@ -375,14 +376,15 @@ async fn conflict_items_persist_project_and_resolve_without_mutating_the_documen
         .context("conflict should include id")?
         .to_string();
 
-    // Conflicts resolve with the comment vocabulary; resolution never
-    // mutates the document.
+    // Keeping canonical resolves the conflict without mutating the document.
     commit_block_transaction(
         &app,
         "conf.md",
         block_tx(
             "tx-resolve-conflict",
-            serde_json::json!([{ "op": "comment.resolve", "item_id": conflict_id }]),
+            serde_json::json!([{
+                "op": "conflict.keep_canonical", "item_id": conflict_id
+            }]),
         ),
     )
     .await;
@@ -442,6 +444,76 @@ async fn comment_edit_on_conflict_id_returns_anchor_not_found() -> anyhow::Resul
     )
     .await;
     assert_typed_error(status, &body, "ANCHOR_NOT_FOUND", false);
+    Ok(())
+}
+
+#[tokio::test]
+async fn accepting_a_conflict_rejects_a_changed_canonical_hunk_atomically() -> anyhow::Result<()> {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "conf-stale.md", "Alpha.\n\nBravo.\n").await;
+    let blocks = get_block_tree(&app, "conf-stale.md").await["blocks"]
+        .as_array()
+        .context("block tree should include blocks")?
+        .clone();
+    let alpha_id = blocks[0]["block_id"]
+        .as_str()
+        .context("alpha id")?
+        .to_string();
+    let bravo_id = blocks[1]["block_id"]
+        .as_str()
+        .context("bravo id")?
+        .to_string();
+    commit_block_transaction(
+        &app,
+        "conf-stale.md",
+        block_tx(
+            "tx-conflict-stale",
+            serde_json::json!([{
+                "op": "conflict.add",
+                "after_block_id": alpha_id,
+                "base_markdown": "Bravo, base.\n",
+                "incoming_markdown": "Bravo, incoming.\n",
+                "canonical_markdown": "Bravo.\n"
+            }]),
+        ),
+    )
+    .await;
+    let conflict_id = get_block_review(&app, "conf-stale.md", false).await["conflicts"][0]["id"]
+        .as_str()
+        .context("conflict id")?
+        .to_string();
+    commit_block_transaction(
+        &app,
+        "conf-stale.md",
+        block_tx(
+            "tx-newer-bravo",
+            serde_json::json!([{
+                "op": "replace_block_content", "block_id": bravo_id, "text": "Bravo, newer."
+            }]),
+        ),
+    )
+    .await;
+
+    let (status, error) = post_block_transaction(
+        &app,
+        "conf-stale.md",
+        block_tx(
+            "tx-stale-accept",
+            serde_json::json!([{
+                "op": "conflict.accept_incoming", "item_id": conflict_id
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &error, "CONFLICT", false);
+    assert_eq!(
+        get_document_markdown(&app, "conf-stale.md").await,
+        "Alpha.\n\nBravo, newer.\n"
+    );
+    assert_eq!(
+        get_block_review(&app, "conf-stale.md", false).await["conflicts"][0]["status"],
+        "open"
+    );
     Ok(())
 }
 
@@ -560,7 +632,7 @@ async fn conflict_add_requires_an_existing_attachment_block() -> anyhow::Result<
 }
 
 #[tokio::test]
-async fn markdown_put_merges_against_the_if_match_base_preserving_ids_and_anchors()
+async fn markdown_put_merges_against_the_explicit_base_preserving_ids_and_anchors()
 -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     // The separator keeps the two edited regions apart: edits to ADJACENT
@@ -613,9 +685,13 @@ async fn markdown_put_merges_against_the_if_match_base_preserving_ids_and_anchor
         ),
     )
     .await;
+    let current_clock = get_block_tree(&app, "merge.md").await["document_clock"]
+        .as_str()
+        .context("updated block tree should include document clock")?
+        .to_string();
 
     // The external writer edits Bravo against the OLD export and PUTs with
-    // the old clock.
+    // the old merge base plus a strict precondition for the current head.
     let incoming = base_export.replace("Bravo.", "Bravo, external.");
     assert_ne!(incoming, base_export);
     let response = app
@@ -625,7 +701,8 @@ async fn markdown_put_merges_against_the_if_match_base_preserving_ids_and_anchor
                 .method(Method::PUT)
                 .uri("/v1/libraries/blocks/documents/merge.md")
                 .header(header::CONTENT_TYPE, "text/markdown")
-                .header(header::IF_MATCH, format!("\"{base_clock}\""))
+                .header(header::IF_MATCH, format!("\"{current_clock}\""))
+                .header("x-quarry-merge-base", format!("\"{base_clock}\""))
                 .body(Body::from(incoming))
                 .unwrap(),
         )
@@ -710,9 +787,9 @@ async fn markdown_put_overlapping_edits_become_conflict_review_items() -> anyhow
                 .method(Method::PUT)
                 .uri("/v1/libraries/blocks/documents/clash.md")
                 .header(header::CONTENT_TYPE, "text/markdown")
-                .header(header::IF_MATCH, format!("\"{base_clock}\""))
+                .header("x-quarry-merge-base", format!("\"{base_clock}\""))
                 .header("x-quarry-transaction-actor", "Avery")
-                .body(Body::from(incoming))
+                .body(Body::from(incoming.clone()))
                 .unwrap(),
         )
         .await
@@ -727,6 +804,15 @@ async fn markdown_put_overlapping_edits_become_conflict_review_items() -> anyhow
     let reply = response_json(response).await;
     assert_eq!(reply["conflicts"], 1, "unexpected PUT reply: {reply}");
     assert_eq!(reply["changed"], true);
+    let conflict_id = reply["conflict_items"][0]["id"]
+        .as_str()
+        .context("PUT conflict item should include its stable id")?
+        .to_string();
+    assert_eq!(reply["conflict_items"][0]["after_block_id"], ids[1]);
+    assert_eq!(
+        reply["conflict_items"][0]["incoming_markdown"],
+        "Bravo, external.\n"
+    );
 
     // Canonical side retained…
     assert_eq!(
@@ -744,6 +830,90 @@ async fn markdown_put_overlapping_edits_become_conflict_review_items() -> anyhow
     assert_eq!(conflicts[0]["incomingMarkdown"], "Bravo, external.\n");
     assert_eq!(conflicts[0]["baseMarkdown"], "Bravo.\n");
     assert_eq!(conflicts[0]["canonicalMarkdown"], "Bravo, canonical.\n");
+
+    // Repeating the same explicit merge does not stack another open item and
+    // returns the existing stable id so the caller can act on it directly.
+    let repeated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/clash.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header("x-quarry-merge-base", format!("\"{base_clock}\""))
+                .body(Body::from(incoming))
+                .unwrap(),
+        )
+        .await
+        .context("repeat overlapping markdown merge")?;
+    assert_eq!(repeated.status(), StatusCode::OK);
+    let repeated = response_json(repeated).await;
+    assert_eq!(repeated["conflicts"], 1);
+    assert_eq!(repeated["conflict_items"][0]["id"], conflict_id);
+    assert_eq!(
+        get_block_review(&app, "clash.md", false).await["conflicts"]
+            .as_array()
+            .context("review should include conflicts array")?
+            .len(),
+        1
+    );
+
+    // Resolution is one atomic semantic action: the server verifies the kept
+    // hunk, swaps in the saved incoming side, and resolves the review item.
+    commit_block_transaction(
+        &app,
+        "clash.md",
+        block_tx(
+            "tx-accept-incoming-conflict",
+            serde_json::json!([{
+                "op": "conflict.accept_incoming", "item_id": conflict_id
+            }]),
+        ),
+    )
+    .await;
+    assert_eq!(
+        get_document_markdown(&app, "clash.md").await,
+        "# Title\n\nAlpha.\n\nBravo, external.\n"
+    );
+    assert!(
+        get_block_review(&app, "clash.md", false).await["conflicts"]
+            .as_array()
+            .context("review should include conflicts array")?
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn markdown_put_if_match_is_a_strict_head_precondition() -> anyhow::Result<()> {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(&app, "strict.md", "Alpha.\n").await;
+    let base_clock = get_block_tree(&app, "strict.md").await["document_clock"]
+        .as_str()
+        .context("block tree should include document clock")?
+        .to_string();
+    put_block_markdown(&app, "strict.md", "Canonical.\n").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/strict.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header(header::IF_MATCH, format!("\"{base_clock}\""))
+                .body(Body::from("Stale overwrite.\n"))
+                .unwrap(),
+        )
+        .await
+        .context("put with stale If-Match")?;
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    let error = response_json(response).await;
+    assert_eq!(error["code"], "PRECONDITION_FAILED");
+    assert_eq!(
+        get_document_markdown(&app, "strict.md").await,
+        "Canonical.\n"
+    );
     Ok(())
 }
 
@@ -818,6 +988,22 @@ async fn markdown_put_with_conflict_markers_flags_a_review_item() -> anyhow::Res
     assert_eq!(conflicts[0]["status"], "open");
     assert_eq!(conflicts[0]["incomingMarkdown"], CONFLICT_MARKER_SOUP);
     assert!(conflicts[0]["afterBlockId"].is_null());
+    let conflict_id = conflicts[0]["id"]
+        .as_str()
+        .context("marker warning should include an id")?;
+    let (status, error) = post_block_transaction(
+        &app,
+        "soup.md",
+        block_tx(
+            "tx-reapply-marker-warning",
+            serde_json::json!([{
+                "op": "conflict.accept_incoming", "item_id": conflict_id
+            }]),
+        ),
+    )
+    .await;
+    assert_typed_error(status, &error, "CONFLICT", false);
+    assert_eq!(get_document_markdown(&app, "soup.md").await, markdown);
     Ok(())
 }
 
@@ -825,12 +1011,32 @@ async fn markdown_put_with_conflict_markers_flags_a_review_item() -> anyhow::Res
 async fn first_import_with_conflict_markers_flags_a_review_item() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
 
-    put_block_markdown(
-        &app,
-        "soup-new.md",
-        &format!("# Notes\n\n{CONFLICT_MARKER_SOUP}"),
-    )
-    .await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/soup-new.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .body(Body::from(format!("# Notes\n\n{CONFLICT_MARKER_SOUP}")))
+                .context("build first marker import")?,
+        )
+        .await
+        .context("first marker import")?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let etag = response.headers()[header::ETAG]
+        .to_str()
+        .context("marker import ETag")?
+        .to_string();
+    let reply = response_json(response).await;
+    assert_eq!(reply["conflicts"], 1);
+    assert_eq!(
+        etag,
+        format!(
+            "\"{}\"",
+            reply["version"]["id"].as_str().context("version id")?
+        )
+    );
 
     let review = get_block_review(&app, "soup-new.md", false).await;
     let conflicts = review["conflicts"]
@@ -838,6 +1044,7 @@ async fn first_import_with_conflict_markers_flags_a_review_item() -> anyhow::Res
         .context("review should include conflicts array")?;
     assert_eq!(conflicts.len(), 1);
     assert_eq!(conflicts[0]["incomingMarkdown"], CONFLICT_MARKER_SOUP);
+    assert_eq!(reply["conflict_items"][0]["id"], conflicts[0]["id"]);
     Ok(())
 }
 
