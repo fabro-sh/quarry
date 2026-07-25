@@ -223,6 +223,29 @@ fn ids_of(blocks: &[MergedBlock]) -> Vec<&str> {
     blocks.iter().map(|block| block.id.as_str()).collect()
 }
 
+/// Every surviving row id, descendants included. `ids_of` only reports
+/// top-level blocks, but review anchors attach to any row — a code line, a
+/// table cell — so identity questions have to look at the whole subtree.
+fn surviving_ids(blocks: &[MergedBlock]) -> Vec<String> {
+    blocks
+        .iter()
+        .flat_map(|block| block.rows.iter())
+        .map(|row| row.block_id.clone())
+        .collect()
+}
+
+/// The id of the canonical row carrying exactly `text`, for anchoring
+/// identity assertions to content rather than to fixture id bookkeeping.
+fn surviving_id_of(canonical: &[BlockRow], text: &str) -> String {
+    let matches: Vec<&BlockRow> = canonical.iter().filter(|row| row.text == text).collect();
+    assert_eq!(
+        matches.len(),
+        1,
+        "fixture must contain exactly one row with text {text:?}"
+    );
+    matches[0].block_id.clone()
+}
+
 fn text_of(blocks: &[MergedBlock], index: usize) -> &str {
     &blocks[index].rows[0].text
 }
@@ -1102,6 +1125,59 @@ fn container_with_changed_children_degrades_to_delete_plus_insert() {
     assert_eq!(rows[1].block_type, "code_line");
     assert_eq!(rows[1].text, "let x = 2;");
     assert_eq!(rows[1].parent_block_id.as_deref(), Some("fresh-1"));
+}
+
+/// Review anchors live on individual rows, and a container's children are
+/// rows: a comment can be anchored to one line of a code fence. When only
+/// SOME children change, the untouched ones must keep their ids — otherwise
+/// every anchor inside the container dies, including anchors on text that
+/// never changed.
+///
+/// Today `pair_replace_ops` bails on any child difference, so the whole
+/// container is deleted and reinserted with fresh ids for every descendant.
+/// The single-line fixture above cannot see this because its only child is
+/// the one that changed.
+#[test]
+fn partially_changed_container_keeps_unchanged_child_ids() {
+    let base = "```toml\n[section.one]\nsha256 = \"abc\"\n```\n\nAfter.\n";
+    let canonical = canonical_doc(base, &["b-code", "b-after"]);
+    let incoming = "```toml\n[section.two]\nsha256 = \"abc\"\n```\n\nAfter.\n";
+
+    let unchanged_child = surviving_id_of(&canonical, "sha256 = \"abc\"");
+
+    let result = run(ReconcileBase::Markdown(base), incoming, &canonical);
+    let merged = apply_ops(&canonical, &result.ops);
+
+    assert_eq!(result.conflicts, []);
+    assert!(
+        surviving_ids(&merged).contains(&unchanged_child),
+        "the untouched code line lost its identity, so any review anchor on \
+         it orphans; surviving ids: {:?}",
+        surviving_ids(&merged)
+    );
+}
+
+/// The same defect one nesting level deeper. Table cells hang off `tr` rows,
+/// so a fix that only recurses into direct children still orphans anchors on
+/// untouched cells.
+#[test]
+fn partially_changed_table_keeps_unchanged_cell_ids() {
+    let base = "| a | b |\n|---|---|\n| keep | one |\n";
+    let canonical = canonical_doc(base, &["b-table"]);
+    let incoming = "| a | b |\n|---|---|\n| keep | two |\n";
+
+    let unchanged_cell = surviving_id_of(&canonical, "keep");
+
+    let result = run(ReconcileBase::Markdown(base), incoming, &canonical);
+    let merged = apply_ops(&canonical, &result.ops);
+
+    assert_eq!(result.conflicts, []);
+    assert!(
+        surviving_ids(&merged).contains(&unchanged_cell),
+        "the untouched table cell lost its identity, so any review anchor on \
+         it orphans; surviving ids: {:?}",
+        surviving_ids(&merged)
+    );
 }
 
 // ---------------------------------------------------------------------------
