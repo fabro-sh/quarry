@@ -66,20 +66,37 @@
 //!    content emits `replace_block_content`, then a same-type attrs change
 //!    emits `set_block_attrs` — pinned in that order. Conversions to or from
 //!    `raw_markdown` keep the spike's delete + insert (the gateway rejects
-//!    those conversions). Container blocks (nested children: code blocks,
-//!    tables, …) pair only for type/attrs changes over identical children;
-//!    changed children degrade to delete + insert with a fresh ID
-//!    (`replace_block_content` carries flat inline content only — a
-//!    documented production limitation).
+//!    those conversions).
+//!
+//!    *Rule 6a — container recursion.* Same-type container blocks (nested
+//!    children: code blocks, tables, …) whose children changed reconcile
+//!    their child sequences with the same machinery one level down: bounded
+//!    exact-equality LCS over the child shapes, gap-wise k-th/k-th pairing
+//!    through rule 6 (recursing further for nested containers such as table
+//!    rows), child leftovers becoming `delete_block` on the mapped child id
+//!    or `insert_child` with fresh IDs at final merged child indices.
+//!    Unchanged children keep their ids — review anchors on them survive.
+//!    Child-level move pairing is not attempted: a child moved within its
+//!    container degrades to delete + fresh insert. Containers still degrade
+//!    to a whole-subtree delete + insert when the type changed along with
+//!    the children or when flat inline content drifted on a block that has
+//!    children (no such shape is produced by the codec). A type/attrs-only
+//!    change over identical children pairs as before.
 //! 7. Leftover deletes → `delete_block`; leftover inserts → `insert_block`
-//!    with fresh IDs minted by the caller, in document order.
+//!    with fresh IDs minted by the caller. Fresh IDs are minted in two runs:
+//!    child-level inserts from rule 6a first (ascending base order), then
+//!    top-level insert subtrees in document order.
 //! 8. Op order and application semantics (positions are indices into the final
-//!    merged top-level sequence): replaces/type-sets/attr-sets (ID-addressed)
-//!    first, then deletes, then placements. Application: apply ID-addressed
-//!    ops, then deletes, then remove every `move_block` target, then place
-//!    moves and inserts at their stated positions in ascending order.
-//!    (`translate to sequential gateway ops` is the adapter layer's job; see
-//!    `quarry-server`.)
+//!    merged top-level sequence; `insert_child` positions are indices into
+//!    the final merged child sequence of their parent): replaces/type-sets/
+//!    attr-sets (ID-addressed, any depth) first, then deletes (any depth),
+//!    then top-level placements, then child inserts. Application: apply
+//!    ID-addressed ops, then deletes, then remove every `move_block` target,
+//!    then place moves and top-level inserts at their stated positions in
+//!    ascending order, then place child inserts at their stated child indices
+//!    ascending per parent (parents of child inserts are paired blocks and
+//!    are never moved or deleted). (`translate to sequential gateway ops` is
+//!    the adapter layer's job; see `quarry-server`.)
 //!
 //! ## The canonical empty-paragraph shape
 //!
@@ -174,6 +191,19 @@ pub enum ReconcileOp {
         /// descendants carry their parent links and sibling positions.
         rows: Vec<BlockRow>,
     },
+    /// A fresh child inserted into a surviving container (rule 6a).
+    InsertChild {
+        /// The canonical id of the container the child is inserted into. The
+        /// parent is a paired block: never moved, never deleted.
+        parent_block_id: String,
+        /// Final merged child index within the parent (rule 8).
+        position: usize,
+        /// The inserted subtree in depth-first order with freshly minted ids:
+        /// `rows[0]` is the inserted child (`parent_block_id = None` — the
+        /// op-level parent governs), descendants carry their parent links and
+        /// sibling positions.
+        rows: Vec<BlockRow>,
+    },
 }
 
 /// Conflict-as-data: the canonical side is retained in the merge; this
@@ -232,7 +262,7 @@ pub fn reconcile(
     let ClassifiedSegments {
         plans,
         conflicts,
-        canonical_id_by_base,
+        canonical_index_by_base,
     } = classify_segments(segments, &base, &incoming, &canonical, &base_to_incoming)?;
 
     let consumed = consume_positionally_equal_pairs(&plans, &base, &incoming);
@@ -246,21 +276,26 @@ pub fn reconcile(
     let ContentOps {
         replace_ops,
         delete_ops,
+        child_insert_ops,
         replaced_by_insert,
+        degraded: child_pairing_degraded,
     } = build_content_ops(
         &plans,
         &base,
         &incoming,
-        &canonical_id_by_base,
+        &canonical,
+        &canonical_index_by_base,
         &consumed,
         &moved_by_insert,
         &moved_bases,
+        &mut mint_block_id,
     );
 
     let placement_ops = build_placement_ops(
         &plans,
         &incoming,
-        &canonical_id_by_base,
+        &canonical,
+        &canonical_index_by_base,
         &moved_by_insert,
         &replaced_by_insert,
         &mut mint_block_id,
@@ -269,11 +304,15 @@ pub fn reconcile(
     let mut ops = replace_ops;
     ops.extend(delete_ops);
     ops.extend(placement_ops);
+    ops.extend(child_insert_ops);
     prepend_trailing_empty_deletes(&mut ops, trailing_empty);
     Ok(ReconcileOutcome {
         ops,
         conflicts,
-        degraded: incoming_degraded || canonical_degraded || move_pairing_degraded,
+        degraded: incoming_degraded
+            || canonical_degraded
+            || move_pairing_degraded
+            || child_pairing_degraded,
     })
 }
 
@@ -294,7 +333,10 @@ fn trim_trailing_empty_paragraphs(canonical: &mut Vec<TopBlock>) -> Vec<String> 
 struct ClassifiedSegments {
     plans: Vec<SegmentPlan>,
     conflicts: Vec<ReconcileConflict>,
-    canonical_id_by_base: HashMap<usize, String>,
+    /// base index → canonical index, for incoming-only regions (positional
+    /// 1:1 by construction: `canonical == base` there, shape-recursively, so
+    /// canonical child subtrees also align with base children by position).
+    canonical_index_by_base: HashMap<usize, usize>,
 }
 
 fn classify_segments(
@@ -308,7 +350,7 @@ fn classify_segments(
     // incoming-only regions, the positional base → canonical ID mapping.
     let mut plans = Vec::new();
     let mut conflicts = Vec::new();
-    let mut canonical_id_by_base: HashMap<usize, String> = HashMap::new();
+    let mut canonical_index_by_base: HashMap<usize, usize> = HashMap::new();
     let mut last_stable: Option<usize> = None;
     for segment in segments {
         match segment {
@@ -329,7 +371,7 @@ fn classify_segments(
                 } else if shapes_equal(canonical_slice, base_slice) {
                     for b in region.base.clone() {
                         let c = region.canonical.start + (b - region.base.start);
-                        canonical_id_by_base.insert(b, canonical[c].rows[0].block_id.clone());
+                        canonical_index_by_base.insert(b, c);
                     }
                     plans.push(SegmentPlan::ApplyIncoming(incoming_region(
                         &region,
@@ -357,7 +399,7 @@ fn classify_segments(
     Ok(ClassifiedSegments {
         plans,
         conflicts,
-        canonical_id_by_base,
+        canonical_index_by_base,
     })
 }
 
@@ -466,24 +508,32 @@ fn pair_unique_moves(
 struct ContentOps {
     replace_ops: Vec<ReconcileOp>,
     delete_ops: Vec<ReconcileOp>,
+    child_insert_ops: Vec<ReconcileOp>,
     replaced_by_insert: HashSet<usize>,
+    degraded: bool,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "pass-3 inputs mirror the reconcile pipeline's accumulated state"
+)]
 fn build_content_ops(
     plans: &[SegmentPlan],
     base: &[TopBlock],
     incoming: &[TopBlock],
-    canonical_id_by_base: &HashMap<usize, String>,
+    canonical: &[TopBlock],
+    canonical_index_by_base: &HashMap<usize, usize>,
     consumed: &ConsumedPairs,
     moved_by_insert: &HashMap<usize, usize>,
     moved_bases: &HashSet<usize>,
+    mint_block_id: &mut impl FnMut() -> String,
 ) -> ContentOps {
     // Pass 3: per-gap positional replace pairing on whatever move pairing left
     // behind; leftovers become deletes and fresh inserts. Plans, gaps within a
     // plan, and pairs within a gap are all walked in ascending base order, so
-    // both op vectors come out sorted by base index with no explicit sort.
-    let mut replace_ops: Vec<ReconcileOp> = Vec::new();
-    let mut delete_ops: Vec<ReconcileOp> = Vec::new();
+    // the op vectors come out sorted by base index with no explicit sort
+    // (child-level ops ride under their pair's base index).
+    let mut buckets = PairOps::default();
     let mut replaced_by_insert: HashSet<usize> = consumed.inserts.clone();
     for plan in plans {
         let SegmentPlan::ApplyIncoming(region_plan) = plan else {
@@ -505,20 +555,29 @@ fn build_content_ops(
             for k in 0..deletes.len().max(inserts.len()) {
                 match (deletes.get(k), inserts.get(k)) {
                     (Some(&b), Some(&i)) => {
-                        let block_id = canonical_id_by_base[&b].clone();
-                        if pair_replace_ops(&base[b].shape, &incoming[i].shape, &block_id)
-                            .map(|ops| replace_ops.extend(ops))
-                            .is_some()
-                        {
+                        let canonical_top = &canonical[canonical_index_by_base[&b]];
+                        let ids = id_tree(canonical_top);
+                        if let Some(pair) = pair_replace_ops(
+                            &base[b].shape,
+                            &incoming[i].shape,
+                            &ids,
+                            mint_block_id,
+                        ) {
+                            buckets.merge(pair);
                             replaced_by_insert.insert(i);
                         } else {
-                            // Unpairable (raw_markdown conversion, changed
-                            // container children): delete + fresh insert.
-                            delete_ops.push(ReconcileOp::DeleteBlock { block_id });
+                            // Unpairable (raw_markdown conversion, container
+                            // type change over changed children): delete +
+                            // fresh insert.
+                            buckets
+                                .delete_ops
+                                .push(ReconcileOp::DeleteBlock { block_id: ids.id });
                         }
                     }
-                    (Some(&b), None) => delete_ops.push(ReconcileOp::DeleteBlock {
-                        block_id: canonical_id_by_base[&b].clone(),
+                    (Some(&b), None) => buckets.delete_ops.push(ReconcileOp::DeleteBlock {
+                        block_id: canonical[canonical_index_by_base[&b]].rows[0]
+                            .block_id
+                            .clone(),
                     }),
                     (None, Some(_)) => {} // stays a fresh insert
                     (None, None) => unreachable!("k < max(len, len)"),
@@ -527,22 +586,26 @@ fn build_content_ops(
         }
     }
     ContentOps {
-        replace_ops,
-        delete_ops,
+        replace_ops: buckets.id_ops,
+        delete_ops: buckets.delete_ops,
+        child_insert_ops: buckets.child_insert_ops,
         replaced_by_insert,
+        degraded: buckets.degraded,
     }
 }
 
 fn build_placement_ops(
     plans: &[SegmentPlan],
     incoming: &[TopBlock],
-    canonical_id_by_base: &HashMap<usize, String>,
+    canonical: &[TopBlock],
+    canonical_index_by_base: &HashMap<usize, usize>,
     moved_by_insert: &HashMap<usize, usize>,
     replaced_by_insert: &HashSet<usize>,
     mint_block_id: &mut impl FnMut() -> String,
 ) -> Vec<ReconcileOp> {
     // Pass 4: walk the merged sequence to assign final positions to moves and
-    // fresh inserts (fresh IDs are minted in document order).
+    // fresh top-level inserts (fresh IDs for these subtrees are minted in
+    // document order, after pass 3's child-insert ids — rule 7).
     let mut merged_len = 0usize;
     let mut placement_ops: Vec<ReconcileOp> = Vec::new();
     for plan in plans {
@@ -555,7 +618,9 @@ fn build_placement_ops(
                         merged_len += 1;
                     } else if let Some(b) = moved_by_insert.get(&i) {
                         placement_ops.push(ReconcileOp::MoveBlock {
-                            block_id: canonical_id_by_base[b].clone(),
+                            block_id: canonical[canonical_index_by_base[b]].rows[0]
+                                .block_id
+                                .clone(),
                             position: merged_len,
                         });
                         merged_len += 1;
@@ -729,9 +794,77 @@ fn reminted_subtree(top: &TopBlock, mint_block_id: &mut impl FnMut() -> String) 
     rows
 }
 
+/// Identity tree of a canonical subtree: node ids in the same child order as
+/// the corresponding [`Shape`]. In an incoming-only region canonical == base
+/// shape-recursively, so `children[k]` carries the surviving id of base
+/// child `k` at every depth.
+struct IdNode {
+    id: String,
+    children: Vec<IdNode>,
+}
+
+fn id_tree(top: &TopBlock) -> IdNode {
+    let mut children_of: HashMap<Option<&str>, Vec<&BlockRow>> = HashMap::new();
+    for row in &top.rows {
+        children_of
+            .entry(row.parent_block_id.as_deref())
+            .or_default()
+            .push(row);
+    }
+    for siblings in children_of.values_mut() {
+        siblings.sort_by_key(|row| row.position);
+    }
+    id_node(&top.rows[0], &children_of)
+}
+
+fn id_node(row: &BlockRow, children_of: &HashMap<Option<&str>, Vec<&BlockRow>>) -> IdNode {
+    IdNode {
+        id: row.block_id.clone(),
+        children: children_of
+            .get(&Some(row.block_id.as_str()))
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|child| id_node(child, children_of))
+            .collect(),
+    }
+}
+
+/// Bucketed output of one (possibly recursive) rule-6 pairing, keeping the
+/// final op-vector phases (rule 8) separable at the call site.
+#[derive(Default)]
+struct PairOps {
+    /// Replace/type/attrs ops, any depth.
+    id_ops: Vec<ReconcileOp>,
+    /// Child deletes from rule 6a (and, at the call site, whole-block
+    /// deletes from unpairable positional pairs).
+    delete_ops: Vec<ReconcileOp>,
+    /// `insert_child` ops from rule 6a.
+    child_insert_ops: Vec<ReconcileOp>,
+    /// True when a child-level LCS exceeded the cell limit.
+    degraded: bool,
+}
+
+impl PairOps {
+    fn merge(&mut self, other: PairOps) {
+        self.id_ops.extend(other.id_ops);
+        self.delete_ops.extend(other.delete_ops);
+        self.child_insert_ops.extend(other.child_insert_ops);
+        self.degraded |= other.degraded;
+    }
+}
+
 /// Rule 6: ID-addressed ops for one positional pair, or `None` when the pair
-/// is unpairable and must degrade to delete + fresh insert.
-fn pair_replace_ops(base: &Shape, incoming: &Shape, block_id: &str) -> Option<Vec<ReconcileOp>> {
+/// is unpairable and must degrade to delete + fresh insert. Same-type
+/// containers with changed children recurse instead of degrading (rule 6a):
+/// unchanged children keep their ids, changed children pair again one level
+/// down, and child-level leftovers become child deletes and child inserts.
+fn pair_replace_ops(
+    base: &Shape,
+    incoming: &Shape,
+    canonical: &IdNode,
+    mint_block_id: &mut impl FnMut() -> String,
+) -> Option<PairOps> {
     let type_changed = base.block_type != incoming.block_type;
     if type_changed && (base.block_type == "raw_markdown" || incoming.block_type == "raw_markdown")
     {
@@ -739,37 +872,158 @@ fn pair_replace_ops(base: &Shape, incoming: &Shape, block_id: &str) -> Option<Ve
     }
     let inline_changed =
         base.text != incoming.text || base.marks != incoming.marks || base.links != incoming.links;
-    if (!base.children.is_empty() || !incoming.children.is_empty())
-        && (base.children != incoming.children || inline_changed)
-    {
-        // Containers pair only for type/attrs changes over identical
-        // children (module docs).
+    let has_children = !base.children.is_empty() || !incoming.children.is_empty();
+    let children_changed = base.children != incoming.children;
+    // Containers carry no flat inline content, so inline drift on a block
+    // with children marks a shape this pairing does not understand; a type
+    // change over changed children has no id-preserving story either. Both
+    // degrade to delete + fresh insert as before rule 6a.
+    if has_children && (inline_changed || (type_changed && children_changed)) {
         return None;
     }
     let attrs_changed = base.attrs != incoming.attrs;
-    let mut ops = Vec::new();
+    let mut ops = PairOps::default();
     if type_changed {
-        ops.push(ReconcileOp::SetBlockType {
-            block_id: block_id.to_string(),
+        ops.id_ops.push(ReconcileOp::SetBlockType {
+            block_id: canonical.id.clone(),
             block_type: incoming.block_type.clone(),
             attrs: attrs_changed.then(|| incoming.attrs.clone()),
         });
     }
     if inline_changed {
-        ops.push(ReconcileOp::ReplaceBlockContent {
-            block_id: block_id.to_string(),
+        ops.id_ops.push(ReconcileOp::ReplaceBlockContent {
+            block_id: canonical.id.clone(),
             text: incoming.text.clone(),
             marks: incoming.marks.clone(),
             links: incoming.links.clone(),
         });
     }
     if attrs_changed && !type_changed {
-        ops.push(ReconcileOp::SetBlockAttrs {
-            block_id: block_id.to_string(),
+        ops.id_ops.push(ReconcileOp::SetBlockAttrs {
+            block_id: canonical.id.clone(),
             attrs: incoming.attrs.clone(),
         });
     }
+    if children_changed {
+        reconcile_children(base, incoming, canonical, mint_block_id, &mut ops);
+    }
     Some(ops)
+}
+
+/// Rule 6a: reconcile the child sequences of a paired same-type container.
+/// The same shape as the top-level rules 4–7, one level down and without
+/// move pairing: LCS-matched children are unchanged (id preserved, no op),
+/// per-gap k-th/k-th positional pairs go through rule 6 recursively, child
+/// leftovers become deletes on the mapped canonical child id or fresh
+/// `insert_child`s at final merged child indices (rule 8).
+fn reconcile_children(
+    base: &Shape,
+    incoming: &Shape,
+    canonical: &IdNode,
+    mint_block_id: &mut impl FnMut() -> String,
+    out: &mut PairOps,
+) {
+    let (matches, degraded) = lcs_matching_bounded_by(
+        &base.children,
+        &incoming.children,
+        LCS_CELL_LIMIT,
+        |a, b| a == b,
+    );
+    out.degraded |= degraded;
+
+    // Gaps between consecutive matches, as at top level (rule 4).
+    let mut gaps: Vec<(Vec<usize>, Vec<usize>)> = Vec::new();
+    let (mut b, mut i) = (0usize, 0usize);
+    for &(mb, mi) in &matches {
+        gaps.push(((b..mb).collect(), (i..mi).collect()));
+        b = mb + 1;
+        i = mi + 1;
+    }
+    gaps.push((
+        (b..base.children.len()).collect(),
+        (i..incoming.children.len()).collect(),
+    ));
+
+    // Incoming children that occupy a slot in the merged child sequence:
+    // LCS matches plus successful positional pairs.
+    let mut kept: HashSet<usize> = matches.iter().map(|&(_, i)| i).collect();
+    for (deletes, inserts) in &gaps {
+        for k in 0..deletes.len().max(inserts.len()) {
+            match (deletes.get(k), inserts.get(k)) {
+                (Some(&bk), Some(&ik)) => {
+                    let child_canonical = &canonical.children[bk];
+                    if let Some(pair) = pair_replace_ops(
+                        &base.children[bk],
+                        &incoming.children[ik],
+                        child_canonical,
+                        mint_block_id,
+                    ) {
+                        out.merge(pair);
+                        kept.insert(ik);
+                    } else {
+                        out.delete_ops.push(ReconcileOp::DeleteBlock {
+                            block_id: child_canonical.id.clone(),
+                        });
+                    }
+                }
+                (Some(&bk), None) => out.delete_ops.push(ReconcileOp::DeleteBlock {
+                    block_id: canonical.children[bk].id.clone(),
+                }),
+                (None, Some(_)) => {} // stays a fresh child insert
+                (None, None) => unreachable!("k < max(len, len)"),
+            }
+        }
+    }
+
+    // Final merged child indices for the fresh inserts (rule 8, one level
+    // down): kept incoming children occupy slots in incoming order, deletes
+    // contribute nothing.
+    let mut merged_index = 0usize;
+    for (ik, child) in incoming.children.iter().enumerate() {
+        if kept.contains(&ik) {
+            merged_index += 1;
+        } else {
+            out.child_insert_ops.push(ReconcileOp::InsertChild {
+                parent_block_id: canonical.id.clone(),
+                position: merged_index,
+                rows: shape_rows(child, mint_block_id),
+            });
+            merged_index += 1;
+        }
+    }
+}
+
+/// Synthesizes the [`BlockRow`] subtree for a fresh child insert from an
+/// incoming [`Shape`], minting ids in depth-first document order. `rows[0]`
+/// carries `parent_block_id = None` (the `insert_child` op-level parent
+/// governs) and `position = 0` (the op-level position governs); descendants
+/// carry their parent links and sibling positions.
+fn shape_rows(shape: &Shape, mint_block_id: &mut impl FnMut() -> String) -> Vec<BlockRow> {
+    fn walk<F: FnMut() -> String>(
+        shape: &Shape,
+        parent: Option<&str>,
+        position: u32,
+        mint_block_id: &mut F,
+        out: &mut Vec<BlockRow>,
+    ) {
+        let id = mint_block_id();
+        out.push(BlockRow {
+            block_id: id.clone(),
+            parent_block_id: parent.map(str::to_string),
+            position,
+            block_type: shape.block_type.clone(),
+            attrs: shape.attrs.clone(),
+            text: shape.text.clone(),
+            marks: shape.marks.clone(),
+            links: shape.links.clone(),
+        });
+        for (index, child) in shape.children.iter().enumerate() {
+            walk(child, Some(&id), index as u32, mint_block_id, out);
+        }
+    }
+    let mut rows = Vec::new();
+    walk(shape, None, 0, mint_block_id, &mut rows);
+    rows
 }
 
 // ---------------------------------------------------------------------------
@@ -794,9 +1048,21 @@ fn lcs_matching_bounded(
     b: &[TopBlock],
     cell_limit: usize,
 ) -> (Vec<(usize, usize)>, bool) {
+    lcs_matching_bounded_by(a, b, cell_limit, |x, y| x.shape == y.shape)
+}
+
+/// The bounded-LCS core, generic over the element type so the same pinned
+/// tie-breaks and degraded mode serve both top-level blocks (compared by
+/// shape) and container children (rule 6a, compared as shapes directly).
+fn lcs_matching_bounded_by<T>(
+    a: &[T],
+    b: &[T],
+    cell_limit: usize,
+    eq: impl Fn(&T, &T) -> bool,
+) -> (Vec<(usize, usize)>, bool) {
     let common = a.len().min(b.len());
     let mut prefix = 0usize;
-    while prefix < common && a[prefix].shape == b[prefix].shape {
+    while prefix < common && eq(&a[prefix], &b[prefix]) {
         prefix += 1;
     }
     let mut pairs: Vec<(usize, usize)> = (0..prefix).map(|index| (index, index)).collect();
@@ -807,7 +1073,10 @@ fn lcs_matching_bounded(
         let common = a_rest.len().min(b_rest.len());
         let mut suffix = 0usize;
         while suffix < common
-            && a_rest[a_rest.len() - 1 - suffix].shape == b_rest[b_rest.len() - 1 - suffix].shape
+            && eq(
+                &a_rest[a_rest.len() - 1 - suffix],
+                &b_rest[b_rest.len() - 1 - suffix],
+            )
         {
             suffix += 1;
         }
@@ -822,7 +1091,7 @@ fn lcs_matching_bounded(
     let mut score = vec![vec![0usize; b_rest.len() + 1]; a_rest.len() + 1];
     for i in (0..a_rest.len()).rev() {
         for j in (0..b_rest.len()).rev() {
-            score[i][j] = if a_rest[i].shape == b_rest[j].shape {
+            score[i][j] = if eq(&a_rest[i], &b_rest[j]) {
                 1 + score[i + 1][j + 1]
             } else {
                 score[i + 1][j].max(score[i][j + 1])
@@ -831,7 +1100,7 @@ fn lcs_matching_bounded(
     }
     let (mut i, mut j) = (0, 0);
     while i < a_rest.len() && j < b_rest.len() {
-        if a_rest[i].shape == b_rest[j].shape {
+        if eq(&a_rest[i], &b_rest[j]) {
             pairs.push((prefix + i, prefix + j));
             i += 1;
             j += 1;

@@ -40,7 +40,11 @@
 //! positions are correct at their application time. Move attribution may
 //! differ from the codec's (moving a displaced sibling instead of the
 //! designated mover) — the merged order, ids, and anchors are identical
-//! either way, pinned by `sequential_ops_*` tests.
+//! either way, pinned by `sequential_ops_*` tests. Child inserts (codec rule
+//! 6a) need no simulation: their parents are paired containers that the
+//! top-level walk never moves or deletes, and with no child moves, applying
+//! them at their final child indices ascending per parent is already
+//! sequential-exact.
 
 use crate::gateway::{
     self, BlockOp, BlockTransactionActor, GatewayError, GatewayErrorCode, GatewayFailure,
@@ -995,6 +999,7 @@ fn sequential_ops(top_ids: &[String], ops: &[ReconcileOp]) -> Vec<BlockOp> {
     let mut working: Vec<String> = top_ids.to_vec();
     let mut moved: Vec<&str> = Vec::new();
     let mut placements: Vec<(&ReconcileOp, usize)> = Vec::new();
+    let mut child_placements: Vec<(&str, usize, &[BlockRow])> = Vec::new();
 
     for op in ops {
         match op {
@@ -1033,6 +1038,11 @@ fn sequential_ops(top_ids: &[String], ops: &[ReconcileOp]) -> Vec<BlockOp> {
                 placements.push((op, *position));
             }
             ReconcileOp::InsertBlock { position, .. } => placements.push((op, *position)),
+            ReconcileOp::InsertChild {
+                parent_block_id,
+                position,
+                rows,
+            } => child_placements.push((parent_block_id, *position, rows)),
         }
     }
 
@@ -1088,6 +1098,23 @@ fn sequential_ops(top_ids: &[String], ops: &[ReconcileOp]) -> Vec<BlockOp> {
         }
     }
     debug_assert_eq!(working, final_order);
+
+    // Child inserts (codec rule 6a) target paired containers — never moved,
+    // never deleted — so they are independent of the top-level walk above.
+    // Their positions are final merged child indices; with no child moves,
+    // applying them ascending per parent after the deletes is exact: when the
+    // insert at final index k runs, everything before k in the parent's final
+    // child sequence (survivors plus earlier inserts) is already in place.
+    child_placements.sort_by(|(parent_a, position_a, _), (parent_b, position_b, _)| {
+        (parent_a, position_a).cmp(&(parent_b, position_b))
+    });
+    for (parent_block_id, position, rows) in child_placements {
+        out.extend(insert_child_subtree_ops(
+            parent_block_id,
+            rows,
+            position as u32,
+        ));
+    }
     out
 }
 
@@ -1099,6 +1126,37 @@ fn insert_subtree_ops(rows: &[BlockRow], position: u32) -> Vec<BlockOp> {
         .map(|row| BlockOp::InsertBlock {
             block_id: Some(row.block_id.clone()),
             parent_block_id: row.parent_block_id.clone(),
+            position: if row.parent_block_id.is_none() {
+                position
+            } else {
+                row.position
+            },
+            block_type: row.block_type.clone(),
+            attrs: row.attrs.clone(),
+            text: row.text.clone(),
+            marks: row.marks.clone(),
+            links: row.links.clone(),
+        })
+        .collect()
+}
+
+/// One inserted child subtree (codec rule 6a) as gateway insert ops: the
+/// subtree root under the surviving canonical parent at the sequential child
+/// `position`, descendants under their freshly minted parents at their
+/// sibling positions (depth-first, parents before children).
+fn insert_child_subtree_ops(
+    parent_block_id: &str,
+    rows: &[BlockRow],
+    position: u32,
+) -> Vec<BlockOp> {
+    rows.iter()
+        .map(|row| BlockOp::InsertBlock {
+            block_id: Some(row.block_id.clone()),
+            parent_block_id: if row.parent_block_id.is_none() {
+                Some(parent_block_id.to_string())
+            } else {
+                row.parent_block_id.clone()
+            },
             position: if row.parent_block_id.is_none() {
                 position
             } else {
@@ -1307,6 +1365,67 @@ mod tests {
             })
             .expect("child insert present");
         assert_eq!(child, ("line".to_string(), "code".to_string(), 0));
+    }
+
+    /// Codec rule 6a: `insert_child` translates to a gateway insert under
+    /// the surviving canonical parent, emitted after deletes, ascending per
+    /// parent, with the subtree root re-parented to the op-level parent.
+    #[test]
+    fn sequential_ops_places_child_inserts_after_deletes_under_the_surviving_parent() {
+        let top = ids(&["code", "after"]);
+        let mut first = insert_rows("fresh-1", "added = true");
+        first[0].block_type = "code_line".to_string();
+        let mut second = insert_rows("fresh-2", "tail = true");
+        second[0].block_type = "code_line".to_string();
+        let ops = vec![
+            ReconcileOp::DeleteBlock {
+                block_id: "stale-line".to_string(),
+            },
+            // Deliberately out of order: translation must sort per parent.
+            ReconcileOp::InsertChild {
+                parent_block_id: "code".to_string(),
+                position: 2,
+                rows: second,
+            },
+            ReconcileOp::InsertChild {
+                parent_block_id: "code".to_string(),
+                position: 0,
+                rows: first,
+            },
+        ];
+
+        let translated = sequential_ops(&top, &ops);
+
+        let delete_index = translated
+            .iter()
+            .position(|op| matches!(op, BlockOp::DeleteBlock { .. }))
+            .expect("delete present");
+        let inserts: Vec<(usize, String, String, u32)> = translated
+            .iter()
+            .enumerate()
+            .filter_map(|(index, op)| match op {
+                BlockOp::InsertBlock {
+                    block_id: Some(id),
+                    parent_block_id: Some(parent),
+                    position,
+                    ..
+                } => Some((index, id.clone(), parent.clone(), *position)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(inserts.len(), 2);
+        assert!(
+            inserts.iter().all(|(index, ..)| *index > delete_index),
+            "child inserts must follow deletes"
+        );
+        assert_eq!(
+            inserts
+                .iter()
+                .map(|(_, id, parent, position)| (id.as_str(), parent.as_str(), *position))
+                .collect::<Vec<_>>(),
+            [("fresh-1", "code", 0), ("fresh-2", "code", 2)],
+            "ascending final child indices per parent"
+        );
     }
 
     #[test]

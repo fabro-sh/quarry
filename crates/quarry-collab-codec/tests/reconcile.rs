@@ -144,12 +144,41 @@ fn group_blocks(rows: &[BlockRow]) -> Vec<MergedBlock> {
     tops
 }
 
-fn top_mut<'a>(blocks: &'a mut [MergedBlock], block_id: &str) -> &'a mut BlockRow {
-    &mut blocks
+/// ID-addressed ops may target any row (rule 6a recurses into containers),
+/// so the lookup spans every subtree, not just top-level rows.
+fn row_mut<'a>(blocks: &'a mut [MergedBlock], block_id: &str) -> &'a mut BlockRow {
+    blocks
         .iter_mut()
-        .find(|block| block.id == block_id)
-        .expect("op targets an existing top-level block")
-        .rows[0]
+        .flat_map(|block| block.rows.iter_mut())
+        .find(|row| row.block_id == block_id)
+        .expect("op targets an existing row")
+}
+
+/// Removes a child row and its descendants from its subtree, closing the
+/// sibling position gap (rule 8: deletes apply before placements).
+fn remove_child_row(block: &mut MergedBlock, block_id: &str) {
+    let removed = block
+        .rows
+        .iter()
+        .find(|row| row.block_id == block_id)
+        .cloned()
+        .expect("deleted child row exists");
+    let mut doomed: Vec<String> = vec![removed.block_id.clone()];
+    let mut frontier = vec![removed.block_id.clone()];
+    while let Some(parent) = frontier.pop() {
+        for row in &block.rows {
+            if row.parent_block_id.as_deref() == Some(parent.as_str()) {
+                doomed.push(row.block_id.clone());
+                frontier.push(row.block_id.clone());
+            }
+        }
+    }
+    block.rows.retain(|row| !doomed.contains(&row.block_id));
+    for row in &mut block.rows {
+        if row.parent_block_id == removed.parent_block_id && row.position > removed.position {
+            row.position -= 1;
+        }
+    }
 }
 
 fn apply_ops(canonical: &[BlockRow], ops: &[ReconcileOp]) -> Vec<MergedBlock> {
@@ -162,7 +191,7 @@ fn apply_ops(canonical: &[BlockRow], ops: &[ReconcileOp]) -> Vec<MergedBlock> {
                 marks,
                 links,
             } => {
-                let row = top_mut(&mut blocks, block_id);
+                let row = row_mut(&mut blocks, block_id);
                 row.text = text.clone();
                 row.marks = marks.clone();
                 row.links = links.clone();
@@ -172,23 +201,29 @@ fn apply_ops(canonical: &[BlockRow], ops: &[ReconcileOp]) -> Vec<MergedBlock> {
                 block_type,
                 attrs,
             } => {
-                let row = top_mut(&mut blocks, block_id);
+                let row = row_mut(&mut blocks, block_id);
                 row.block_type = block_type.clone();
                 if let Some(attrs) = attrs {
                     row.attrs = attrs.clone();
                 }
             }
             ReconcileOp::SetBlockAttrs { block_id, attrs } => {
-                top_mut(&mut blocks, block_id).attrs = attrs.clone();
+                row_mut(&mut blocks, block_id).attrs = attrs.clone();
             }
             ReconcileOp::DeleteBlock { block_id } => {
-                let index = blocks
-                    .iter()
-                    .position(|block| block.id == *block_id)
-                    .expect("deleted block exists");
-                blocks.remove(index);
+                if let Some(index) = blocks.iter().position(|block| block.id == *block_id) {
+                    blocks.remove(index);
+                } else {
+                    let block = blocks
+                        .iter_mut()
+                        .find(|block| block.rows.iter().any(|row| row.block_id == *block_id))
+                        .expect("deleted block exists");
+                    remove_child_row(block, block_id);
+                }
             }
-            ReconcileOp::InsertBlock { .. } | ReconcileOp::MoveBlock { .. } => {}
+            ReconcileOp::InsertBlock { .. }
+            | ReconcileOp::MoveBlock { .. }
+            | ReconcileOp::InsertChild { .. } => {}
         }
     }
     let mut placements: Vec<(usize, MergedBlock)> = Vec::new();
@@ -216,7 +251,59 @@ fn apply_ops(canonical: &[BlockRow], ops: &[ReconcileOp]) -> Vec<MergedBlock> {
     for (position, block) in placements {
         blocks.insert(position, block);
     }
+    // Child inserts last (rule 8), ascending per parent: bump existing
+    // siblings at or past the final index, then splice the subtree in with
+    // its root re-parented to the op-level parent.
+    let mut child_inserts: Vec<(&String, usize, &Vec<BlockRow>)> = ops
+        .iter()
+        .filter_map(|op| match op {
+            ReconcileOp::InsertChild {
+                parent_block_id,
+                position,
+                rows,
+            } => Some((parent_block_id, *position, rows)),
+            _ => None,
+        })
+        .collect();
+    child_inserts.sort_by_key(|(parent, position, _)| (parent.as_str(), *position));
+    for (parent_block_id, position, rows) in child_inserts {
+        let block = blocks
+            .iter_mut()
+            .find(|block| {
+                block
+                    .rows
+                    .iter()
+                    .any(|row| row.block_id == *parent_block_id)
+            })
+            .expect("child insert targets a surviving parent");
+        for row in &mut block.rows {
+            if row.parent_block_id.as_deref() == Some(parent_block_id.as_str())
+                && (row.position as usize) >= position
+            {
+                row.position += 1;
+            }
+        }
+        let mut inserted = rows.clone();
+        inserted[0].parent_block_id = Some(parent_block_id.clone());
+        inserted[0].position = position as u32;
+        block.rows.extend(inserted);
+    }
     blocks
+}
+
+/// The merged child sequence of `parent_id` as `(block_id, text)` pairs in
+/// sibling order.
+fn children_of(blocks: &[MergedBlock], parent_id: &str) -> Vec<(String, String)> {
+    let mut children: Vec<&BlockRow> = blocks
+        .iter()
+        .flat_map(|block| block.rows.iter())
+        .filter(|row| row.parent_block_id.as_deref() == Some(parent_id))
+        .collect();
+    children.sort_by_key(|row| row.position);
+    children
+        .iter()
+        .map(|row| (row.block_id.clone(), row.text.clone()))
+        .collect()
 }
 
 fn ids_of(blocks: &[MergedBlock]) -> Vec<&str> {
@@ -279,7 +366,8 @@ fn anchor_fate(kind: ReviewKind, block_id: &str, ops: &[ReconcileOp]) -> AnchorF
         ReconcileOp::SetBlockType { .. }
         | ReconcileOp::SetBlockAttrs { .. }
         | ReconcileOp::InsertBlock { .. }
-        | ReconcileOp::MoveBlock { .. } => false,
+        | ReconcileOp::MoveBlock { .. }
+        | ReconcileOp::InsertChild { .. } => false,
     });
     if !block_changed {
         return AnchorFate::Untouched;
@@ -1097,19 +1185,196 @@ fn container_attrs_only_change_emits_set_block_attrs_and_keeps_identity() {
     assert_eq!(result.conflicts, []);
 }
 
-/// Changed container children degrade to delete + insert with a fresh id
-/// (documented limitation: `replace_block_content` carries flat inline
-/// content only).
+/// Rule 6a: a changed child of a same-type container pairs positionally on
+/// the mapped canonical child id — the container and its child keep their
+/// identity (the pre-6a behavior, delete + reinsert of the whole subtree,
+/// orphaned review anchors on children that never changed).
 #[test]
-fn container_with_changed_children_degrades_to_delete_plus_insert() {
+fn container_child_edit_replaces_on_the_mapped_child_id() {
     let base = "```rust\nlet x = 1;\n```\n\nAfter.\n";
     let canonical = canonical_doc(base, &["b-code", "b-after"]);
     let incoming = "```rust\nlet x = 2;\n```\n\nAfter.\n";
 
+    let child_id = surviving_id_of(&canonical, "let x = 1;");
+    let result = run(ReconcileBase::Markdown(base), incoming, &canonical);
+
+    assert_eq!(
+        result.ops,
+        [ReconcileOp::ReplaceBlockContent {
+            block_id: child_id.clone(),
+            text: "let x = 2;".to_string(),
+            marks: Vec::new(),
+            links: Vec::new(),
+        }]
+    );
+    assert_eq!(result.conflicts, []);
+
+    let merged = apply_ops(&canonical, &result.ops);
+    assert_eq!(ids_of(&merged), ["b-code", "b-after"]);
+    assert_eq!(
+        children_of(&merged, "b-code"),
+        [(child_id, "let x = 2;".to_string())]
+    );
+}
+
+/// Rule 6a: a line added to a code block becomes one `insert_child` at its
+/// final merged child index; the container and both existing lines keep
+/// their ids.
+#[test]
+fn line_added_to_code_block_inserts_a_child_and_keeps_sibling_ids() {
+    let base = "```toml\n[section]\nkey = \"one\"\n```\n";
+    let canonical = canonical_doc(base, &["b-code"]);
+    let incoming = "```toml\n[section]\nadded = true\nkey = \"one\"\n```\n";
+
+    let first = surviving_id_of(&canonical, "[section]");
+    let second = surviving_id_of(&canonical, "key = \"one\"");
+    let result = run(ReconcileBase::Markdown(base), incoming, &canonical);
+
+    let [
+        ReconcileOp::InsertChild {
+            parent_block_id,
+            position,
+            rows,
+        },
+    ] = &result.ops[..]
+    else {
+        panic!("expected one insert_child, got {:?}", result.ops);
+    };
+    assert_eq!(parent_block_id, "b-code");
+    assert_eq!(*position, 1);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].block_id, "fresh-1");
+    assert_eq!(rows[0].block_type, "code_line");
+    assert_eq!(rows[0].text, "added = true");
+    assert_eq!(rows[0].parent_block_id, None);
+
+    let merged = apply_ops(&canonical, &result.ops);
+    assert_eq!(
+        children_of(&merged, "b-code"),
+        [
+            (first, "[section]".to_string()),
+            ("fresh-1".to_string(), "added = true".to_string()),
+            (second, "key = \"one\"".to_string()),
+        ]
+    );
+}
+
+/// Rule 6a: a line removed from a code block deletes the mapped child id and
+/// nothing else; siblings keep their ids and close the gap.
+#[test]
+fn line_deleted_from_code_block_deletes_the_child_and_keeps_sibling_ids() {
+    let base = "```toml\n[section]\nstale = true\nkey = \"one\"\n```\n";
+    let canonical = canonical_doc(base, &["b-code"]);
+    let incoming = "```toml\n[section]\nkey = \"one\"\n```\n";
+
+    let first = surviving_id_of(&canonical, "[section]");
+    let stale = surviving_id_of(&canonical, "stale = true");
+    let last = surviving_id_of(&canonical, "key = \"one\"");
+    let result = run(ReconcileBase::Markdown(base), incoming, &canonical);
+
+    assert_eq!(result.ops, [ReconcileOp::DeleteBlock { block_id: stale }]);
+
+    let merged = apply_ops(&canonical, &result.ops);
+    assert_eq!(
+        children_of(&merged, "b-code"),
+        [
+            (first, "[section]".to_string()),
+            (last, "key = \"one\"".to_string()),
+        ]
+    );
+}
+
+/// Rule 6a composes with container attrs: a fence-language change plus one
+/// edited line emit `set_block_attrs` on the container and a replace on the
+/// mapped child, in that order.
+#[test]
+fn code_fence_lang_and_line_change_pair_attrs_and_child_replace() {
+    let base = "```rust\nkeep();\nold();\n```\n";
+    let canonical = canonical_doc(base, &["b-code"]);
+    let incoming = "```python\nkeep();\nnew();\n```\n";
+
+    let keep = surviving_id_of(&canonical, "keep();");
+    let old = surviving_id_of(&canonical, "old();");
+    let result = run(ReconcileBase::Markdown(base), incoming, &canonical);
+
+    assert_eq!(
+        result.ops,
+        [
+            ReconcileOp::SetBlockAttrs {
+                block_id: "b-code".to_string(),
+                attrs: attrs([("lang", json!("python"))]),
+            },
+            ReconcileOp::ReplaceBlockContent {
+                block_id: old.clone(),
+                text: "new();".to_string(),
+                marks: Vec::new(),
+                links: Vec::new(),
+            },
+        ]
+    );
+
+    let merged = apply_ops(&canonical, &result.ops);
+    assert_eq!(
+        children_of(&merged, "b-code"),
+        [(keep, "keep();".to_string()), (old, "new();".to_string())]
+    );
+}
+
+/// Rule 6a recurses: a table row added between existing rows inserts one
+/// child subtree (`tr` + cells) with fresh ids while every existing row and
+/// cell keeps its id.
+#[test]
+fn table_row_added_inserts_a_child_subtree_with_fresh_ids() {
+    let base = "| a | b |\n|---|---|\n| one | two |\n";
+    let canonical = canonical_doc(base, &["b-table"]);
+    let incoming = "| a | b |\n|---|---|\n| one | two |\n| three | four |\n";
+
+    let one = surviving_id_of(&canonical, "one");
+    let two = surviving_id_of(&canonical, "two");
+    let result = run(ReconcileBase::Markdown(base), incoming, &canonical);
+
+    let [
+        ReconcileOp::InsertChild {
+            parent_block_id,
+            position,
+            rows,
+        },
+    ] = &result.ops[..]
+    else {
+        panic!("expected one insert_child, got {:?}", result.ops);
+    };
+    assert_eq!(parent_block_id, "b-table");
+    assert_eq!(*position, 2);
+    // The inserted subtree nests the full cell shape: tr → td → p.
+    assert_eq!(rows[0].block_type, "tr");
+    assert_eq!(rows[0].parent_block_id, None);
+    let types: Vec<&str> = rows.iter().map(|row| row.block_type.as_str()).collect();
+    assert_eq!(types, ["tr", "td", "p", "td", "p"]);
+    assert_eq!(
+        rows[1].parent_block_id.as_deref(),
+        Some(rows[0].block_id.as_str())
+    );
+    assert_eq!(rows[2].text, "three");
+    assert_eq!(rows[4].text, "four");
+
+    let merged = apply_ops(&canonical, &result.ops);
+    let surviving = surviving_ids(&merged);
+    assert!(surviving.contains(&one), "existing cell ids must survive");
+    assert!(surviving.contains(&two), "existing cell ids must survive");
+}
+
+/// A container whose type changed along with its children still degrades to
+/// delete + insert with fresh ids — rule 6a only recurses for same-type
+/// containers.
+#[test]
+fn container_type_change_with_changed_children_still_degrades() {
+    let base = "```rust\nlet x = 1;\n```\n\nAfter.\n";
+    let canonical = canonical_doc(base, &["b-code", "b-after"]);
+    let incoming = "| a |\n|---|\n| one |\n\nAfter.\n";
+
     let result = run(ReconcileBase::Markdown(base), incoming, &canonical);
 
     assert_eq!(result.conflicts, []);
-    assert_eq!(result.ops.len(), 2);
     assert_eq!(
         result.ops[0],
         ReconcileOp::DeleteBlock {
@@ -1120,11 +1385,8 @@ fn container_with_changed_children_degrades_to_delete_plus_insert() {
         panic!("expected an insert, got {:?}", result.ops[1]);
     };
     assert_eq!(*position, 0);
-    assert_eq!(rows[0].block_type, "code_block");
+    assert_eq!(rows[0].block_type, "table");
     assert_eq!(rows[0].block_id, "fresh-1");
-    assert_eq!(rows[1].block_type, "code_line");
-    assert_eq!(rows[1].text, "let x = 2;");
-    assert_eq!(rows[1].parent_block_id.as_deref(), Some("fresh-1"));
 }
 
 /// Review anchors live on individual rows, and a container's children are
