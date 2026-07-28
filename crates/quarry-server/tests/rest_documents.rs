@@ -2898,6 +2898,63 @@ async fn metadata_patch_preserves_rows_anchors_and_conflict_items() -> anyhow::R
     Ok(())
 }
 
+/// The user-facing shape of the reconciler's container recursion (codec rule
+/// 6a): a comment anchored to one line of a code fence survives a whole-file
+/// Markdown PUT that edits a DIFFERENT line of the same fence. Before the
+/// rule, the reconciler deleted and reinserted the whole container with
+/// fresh ids, orphaning anchors on lines that never changed.
+#[tokio::test]
+async fn markdown_put_preserves_comment_on_unchanged_code_line() -> anyhow::Result<()> {
+    let (_root, app, _store) = block_test_app().await;
+    put_block_markdown(
+        &app,
+        "plan.md",
+        "# Plan\n\n```toml\n[section.one]\nsha256 = \"abc\"\n```\n\nAfter.\n",
+    )
+    .await;
+    let tree = get_block_tree(&app, "plan.md").await;
+    let sha_line_id = tree["blocks"]
+        .as_array()
+        .context("block tree response should include blocks array")?
+        .iter()
+        .find(|block| block["text"] == "sha256 = \"abc\"")
+        .and_then(|block| block["block_id"].as_str())
+        .context("commented code line should be present")?
+        .to_string();
+    commit_block_transaction(
+        &app,
+        "plan.md",
+        block_tx(
+            "tx-comment-code-line",
+            serde_json::json!([
+                {"op": "comment.add", "block_id": sha_line_id, "start": 0, "end": 6,
+                 "body": "is sha256 optional?"}
+            ]),
+        ),
+    )
+    .await;
+
+    // Whole-file PUT editing only the sibling line of the fence.
+    put_block_markdown(
+        &app,
+        "plan.md",
+        "# Plan\n\n```toml\n[section.two]\nsha256 = \"abc\"\n```\n\nAfter.\n",
+    )
+    .await;
+
+    let review = get_block_review(&app, "plan.md", false).await;
+    assert_eq!(review["comments"][0]["status"], "open");
+    assert_eq!(
+        review["comments"][0]["anchor"]["blockId"].as_str(),
+        Some(sha_line_id.as_str()),
+        "the unchanged line keeps its id, so the anchor survives"
+    );
+    let content = get_document_markdown(&app, "plan.md").await;
+    assert!(content.contains("[section.two]"), "edit applied: {content}");
+    assert!(content.contains("sha256 = \"abc\""));
+    Ok(())
+}
+
 #[tokio::test]
 async fn library_agent_prompt_returns_connect_instructions() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
