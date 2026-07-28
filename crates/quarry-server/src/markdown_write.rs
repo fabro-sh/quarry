@@ -64,6 +64,7 @@ use quarry_storage::{
 };
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use utoipa::ToSchema;
@@ -1000,6 +1001,7 @@ fn sequential_ops(top_ids: &[String], ops: &[ReconcileOp]) -> Vec<BlockOp> {
     let mut moved: Vec<&str> = Vec::new();
     let mut placements: Vec<(&ReconcileOp, usize)> = Vec::new();
     let mut child_placements: Vec<(&str, usize, &[BlockRow])> = Vec::new();
+    let mut deleted: HashSet<&str> = HashSet::new();
 
     for op in ops {
         match op {
@@ -1028,7 +1030,7 @@ fn sequential_ops(top_ids: &[String], ops: &[ReconcileOp]) -> Vec<BlockOp> {
                 attrs: attrs.clone(),
             }),
             ReconcileOp::DeleteBlock { block_id } => {
-                working.retain(|id| id != block_id);
+                deleted.insert(block_id);
                 out.push(BlockOp::DeleteBlock {
                     block_id: block_id.clone(),
                 });
@@ -1045,6 +1047,7 @@ fn sequential_ops(top_ids: &[String], ops: &[ReconcileOp]) -> Vec<BlockOp> {
             } => child_placements.push((parent_block_id, *position, rows)),
         }
     }
+    working.retain(|id| !deleted.contains(id.as_str()));
 
     // The final top-level order per rule-8 semantics: detach every move
     // target, then place moves and inserts at their final indices ascending.
@@ -1062,7 +1065,7 @@ fn sequential_ops(top_ids: &[String], ops: &[ReconcileOp]) -> Vec<BlockOp> {
         };
         final_order.insert((*position).min(final_order.len()), id);
     }
-    let inserted_rows: std::collections::HashMap<&str, &[BlockRow]> = placements
+    let inserted_rows: HashMap<&str, &[BlockRow]> = placements
         .iter()
         .filter_map(|(op, _)| match op {
             ReconcileOp::InsertBlock { rows, .. } => {
@@ -1081,7 +1084,7 @@ fn sequential_ops(top_ids: &[String], ops: &[ReconcileOp]) -> Vec<BlockOp> {
             continue;
         }
         if let Some(rows) = inserted_rows.get(want.as_str()) {
-            out.extend(insert_subtree_ops(rows, k as u32));
+            out.extend(insert_subtree_ops(rows, None, k as u32));
             working.insert(k, want.clone());
         } else {
             let from = working
@@ -1109,54 +1112,30 @@ fn sequential_ops(top_ids: &[String], ops: &[ReconcileOp]) -> Vec<BlockOp> {
         (parent_a, position_a).cmp(&(parent_b, position_b))
     });
     for (parent_block_id, position, rows) in child_placements {
-        out.extend(insert_child_subtree_ops(
-            parent_block_id,
+        out.extend(insert_subtree_ops(
             rows,
+            Some(parent_block_id),
             position as u32,
         ));
     }
     out
 }
 
-/// One inserted top-level subtree as gateway insert ops: the top row at the
-/// sequential top-level `position`, descendants under their parents at their
-/// sibling positions (depth-first, parents before children).
-fn insert_subtree_ops(rows: &[BlockRow], position: u32) -> Vec<BlockOp> {
-    rows.iter()
-        .map(|row| BlockOp::InsertBlock {
-            block_id: Some(row.block_id.clone()),
-            parent_block_id: row.parent_block_id.clone(),
-            position: if row.parent_block_id.is_none() {
-                position
-            } else {
-                row.position
-            },
-            block_type: row.block_type.clone(),
-            attrs: row.attrs.clone(),
-            text: row.text.clone(),
-            marks: row.marks.clone(),
-            links: row.links.clone(),
-        })
-        .collect()
-}
-
-/// One inserted child subtree (codec rule 6a) as gateway insert ops: the
-/// subtree root under the surviving canonical parent at the sequential child
-/// `position`, descendants under their freshly minted parents at their
-/// sibling positions (depth-first, parents before children).
-fn insert_child_subtree_ops(
-    parent_block_id: &str,
+/// One inserted subtree as gateway insert ops. The root uses the operation's
+/// parent and sequential `position`; descendants keep their freshly minted
+/// parent links and sibling positions (depth-first, parents before children).
+fn insert_subtree_ops(
     rows: &[BlockRow],
+    root_parent_id: Option<&str>,
     position: u32,
 ) -> Vec<BlockOp> {
     rows.iter()
         .map(|row| BlockOp::InsertBlock {
             block_id: Some(row.block_id.clone()),
-            parent_block_id: if row.parent_block_id.is_none() {
-                Some(parent_block_id.to_string())
-            } else {
-                row.parent_block_id.clone()
-            },
+            parent_block_id: row
+                .parent_block_id
+                .clone()
+                .or_else(|| root_parent_id.map(str::to_string)),
             position: if row.parent_block_id.is_none() {
                 position
             } else {

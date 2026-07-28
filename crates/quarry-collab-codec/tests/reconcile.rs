@@ -1391,14 +1391,13 @@ fn container_type_change_with_changed_children_still_degrades() {
 
 /// Review anchors live on individual rows, and a container's children are
 /// rows: a comment can be anchored to one line of a code fence. When only
-/// SOME children change, the untouched ones must keep their ids — otherwise
+/// some children change, the untouched ones must keep their ids. Otherwise,
 /// every anchor inside the container dies, including anchors on text that
 /// never changed.
 ///
-/// Today `pair_replace_ops` bails on any child difference, so the whole
-/// container is deleted and reinserted with fresh ids for every descendant.
-/// The single-line fixture above cannot see this because its only child is
-/// the one that changed.
+/// This guards against replacing the whole container and minting fresh ids
+/// for every descendant. The single-line fixture above cannot detect that
+/// regression because its only child is the one that changed.
 #[test]
 fn partially_changed_container_keeps_unchanged_child_ids() {
     let base = "```toml\n[section.one]\nsha256 = \"abc\"\n```\n\nAfter.\n";
@@ -1419,9 +1418,9 @@ fn partially_changed_container_keeps_unchanged_child_ids() {
     );
 }
 
-/// The same defect one nesting level deeper. Table cells hang off `tr` rows,
-/// so a fix that only recurses into direct children still orphans anchors on
-/// untouched cells.
+/// The same identity rule one nesting level deeper. Table cells hang off `tr`
+/// rows, so reconciliation must recurse beyond direct children to preserve
+/// anchors on untouched cells.
 #[test]
 fn partially_changed_table_keeps_unchanged_cell_ids() {
     let base = "| a | b |\n|---|---|\n| keep | one |\n";
