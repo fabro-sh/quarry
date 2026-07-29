@@ -1172,9 +1172,9 @@ impl ApplyContext {
             None => self.minted.mint(),
         };
         // Caller-supplied AND minted ids collide here: minted ids are
-        // deterministic per (client_tx_id, op), so a retried transaction
-        // whose first application already reached the doc fails typed
-        // instead of silently duplicating the inserted block.
+        // deterministic per (document_id, client_tx_id, op), so a retried
+        // transaction whose first application already reached the doc fails
+        // typed instead of silently duplicating the inserted block.
         if self.model.blocks.contains_key(&block_id) {
             return Err(GatewayError::invalid(format!(
                 "block {block_id} already exists in this document"
@@ -1943,20 +1943,20 @@ fn parse_markdown_fragment(
 
 /// Ids the apply engine mints (inserted blocks without a caller id, review
 /// items, the re-minted empty paragraph) derive deterministically from the
-/// transaction's `client_tx_id` plus a counter: re-running the SAME
-/// transaction's ops mints the SAME ids. This makes a session-mode retry
-/// after a failed commit unable to silently duplicate inserted content —
-/// the deterministic id collides with the first application and the op
-/// fails with a typed error instead.
+/// document id, the transaction's `client_tx_id`, and a counter: re-running
+/// the SAME transaction's ops on the SAME document mints the SAME ids. This
+/// makes a session-mode retry after a failed commit unable to silently
+/// duplicate inserted content, while the same client transaction id remains
+/// safely reusable on another document.
 struct DeterministicIds {
     seed: String,
     next: u32,
 }
 
 impl DeterministicIds {
-    fn new(client_tx_id: &str) -> Self {
+    fn new(document_id: &str, client_tx_id: &str) -> Self {
         Self {
-            seed: client_tx_id.to_string(),
+            seed: format!("{document_id}\0{client_tx_id}"),
             next: 0,
         }
     }
@@ -1985,7 +1985,7 @@ fn apply_ops(
         document_id: state.document_id.clone(),
         author: actor.display(),
         now: now_timestamp(),
-        minted: DeterministicIds::new(client_tx_id),
+        minted: DeterministicIds::new(&state.document_id, client_tx_id),
     };
     for (op_index, op) in ops.iter().enumerate() {
         apply_op(&mut ctx, op).map_err(|error| {
@@ -3182,7 +3182,7 @@ async fn apply_session_transaction(
         // replay record yet). Surface Busy: a client retry re-runs the
         // ops against the flushed state — idempotent for replaces, and
         // safe for inserts because minted ids are deterministic per
-        // (client_tx_id, op): a re-insert collides with the first
+        // (document_id, client_tx_id, op): a re-insert collides with the first
         // application's block and fails typed instead of duplicating.
         //
         // HONEST WINDOW (any commit failure below, not just this arm): the
@@ -3871,8 +3871,9 @@ mod tests {
     /// A session-mode retry after a failed commit re-runs the same ops; the
     /// engine must mint the SAME ids so re-application cannot silently
     /// duplicate inserted content (it collides and fails typed instead).
+    /// Another document may reuse the client transaction id safely.
     #[test]
-    fn minted_ids_are_deterministic_per_client_tx_id_so_retries_cannot_duplicate() {
+    fn minted_ids_are_deterministic_per_document_and_client_transaction() {
         let rows = vec![BlockRow {
             block_id: "b1".to_string(),
             parent_block_id: None,
@@ -3908,6 +3909,18 @@ mod tests {
         assert_eq!(
             timeless(&first.review_items),
             timeless(&second.review_items)
+        );
+
+        // The same client transaction id belongs to an independent
+        // idempotency namespace on another document.
+        let mut other_document = state.clone();
+        other_document.document_id = "doc-2".to_string();
+        let in_other_document =
+            apply_ops(&other_document, &ops, &actor(), "tx-deterministic").unwrap();
+        assert_ne!(first.changed_block_ids, in_other_document.changed_block_ids);
+        assert_ne!(
+            first.review_items[0].id,
+            in_other_document.review_items[0].id
         );
 
         // A DIFFERENT transaction mints different ids.
