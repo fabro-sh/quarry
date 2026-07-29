@@ -75,6 +75,105 @@ fn assert_json_timestamp(value: &Value) {
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
+async fn tmp_block_transactions_scope_minted_ids_to_each_document() -> anyhow::Result<()> {
+    let (_root, app, _store) = document_test_app().await;
+    let mut documents = Vec::new();
+
+    for title in ["First review", "Second review"] {
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                Method::POST,
+                "/v1/tmp/documents",
+                serde_json::json!({
+                    "content": "Review every project on Friday.\n",
+                    "content_type": "text/markdown",
+                    "metadata": {"title": title}
+                }),
+            ))
+            .await
+            .context("create tmp review document")?;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let created = response_json(response).await;
+        let secret = created["document"]["path"]
+            .as_str()
+            .context("tmp create response should expose the secret path")?
+            .to_string();
+        let tree = get_tmp_block_tree(&app, &secret).await;
+        let block_id = tree["blocks"][0]["block_id"]
+            .as_str()
+            .context("tmp block tree should expose the paragraph id")?
+            .to_string();
+        documents.push((secret, block_id));
+    }
+
+    for (secret, block_id) in &documents {
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                Method::POST,
+                &format!("/v1/tmp/documents/{secret}/transactions"),
+                serde_json::json!({
+                    "client_tx_id": "shared-review-transaction",
+                    "actor": {"kind": "agent", "id": "reviewer", "label": "Reviewer"},
+                    "ops": [
+                        {
+                            "op": "comment.add",
+                            "block_id": block_id,
+                            "start": 21,
+                            "end": 30,
+                            "body": "Confirm the release date.",
+                            "quote": "on Friday"
+                        },
+                        {
+                            "op": "suggestion.add",
+                            "block_id": block_id,
+                            "start": 7,
+                            "end": 20,
+                            "replacement": "a small pilot group",
+                            "body": "Choose the rollout scope.",
+                            "quote": "every project"
+                        }
+                    ]
+                }),
+            ))
+            .await
+            .context("submit tmp review transaction")?;
+        let status = response.status();
+        let body = response_json(response).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "unexpected transaction response: {body}"
+        );
+    }
+
+    let first_review = get_tmp_review(&app, &documents[0].0, false).await;
+    let second_review = get_tmp_review(&app, &documents[1].0, false).await;
+    assert_eq!(first_review["comments"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        first_review["suggestions"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(second_review["comments"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        second_review["suggestions"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_ne!(
+        first_review["comments"][0]["id"],
+        second_review["comments"][0]["id"]
+    );
+    assert_ne!(
+        first_review["suggestions"][0]["id"],
+        second_review["suggestions"][0]["id"]
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "tmp-documents")]
+#[tokio::test]
 async fn rest_api_supports_tmp_documents_ttl_versions_and_promotion() -> anyhow::Result<()> {
     let (_root, app, _store) = document_test_app().await;
 
