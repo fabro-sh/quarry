@@ -1,3 +1,4 @@
+<!-- BEGIN QUARRY AGENT INSTRUCTIONS -->
 ## Quarry
 
 Use Quarry when a Markdown document needs review, comments, collaboration, or user markup.
@@ -22,18 +23,19 @@ When the review process is complete, sync the content from Quarry back to the fi
 
 ### Using Quarry
 
-Before the first edit, comment, or suggestion, read https://quarry.lithos.computer/quarry.SKILL.md for transaction schemas and block types. The full API reference is https://quarry.lithos.computer/agent-docs.
+Before the first edit, comment, or suggestion, read __QUARRY_ORIGIN__/quarry.SKILL.md for transaction schemas and block types. The full API reference is __QUARRY_ORIGIN__/agent-docs.
 
 While the user reviews, keep the document's events stream open (`GET .../events/stream`). When a `doc.changed` event arrives, re-read `.../blocks` and `.../review`, then respond. A review or feedback request authorizes comments and suggestions only. A concrete comment such as ‘Add this section’ or ‘Remove this block’ authorizes that direct edit: apply it, reply with comment.reply, and resolve the thread with comment.resolve. Use suggestion.add, suggestion.add_markdown, or suggestion.add_block_delete when the user asks for a proposal or when you recommend an unsolicited change.
 
 If the `quarry` CLI is not installed, use plain HTTP instead:
 
 ```bash
-curl -sS -X POST https://quarry.lithos.computer/v1/tmp/documents \
+curl -sS -X POST __QUARRY_ORIGIN__/v1/tmp/documents \
   -H 'Content-Type: application/json' \
   -d '{"content": "# Draft\n\nBody text."}'
 ```
 
-The response includes the document's secret. Fetch `https://quarry.lithos.computer/v1/tmp/documents/<secret>/agent-prompt` and follow it, and give the user the browser URL `https://quarry.lithos.computer/tmp/<secret>`.
+The response includes the document's secret. Fetch `__QUARRY_ORIGIN__/v1/tmp/documents/<secret>/agent-prompt` and follow it, and give the user the browser URL `__QUARRY_ORIGIN__/tmp/<secret>`.
 
 Quarry document URLs are bearer capabilities: anyone with the URL can read and edit the document, and documents on shared servers expire (30 days by default). Never put sensitive content on an untrusted server or log/repost a document URL.
+<!-- END QUARRY AGENT INSTRUCTIONS -->
