@@ -157,6 +157,11 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() -> anyhow::R
             "A task to review or leave feedback, comments, or suggestions authorizes review operations only"
         ));
         assert!(surface.contains("it does not authorize direct content edits"));
+        assert!(surface.contains("Creating a suggestion does not authorize deciding it"));
+        assert!(surface.contains(
+            "Never accept or reject your own suggestion unless the user explicitly asks you to do so after the suggestion exists"
+        ));
+        assert!(surface.contains("apply or bypass a pending suggestion"));
         assert!(surface.contains("If no concrete Quarry task exists"));
     }
     assert!(!skill.contains("Wait for the user's instruction"));
