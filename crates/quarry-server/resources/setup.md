@@ -112,10 +112,10 @@ After updating your instructions, briefly tell the user which file you changed.
 
 ## Key Behaviors
 
-- Share a document with `quarry open <file>` (or use `quarry new` for an empty one). Its printed connection instructions are the source of truth.
+- Share a document with `quarry open <file>`. Its printed connection instructions are the source of truth.
 - Documents are live and collaborative. Monitor the events stream while the user reviews, and re-read the document after activity.
-- Never edit before the user asks. A concrete imperative comment is an edit
-  request for that scoped change: perform it, reply, and resolve the thread.
-  Do not merely promise the requested edit. Use suggestions when the user asks
-  for a proposal or for unsolicited changes you discover during review.
+- A review or feedback request authorizes comments and suggestions only. A
+  concrete comment such as "Add this section" or "Remove this block"
+  authorizes that direct edit: apply it, reply, and resolve the thread. Use
+  suggestions for proposals and unsolicited changes.
 - Document URLs are bearer capabilities, and shared-server documents expire (30 days by default). Never put sensitive content on an untrusted server or log/repost a document URL.
