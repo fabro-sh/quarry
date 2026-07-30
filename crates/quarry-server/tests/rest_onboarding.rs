@@ -63,11 +63,11 @@ async fn onboarding_documents_render_the_forwarded_origin() {
     assert!(body.contains("https://quarry.lithos.computer/prompt.md"));
     assert!(body.contains("https://quarry.lithos.computer/example.md"));
     assert!(body.contains("## Install or Refresh Your Persistent Instructions"));
-    assert!(body.contains("replace the entire marked block"));
-    assert!(body.contains("legacy unmarked `## Quarry` section"));
-    assert!(body.contains("verify that each marker appears exactly once"));
-    assert!(body.contains("A concrete imperative comment is an edit"));
-    assert!(body.contains("Do not merely promise the requested edit"));
+    assert!(body.contains("replace the entire marked block with the fetched section"));
+    assert!(body.contains("if a `## Quarry` section exists"));
+    assert!(body.contains("verify that `## Quarry` appears exactly once"));
+    assert!(body.contains("A review or feedback request authorizes comments"));
+    assert!(body.contains("authorizes that direct edit"));
     assert!(body.contains("already authorized"));
     assert!(body.contains("without asking the user to repeat it"));
     assert!(!body.contains("__QUARRY_ORIGIN__"));
@@ -79,37 +79,31 @@ async fn prompt_document_teaches_the_review_workflow() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(content_type, "text/markdown; charset=utf-8");
-    assert_eq!(
-        body.matches("<!-- BEGIN QUARRY AGENT INSTRUCTIONS -->")
-            .count(),
-        1
-    );
-    assert_eq!(
-        body.matches("<!-- END QUARRY AGENT INSTRUCTIONS -->")
-            .count(),
-        1
-    );
+    assert!(!body.contains("<!-- BEGIN QUARRY AGENT INSTRUCTIONS -->"));
+    assert!(!body.contains("<!-- END QUARRY AGENT INSTRUCTIONS -->"));
     assert!(body.contains(
         "Use Quarry when a Markdown document needs review, comments, collaboration, or user markup."
     ));
     assert!(body.contains("quarry open"));
+    assert!(body.contains("### Share a newly written document"));
+    assert!(body.contains("### Editing existing documents"));
+    assert!(body.contains("sync the content from Quarry back to the file on disk"));
     assert!(body.contains("creates the shared document"));
-    assert!(body.contains("instructions given before `quarry open` remain valid"));
-    assert!(body.contains("Only use the ready-message-and-wait handshake"));
-    assert!(body.contains(
-        "A task to review or leave feedback, comments, or suggestions authorizes review operations only"
-    ));
+    assert!(body.contains("Instructions given before the document opens remain valid"));
+    assert!(body.contains("Use the ready-message-and-wait handshake only"));
+    assert!(body.contains("When reviewing substantive changes to an existing Markdown document"));
+    assert!(body.contains("A review or feedback request authorizes comments and suggestions only"));
     assert!(body.contains("suggestion.add"));
     assert!(body.contains("suggestion.add_block_delete"));
-    assert!(body.contains("A concrete imperative comment"));
-    assert!(body.contains("authorizes that requested edit"));
-    assert!(body.contains("Do not answer an implementation request only with a promise"));
+    assert!(body.contains("A concrete comment"));
+    assert!(body.contains("authorizes that direct edit"));
+    assert!(body.contains("apply it, reply with comment.reply"));
     assert!(body.contains("when the user asks for a proposal"));
     assert!(body.contains("bearer capabilities"));
     assert!(body.contains(
         "Never put sensitive content on an untrusted server or log/repost a document URL."
     ));
-    assert!(body.contains("http://127.0.0.1:7831/quarry.SKILL.md"));
+    assert!(body.contains("https://quarry.lithos.computer/quarry.SKILL.md"));
     assert!(!body.contains("send `X-Agent-Id` on every request"));
     assert!(!body.contains("__QUARRY_ORIGIN__"));
 }

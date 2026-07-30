@@ -86,11 +86,10 @@ If no persistent instruction file exists and the user has not specified a tool, 
 
 Use imports or symlinks only when the target agent supports normal Markdown files at that path. For UI-only settings such as Cursor User Rules or GitHub Copilot personal instructions, tell the user what text to add rather than editing an unknown file.
 
-The canonical Quarry instruction block is hosted at __QUARRY_ORIGIN__/prompt.md and delimited by stable markers:
+The canonical Quarry instruction section is hosted at __QUARRY_ORIGIN__/prompt.md. It starts with:
 
 ```text
-<!-- BEGIN QUARRY AGENT INSTRUCTIONS -->
-<!-- END QUARRY AGENT INSTRUCTIONS -->
+## Quarry
 ```
 
 After identifying or creating the right instruction file, fetch the canonical block:
@@ -102,20 +101,20 @@ curl -fsSL __QUARRY_ORIGIN__/prompt.md -o "$canonical_quarry_block"
 
 Update the instruction file idempotently:
 
-1. If the marker pair already exists, replace the entire marked block with the fetched block.
-2. Otherwise, if a legacy unmarked `## Quarry` section exists, replace that section through the next level-two heading (or end of file) with the fetched block. Preserve any user-authored Quarry rules that are not part of the old canonical section by moving them outside the managed markers.
+1. If an older `<!-- BEGIN QUARRY AGENT INSTRUCTIONS -->` and `<!-- END QUARRY AGENT INSTRUCTIONS -->` marker pair exists, replace the entire marked block with the fetched section.
+2. Otherwise, if a `## Quarry` section exists, replace that section through the next level-two heading or end of file with the fetched section.
 3. Otherwise, append the fetched block with one blank line separating it from existing content.
 
-Never add a second Quarry heading or marker pair, and never overwrite unrelated instructions. Re-read the file afterward, verify that each marker appears exactly once and the surrounding content is unchanged, then remove the temporary canonical block.
+Never add a second Quarry heading or overwrite unrelated instructions. Preserve user-authored Quarry rules that are outside the replaced section. Re-read the file afterward, verify that `## Quarry` appears exactly once and the surrounding content is unchanged, then remove the temporary canonical block.
 
 After updating your instructions, briefly tell the user which file you changed.
 
 ## Key Behaviors
 
-- Share a document with `quarry open <file>` (or use `quarry new` for an empty one). Its printed connection instructions are the source of truth.
+- Share a document with `quarry open <file>`. Its printed connection instructions are the source of truth.
 - Documents are live and collaborative. Monitor the events stream while the user reviews, and re-read the document after activity.
-- Never edit before the user asks. A concrete imperative comment is an edit
-  request for that scoped change: perform it, reply, and resolve the thread.
-  Do not merely promise the requested edit. Use suggestions when the user asks
-  for a proposal or for unsolicited changes you discover during review.
+- A review or feedback request authorizes comments and suggestions only. A
+  concrete comment such as "Add this section" or "Remove this block"
+  authorizes that direct edit: apply it, reply, and resolve the thread. Use
+  suggestions for proposals and unsolicited changes.
 - Document URLs are bearer capabilities, and shared-server documents expire (30 days by default). Never put sensitive content on an untrusted server or log/repost a document URL.
