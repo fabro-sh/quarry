@@ -45,8 +45,9 @@ A concrete imperative Quarry comment such as “Add this section,” “Change t
 wording,” or “Remove this block” is a direct-edit instruction for that scoped
 change; do the work, reply to the comment, and resolve the addressed thread. Do
 not respond only with a promise or proposal. Unsolicited changes, and changes
-the user explicitly asks to review before applying, stay as suggestions. Both
-operation families share the same transaction envelope. To author or
+the user explicitly asks to review before applying, stay as suggestions.
+Leave suggestions for the user to accept or reject.
+Both operation families share the same transaction envelope. To author or
 restructure a whole document, prefer the Markdown `PUT` (see Whole-Document
 Markdown Writes) over hand-assembling block ops.
 

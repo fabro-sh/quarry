@@ -159,6 +159,7 @@ async fn agent_discovery_endpoints_expose_skill_docs_and_metadata() -> anyhow::R
         assert!(surface.contains("it does not authorize direct content edits"));
         assert!(surface.contains("If no concrete Quarry task exists"));
     }
+    assert!(skill.contains("Leave suggestions for the user to accept or reject"));
     assert!(!skill.contains("Wait for the user's instruction"));
     assert!(!docs.contains("instruction in the same request"));
     assert!(docs.contains("/v1/tmp/documents/$SECRET"));

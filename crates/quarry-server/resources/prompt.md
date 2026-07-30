@@ -17,7 +17,7 @@ quarry open "/absolute/path/to/file.md"
 
 ### Editing existing documents
 
-When reviewing substantive changes to an existing Markdown document, first open it in Quarry and use suggestions for proposals or unsolicited changes. Apply a direct edit only when the user asks for that concrete change.
+When reviewing substantive changes to an existing Markdown document, first open it in Quarry and use suggestions for proposals or unsolicited changes. Apply a direct edit only when the user asks for that concrete change. Leave suggestions for the user to accept or reject.
 
 When the review process is complete, sync the content from Quarry back to the file on disk.
 

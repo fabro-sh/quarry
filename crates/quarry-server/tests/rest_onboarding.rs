@@ -95,6 +95,7 @@ async fn prompt_document_teaches_the_review_workflow() {
     assert!(body.contains("quarry open"));
     assert!(body.contains("### Share a newly written document"));
     assert!(body.contains("### Editing existing documents"));
+    assert!(body.contains("Leave suggestions for the user to accept or reject"));
     assert!(body.contains("sync the content from Quarry back to the file on disk"));
     assert!(body.contains("creates the shared document"));
     assert!(body.contains("Instructions given before the document opens remain valid"));
