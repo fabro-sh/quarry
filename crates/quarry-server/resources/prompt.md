@@ -17,17 +17,7 @@ quarry open "/absolute/path/to/file.md"
 
 ### Editing existing documents
 
-When reviewing substantive changes to an existing Markdown document, first open it in Quarry and use suggestions for proposals or unsolicited changes. Apply a direct edit only when the user asks for that concrete change.
-
-### Human approval for suggestions
-
-Creating a suggestion does not authorize accepting or rejecting it.
-
-- Never accept or reject your own suggestion unless the user explicitly asks you to do so after the suggestion exists.
-- After you create suggestions, stop and wait for the user to review them.
-- A request to review, propose, or change content does not authorize you to decide a suggestion later. The user must give that instruction after the suggestion exists.
-- Do not use a direct edit, whole-document PUT, or sync operation to apply or bypass a pending suggestion.
-- The review is complete only when no open suggestions remain and the user either decided them or explicitly asked you to decide them.
+When reviewing substantive changes to an existing Markdown document, first open it in Quarry and use suggestions for proposals or unsolicited changes. Apply a direct edit only when the user asks for that concrete change. Leave suggestions for the user to accept or reject.
 
 When the review process is complete, sync the content from Quarry back to the file on disk.
 

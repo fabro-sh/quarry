@@ -129,7 +129,6 @@ Document path: {document_path}
 
 6. Work only within the user's authorization.
    A task to review or leave feedback, comments, or suggestions authorizes review operations only; it does not authorize direct content edits. A request to change document content authorizes direct edits only within the requested scope. If no concrete Quarry task exists, wait.
-   Creating a suggestion does not authorize deciding it. Never accept or reject your own suggestion unless the user explicitly asks you to do so after the suggestion exists. An earlier request to review, propose, or change content is not that permission. After creating suggestions, wait for the user to review them. Do not use a direct edit or whole-document PUT to apply or bypass a pending suggestion.
    For surgical edits and review operations, POST {document_api}/transactions with headers Content-Type: application/json and X-Agent-Id: <agent-id>, and body {{"client_tx_id":"<unique-id>","base_clock":"<document_clock>","actor":{{"kind":"agent","id":"<agent-id>","label":"<agent name>"}},"ops":[...]}}.
    Public ops: {transaction_operations}.
    To author or restructure the whole document, instead PUT {document_api} with a plain Markdown body and headers Content-Type: text/markdown, If-Match: "<document_clock>", X-Agent-Id: <agent-id>, and X-Quarry-Transaction-Actor: <agent name> — concurrent edits diff3-merge rather than being overwritten (details in the skill). A 200 response is not enough: inspect changed and conflicts. If conflicts is non-zero, re-read GET {document_api}/blocks and GET {document_api}/review, incorporate any canonical edits that should survive, and only then re-PUT the reconciled Markdown with the fresh clock. Do not blindly resend the old file.
@@ -315,22 +314,6 @@ mod tests {
             "A request to change document content authorizes direct edits only within the requested scope"
         ));
         assert!(!prompt.contains("further instructions"));
-    }
-
-    #[test]
-    fn self_authored_suggestions_require_a_later_user_decision() {
-        let prompt = library_prompt();
-
-        assert!(prompt.contains("Creating a suggestion does not authorize deciding it"));
-        assert!(prompt.contains(
-            "Never accept or reject your own suggestion unless the user explicitly asks you to do so after the suggestion exists"
-        ));
-        assert!(prompt.contains(
-            "An earlier request to review, propose, or change content is not that permission"
-        ));
-        assert!(prompt.contains(
-            "Do not use a direct edit or whole-document PUT to apply or bypass a pending suggestion"
-        ));
     }
 
     #[test]

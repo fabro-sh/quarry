@@ -45,24 +45,11 @@ A concrete imperative Quarry comment such as “Add this section,” “Change t
 wording,” or “Remove this block” is a direct-edit instruction for that scoped
 change; do the work, reply to the comment, and resolve the addressed thread. Do
 not respond only with a promise or proposal. Unsolicited changes, and changes
-the user explicitly asks to review before applying, stay as suggestions. Both
-operation families share the same transaction envelope. To author or
+the user explicitly asks to review before applying, stay as suggestions.
+Leave suggestions for the user to accept or reject.
+Both operation families share the same transaction envelope. To author or
 restructure a whole document, prefer the Markdown `PUT` (see Whole-Document
 Markdown Writes) over hand-assembling block ops.
-
-## Suggestion Decisions
-
-Creating a suggestion does not authorize deciding it.
-
-- Never accept or reject your own suggestion unless the user explicitly asks
-  you to do so after the suggestion exists.
-- After creating suggestions, wait for the user to review them.
-- Do not treat an earlier request to review, propose, or change content as
-  permission to decide a later suggestion.
-- Do not use edit operations, a whole-document `PUT`, or a sync operation to
-  apply or bypass a pending suggestion.
-- Treat the review as complete only when no open suggestions remain and the
-  user either decided them or explicitly asked you to decide them.
 
 ## Locator URLs And Auth
 
@@ -355,8 +342,7 @@ action.
 To clear a review queue: decide suggestions (`suggestion.accept` /
 `suggestion.reject`), apply comment-requested prose changes with edit ops,
 resolve handled comments, then verify `GET $DOC/review` returns empty
-`comments` and `suggestions`. Decide a suggestion that you authored only after
-the user gives an explicit instruction for that suggestion.
+`comments` and `suggestions`.
 
 ## Events
 

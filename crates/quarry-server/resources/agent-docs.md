@@ -320,15 +320,6 @@ operation. Do not send it. Read generated conflict items through `GET /review`
 and resolve them with the explicit conflict operations above. The legacy
 `comment.resolve` / `comment.delete` operations remain available for dismissal.
 
-Creating a suggestion does not authorize deciding it. Never accept or reject
-your own suggestion unless the user explicitly asks you to do so after the
-suggestion exists. An earlier request to review, propose, or change content is
-not that permission. After creating suggestions, wait for the user to review
-them. Do not use edit operations, a whole-document PUT, or a sync operation to
-apply or bypass a pending suggestion. The review is complete only when no open
-suggestions remain and the user either decided them or explicitly asked you to
-decide them.
-
 A full review as one transaction:
 
 ```json
@@ -642,10 +633,6 @@ Then report the evidence to the user. Do not keep retrying destructive writes.
   that scoped change; apply it, reply, and resolve the thread.
 - Prefer comments and suggestions for review requests, requested proposals,
   and unsolicited recommendations.
-- Never decide a suggestion that you authored unless the user explicitly asks
-  you to do so after the suggestion exists.
-- Do not use an edit, whole-document PUT, or sync operation to apply or bypass
-  a pending suggestion.
 - Never substitute a promise-to-edit reply for an authorized edit.
 - Re-read both `/blocks` and `/review` after any event; re-read `/blocks` after
   any stale write.

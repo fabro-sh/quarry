@@ -95,13 +95,7 @@ async fn prompt_document_teaches_the_review_workflow() {
     assert!(body.contains("quarry open"));
     assert!(body.contains("### Share a newly written document"));
     assert!(body.contains("### Editing existing documents"));
-    assert!(body.contains("### Human approval for suggestions"));
-    assert!(body.contains(
-        "Never accept or reject your own suggestion unless the user explicitly asks you to do so after the suggestion exists"
-    ));
-    assert!(body.contains(
-        "Do not use a direct edit, whole-document PUT, or sync operation to apply or bypass a pending suggestion"
-    ));
+    assert!(body.contains("Leave suggestions for the user to accept or reject"));
     assert!(body.contains("sync the content from Quarry back to the file on disk"));
     assert!(body.contains("creates the shared document"));
     assert!(body.contains("Instructions given before the document opens remain valid"));
