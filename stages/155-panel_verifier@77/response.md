@@ -1,0 +1,21 @@
+All checks are complete. My assessment from the DEFENSES lens:
+
+**Recursion cycle (code fact):** `text_children_to_slate` → `element_from_embedded_text` at yjs_builder.rs:252-257, closing back to `text_children_to_slate` at yjs_builder.rs:276. No depth counter exists on either side.
+
+**Guards checked and found absent or ineffective:**
+- `validate_node` (yjs_builder.rs:144-168) is invoked only from `build_nodes` (yjs_builder.rs:16-21), the server-authored write path — it never runs on the `xmltext_to_slate` peer-content read path, and it checks JSON value types, not nesting depth.
+- No depth-limit constant exists anywhere relevant; the workspace's only limits (MULTI_HUNK_CHAR_LIMIT, LCS_CELL_LIMIT, HTTP DefaultBodyLimit) are unrelated and don't apply to upgraded websockets.
+- The library collab route (lib.rs:325-338) and handler (collab_handlers.rs:19-31) use the default `WebSocketUpgrade` with no `max_message_size` configured and no auth/secret — every binary payload flows straight to `DefaultProtocol.handle` (collab.rs:98-101).
+- The projection `project_locked` → `xmltext_to_slate` (session.rs:884-887) fires automatically on the debounced checkpoint (session.rs:609-634) and final checkpoint (session.rs:394-396) on a tokio task (default 2 MiB stack), with no validation between update application and projection.
+
+**Could not confirm (read-only rule):** the yrs 0.27 source is not vendored locally, so the decoder's acceptance of an ultra-deep structure and the exact overflow depth were not observed — however, the yjs/yrs update format stores items as a flat struct list with parent references, so nesting depth does not recurse at decode/apply time, and no defense may be invented on yrs's behalf. No mitigation exists anywhere in this repository between the attacker-controlled source and the unbounded recursion.
+
+```json
+{
+  "job_id": "panel:F11:defenses",
+  "candidate_id": "F11",
+  "verdict": "TRUE_POSITIVE",
+  "confidence": "MEDIUM",
+  "reasoning": "DEFENSES lens: no effective mitigation exists between the attacker-controlled source and the unbounded recursion. The recursion cycle is a direct code fact: text_children_to_slate calls element_from_embedded_text for each embedded YXmlText/YText child (crates/quarry-collab-codec/src/yjs_builder.rs:252-257), and element_from_embedded_text calls text_children_to_slate on that child (yjs_builder.rs:276), so projection depth equals peer-controlled embed nesting with no depth counter on either side. The only structural validator, validate_node (yjs_builder.rs:144-168), is invoked solely from build_nodes (yjs_builder.rs:16-21) on the server-authored write path — it never runs on the xmltext_to_slate read path (yjs_builder.rs:106-109) — and it validates JSON value types, not nesting depth. No depth-limit constant exists in the workspace for this path; the unrelated limits (MULTI_HUNK_CHAR_LIMIT, LCS_CELL_LIMIT, HTTP DefaultBodyLimit) do not apply to websocket messages. The library collab route is installed with no secret or auth gate (crates/quarry-server/src/lib.rs:325-338) and its handler uses a default WebSocketUpgrade with no max_message_size configured (crates/quarry-server/src/collab_handlers.rs:19-31); every binary peer payload is passed raw to DefaultProtocol.handle (crates/quarry-server/src/collab.rs:98-101). The sink fires automatically: the debounced checkpoint task (crates/quarry-server/src/session.rs:609-634) and the final on-leave checkpoint (session.rs:394-396) call project_locked, which invokes quarry_collab_codec::xmltext_to_slate on the peer-written live doc (session.rs:884-887) on a tokio worker thread with the default ~2 MiB stack, and a Rust stack overflow aborts the whole server process. Not confirmable read-only: the yrs 0.27 decoder source is not vendored, so acceptance of a ~100k-deep structure and the exact overflow depth were not observed; this rests on the flat, reference-based yrs update format (nesting does not recurse at decode/apply time), which the repo's own insert path (yjs_builder.rs:127-135) mirrors. Since no defense may be invented and none exists in the repository code, the missing bound on attacker-controlled recursion stands."
+}
+```

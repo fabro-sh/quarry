@@ -1,0 +1,9 @@
+```json
+{
+  "job_id": "panel:F15:impact",
+  "candidate_id": "F15",
+  "verdict": "TRUE_POSITIVE",
+  "reasoning": "IMPACT lens: the claimed consequence is real and fully verified in code. crates/quarry-server/src/git_handlers.rs:98-106 passes a caller-supplied absolute path (GitImportRequest.repo, line 88) straight into import_worktree with zero confinement or validation; import_worktree (crates/quarry-git/src/lib.rs:825-851) only checks the path exists. scan_worktree_import_files (crates/quarry-git/src/lib.rs:881-929) walks every real file under that root (skipping only .git/.quarry names and sidecars) and reads each wholesale with fs::read at lib.rs:903 — nothing filters by type, size, or location, so ~/.ssh, cloud credential files, /etc paths are all in scope if the server process can read them. The bytes are committed into the document store via write_markdown_file / stage_put + commit_transaction (lib.rs:931-974), and the read-back half of the exfiltration is confirmed: GET /v1/libraries/{library}/documents/{*path} (crates/quarry-server/src/lib.rs:407-413, get_document at crates/quarry-server/src/document_handlers.rs:308) returns stored content over the same unauthenticated API. No middleware, auth layer, or path policy sits anywhere on the chain; the only mitigations in the codebase are a startup warning when binding non-loopback (crates/quarry-server/src/lib.rs:692-695 — warning only, the bind is still allowed) and a documented trusted-localhost phase-one posture (crates/quarry-server/src/discovery.rs:256-273). The data at stake (private keys, credentials) is genuinely sensitive, and the operation genuinely discloses it to any caller who can reach the socket — including other local users/processes crossing the server user's privilege boundary, or network callers when bound non-loopback. The reported MEDIUM severity correctly reflects the localhost-trust caveat; the impact as written materializes.",
+  "confidence": "high"
+}
+```

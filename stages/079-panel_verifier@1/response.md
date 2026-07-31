@@ -1,0 +1,10 @@
+```json
+{
+  "job_id": "panel:F1:impact",
+  "candidate_id": "F1",
+  "verdict": "TRUE_POSITIVE",
+  "severity": "HIGH",
+  "reasoning": "Impact verified against source. (1) The credential is real and write-capable: .github/workflows/release-nightly.yml:69-70 embeds the minted GitHub App token into the remote URL, which `git remote set-url` persists in plaintext in the checkout's .git/config; that same credential is later used for `git push --atomic origin main <tag>` at crates/quarry-dev/src/release.rs:116-124, proving it carries repository contents write. (2) The claimed consequence — third-party code executing while the token is readable on disk — is mechanically present: release.rs:76-79 invokes verify_release on the non-dry-run nightly path (the workflow passes `--nightly` with no `--dry-run`/`--skip-tests`, release-nightly.yml:72), and verify_release (release.rs:294-327) runs `bun install --frozen-lockfile`, four bun scripts, and `cargo test`, which necessarily compile and execute third-party build.rs scripts and proc-macros; run_command (release.rs:368-377) spawns them with cwd inside the checkout and the inherited environment, so any executed dependency code can open .git/config and exfiltrate the live token during the run. (3) Every cited guard is confirmed ineffective as the rationale states: persist-credentials: false (release-nightly.yml:35) is overridden by the explicit set-url; `unset RELEASE_TOKEN` (release-nightly.yml:71) clears only the environment variable, not the on-disk remote URL; scrub_nested_cargo_env (release.rs:406-421) removes only CARGO_* environment variables and touches no file state. A grep of crates/quarry-dev/src for any .git/config or credential scrubbing found nothing. Lockfiles pin the dependency versions but do not prevent pinned third-party build code from reading files, so the exposure holds. The only caveat is that exploitation presupposes a compromised dependency (supply-chain precondition), but the finding as written asserts exposure, not active exploitation, and that exposure is fully confirmed.",
+  "confidence": "high"
+}
+```

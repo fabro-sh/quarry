@@ -1,0 +1,18 @@
+The full chain is verified. My DEFENSES analysis is complete.
+
+**Verification summary:**
+
+- **Sink confirmed as quoted** — `markdown_writer.rs:236`: `"    ".repeat(key.indent as usize - 1)` inside `render_list_item`; `indent` comes from `list_item_key` (`markdown_writer.rs:94-99`) via `as_u64().unwrap_or(1).max(1)` — `.max(1)` only excludes 0, no upper bound.
+- **No type-coercion defense** — `yjs_builder.rs:287-295` (`xml_attrs_to_slate`) copies every peer-written Yjs attribute verbatim; `any_to_value` (`yjs_builder.rs:325-346`) + `json_number` (`348-358`) preserve integral f64s like 2^40 as i64, so `as_u64` succeeds.
+- **No attr filtering on the checkpoint path** — `session_doc.rs:573-598` (`collect_block`) clones attrs into `BlockRow.attrs` stripping only `id`/`suggestion`; `rows.rs:177-180` re-inserts them verbatim; `session.rs:811-815` runs `block_rows_to_markdown` on those rows *before* any store commit.
+- **Trigger confirmed** — doc observer (`session.rs:556-564`) marks dirty on any peer y-sync update; debounced checkpointer (`session.rs:611-634`) → `checkpoint_browser_session` → `commit_doc_state` → `project_locked` (`session.rs:778`).
+- **Cited guard is ineffective** — `gateway.rs:2550-2561` (`normalize_list_attrs`) accepts any `u64 >= 1` with no upper bound and only runs on the REST ops path, not the Yjs path. A websocket message-size limit could not help either: the hostile attribute encodes in a handful of bytes.
+- **Reachability** — the default-build route `/v1/tmp/collab/{secret}/{room}` (`collab_handlers.rs:45-64`) converges on the same hub; the threat model (`docs/security/threat-model.md:381`) explicitly names "malicious collaborator" as an in-scope adversary, and T11 flags availability of the shared collab plane.
+
+```json
+{
+  "verdict": "TRUE_POSITIVE",
+  "confidence": "MEDIUM",
+  "reasoning": "DEFENSES lens: searched every hop for a mitigation and found none. Sink is exactly as quoted at crates/quarry-collab-codec/src/markdown_writer.rs:236 (`\"    \".repeat(key.indent as usize - 1)`), fed by list_item_key at markdown_writer.rs:94-99 where `.max(1)` excludes only 0 — no upper bound exists anywhere in the writer. The Yjs checkpoint path has no validation: collab.rs:100 applies peer y-sync bytes verbatim; xml_attrs_to_slate (yjs_builder.rs:287-295) copies all attributes, and any_to_value/json_number (yjs_builder.rs:325-358) preserve integral numbers like 2^40 as i64 so `as_u64` succeeds — no type-coercion defense. collect_block (session_doc.rs:573-598) strips only `id`/`suggestion`; row_to_node (rows.rs:177-180) re-inserts attrs verbatim; commit_doc_state (session.rs:778) projects the peer-written doc and runs block_rows_to_markdown (session.rs:811-815) before any store-side check. The one cited guard, normalize_list_attrs (gateway.rs:2550-2561), accepts any u64>=1 with no magnitude cap and runs only on the REST ops path. No websocket size cap could help since the payload is a few bytes. Reachable in the default tmp-documents build by a malicious collaborator via /v1/tmp/collab/{secret}/{room} (collab_handlers.rs:45-64), an actor class the threat model declares in scope (docs/security/threat-model.md:381, T11). Impact: indent=2^40 requests ~4.4 TiB — below the isize::MAX capacity-overflow panic threshold, so it hits the allocator; Rust allocation failure aborts the process (uncatchable, killing the shared multi-tenant server), or the fill triggers the OOM killer. Not executed per the read-only rule; the abort-on-allocation-failure behavior is standard Rust and the arithmetic is directly readable, hence MEDIUM rather than HIGH confidence, matching the reporter's own assessment."
+}
+```

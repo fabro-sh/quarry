@@ -1,0 +1,9 @@
+```json
+{
+  "candidate_id": "F22",
+  "verdict": "TRUE_POSITIVE",
+  "confidence": "MEDIUM",
+  "severity": "MEDIUM",
+  "reasoning": "IMPACT lens: the claimed consequence is real for the supported lib-documents build. The middleware stack (crates/quarry-server/src/lib.rs:215-217) has no Host/Origin check and no CORS layer anywhere in the crate, the default bind is the fixed well-known 127.0.0.1:7831 (crates/quarry-cli/src/lib.rs:261), and warn_if_non_loopback (lib.rs:692) is the only confinement. With no Host validation, a DNS-rebinding (or 127.0.0.1-resolving) page becomes same-origin with the listener and gains full unauthenticated read/write/exfil via get_document (crates/quarry-server/src/document_handlers.rs:308), put_document, and delete_document. Independent of rebinding, body-less POST handlers git_pull/git_push/git_sync (crates/quarry-server/src/git_handlers.rs:145-182) are triggerable by blind cross-site form POSTs, and collab_websocket (crates/quarry-server/src/collab_handlers.rs:19-31) upgrades with no Origin verification, WebSocket being CORS-exempt. This is distinct from the documented 'trusts loopback' posture (README.md:80, docs/security/threat-model.md), which covers local processes, not browser-mediated access; the standard Host-header fix is absent. Two impact limiters keep confidence/severity at MEDIUM rather than higher: (1) the cited library/git/collab routes require the non-default lib-documents feature (crates/quarry-server/Cargo.toml:12-14; default build is tmp-only where tmp documents are secret-capability-gated), and (2) rebinding read-back feasibility depends on victim browser/resolver behavior (e.g., DNS pinning, Private Network Access rollout), as the claim itself concedes. End-to-end execution was not possible under read-only review, but every cited code fact was verified and the attack class is standard against unauthenticated loopback daemons."
+}
+```

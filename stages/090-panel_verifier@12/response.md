@@ -1,0 +1,19 @@
+All claims in the finding verify against the source. Summary of what I confirmed:
+
+- **Source**: `git_export` wraps the request body's `repo` string in `Path::new` and passes it straight to `export_worktree` with zero validation — `crates/quarry-server/src/git_handlers.rs:123-137`.
+- **No path guard in quarry-git**: `export_worktree` copies `repo_dir` into the plan untouched (`crates/quarry-git/src/lib.rs:1011-1024`); `execute_worktree_export` runs `create_dir_all` on it, then `verify_or_write_marker`, then unconditionally `clean_worktree` (`lib.rs:1029-1032`).
+- **Guard fails open**: `verify_or_write_marker` writes the marker when absent and returns `Ok` (`lib.rs:1195-1209`, `write_marker` call at 1206), so the only confinement check passes for any directory that isn't already another library's worktree.
+- **Sink**: `clean_worktree` removes every entry except `.git` via `fs::remove_dir_all`/`fs::remove_file` (`lib.rs:1254-1269`, `remove_dir_all` at 1263).
+- **No auth/middleware defense**: router installs only error-envelope, request-tracing, and security-headers middleware (`crates/quarry-server/src/lib.rs:215-217`); spec.md:281 documents "Phase one has no auth" with only a loopback default and a warning for other binds (`lib.rs:582` `warn_if_non_loopback`).
+- **No normalization defense**: nothing in the chain calls `normalize_path` or any allowlist on `repo_dir`.
+
+The only mitigations are deployment posture, not code defenses: the `lib-documents` feature gate (opt-in, but a supported deployment — `quarry-fuse` enables it at `crates/quarry-fuse/Cargo.toml:30`) and the loopback default bind, which the spec explicitly allows overriding with just a warning. Within the documented lib-documents deployment, no effective defense exists between the attacker-controlled path and recursive deletion.
+
+```json
+{
+  "job_id": "panel:F4:defenses",
+  "candidate_id": "F4",
+  "verdict": "TRUE_POSITIVE",
+  "reasoning": "DEFENSES lens: no effective mitigation exists between the attacker-controlled source and the deletion sink. (1) The marker guard fails open as claimed: verify_or_write_marker writes the marker and returns Ok when .quarry/marker.json is absent (crates/quarry-git/src/lib.rs:1195-1209, write_marker call at line 1206), so it confines nothing for first-use directories. (2) execute_worktree_export calls create_dir_all on the caller path, then the fail-open marker check, then unconditionally clean_worktree (crates/quarry-git/src/lib.rs:1029-1032); clean_worktree recursively deletes every entry except .git via fs::remove_dir_all at crates/quarry-git/src/lib.rs:1263 and fs::remove_file at 1265. (3) No validation/normalization/allowlist on repo_dir anywhere in the chain: git_export passes Path::new(&request.repo) directly (crates/quarry-server/src/git_handlers.rs:123-137) and export_worktree copies it untouched (crates/quarry-git/src/lib.rs:1011-1024); quarry-core's normalize_path is never applied to repo_dir. (4) No auth middleware: router_with_state installs only api_error_envelope, request_tracing, and security_headers middleware (crates/quarry-server/src/lib.rs:215-217), and spec.md:281 documents 'Phase one has no auth'. The only mitigations are deployment posture, not defenses: the lib-documents feature gate is opt-in but a supported deployment (enabled by quarry-fuse at crates/quarry-fuse/Cargo.toml:30), and the loopback default bind is explicitly overridable with only a warning (crates/quarry-server/src/lib.rs:582, spec.md:281). In the lib-documents deployment the arbitrary directory wipe is reachable with a single unauthenticated POST to /v1/libraries/{library}/git/export. All quoted evidence and line numbers verified accurate against the tree."
+}
+```

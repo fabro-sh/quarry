@@ -1,0 +1,9 @@
+```json
+{
+  "job_id": "panel:F11:impact",
+  "candidate_id": "F11",
+  "verdict": "TRUE_POSITIVE",
+  "confidence": "MEDIUM",
+  "reasoning": "IMPACT lens: the claimed consequence is confirmed by code inspection. The mutual recursion text_children_to_slate -> element_from_embedded_text -> text_children_to_slate (crates/quarry-collab-codec/src/yjs_builder.rs:240-257 closing at line 276) has no depth counter anywhere on the cycle, so recursion depth equals peer-controlled XmlText embed nesting. Each cycle carries non-trivial frames (Vec<Node>, yrs diff iterator, SlateAttrs maps in both functions), so stack use grows linearly with attacker-controlled depth. The projection runs on a tokio task (crates/quarry-server/src/session.rs:614 spawns the debounced checkpointer; session.rs:778 calls project_locked; session.rs:887 calls quarry_collab_codec::xmltext_to_slate on the peer-written doc), giving it tokio's ~2 MiB default worker stack; a stack overflow in Rust aborts the entire process, so the consequence is a full server DoS, not a recoverable error. The crafted update is applied verbatim via DefaultProtocol.handle (crates/quarry-server/src/collab.rs:98-100) and the checkpoint fires automatically after a debounce (session.rs:609-634), so no further attacker action is needed. No effective mitigation exists: validate_node (yjs_builder.rs:144-168) checks value types, not depth, and sits on the server-authored write path; no message-size limit is set on the plain WebSocketUpgrade (crates/quarry-server/src/collab_handlers.rs:22), so axum's 64 MiB default permits updates encoding far more nesting than the stack survives. Confidence is MEDIUM rather than HIGH only because the read-only rule forbids observing the exact overflow depth and the yrs decoder's acceptance of an extremely deep structure; the missing bound, the recursion, and the abort-on-overflow consequence are direct code facts that do not require execution to establish."
+}
+```

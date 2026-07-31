@@ -1,0 +1,10 @@
+```json
+{
+  "job_id": "panel:F20:reachability",
+  "candidate_id": "F20",
+  "verdict": "TRUE_POSITIVE",
+  "severity": "MEDIUM",
+  "reasoning": "Every element of the claim verified against source. (1) Credentialed URLs are the only HTTPS auth path: quarry-git/src/lib.rs:1331 (FetchOptions::new()) and :1406 (PushOptions::new()) set no credentials callback, and the redact_remote_url unit test at quarry-git/src/lib.rs:1840 explicitly exercises 'https://token:secret@example.com/acme/repo.git', proving credential-bearing URLs are an anticipated input; redact_remote_url (:1442) is applied only to tracing fields, never to stored or API-returned data. (2) The caller-supplied remote is stored verbatim: git_handlers.rs:64-66 inserts the raw string into the peer config JSON, and quarry-storage/src/sync.rs:39-45 persists it as plaintext config_json. (3) The sink discloses it verbatim: list_git_peers at git_handlers.rs:83 returns store.list_git_peers, which (sync.rs:55-76) deserializes config_json into GitPeer.config, a fully serialized field (quarry-core/src/lib.rs:445-452), so any embedded credentials appear in the JSON response. (4) No guard on the route: /v1/libraries/{library}/git/peers is registered at quarry-server/src/lib.rs:456-459, and the only router layers (:215-217) are error-envelope, tracing, and security-headers middleware — no authn/authz anywhere. (5) Reachability: the default bind is loopback (quarry-cli/src/lib.rs:261, --addr default 127.0.0.1:7831), but a non-loopback bind is an explicitly supported CLI configuration that only triggers a warning whose own text states 'Quarry phase one has no auth' (quarry-server/src/lib.rs:694-704); even on loopback, any unauthenticated local process can read the operator's third-party git credentials. The default-loopback posture reduces but does not eliminate reachability, consistent with the reported MEDIUM severity. A real attacker-controlled/operator-supplied credential source, a real disclosure sink, and no effective mitigation between them are all confirmed.",
+  "confidence": "high"
+}
+```

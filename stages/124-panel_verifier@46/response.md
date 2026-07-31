@@ -1,0 +1,19 @@
+All reachability checks are now confirmed. My assessment:
+
+**Sink verified**: `crates/quarry-git/src/lib.rs:903` — `let bytes = fs::read(entry.path())?;` in `scan_worktree_import_files`, walking every regular file with no size/count/aggregate cap; identical pattern at `lib.rs:1595` in `worktree_snapshot_blocking`. Export direction does have the 5 MiB guard (`lib.rs:997-1001`), confirming the asymmetry.
+
+**Route verified**: `POST /v1/libraries/{library}/git/import` → `git_import` (`git_handlers.rs:98-106`, call at :104) → `import_worktree` (`lib.rs:825-851`) → `read_worktree_import_files` → `scan_worktree_import_files`. No auth middleware exists anywhere — `lib.rs:695` states "Quarry phase one has no auth"; non-loopback binds only get a warning (`lib.rs:692-713`). No per-route guard on the git routes (`lib.rs:453-479`).
+
+**Remote variant verified**: `create_git_peer` (`git_handlers.rs:55-71`) stores an attacker-supplied `remote` URL with zero validation (`sync.rs:27-53`). `pull_peer_inner` (`lib.rs:296-300`) clones/fetches it (`lib.rs:1362`), then `verify_marker` (`lib.rs:1223-1239`) requires `.quarry/marker.json` with the library ID — but library IDs are disclosed by the unauthenticated `GET /v1/libraries` (`Library.id`, quarry-core `lib.rs:168`), and the attacker controls the remote repo content, so the marker is plantable. The uncapped import then runs on attacker-controlled bytes. The 2-minute timeout (`lib.rs:28`) does not reclaim memory already read, and the code itself notes timed-out blocking jobs keep running (`lib.rs:32-33`).
+
+**Caveat**: the routes compile only under the `lib-documents` feature (`lib.rs:454-455`; default build is tmp-only), but that is a supported first-class deployment mode, not a mitigation — within that mode every route lacks a guard and the source is genuinely attacker-controlled.
+
+```json
+{
+  "job_id": "panel:F23:reachability",
+  "candidate_id": "F23",
+  "lens": "REACHABILITY",
+  "verdict": "TRUE_POSITIVE",
+  "reasoning": "Sink confirmed exactly as cited: crates/quarry-git/src/lib.rs:903 (`let bytes = fs::read(entry.path())?;` in scan_worktree_import_files) reads every regular file fully with no size, count, or aggregate cap; worktree_snapshot_blocking repeats it at lib.rs:1595-1596. Reached unauthenticated: POST /v1/libraries/{library}/git/import -> git_import (crates/quarry-server/src/git_handlers.rs:98-106, sink call at :104) -> import_worktree (lib.rs:825-851) -> scan_worktree_import_files. The server has no auth at all in phase one (crates/quarry-server/src/lib.rs:695; non-loopback binds only warn, lib.rs:692-713) and no route guard exists on the git group (lib.rs:453-479). Fully remote path also confirmed: create_git_peer (git_handlers.rs:55-71) stores an attacker-supplied remote URL with no validation (crates/quarry-storage/src/sync.rs:27-53); pull_peer_inner (lib.rs:296-300) clones/fetches it (lib.rs:1362) and then runs the same uncapped import. The only gate on that path, verify_marker (lib.rs:1223-1239), is not an obstacle: library IDs are exposed by the unauthenticated GET /v1/libraries (crates/quarry-core/src/lib.rs:168), and the attacker controls the remote repo content so a valid .quarry/marker.json can be planted. REMOTE_GIT_OPERATION_TIMEOUT (lib.rs:28) does not reclaim already-read memory, and the code notes timed-out blocking jobs keep running (lib.rs:32-33). The routes compile only under the lib-documents feature (crates/quarry-server/src/lib.rs:454-455, default build excludes them), but that is a supported deployment mode, not a defense: within it, a real attacker-controlled source reaches a real uncapped memory read with no effective mitigation."
+}
+```

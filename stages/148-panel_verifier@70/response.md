@@ -1,0 +1,11 @@
+No clamp anywhere on the row→node→markdown path. Every element of the claim verified against the source.
+
+```json
+{
+  "job_id": "panel:F9:impact",
+  "candidate_id": "F9",
+  "verdict": "TRUE_POSITIVE",
+  "confidence": 0.82,
+  "reasoning": "IMPACT lens: the claimed consequence is real. Sink confirmed at crates/quarry-collab-codec/src/markdown_writer.rs:236 (`\"    \".repeat(key.indent as usize - 1)`), fed by list_item_key at markdown_writer.rs:94-99 which reads `indent` via `as_u64().unwrap_or(1).max(1)` — `.max(1)` excludes only 0; no upper bound exists. The value is genuinely attacker-controlled end to end: an unauthenticated collab peer's y-sync payload is applied uninspected (crates/quarry-server/src/collab.rs:100), a BigInt/integral-f64 attribute survives conversion to a u64-readable serde Number (crates/quarry-collab-codec/src/yjs_builder.rs:329-330, 348-355), collect_block clones attrs verbatim into BlockRow (crates/quarry-collab-codec/src/session_doc.rs:573, 593-598), and the debounced/final checkpoint path runs block_rows_to_markdown over those rows (crates/quarry-server/src/session.rs:811-815, rows.rs:134-136) with project_locked doing no attr validation (session.rs:880-894). For indent = 2^40 the repeat requests ~4.4 TiB; this is below isize::MAX so it is not a capacity-overflow panic but a failed allocation, and Rust's default handle_alloc_error aborts the process — uncatchable, killing the whole server, not just a task. The attacker can also pick a much smaller magnitude (e.g. 2^33 → ~34 GiB) to guarantee alloc failure on typical hosts, so impact does not hinge on the 4 TiB figure, and the trigger fires automatically on the debounced checkpoint after one tiny websocket update. The only validator, normalize_list_attrs (crates/quarry-server/src/gateway.rs:2550-2559), accepts any u64 >= 1 with no upper bound and is only wired into the REST ops paths (gateway.rs:1190, 1362, 1405), never the Yjs checkpoint path; no clamp exists in rows.rs or the writer. Not executed per the read-only rule; the abort-on-allocation-failure semantics are standard Rust and the size arithmetic is directly readable from the code, which is why confidence is not maximal."
+}
+```

@@ -1,0 +1,10 @@
+```json
+{
+  "job_id": "panel:F27:defenses",
+  "candidate_id": "F27",
+  "verdict": "TRUE_POSITIVE",
+  "reasoning": "DEFENSES lens: the sole defense is redact_remote_url itself, and it verifiably fails for the claimed credential placements, with no compensating control. (1) crates/quarry-git/src/lib.rs:1442-1454 — redact_remote_url returns the input verbatim when there is no '://' (line 1444) and verbatim when the post-scheme remainder contains no '@' (line 1447); a URL carrying a token in path or query (e.g. https://host/repo.git?private_token=XYZ) has no '@', so it is returned unchanged. Only the scheme://userinfo@ form is redacted (line 1452). (2) Source confirmed at lib.rs:1493-1498 — peer_config reads the operator-supplied 'remote'/'remote_url' string from stored peer config with no format validation, so credential-bearing URLs in non-userinfo forms are plausible config. (3) Sinks confirmed: the unredacted URL is emitted into tracing events at lib.rs:1340 (fetch, debug), 1367 (clone, debug), 1414 (push), and at info! level in peer-operation completion events at 253-257, 308-312, and 459 — the info-level sinks do not depend on debug logging being enabled. (4) No other defense applies: the repository's only other redaction facility, crates/quarry-server/src/log_redaction.rs, redacts only tmp-document capability secrets (is_tmp_document_secret, 32-char hex) on HTTP request paths (lib.rs:493) and error bodies (error.rs:158,224); it is never applied to quarry-git's tracing fields, and a generic query token would not match its format anyway. (5) The unit test at lib.rs:1838-1848 exercises only the userinfo form, confirming the gap is by design. The finding is accurately scoped as LOW defense-in-depth: the redaction helper exists solely to keep remote-URL credentials out of logs, and for token-in-path/query or scheme-less credential forms it does not, so operator-configured secrets reach the log stream. All quoted evidence and line numbers verified against the file; no invented defense found.",
+  "confidence": "high",
+  "severity": "LOW"
+}
+```

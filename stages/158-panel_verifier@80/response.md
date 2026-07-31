@@ -1,0 +1,10 @@
+```json
+{
+  "job_id": "panel:F5:impact",
+  "candidate_id": "F5",
+  "verdict": "TRUE_POSITIVE",
+  "severity": "HIGH",
+  "reasoning": "Impact chain confirmed end-to-end in code. (1) Source: git_import at crates/quarry-server/src/git_handlers.rs:98-106 passes std::path::Path::new(&request.repo) directly into import_worktree with no validation or allowlist (line 104). (2) Dangerous operation: import_worktree (crates/quarry-git/src/lib.rs:825-851) performs only an existence check (ensure_worktree_exists, line 830) and never calls verify_marker — the marker check exists only in the pull/sync flows (lines 299, 373). scan_worktree_import_files (lib.rs:881-929) walks the fully caller-chosen directory and fs::read at line 903 loads every regular file's bytes; skipping symlinks does not matter since the attacker picks the root directory itself (e.g. /home/user, /etc). normalize_path (line 902) constrains only the relative document path shape, not which host directory is read. (3) Consequence realized: import_worktree_transaction (lib.rs:931-974) persists the bytes via write_markdown_file (line 945) and store.stage_put (line 962) plus commit_transaction (line 969), making host files permanent library documents, retrievable by the same caller via GET /v1/libraries/{library}/documents/{*path} -> document_handlers::get_document (crates/quarry-server/src/lib.rs:406-414). (4) No mitigation: the router (lib.rs:196-220) installs only error-envelope, tracing, and security-header middleware — no authentication or authorization anywhere; spec.md:281 and spec.md:765 confirm phase one has no auth by design, with 127.0.0.1 merely the default bind that the user may explicitly override (spec.md:590, 597). Even at the loopback default, any local process (including a lower-privilege one, or a browser POSTing to localhost) can drive the import-then-read sequence to disclose files readable by the quarry server user. The claimed consequence — arbitrary caller-chosen host directory contents disclosed through the unauthenticated API — is exactly what the code does.",
+  "confidence": "HIGH"
+}
+```
