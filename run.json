@@ -2141,7 +2141,7 @@
     "kind": "running"
   },
   "status_updated_at": "2026-07-31T11:30:32.248036924Z",
-  "last_event_at": "2026-07-31T11:30:37.855718245Z",
+  "last_event_at": "2026-07-31T11:32:19.487793750Z",
   "pending_control": null,
   "checkpoints": [
     {
@@ -2317,9 +2317,9 @@
       }
     },
     {
-      "seq": 0,
+      "seq": 43,
       "checkpoint": {
-        "timestamp": "2026-07-31T11:30:38.084559253Z",
+        "timestamp": "2026-07-31T11:30:40.782023024Z",
         "current_node": "target_gate",
         "completed_nodes": [
           "start",
@@ -2328,28 +2328,25 @@
         ],
         "node_retries": {},
         "context_values": {
-          "mode": "scan",
-          "internal.retry_count.start": 0,
-          "internal.retry_count.target_gate": 0,
-          "graph.default_fidelity": "compact",
-          "graph.default_max_retries": "0",
-          "failure_class": "",
-          "use_inventory": true,
-          "internal.node_visit_count": 1,
-          "internal.thread_id": "prepare",
-          "graph.rankdir": "LR",
-          "failure_signature": "",
-          "empty_target": false,
-          "products_dir": "SECURITY-REVIEW-20260731-113033",
-          "graph.model_stylesheet": "\n            * { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .inventory { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .threat-model { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .research { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n            .verification { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n        ",
+          "internal.retry_count.prepare": 0,
           "command.output": "blob://sha256/6ad936f2b46186b54f6c627a4def8ca80df2eb5d1acc4171f06f6503d22e9095",
-          "thread.prepare.current_node": "target_gate",
-          "graph.goal": "Perform an adversarial, read-only security review of this repository and report only panel-verified findings.",
-          "internal.work_dir": "/home/daytona/workspace/quarry",
-          "internal.fidelity": "compact",
-          "outcome": "succeeded",
+          "internal.retry_count.target_gate": 0,
+          "internal.run_id": "01KYVZ17V2N1DVGQX3EC3TEE92",
+          "mode": "scan",
+          "graph.default_fidelity": "compact",
           "thread.start.current_node": "prepare",
+          "products_dir": "SECURITY-REVIEW-20260731-113033",
+          "thread.prepare.current_node": "target_gate",
+          "internal.work_dir": "/home/daytona/workspace/quarry",
           "current_node": "target_gate",
+          "use_inventory": true,
+          "graph.rankdir": "LR",
+          "internal.fidelity": "compact",
+          "graph.stall_timeout": "3600000ms",
+          "failure_signature": "",
+          "internal.retry_count.start": 0,
+          "graph.goal": "Perform an adversarial, read-only security review of this repository and report only panel-verified findings.",
+          "internal.node_visit_count": 1,
           "inventory_assignment": {
             "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
             "target": {
@@ -2378,12 +2375,19 @@
             ],
             "wholeTreeCompletenessRequired": true
           },
-          "internal.retry_count.prepare": 0,
-          "graph.stall_timeout": "3600000ms",
+          "outcome": "succeeded",
+          "failure_class": "",
+          "internal.thread_id": "prepare",
+          "graph.default_max_retries": "0",
           "effort": "medium",
-          "internal.run_id": "01KYVZ17V2N1DVGQX3EC3TEE92"
+          "graph.model_stylesheet": "\n            * { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .inventory { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .threat-model { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .research { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n            .verification { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n        ",
+          "empty_target": false
         },
         "node_outcomes": {
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          },
           "prepare": {
             "status": "succeeded",
             "context_updates": {
@@ -2435,17 +2439,549 @@
             "status": "succeeded",
             "notes": "Conditional node evaluated: target_gate",
             "usage": null
+          }
+        },
+        "next_node_id": "inventory",
+        "git_commit_sha": "ade4346200a194112bb98572c61e47e65e210f41",
+        "node_visits": {
+          "target_gate": 1,
+          "start": 1,
+          "prepare": 1
+        }
+      },
+      "diff": {
+        "summary": {
+          "files_changed": 0,
+          "additions": 0,
+          "deletions": 0
+        }
+      }
+    },
+    {
+      "seq": 0,
+      "checkpoint": {
+        "timestamp": "2026-07-31T11:32:19.758684523Z",
+        "current_node": "inventory",
+        "completed_nodes": [
+          "start",
+          "prepare",
+          "target_gate",
+          "inventory"
+        ],
+        "node_retries": {},
+        "context_values": {
+          "mode": "scan",
+          "internal.retry_count.start": 0,
+          "internal.retry_count.target_gate": 0,
+          "graph.default_fidelity": "compact",
+          "graph.default_max_retries": "0",
+          "failure_class": "",
+          "use_inventory": true,
+          "thread.inventory.current_node": "inventory",
+          "response.inventory": "{\"components\":[{\"name\":\"server-http-api\",\"paths\":[\"crates/quarry-server\"],\"language\":\"rust\",\"role\":\"HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent prompt handling\",\"internetFacing\":true},{\"name\":\"web-ui\",\"paths\":[\"ui/src\",\"ui/index.html\",\"ui/vite.config.ts\",\"ui/package.json\",\"ui/scripts\"],\"language\":\"typescript\",\"role\":\"Browser frontend consuming the server API; renders collaborative documents and handles untrusted markdown/Yjs data\",\"internetFacing\":true},{\"name\":\"collab-codec\",\"paths\":[\"crates/quarry-collab-codec\"],\"language\":\"rust\",\"role\":\"Markdown/Slate/Yjs parsing, normalization, diffing and reconciliation of untrusted document content\",\"internetFacing\":false},{\"name\":\"git-layer\",\"paths\":[\"crates/quarry-git\"],\"language\":\"rust\",\"role\":\"Git operations over user repositories; shells out to git and processes paths/refs from requests\",\"internetFacing\":false},{\"name\":\"fuse-fs\",\"paths\":[\"crates/quarry-fuse\"],\"language\":\"rust\",\"role\":\"FUSE filesystem exposing documents to local processes/agents\",\"internetFacing\":false},{\"name\":\"storage-layer\",\"paths\":[\"crates/quarry-storage\"],\"language\":\"rust\",\"role\":\"SQLite persistence: schema, documents, events, search, sync queries built from request data\",\"internetFacing\":false},{\"name\":\"cas-store\",\"paths\":[\"crates/quarry-cas\"],\"language\":\"rust\",\"role\":\"Content-addressed blob store writing/reading files by hash\",\"internetFacing\":false},{\"name\":\"cli-and-binary\",\"paths\":[\"crates/quarry-cli\",\"crates/quarry\"],\"language\":\"rust\",\"role\":\"Command-line entry point and agent detection; launches processes with user-supplied arguments\",\"internetFacing\":false},{\"name\":\"core-shared\",\"paths\":[\"crates/quarry-core\"],\"language\":\"rust\",\"role\":\"Shared types and utilities used across crates\",\"internetFacing\":false},{\"name\":\"dev-release-tooling\",\"paths\":[\"crates/quarry-dev\",\"scripts\",\"Formula\"],\"language\":\"rust+ruby\",\"role\":\"Dev/release helper crate and Homebrew formula update scripts; executes builds and rewrites release metadata\",\"internetFacing\":false},{\"name\":\"ci-and-build-config\",\"paths\":[\".github\",\".cargo\",\"Dockerfile\",\"Cargo.toml\",\"Cargo.lock\",\"rust-toolchain.toml\"],\"language\":\"yaml+toml\",\"role\":\"CI workflows, actions, cargo and toolchain configuration - supply-chain and CI-injection surface\",\"internetFacing\":false}],\"securityScanSkippedComponents\":[{\"name\":\"fixtures\",\"paths\":[\"fixtures\"],\"reason\":\"Test fixtures (slate-yjs compatibility data), not shipped code\"},{\"name\":\"docs\",\"paths\":[\"docs\"],\"reason\":\"Documentation only, no executable code\"},{\"name\":\"ai-plans\",\"paths\":[\".ai\"],\"reason\":\"Agent plan notes, not product code\"},{\"name\":\"claude-skills\",\"paths\":[\".claude\"],\"reason\":\"Agent skill/instruction files, not product code\"},{\"name\":\"fabro-workflow\",\"paths\":[\".fabro\"],\"reason\":\"Review-orchestration workflow scripts (the tooling running this scan), not the product\"},{\"name\":\"ui-tests\",\"paths\":[\"ui/tests\",\"ui/playwright.config.ts\",\"ui/playwright.live.config.ts\",\"ui/vitest.setup.ts\"],\"reason\":\"End-to-end/unit test harness, not shipped code\"},{\"name\":\"ui-public-assets\",\"paths\":[\"ui/public\"],\"reason\":\"Static public assets, no logic\"},{\"name\":\"review-output\",\"paths\":[\"SECURITY-REVIEW-20260731-113033\"],\"reason\":\"Output directory of this review run, not product code\"}]}",
+          "internal.node_visit_count": 1,
+          "internal.thread_id": "inventory",
+          "last_stage": "inventory",
+          "graph.rankdir": "LR",
+          "failure_signature": "",
+          "empty_target": false,
+          "products_dir": "SECURITY-REVIEW-20260731-113033",
+          "graph.model_stylesheet": "\n            * { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .inventory { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .threat-model { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .research { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n            .verification { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n        ",
+          "command.output": "blob://sha256/6ad936f2b46186b54f6c627a4def8ca80df2eb5d1acc4171f06f6503d22e9095",
+          "last_response": "{\"components\":[{\"name\":\"server-http-api\",\"paths\":[\"crates/quarry-server\"],\"language\":\"rust\",\"role\":\"HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent ",
+          "thread.prepare.current_node": "target_gate",
+          "output.inventory": {
+            "components": [
+              {
+                "name": "server-http-api",
+                "paths": [
+                  "crates/quarry-server"
+                ],
+                "language": "rust",
+                "role": "HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent prompt handling",
+                "internetFacing": true
+              },
+              {
+                "name": "web-ui",
+                "paths": [
+                  "ui/src",
+                  "ui/index.html",
+                  "ui/vite.config.ts",
+                  "ui/package.json",
+                  "ui/scripts"
+                ],
+                "language": "typescript",
+                "role": "Browser frontend consuming the server API; renders collaborative documents and handles untrusted markdown/Yjs data",
+                "internetFacing": true
+              },
+              {
+                "name": "collab-codec",
+                "paths": [
+                  "crates/quarry-collab-codec"
+                ],
+                "language": "rust",
+                "role": "Markdown/Slate/Yjs parsing, normalization, diffing and reconciliation of untrusted document content",
+                "internetFacing": false
+              },
+              {
+                "name": "git-layer",
+                "paths": [
+                  "crates/quarry-git"
+                ],
+                "language": "rust",
+                "role": "Git operations over user repositories; shells out to git and processes paths/refs from requests",
+                "internetFacing": false
+              },
+              {
+                "name": "fuse-fs",
+                "paths": [
+                  "crates/quarry-fuse"
+                ],
+                "language": "rust",
+                "role": "FUSE filesystem exposing documents to local processes/agents",
+                "internetFacing": false
+              },
+              {
+                "name": "storage-layer",
+                "paths": [
+                  "crates/quarry-storage"
+                ],
+                "language": "rust",
+                "role": "SQLite persistence: schema, documents, events, search, sync queries built from request data",
+                "internetFacing": false
+              },
+              {
+                "name": "cas-store",
+                "paths": [
+                  "crates/quarry-cas"
+                ],
+                "language": "rust",
+                "role": "Content-addressed blob store writing/reading files by hash",
+                "internetFacing": false
+              },
+              {
+                "name": "cli-and-binary",
+                "paths": [
+                  "crates/quarry-cli",
+                  "crates/quarry"
+                ],
+                "language": "rust",
+                "role": "Command-line entry point and agent detection; launches processes with user-supplied arguments",
+                "internetFacing": false
+              },
+              {
+                "name": "core-shared",
+                "paths": [
+                  "crates/quarry-core"
+                ],
+                "language": "rust",
+                "role": "Shared types and utilities used across crates",
+                "internetFacing": false
+              },
+              {
+                "name": "dev-release-tooling",
+                "paths": [
+                  "crates/quarry-dev",
+                  "scripts",
+                  "Formula"
+                ],
+                "language": "rust+ruby",
+                "role": "Dev/release helper crate and Homebrew formula update scripts; executes builds and rewrites release metadata",
+                "internetFacing": false
+              },
+              {
+                "name": "ci-and-build-config",
+                "paths": [
+                  ".github",
+                  ".cargo",
+                  "Dockerfile",
+                  "Cargo.toml",
+                  "Cargo.lock",
+                  "rust-toolchain.toml"
+                ],
+                "language": "yaml+toml",
+                "role": "CI workflows, actions, cargo and toolchain configuration - supply-chain and CI-injection surface",
+                "internetFacing": false
+              }
+            ],
+            "securityScanSkippedComponents": [
+              {
+                "name": "fixtures",
+                "paths": [
+                  "fixtures"
+                ],
+                "reason": "Test fixtures (slate-yjs compatibility data), not shipped code"
+              },
+              {
+                "name": "docs",
+                "paths": [
+                  "docs"
+                ],
+                "reason": "Documentation only, no executable code"
+              },
+              {
+                "name": "ai-plans",
+                "paths": [
+                  ".ai"
+                ],
+                "reason": "Agent plan notes, not product code"
+              },
+              {
+                "name": "claude-skills",
+                "paths": [
+                  ".claude"
+                ],
+                "reason": "Agent skill/instruction files, not product code"
+              },
+              {
+                "name": "fabro-workflow",
+                "paths": [
+                  ".fabro"
+                ],
+                "reason": "Review-orchestration workflow scripts (the tooling running this scan), not the product"
+              },
+              {
+                "name": "ui-tests",
+                "paths": [
+                  "ui/tests",
+                  "ui/playwright.config.ts",
+                  "ui/playwright.live.config.ts",
+                  "ui/vitest.setup.ts"
+                ],
+                "reason": "End-to-end/unit test harness, not shipped code"
+              },
+              {
+                "name": "ui-public-assets",
+                "paths": [
+                  "ui/public"
+                ],
+                "reason": "Static public assets, no logic"
+              },
+              {
+                "name": "review-output",
+                "paths": [
+                  "SECURITY-REVIEW-20260731-113033"
+                ],
+                "reason": "Output directory of this review run, not product code"
+              }
+            ]
+          },
+          "graph.goal": "Perform an adversarial, read-only security review of this repository and report only panel-verified findings.",
+          "internal.work_dir": "/home/daytona/workspace/quarry",
+          "internal.fidelity": "compact",
+          "outcome": "succeeded",
+          "thread.start.current_node": "prepare",
+          "current_node": "inventory",
+          "inventory_assignment": {
+            "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+            "target": {
+              "mode": "scan",
+              "scope": [],
+              "range": null,
+              "changedFileCount": null,
+              "changedLineCount": null,
+              "focus": null,
+              "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+              "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+            },
+            "maxComponents": 12,
+            "topLevelDirectories": [
+              ".ai",
+              ".cargo",
+              ".claude",
+              ".fabro",
+              ".github",
+              "Formula",
+              "crates",
+              "docs",
+              "fixtures",
+              "scripts",
+              "ui"
+            ],
+            "wholeTreeCompletenessRequired": true
+          },
+          "internal.retry_count.prepare": 0,
+          "graph.stall_timeout": "3600000ms",
+          "internal.retry_count.inventory": 0,
+          "effort": "medium",
+          "internal.run_id": "01KYVZ17V2N1DVGQX3EC3TEE92"
+        },
+        "node_outcomes": {
+          "prepare": {
+            "status": "succeeded",
+            "context_updates": {
+              "mode": "scan",
+              "products_dir": "SECURITY-REVIEW-20260731-113033",
+              "inventory_assignment": {
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "target": {
+                  "mode": "scan",
+                  "scope": [],
+                  "range": null,
+                  "changedFileCount": null,
+                  "changedLineCount": null,
+                  "focus": null,
+                  "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                  "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                },
+                "maxComponents": 12,
+                "topLevelDirectories": [
+                  ".ai",
+                  ".cargo",
+                  ".claude",
+                  ".fabro",
+                  ".github",
+                  "Formula",
+                  "crates",
+                  "docs",
+                  "fixtures",
+                  "scripts",
+                  "ui"
+                ],
+                "wholeTreeCompletenessRequired": true
+              },
+              "empty_target": false,
+              "use_inventory": true,
+              "command.output": "blob://sha256/6ad936f2b46186b54f6c627a4def8ca80df2eb5d1acc4171f06f6503d22e9095",
+              "effort": "medium"
+            },
+            "notes": "Script completed: python3 -c \"import hashlib,sys; pairs=list(zip(sys.argv[1::2],sys.argv[2::2])); sys.exit(0 if pairs and all(hashlib.sha256(open(path,'rb').read()).hexdigest()==expected for path,expected in pairs) else 91)\" .fabro/workflows/security-review/scripts/security_review.py db08c08320c2c1fb6cd3226fb70fa5672794c0cd12be7d78b82214fc7346258d .fabro/workflows/security-review/scripts/git_readonly.py 6bafe2418234d7887d9f4726208bc9e50325bf34c5098c4a6ef508f1a5486ec5 .fabro/workflows/security-review/scripts/render_report.py 6949cb65bf950b41cf1937deb9eac111a026fe11bf7aa35eb34d53dd670100c4 .fabro/workflows/security-review/specs/report-spec.md 18e3eb3de3c2f585cd4e24d3168b0aaf0176a72ba5efeadaf6773cee1c5f2be2 .fabro/workflows/security-review/templates/report.html 55583ce1e9272ccbc0c048bf8d2ba660e443ca3b77c929958ab0955ac4616777 && python3 .fabro/workflows/security-review/scripts/security_review.py prepare --scan-id-stdin --mode scan --effort medium --scope '' --base '' --commit '' --range '' --focus ''",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 1371,
+              "active_time_ms": 1371
+            }
+          },
+          "inventory": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_stage": "inventory",
+              "last_response": "{\"components\":[{\"name\":\"server-http-api\",\"paths\":[\"crates/quarry-server\"],\"language\":\"rust\",\"role\":\"HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent ",
+              "response.inventory": "{\"components\":[{\"name\":\"server-http-api\",\"paths\":[\"crates/quarry-server\"],\"language\":\"rust\",\"role\":\"HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent prompt handling\",\"internetFacing\":true},{\"name\":\"web-ui\",\"paths\":[\"ui/src\",\"ui/index.html\",\"ui/vite.config.ts\",\"ui/package.json\",\"ui/scripts\"],\"language\":\"typescript\",\"role\":\"Browser frontend consuming the server API; renders collaborative documents and handles untrusted markdown/Yjs data\",\"internetFacing\":true},{\"name\":\"collab-codec\",\"paths\":[\"crates/quarry-collab-codec\"],\"language\":\"rust\",\"role\":\"Markdown/Slate/Yjs parsing, normalization, diffing and reconciliation of untrusted document content\",\"internetFacing\":false},{\"name\":\"git-layer\",\"paths\":[\"crates/quarry-git\"],\"language\":\"rust\",\"role\":\"Git operations over user repositories; shells out to git and processes paths/refs from requests\",\"internetFacing\":false},{\"name\":\"fuse-fs\",\"paths\":[\"crates/quarry-fuse\"],\"language\":\"rust\",\"role\":\"FUSE filesystem exposing documents to local processes/agents\",\"internetFacing\":false},{\"name\":\"storage-layer\",\"paths\":[\"crates/quarry-storage\"],\"language\":\"rust\",\"role\":\"SQLite persistence: schema, documents, events, search, sync queries built from request data\",\"internetFacing\":false},{\"name\":\"cas-store\",\"paths\":[\"crates/quarry-cas\"],\"language\":\"rust\",\"role\":\"Content-addressed blob store writing/reading files by hash\",\"internetFacing\":false},{\"name\":\"cli-and-binary\",\"paths\":[\"crates/quarry-cli\",\"crates/quarry\"],\"language\":\"rust\",\"role\":\"Command-line entry point and agent detection; launches processes with user-supplied arguments\",\"internetFacing\":false},{\"name\":\"core-shared\",\"paths\":[\"crates/quarry-core\"],\"language\":\"rust\",\"role\":\"Shared types and utilities used across crates\",\"internetFacing\":false},{\"name\":\"dev-release-tooling\",\"paths\":[\"crates/quarry-dev\",\"scripts\",\"Formula\"],\"language\":\"rust+ruby\",\"role\":\"Dev/release helper crate and Homebrew formula update scripts; executes builds and rewrites release metadata\",\"internetFacing\":false},{\"name\":\"ci-and-build-config\",\"paths\":[\".github\",\".cargo\",\"Dockerfile\",\"Cargo.toml\",\"Cargo.lock\",\"rust-toolchain.toml\"],\"language\":\"yaml+toml\",\"role\":\"CI workflows, actions, cargo and toolchain configuration - supply-chain and CI-injection surface\",\"internetFacing\":false}],\"securityScanSkippedComponents\":[{\"name\":\"fixtures\",\"paths\":[\"fixtures\"],\"reason\":\"Test fixtures (slate-yjs compatibility data), not shipped code\"},{\"name\":\"docs\",\"paths\":[\"docs\"],\"reason\":\"Documentation only, no executable code\"},{\"name\":\"ai-plans\",\"paths\":[\".ai\"],\"reason\":\"Agent plan notes, not product code\"},{\"name\":\"claude-skills\",\"paths\":[\".claude\"],\"reason\":\"Agent skill/instruction files, not product code\"},{\"name\":\"fabro-workflow\",\"paths\":[\".fabro\"],\"reason\":\"Review-orchestration workflow scripts (the tooling running this scan), not the product\"},{\"name\":\"ui-tests\",\"paths\":[\"ui/tests\",\"ui/playwright.config.ts\",\"ui/playwright.live.config.ts\",\"ui/vitest.setup.ts\"],\"reason\":\"End-to-end/unit test harness, not shipped code\"},{\"name\":\"ui-public-assets\",\"paths\":[\"ui/public\"],\"reason\":\"Static public assets, no logic\"},{\"name\":\"review-output\",\"paths\":[\"SECURITY-REVIEW-20260731-113033\"],\"reason\":\"Output directory of this review run, not product code\"}]}",
+              "output.inventory": {
+                "components": [
+                  {
+                    "name": "server-http-api",
+                    "paths": [
+                      "crates/quarry-server"
+                    ],
+                    "language": "rust",
+                    "role": "HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent prompt handling",
+                    "internetFacing": true
+                  },
+                  {
+                    "name": "web-ui",
+                    "paths": [
+                      "ui/src",
+                      "ui/index.html",
+                      "ui/vite.config.ts",
+                      "ui/package.json",
+                      "ui/scripts"
+                    ],
+                    "language": "typescript",
+                    "role": "Browser frontend consuming the server API; renders collaborative documents and handles untrusted markdown/Yjs data",
+                    "internetFacing": true
+                  },
+                  {
+                    "name": "collab-codec",
+                    "paths": [
+                      "crates/quarry-collab-codec"
+                    ],
+                    "language": "rust",
+                    "role": "Markdown/Slate/Yjs parsing, normalization, diffing and reconciliation of untrusted document content",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "git-layer",
+                    "paths": [
+                      "crates/quarry-git"
+                    ],
+                    "language": "rust",
+                    "role": "Git operations over user repositories; shells out to git and processes paths/refs from requests",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "fuse-fs",
+                    "paths": [
+                      "crates/quarry-fuse"
+                    ],
+                    "language": "rust",
+                    "role": "FUSE filesystem exposing documents to local processes/agents",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "storage-layer",
+                    "paths": [
+                      "crates/quarry-storage"
+                    ],
+                    "language": "rust",
+                    "role": "SQLite persistence: schema, documents, events, search, sync queries built from request data",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "cas-store",
+                    "paths": [
+                      "crates/quarry-cas"
+                    ],
+                    "language": "rust",
+                    "role": "Content-addressed blob store writing/reading files by hash",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "cli-and-binary",
+                    "paths": [
+                      "crates/quarry-cli",
+                      "crates/quarry"
+                    ],
+                    "language": "rust",
+                    "role": "Command-line entry point and agent detection; launches processes with user-supplied arguments",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "core-shared",
+                    "paths": [
+                      "crates/quarry-core"
+                    ],
+                    "language": "rust",
+                    "role": "Shared types and utilities used across crates",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "dev-release-tooling",
+                    "paths": [
+                      "crates/quarry-dev",
+                      "scripts",
+                      "Formula"
+                    ],
+                    "language": "rust+ruby",
+                    "role": "Dev/release helper crate and Homebrew formula update scripts; executes builds and rewrites release metadata",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "ci-and-build-config",
+                    "paths": [
+                      ".github",
+                      ".cargo",
+                      "Dockerfile",
+                      "Cargo.toml",
+                      "Cargo.lock",
+                      "rust-toolchain.toml"
+                    ],
+                    "language": "yaml+toml",
+                    "role": "CI workflows, actions, cargo and toolchain configuration - supply-chain and CI-injection surface",
+                    "internetFacing": false
+                  }
+                ],
+                "securityScanSkippedComponents": [
+                  {
+                    "name": "fixtures",
+                    "paths": [
+                      "fixtures"
+                    ],
+                    "reason": "Test fixtures (slate-yjs compatibility data), not shipped code"
+                  },
+                  {
+                    "name": "docs",
+                    "paths": [
+                      "docs"
+                    ],
+                    "reason": "Documentation only, no executable code"
+                  },
+                  {
+                    "name": "ai-plans",
+                    "paths": [
+                      ".ai"
+                    ],
+                    "reason": "Agent plan notes, not product code"
+                  },
+                  {
+                    "name": "claude-skills",
+                    "paths": [
+                      ".claude"
+                    ],
+                    "reason": "Agent skill/instruction files, not product code"
+                  },
+                  {
+                    "name": "fabro-workflow",
+                    "paths": [
+                      ".fabro"
+                    ],
+                    "reason": "Review-orchestration workflow scripts (the tooling running this scan), not the product"
+                  },
+                  {
+                    "name": "ui-tests",
+                    "paths": [
+                      "ui/tests",
+                      "ui/playwright.config.ts",
+                      "ui/playwright.live.config.ts",
+                      "ui/vitest.setup.ts"
+                    ],
+                    "reason": "End-to-end/unit test harness, not shipped code"
+                  },
+                  {
+                    "name": "ui-public-assets",
+                    "paths": [
+                      "ui/public"
+                    ],
+                    "reason": "Static public assets, no logic"
+                  },
+                  {
+                    "name": "review-output",
+                    "paths": [
+                      "SECURITY-REVIEW-20260731-113033"
+                    ],
+                    "reason": "Output directory of this review run, not product code"
+                  }
+                ]
+              }
+            },
+            "notes": "Stage completed: inventory",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "kimi",
+                    "model_id": "kimi-k3"
+                  },
+                  "tokens": {
+                    "input_tokens": 10478,
+                    "output_tokens": 2222,
+                    "reasoning_tokens": 441,
+                    "cache_read_tokens": 36864,
+                    "cache_write_tokens": 0
+                  }
+                },
+                "facts": {
+                  "algorithm": "openai"
+                }
+              },
+              "total_usd_micros": 82436
+            },
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 93267,
+              "tool_time_ms": 5107,
+              "active_time_ms": 98374
+            }
+          },
+          "target_gate": {
+            "status": "succeeded",
+            "notes": "Conditional node evaluated: target_gate",
+            "usage": null
           },
           "start": {
             "status": "succeeded",
             "usage": null
           }
         },
-        "next_node_id": "inventory",
+        "next_node_id": "merge_inventory",
         "node_visits": {
-          "prepare": 1,
           "target_gate": 1,
-          "start": 1
+          "start": 1,
+          "inventory": 1,
+          "prepare": 1
         }
       },
       "diff": {}
@@ -2477,31 +3013,6 @@
   "superseded_by": null,
   "pending_interviews": {},
   "stages": {
-    "target_gate@1": {
-      "first_event_seq": 38,
-      "prompt": null,
-      "response": null,
-      "completion": null,
-      "provider_used": null,
-      "diff": null,
-      "script_invocation": null,
-      "script_timing": null,
-      "parallel_results": null,
-      "output": null,
-      "started_at": "2026-07-31T11:30:37.855718245Z",
-      "handler": "conditional",
-      "graph_visit": 1,
-      "usage": {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "total_tokens": 0,
-        "reasoning_tokens": 0,
-        "cache_read_tokens": 0,
-        "cache_write_tokens": 0
-      },
-      "agent_control": "running",
-      "state": "running"
-    },
     "start@1": {
       "first_event_seq": 18,
       "prompt": null,
@@ -2520,6 +3031,242 @@
       "output": null,
       "started_at": "2026-07-31T11:30:33.418042534Z",
       "handler": "start",
+      "graph_visit": 1,
+      "timing": {
+        "wall_time_ms": 0,
+        "inference_time_ms": 0,
+        "tool_time_ms": 0,
+        "active_time_ms": 0
+      },
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "agent_control": "running",
+      "state": "succeeded"
+    },
+    "inventory@1": {
+      "first_event_seq": 46,
+      "prompt": null,
+      "response": null,
+      "completion": null,
+      "provider_used": {
+        "mode": "agent",
+        "provider": "kimi",
+        "model": "kimi-k3",
+        "reasoning_effort": "low"
+      },
+      "diff": null,
+      "script_invocation": null,
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-07-31T11:30:40.798342320Z",
+      "handler": "agent",
+      "graph_visit": 1,
+      "live_inference_ms": 93265,
+      "live_tool_ms": 5106,
+      "usage": {
+        "input_tokens": 10478,
+        "output_tokens": 2222,
+        "total_tokens": 50005,
+        "reasoning_tokens": 441,
+        "cache_read_tokens": 36864,
+        "cache_write_tokens": 0,
+        "total_usd_micros": 82436
+      },
+      "model": {
+        "provider": "kimi",
+        "model_id": "kimi-k3"
+      },
+      "permission_level": "full",
+      "agent_tools": [
+        {
+          "name": "AskUserQuestion",
+          "description": "Ask the human one or more questions and wait for their answers before continuing this stage.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "Bash",
+          "description": "Execute a bash command. Use this for shell semantics — pipes, env, processes, git, package managers, build and test runners.\n\nTranslate these to a dedicated tool instead:\n- `cat` / `head` / `tail` on a known path → Read\n- `sed` / `awk` for an in-place edit → Edit\n- `echo > file` / heredoc → Write\n- `find` or recursive `ls` to locate files by name → Glob (plain `ls <dir>` is fine)\n- `grep` / `rg` to search file contents → Grep\n\nThe dedicated tools cap their output, so they keep large raw dumps out of the conversation.\n\nOutput: stdout and stderr are combined and returned as a string. A non-zero exit appends a `Command failed with exit code: N` line.\n\nGuidelines:\n- Each call runs in a fresh bash process. Environment variables and `cd` do NOT persist between calls — pass `cwd`, or use absolute paths.\n- `timeout` is in SECONDS. It defaults to 60 and is capped at 600.\n- A long-running command needs a raised `timeout`, not a retry: a command that timed out once will time out again.\n- Do not run interactive commands, or commands that never exit.\n- Chain genuinely dependent steps with `&&`. Issue independent read-only commands as separate parallel calls in one response so their output stays separate.\n- Quote paths containing spaces.\n- Avoid `..` to reach outside the working directory, and do not modify files outside it unless explicitly asked. Never run commands requiring superuser privileges unless explicitly asked.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "shell",
+          "invoked": true
+        },
+        {
+          "name": "Edit",
+          "description": "Perform exact replacements in existing files.\n\n- Edit is mandatory for every incremental change, especially small edits. DO NOT use Write or Bash `sed`.\n- Read the target file before every Edit. DO NOT call Edit from memory, stale context, or a guessed `old_string`.\n- Take `old_string` and `new_string` from the Read output view, dropping the line-number prefix and separator; match only file content.\n- `old_string` must be unique unless `replace_all` is set. If it is ambiguous, add surrounding context. Use `replace_all` only when every occurrence should change — for example, renaming a symbol throughout the file.\n- DO NOT issue consecutive Edit calls on the same file. A previous Edit can invalidate a later Edit's `old_string`, causing `old_string not found`. Read the file again before the next Edit.\n- If an Edit fails with `old_string not found`, re-read the file and take the exact text from the fresh output rather than guessing again.\n- Preserve existing indentation.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "write",
+          "invoked": false
+        },
+        {
+          "name": "FetchURL",
+          "description": "Fetch content from a URL that starts with http:// or https://. Pass a prompt to extract specific information or summarize the page; omit prompt to return the page content.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "Glob",
+          "description": "Find files by search-root-relative path using a glob pattern. Results are sorted lexicographically by relative path.\n\nUse this instead of `find` or recursive `ls` through Bash. Prefer patterns with a literal anchor — an extension or a subdirectory — over bare wildcards.\n\nGood patterns:\n- `*.rs` — direct children of the search root\n- `**/*.rs` — files at any depth below the search root\n- `src/*.rs` — directly inside `src/`, not recursive\n- `src/**/*.rs` — recursive walk under a subdirectory\n- `src/[lm]ib.rs` — a bracket expression matches one character\n\nAvoid recursing into dependency or build output (`node_modules/**`, `target/**`): those produce thousands of matches and waste context. Narrow to a specific subpath instead. Results are files, so to locate a directory, glob for something inside it. Patterns must use `/`, be relative, and cannot contain a `..` segment.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "read",
+          "invoked": false
+        },
+        {
+          "name": "Grep",
+          "description": "Search file contents with a regular expression.\n\nUse Grep when looking for unknown content or an unknown location. If you already know the path, use Read instead. Prefer this over running `grep` or `rg` through Bash: it caps its output, so it will not flood the conversation.\n\n- Backed by ripgrep when available and POSIX `grep` otherwise, so keep patterns portable across both rather than relying on ripgrep-only syntax.\n- `output_mode` selects what comes back: `files_with_matches` (just the paths, the default), `content` (matching lines), or `count_matches` (matches per file).\n- `head_limit` caps how many results are returned and `offset` skips that many first, so you can page through a large result set.\n- `glob` limits which files are searched; `-i` folds case.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "read",
+          "invoked": false
+        },
+        {
+          "name": "Read",
+          "description": "Read a text file from the workspace.\n\n- If you have a concrete path, call Read directly. Do not Glob or `ls` first to check that it exists — a missing path returns an error you can handle.\n- When you need several files, emit multiple Read calls in one response rather than one per turn.\n- Returns `<line-number> | <content>` per line. Drop the number and separator when taking text for an Edit `old_string`.\n- `line_offset` is the 1-based first line to read. A NEGATIVE value reads from the end, so -100 returns the last 100 lines.\n- `n_lines` defaults to 2000 lines.\n- Use Bash or an MCP tool for binary formats; this tool reads text.\n- After a successful Edit or Write, do not re-read solely to prove the write landed. When the task depends on an exact file, API, or output shape, inspect the final result before finishing.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "read",
+          "invoked": false
+        },
+        {
+          "name": "TodoList",
+          "description": "Maintain a structured TODO list for the current task. Use it proactively for multi-step work. Pass `todos` to replace the entire list, omit `todos` to read the current list without changing it, and pass an empty array to clear it. Keep exactly one item `in_progress` while work is underway, and mark an item `done` as soon as it is finished rather than batching completions at the end.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "WebSearch",
+          "description": "Search the web using Brave Search when current external information is needed. Returns result titles, URLs, and descriptions; use web_fetch for a specific URL.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "Write",
+          "description": "Create, append to, or replace a file entirely.\n\n- `mode` defaults to `overwrite`, which replaces the whole file. `append` requires an existing file and adds to its end without inserting a newline.\n- Write is NOT ALLOWED for incremental changes to existing files, including trivial, one-line, quick, or cosmetic edits. Use Edit instead.\n- Use Write only when the file does not exist, you intend a complete replacement, or the new contents have little continuity with the old contents.\n- Read before overwriting an existing file.\n- Write ignores the Read/Edit line-number view. NEVER include line prefixes.\n- Do not create documentation files that were not asked for.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "write",
+          "invoked": false
+        },
+        {
+          "name": "close_agent",
+          "description": "Close a running subagent that is no longer needed.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "subagent",
+          "invoked": false
+        },
+        {
+          "name": "send_input",
+          "description": "Send a follow-up message to a running subagent when new information or corrected instructions are needed.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "subagent",
+          "invoked": false
+        },
+        {
+          "name": "spawn_agent",
+          "description": "Spawn a subagent for independent work or context isolation. Use it for tasks that can proceed separately, and avoid duplicating the same work in the parent session.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "subagent",
+          "invoked": false
+        },
+        {
+          "name": "wait",
+          "description": "Wait for a subagent to complete, then use the result to synthesize the outcome for the user.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "subagent",
+          "invoked": false
+        }
+      ],
+      "context_window": {
+        "provider": "kimi",
+        "model": "kimi-k3",
+        "context_window_tokens": 1048576,
+        "input_tokens": 9832,
+        "usage_percent": 0.937652587890625,
+        "count_method": "response_usage_scaled_breakdown",
+        "staleness": "live",
+        "generated_at": "2026-07-31T11:32:19.486952318Z",
+        "event_seq": 85,
+        "breakdown": [
+          {
+            "category": "system_prompt",
+            "tokens": 2507,
+            "usage_percent": 0.23908615112304688
+          },
+          {
+            "category": "tools",
+            "tokens": 2871,
+            "usage_percent": 0.2737998962402344
+          },
+          {
+            "category": "conversation",
+            "tokens": 4448,
+            "usage_percent": 0.4241943359375
+          },
+          {
+            "category": "other",
+            "tokens": 6,
+            "usage_percent": 0.00057220458984375
+          }
+        ],
+        "warnings": []
+      },
+      "agent_control": "running",
+      "state": "running"
+    },
+    "target_gate@1": {
+      "first_event_seq": 38,
+      "prompt": null,
+      "response": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": "Conditional node evaluated: target_gate",
+        "failure_reason": null,
+        "timestamp": "2026-07-31T11:30:38.083780465Z"
+      },
+      "provider_used": null,
+      "diff": null,
+      "script_invocation": null,
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-07-31T11:30:37.855718245Z",
+      "handler": "conditional",
       "graph_visit": 1,
       "timing": {
         "wall_time_ms": 0,
