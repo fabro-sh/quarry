@@ -1,0 +1,6 @@
+{
+  "outcome": "succeeded",
+  "notes": "Script completed: python3 .fabro/workflows/security-review/scripts/security_review.py merge inventory",
+  "failure_reason": null,
+  "timestamp": "2026-07-31T11:32:23.932774941Z"
+}
