@@ -1,0 +1,6 @@
+{
+  "mode": "agent",
+  "provider": "kimi",
+  "model": "kimi-k3",
+  "reasoning_effort": "low"
+}
