@@ -5,11 +5,11 @@ digraph SecurityReview {
         default_fidelity="compact",
         stall_timeout="3600s",
         model_stylesheet="
-            * { model: kimi-k3; provider: kimi; reasoning_effort: low; }
-            .inventory { model: kimi-k3; provider: kimi; reasoning_effort: low; }
-            .threat-model { model: kimi-k3; provider: kimi; reasoning_effort: low; }
-            .research { model: kimi-k3; provider: kimi; reasoning_effort: high; }
-            .verification { model: kimi-k3; provider: kimi; reasoning_effort: high; }
+            * { model: kimi-k3; provider: modal; reasoning_effort: low; }
+            .inventory { model: kimi-k3; provider: modal; reasoning_effort: low; }
+            .threat-model { model: kimi-k3; provider: modal; reasoning_effort: low; }
+            .research { model: kimi-k3; provider: modal; reasoning_effort: high; }
+            .verification { model: kimi-k3; provider: modal; reasoning_effort: high; }
         "
     ]
     rankdir=LR
