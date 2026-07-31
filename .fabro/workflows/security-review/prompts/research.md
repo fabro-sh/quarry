@@ -31,7 +31,11 @@ genuinely lands there.
 Every finding must:
 
 - name the exact repository-relative root-control file and line;
-- put the complete source-to-sink proof in `evidence`;
+- put the source-to-sink proof in `evidence` as a list of citations, one
+  entry per hop from the untrusted source to the dangerous operation.
+  Start each entry with the `file:line` it rests on, then say in one
+  sentence what that line does. Include the guards you checked and found
+  ineffective. Write one hop per entry rather than one long paragraph;
 - quote that sink line verbatim in `snippet`;
 - name the root control's enclosing function or method in `symbol`;
 - use a stable `ruleId` in the form `<category>.<control-family>`, such as

@@ -1128,13 +1128,7 @@ def prepare(args: argparse.Namespace) -> None:
         parent,
         revision_range,
     )
-    model_record = {
-        "provider": "openrouter",
-        "inventory": "sonnet",
-        "scan": "opus",
-    }
     state["revision"] = revision
-    state["model"] = model_record
     scan_meta = {
         "schema_version": CANONICAL_SCHEMA_VERSION,
         "started_at": started_at,
@@ -1148,7 +1142,6 @@ def prepare(args: argparse.Namespace) -> None:
         "mode": mode,
         "scope": scope,
         "effort": effort,
-        "model": model_record,
         "revision": revision,
         "revision_source": "self-reported",
         "top_level_dirs": top_level_dirs,
@@ -1837,9 +1830,17 @@ def normalize_category(value: Any) -> str:
     ).strip("-")
 
 
-def normalize_finding(value: Any) -> Optional[Dict[str, Any]]:
+def finding_or_rejection(
+    value: Any,
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Normalize one reported finding, or say which part of the contract failed.
+
+    A rejected finding is dropped from the scan, so the reason travels with the
+    rejection into coverage. Reasons are fixed strings: they name the field, and
+    never quote the model's own text back into a report.
+    """
     if not isinstance(value, dict):
-        return None
+        return None, "the finding is not a JSON object"
     path = normalize_repo_path(value.get("file"))
     line = value.get("line")
     severity = one_line(value.get("severity"), 20).upper()
@@ -1850,22 +1851,29 @@ def normalize_finding(value: Any) -> Optional[Dict[str, Any]]:
     rationale = clean_text(value.get("rationale"), 4000).strip()
     rule_id = normalize_rule_id(value.get("ruleId"))
     identity = normalize_identity(value.get("identity"))
-    if (
-        path is None
-        or path == "."
-        or isinstance(line, bool)
-        or not isinstance(line, int)
-        or line < 1
-        or severity not in SEVERITY_RANK
-        or difficulty not in DIFFICULTY_RANK
-        or confidence not in CONFIDENCE_RANK
-        or not category
-        or not title
-        or not rationale
-        or rule_id is None
-        or identity is None
+    for failed, reason in (
+        (path is None or path == ".", "file does not name a repository file"),
+        (
+            isinstance(line, bool) or not isinstance(line, int) or line < 1,
+            "line is not a positive integer",
+        ),
+        (severity not in SEVERITY_RANK, "severity is not HIGH, MEDIUM, or LOW"),
+        (
+            difficulty not in DIFFICULTY_RANK,
+            "difficulty is not LOW, MEDIUM, or HIGH",
+        ),
+        (
+            confidence not in CONFIDENCE_RANK,
+            "confidence is not HIGH, MEDIUM, or LOW",
+        ),
+        (not category, "category is empty"),
+        (not title, "title is empty"),
+        (not rationale, "rationale is empty"),
+        (rule_id is None, "ruleId is not <category>.<control-family>"),
+        (identity is None, "identity.anchor is not a lowercase slug"),
     ):
-        return None
+        if failed:
+            return None, reason
     preconditions = string_list(
         value.get("preconditions", []),
         cap=50,
@@ -1881,6 +1889,18 @@ def normalize_finding(value: Any) -> Optional[Dict[str, Any]]:
         cap=20,
         item_cap=2000,
     )
+    # Researchers now cite one hop per entry. A single blob is still accepted,
+    # and becomes a one-entry list, until that shape is retired.
+    raw_evidence = value.get("evidence")
+    if isinstance(raw_evidence, list):
+        citations = [
+            item
+            for item in (string_list(raw_evidence, cap=40, item_cap=2000) or [])
+            if item.strip()
+        ]
+    else:
+        blob = clean_text(raw_evidence, 8000).strip()
+        citations = [blob] if blob else []
     return {
         "file": path,
         "line": line,
@@ -1892,7 +1912,7 @@ def normalize_finding(value: Any) -> Optional[Dict[str, Any]]:
         "confidence": confidence,
         "title": title,
         "rationale": rationale,
-        "evidence": clean_text(value.get("evidence"), 8000),
+        "evidence": citations,
         "snippet": clean_text(value.get("snippet"), 2000),
         "symbol": one_line(value.get("symbol"), 500),
         "impact": clean_text(value.get("impact"), 4000),
@@ -1902,18 +1922,34 @@ def normalize_finding(value: Any) -> Optional[Dict[str, Any]]:
             item for item in (recommendations or []) if item.strip()
         ],
         "cweId": one_line(value.get("cweId"), 50),
-    }
+    }, None
+
+
+def normalize_finding(value: Any) -> Optional[Dict[str, Any]]:
+    finding, _reason = finding_or_rejection(value)
+    return finding
+
+
+def findings_and_rejections(
+    value: Any,
+) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+    """Split a research result into usable findings and rejection reasons."""
+    if not isinstance(value, dict) or not isinstance(value.get("findings"), list):
+        return None, []
+    findings: List[Dict[str, Any]] = []
+    rejections: List[str] = []
+    for position, raw in enumerate(value["findings"], 1):
+        finding, reason = finding_or_rejection(raw)
+        if finding is not None:
+            findings.append(finding)
+        else:
+            rejections.append(f"finding {position}: {reason}")
+    return {"findings": findings}, rejections
 
 
 def normalize_findings_result(value: Any) -> Optional[Dict[str, Any]]:
-    if not isinstance(value, dict) or not isinstance(value.get("findings"), list):
-        return None
-    findings: List[Dict[str, Any]] = []
-    for raw in value["findings"]:
-        finding = normalize_finding(raw)
-        if finding is not None:
-            findings.append(finding)
-    return {"findings": findings}
+    result, _rejections = findings_and_rejections(value)
+    return result
 
 
 def normalize_verdict(value: Any) -> Optional[Dict[str, str]]:
@@ -1986,7 +2022,14 @@ def merge_phase(
         if not isinstance(updates, dict):
             continue
         value = updates.get(PHASE_OUTPUT_KEYS[phase])
-        normalized = normalize_phase_result(phase, value)
+        rejections: List[str] = []
+        if phase in {"research", "sweep"}:
+            # Rejections are recorded here, where the agent's raw output is
+            # first seen. Later steps re-normalize an already-clean result and
+            # would find nothing to report.
+            normalized, rejections = findings_and_rejections(value)
+        else:
+            normalized = normalize_phase_result(phase, value)
         if normalized is None:
             continue
         job = jobs[position]
@@ -1994,7 +2037,13 @@ def merge_phase(
             continue
         job_id = job.get("job_id")
         if isinstance(job_id, str) and job_id:
-            result_map.setdefault(job_id, normalized)
+            if job_id not in result_map:
+                result_map[job_id] = normalized
+                if rejections:
+                    state.setdefault("rejected_findings", {})[job_id] = [
+                        f"{one_line(job.get('name'), 200)}: {reason}"
+                        for reason in rejections
+                    ]
 
     return {f"{phase}_results_merged": len(result_map)}
 
@@ -2055,7 +2104,7 @@ def verification_claim(candidate: Mapping[str, Any]) -> Dict[str, Any]:
         "severityAsReported": candidate.get("severity"),
         "title": candidate.get("title"),
         "rationale": candidate.get("rationale"),
-        "evidenceAsCited": candidate.get("evidence") or "(none)",
+        "evidenceAsCited": "\n".join(candidate.get("evidence") or []) or "(none)",
         "snippetAsQuoted": candidate.get("snippet") or "(none)",
         "symbol": candidate.get("symbol") or "(none)",
         "reports": int(candidate.get("reports") or 1),
@@ -2431,6 +2480,24 @@ def confidence_sort_key(record: Mapping[str, Any]) -> Tuple[int, int, str]:
     )
 
 
+def rejected_finding_reports(state: Mapping[str, Any]) -> List[str]:
+    """Every finding an agent reported that failed the contract, with a reason.
+
+    A rejected finding never reaches a candidate, a vote, or the report. Without
+    this record a scan that dropped every finding it was given is indexed from a
+    scan that found nothing, and the second reads as good news.
+    """
+    rejected = state.get("rejected_findings")
+    if not isinstance(rejected, dict):
+        return []
+    reasons: List[str] = []
+    for job_id in sorted(rejected):
+        entries = rejected[job_id]
+        if isinstance(entries, list):
+            reasons.extend(str(entry) for entry in entries)
+    return reasons
+
+
 def coverage_from_state(state: Mapping[str, Any]) -> Dict[str, Any]:
     planned = state.get("planned_components") or []
     return {
@@ -2482,6 +2549,7 @@ def coverage_from_state(state: Mapping[str, Any]) -> Dict[str, Any]:
         "invalidResearchResults": (
             state.get("invalid_research_results") or []
         ),
+        "rejectedFindingReports": rejected_finding_reports(state),
     }
 
 
@@ -2644,7 +2712,7 @@ def canonical_candidate(
         "file": candidate["file"],
         "line": int(candidate["line"]),
         "description": candidate["rationale"],
-        "evidence": candidate.get("evidence") or "",
+        "evidence": list(candidate.get("evidence") or []),
         "exploit_scenarios": (
             list(candidate.get("exploitScenarios") or [])
             or [candidate["rationale"]]
@@ -2838,6 +2906,12 @@ def scan_manifest(
         reasons.append(
             f"{len(invalid_results)} research result(s) were unusable"
         )
+    rejected_findings = rejected_finding_reports(state)
+    if rejected_findings:
+        reasons.append(
+            f"{len(rejected_findings)} reported finding(s) failed the finding "
+            "contract and were dropped"
+        )
     completed_vote_records = sum(
         vote.get("status") == "completed" for vote in votes
     )
@@ -2875,7 +2949,6 @@ def scan_manifest(
             "focus": state.get("focus"),
         },
         "revision": state.get("revision") or {"versioned": False},
-        "model": state.get("model") or {},
         "completion": {
             "status": completion_status,
             "reasons": reasons,

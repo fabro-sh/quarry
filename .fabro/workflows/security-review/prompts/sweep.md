@@ -9,8 +9,10 @@ on the assignment, inspect exposed glue code outside covered paths, security
 boundaries between components, or committed secrets. Confirm a complete path
 from attacker-controlled input to a dangerous sink without an effective
 defense. For every finding, name the exact repository-relative sink line, quote
-it in `snippet`, and name the enclosing function in `symbol`. Put the complete
-source-to-sink proof in `evidence`. Put the concrete impact in `impact`, the
+it in `snippet`, and name the enclosing function in `symbol`. Put the source-to-sink proof in
+`evidence` as a list of citations, one entry per hop from the untrusted
+source to the dangerous operation, each starting with the `file:line` it rests
+on followed by one sentence on what that line does. Put the concrete impact in `impact`, the
 attack steps in order in `exploitScenarios`, every required condition in
 `preconditions`, and the root-cause fix first in `recommendations`, followed by
 any hardening step and the regression test that would catch the issue again.

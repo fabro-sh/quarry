@@ -134,7 +134,10 @@
           "minLength": 1
         },
         "evidence": {
-          "type": "string"
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "exploit_scenarios": {
           "type": "array",

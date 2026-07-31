@@ -81,7 +81,6 @@ MANIFEST_FIELDS = (
     "workflow",
     "request",
     "revision",
-    "model",
     "completion",
     "canonicalFiles",
 )
@@ -153,11 +152,13 @@ COVERAGE_FIELDS = (
     "candidatesDroppedByCap",
     "unverifiedByCap",
     "invalidResearchResults",
+    "rejectedFindingReports",
 )
 
 SEVERITIES = ("HIGH", "MEDIUM", "LOW")
 DIFFICULTIES = ("LOW", "MEDIUM", "HIGH")
 CONFIDENCES = ("low", "medium", "high")
+CONFIDENCE_ORDER = {name: rank for rank, name in enumerate(CONFIDENCES, 1)}
 DISPOSITIONS = (
     "reportable",
     "rejected",
@@ -494,17 +495,15 @@ def validate_manifest(value: object) -> JsonMap:
     request = as_map(manifest.get("request"))
     revision = as_map(manifest.get("revision"))
     workflow = as_map(manifest.get("workflow"))
-    model = as_map(manifest.get("model"))
     completion = as_map(manifest.get("completion"))
     if (
         request is None
         or revision is None
         or workflow is None
-        or model is None
         or completion is None
     ):
         raise RenderError(
-            "scan-manifest.json workflow, request, revision, model, and "
+            "scan-manifest.json workflow, request, revision, and "
             "completion must be objects"
         )
     exact_keys(
@@ -659,6 +658,18 @@ def string_list(value: object, field: str) -> List[str]:
     ]
 
 
+def canonical_evidence(value: object, field: str) -> List[str]:
+    """The source-to-sink proof, one citation per hop.
+
+    A bundle written before the list shape carries one blob; it becomes a
+    one-entry list so both render. That fallback goes when the shape is retired.
+    """
+    if isinstance(value, str):
+        text = safe_text(value, field)
+        return [text] if text.strip() else []
+    return string_list(value, field)
+
+
 def non_empty_string_list(value: object, field: str) -> List[str]:
     items = string_list(value, field)
     if not items or any(not item.strip() for item in items):
@@ -783,7 +794,7 @@ def canonical_finding(
             f"{label}.description",
             False,
         ),
-        "evidence": safe_text(item.get("evidence"), f"{label}.evidence"),
+        "evidence": canonical_evidence(item.get("evidence"), f"{label}.evidence"),
         "exploit_scenarios": non_empty_string_list(
             item.get("exploit_scenarios"),
             f"{label}.exploit_scenarios",
@@ -995,7 +1006,7 @@ def validate_votes(
             "severityAsReported": candidate["severity"],
             "title": candidate["title"],
             "rationale": candidate["description"],
-            "evidenceAsCited": candidate["evidence"] or "(none)",
+            "evidenceAsCited": "\n".join(candidate["evidence"]) or "(none)",
             "snippetAsQuoted": candidate["snippet"] or "(none)",
             "symbol": candidate["symbol"] or "(none)",
             "reports": ledger_entry["reports"],
@@ -1071,6 +1082,7 @@ def validate_coverage(value: object) -> Dict[str, object]:
         "prunedBuckets",
         "adversarialCasualties",
         "invalidResearchResults",
+        "rejectedFindingReports",
     )
     normalized: Dict[str, object] = {
         field: string_list(coverage.get(field), f"coverage.{field}")
@@ -1289,6 +1301,16 @@ def validate_relationships(
             raise RenderError(
                 f"finding {finding['id']} lacks a complete keep-quorum panel"
             )
+        # Only a unanimous panel earns high confidence. The engine computes
+        # this, and it is re-checked here against the votes themselves so a
+        # bundle edited after the fact cannot publish a stronger claim.
+        ceiling = "high" if true_votes == 3 else "medium"
+        if CONFIDENCE_ORDER[str(finding["confidence"])] > CONFIDENCE_ORDER[ceiling]:
+            raise RenderError(
+                f"finding {finding['id']} claims {finding['confidence']} "
+                f"confidence, but {true_votes} of {len(panel)} panel voters "
+                f"confirmed it, which earns at most {ceiling}"
+            )
 
     completion = as_map(manifest["completion"]) or {}
     if completion.get("uniqueCandidates") != len(ledger):
@@ -1353,6 +1375,7 @@ def validate_relationships(
             disposition_counts(ledger).get("verification-incomplete")
         )
         or bool(coverage.get("invalidResearchResults"))
+        or bool(coverage.get("rejectedFindingReports"))
         or any(vote["status"] == "missing" for vote in votes)
         or completion.get("verificationStatus") != "verified"
     )
@@ -1478,6 +1501,14 @@ def coverage_markdown(coverage: JsonMap) -> List[str]:
     invalid = coverage.get("invalidResearchResults")
     if isinstance(invalid, list) and invalid:
         lines.append(f"- Unusable research results: {len(invalid)}")
+    rejected = coverage.get("rejectedFindingReports")
+    if isinstance(rejected, list) and rejected:
+        lines.append(
+            f"- Reported findings dropped for failing the contract: "
+            f"{len(rejected)}"
+        )
+        for reason in rejected:
+            lines.append(f"  - {escape_markdown(reason)}")
     lines.append("")
     return lines
 
@@ -1521,11 +1552,19 @@ def finding_markdown(
         "",
         "**What.** " + escape_markdown(finding["description"]),
         "",
-        "**Evidence.** " + escape_markdown(finding["evidence"]),
+        "**Evidence.**",
+        "",
+    ]
+    citations = finding["evidence"]
+    if isinstance(citations, list) and citations:
+        lines.extend("- " + escape_markdown(item) for item in citations)
+    else:
+        lines.append("- None recorded.")
+    lines.extend([
         "",
         "**Exploit scenario.**",
         "",
-    ]
+    ])
     scenarios = finding["exploit_scenarios"]
     if isinstance(scenarios, list) and scenarios:
         lines.extend(
@@ -1731,13 +1770,27 @@ def display_id(value: object) -> str:
     return f"F-{int(match.group(1)):03d}"
 
 
+def repository_name(scan_root: object) -> str:
+    """The reviewed repository's own name, for the report's identity line."""
+    text = str(scan_root or "").replace("\\", "/").rstrip("/")
+    name = text.rsplit("/", 1)[-1] if "/" in text else text
+    return name or text or "repository"
+
+
 def component_for_file(
     path: str,
     components: Sequence[Mapping[str, object]],
 ) -> Optional[str]:
-    """Name the examined component a finding's file belongs to."""
+    """Name the examined component a finding's file belongs to.
+
+    One component covers every finding, so naming it beside each location says
+    nothing. A component whose path is the whole tree localizes nothing either.
+    Both cases yield no name rather than a constant repeated on every finding.
+    """
+    if len(components) < 2:
+        return None
     best_name: Optional[str] = None
-    best_length = -1
+    best_length = 0
     for component in components:
         name = component.get("name")
         raw_paths = component.get("paths")
@@ -1748,8 +1801,8 @@ def component_for_file(
                 continue
             prefix = raw_path.rstrip("/")
             if prefix in ("", "."):
-                length = 0
-            elif path == prefix or path.startswith(prefix + "/"):
+                continue
+            if path == prefix or path.startswith(prefix + "/"):
                 length = len(prefix)
             else:
                 continue
@@ -1797,14 +1850,14 @@ def html_finding(
         # The excerpt read from the tree is preferred. This is the reporter's
         # quoted line, which the page falls back to when there is no excerpt.
         "snippet": finding["snippet"],
-        "summary": finding["description"],
-        # The canonical description is the claim; the cited source-to-sink
-        # proof is what a reader needs next, so it becomes the body text.
+        # The claim is the body text. The source-to-sink citations get their
+        # own block, which the page keeps collapsed.
         "description": [
             paragraph.strip()
-            for paragraph in re.split(r"\n\s*\n", str(finding["evidence"]))
+            for paragraph in re.split(r"\n\s*\n", str(finding["description"]))
             if paragraph.strip()
         ],
+        "evidence": list(finding["evidence"]),
         "impact": finding["impact"],
         "exploitScenarios": string_list(
             finding["exploit_scenarios"],
@@ -1846,13 +1899,24 @@ def report_payload(
         if isinstance(component, dict)
     ]
     mode = str(request.get("mode") or "")
+    completion = as_map(manifest["completion"]) or {}
     return {
         "report": {
             "title": HTML_REPORT_TITLE,
             "date": display_date(manifest["completedAt"]),
         },
+        # A partial scan must say so where the findings are read, or a reader
+        # takes an incomplete review for a clean one.
+        "completion": {
+            "status": completion.get("status"),
+            "reasons": string_list(
+                completion.get("reasons"),
+                "manifest completion.reasons",
+            ),
+        },
         "scan": {
             "root": target.get("scanRoot"),
+            "repository": repository_name(target.get("scanRoot")),
             "revision": revision_tag(manifest["revision"]),
             "mode": mode,
             "modeLabel": MODE_LABELS.get(mode, mode or "Unknown"),
@@ -2029,7 +2093,6 @@ def render(
         "scope": (as_map(manifest["request"]) or {}).get("scope") or [],
         "revision": revision,
         "revision_source": "self-reported",
-        "model": manifest.get("model"),
         "effort": (as_map(manifest["request"]) or {}).get("effort"),
         "findings": {
             "total": len(findings),

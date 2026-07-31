@@ -65,7 +65,10 @@
           },
           "title": { "type": "string" },
           "rationale": { "type": "string" },
-          "evidence": { "type": "string" },
+          "evidence": {
+            "type": ["array", "string"],
+            "items": { "type": "string", "minLength": 1 }
+          },
           "snippet": { "type": "string" },
           "symbol": { "type": "string" },
           "impact": { "type": "string" },

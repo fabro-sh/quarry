@@ -181,7 +181,7 @@ pre {
 
 .scan-identity {
 	display: grid;
-	grid-template-columns: repeat(4, minmax(0, 1fr));
+	grid-template-columns: repeat(5, minmax(0, 1fr));
 	gap: 0;
 	max-width: 58rem;
 	padding: 1rem 0 0;
@@ -435,6 +435,32 @@ pre {
 	font-size: 0.9375rem;
 	line-height: 1.65;
 	text-wrap: pretty;
+}
+
+.completion-note {
+	max-width: var(--reading-width);
+	padding: 1rem 1.1rem;
+	margin: 1rem 0 0;
+	border-left: 0.25rem solid var(--medium);
+	background: var(--medium-soft);
+	color: var(--ink-soft);
+	font-size: 0.9375rem;
+	line-height: 1.65;
+	text-wrap: pretty;
+}
+
+.completion-note strong {
+	color: var(--ink);
+	font-weight: 680;
+}
+
+.completion-note ul {
+	padding-left: 1.15rem;
+	margin: 0.45rem 0 0;
+}
+
+.completion-note[hidden] {
+	display: none;
 }
 
 .finding-filters {
@@ -759,6 +785,74 @@ td {
 	font-size: 1rem;
 	line-height: 1.7;
 	text-wrap: pretty;
+}
+
+.finding-evidence {
+	display: grid;
+	gap: 0.7rem;
+}
+
+.finding-evidence > summary {
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	gap: 0.45rem;
+	width: fit-content;
+	font-size: 1rem;
+	font-weight: 680;
+	list-style: none;
+}
+
+.finding-evidence > summary::-webkit-details-marker {
+	display: none;
+}
+
+.finding-evidence > summary::before {
+	content: "";
+	width: 0.4rem;
+	height: 0.4rem;
+	border-right: 0.11rem solid var(--finding-tone);
+	border-bottom: 0.11rem solid var(--finding-tone);
+	rotate: -45deg;
+	translate: 0 -0.06rem;
+	transition: rotate 120ms ease;
+}
+
+.finding-evidence[open] > summary::before {
+	rotate: 45deg;
+	translate: 0 -0.14rem;
+}
+
+.finding-evidence > summary:hover {
+	color: var(--accent-dark);
+}
+
+.finding-evidence__count {
+	color: var(--muted);
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	font-weight: 400;
+}
+
+.finding-evidence ol {
+	display: grid;
+	gap: 0.7rem;
+	padding-left: 1.25rem;
+	margin: 0;
+}
+
+.finding-evidence li {
+	margin: 0;
+	color: var(--ink-soft);
+	font-size: 0.9375rem;
+	line-height: 1.7;
+	overflow-wrap: anywhere;
+	text-wrap: pretty;
+}
+
+.finding-evidence li::marker {
+	color: var(--finding-tone);
+	font-weight: 700;
 }
 
 .code-frame {
@@ -1172,6 +1266,10 @@ td {
 		display: table-row;
 	}
 
+	.finding-evidence > summary::before {
+		display: none;
+	}
+
 	.table-scroll,
 	.table-scroll__inner {
 		display: block;
@@ -1203,12 +1301,15 @@ td {
 				<div class="page-container">
 					<div class="report-hero__topline">
 						<p class="eyebrow">Security review</p>
-						<p id="report-target"></p>
 					</div>
 					<h1 id="report-title"></h1>
 					<p class="report-hero__summary" id="report-summary"></p>
 
 					<dl class="scan-identity" aria-label="Report identity">
+						<div>
+							<dt>Repository</dt>
+							<dd id="report-repository"></dd>
+						</div>
 						<div>
 							<dt>Report date</dt>
 							<dd id="report-date"></dd>
@@ -1293,6 +1394,7 @@ td {
 					</div>
 
 					<p class="coverage-note" id="coverage-note"></p>
+					<div class="completion-note" id="completion-note" hidden></div>
 				</div>
 			</section>
 
@@ -1523,10 +1625,38 @@ window.securityReportData = Object.freeze(__REPORT_DATA__);
 
 	const findings = data.findings.map(normalizedFinding);
 
+	function inlineText(value) {
+		// Model-authored prose carries Markdown code spans. They become real
+		// <code> nodes here; the page still never assembles markup, so this
+		// keeps the property that finding text cannot inject an element.
+		const text = String(value === undefined || value === null ? "" : value);
+		const codeSpan = /(`+)([^\n]+?)\1/g;
+		const fragment = document.createDocumentFragment();
+		let consumed = 0;
+		let match = codeSpan.exec(text);
+
+		while (match !== null) {
+			if (match.index > consumed) {
+				fragment.append(
+					document.createTextNode(text.slice(consumed, match.index)),
+				);
+			}
+			fragment.append(element("code", { text: match[2] }));
+			consumed = match.index + match[0].length;
+			match = codeSpan.exec(text);
+		}
+		if (consumed < text.length) {
+			fragment.append(document.createTextNode(text.slice(consumed)));
+		}
+		return fragment;
+	}
+
 	function appendList(container, items, ordered = false) {
 		const list = element(ordered ? "ol" : "ul");
 		for (const item of items) {
-			list.append(element("li", { text: item }));
+			const entry = element("li");
+			entry.append(inlineText(item));
+			list.append(entry);
 		}
 		container.append(list);
 	}
@@ -1537,7 +1667,7 @@ window.securityReportData = Object.freeze(__REPORT_DATA__);
 
 		document.title = data.report.title;
 		byId("report-title").textContent = data.report.title;
-		byId("report-target").textContent = data.scan.root;
+		byId("report-repository").textContent = data.scan.repository;
 		byId("report-summary").textContent =
 			`Source review of ${componentCount} ` +
 			`${componentCount === 1 ? "component" : "components"} at ` +
@@ -1688,18 +1818,34 @@ window.securityReportData = Object.freeze(__REPORT_DATA__);
 		} else {
 			for (const skipped of coverage.skippedComponents) {
 				const item = element("article", { className: "coverage-item" });
+				const reason = element("p", {
+					className: "coverage-item__reason",
+				});
+				reason.append(inlineText(skipped.reason));
 				item.append(
 					element("h4", { text: skipped.name }),
 					element("p", {
 						className: "coverage-item__paths",
 						text: skipped.paths.join(" · "),
 					}),
-					element("p", {
-						className: "coverage-item__reason",
-						text: skipped.reason,
-					}),
+					reason,
 				);
 				skips.append(item);
+			}
+		}
+
+		const completion = data.completion || {};
+		if (completion.status && completion.status !== "complete") {
+			const banner = byId("completion-note");
+			banner.hidden = false;
+			banner.append(
+				element("strong", {
+					text: `This review is ${completion.status}.`,
+				}),
+			);
+			const reasons = completion.reasons || [];
+			if (reasons.length > 0) {
+				appendList(banner, reasons);
 			}
 		}
 
@@ -1756,13 +1902,12 @@ window.securityReportData = Object.freeze(__REPORT_DATA__);
 			row.dataset.difficulty = finding.difficulty;
 
 			const titleCell = element("td");
-			titleCell.append(
-				element("a", {
-					className: "finding-title-link",
-					text: finding.title,
-					attributes: { href: `#finding-${slugify(finding.id)}` },
-				}),
-			);
+			const titleLink = element("a", {
+				className: "finding-title-link",
+				attributes: { href: `#finding-${slugify(finding.id)}` },
+			});
+			titleLink.append(inlineText(finding.title));
+			titleCell.append(titleLink);
 
 			row.append(
 				element("td", {
@@ -1792,13 +1937,36 @@ window.securityReportData = Object.freeze(__REPORT_DATA__);
 		section.append(element("h4", { text: title }));
 
 		for (const paragraph of options.paragraphs || []) {
-			section.append(element("p", { text: paragraph }));
+			const body = element("p");
+			body.append(inlineText(paragraph));
+			section.append(body);
 		}
 		if (options.items?.length) {
 			appendList(section, options.items, options.ordered);
 		}
 
 		return section;
+	}
+
+	function createEvidenceBlock(finding) {
+		const citations = finding.evidence || [];
+		if (citations.length === 0) {
+			return null;
+		}
+		const block = element("details", { className: "finding-evidence" });
+		const heading = element("summary");
+		heading.append(
+			document.createTextNode("Evidence"),
+			element("span", {
+				className: "finding-evidence__count",
+				text: `${citations.length} ${
+					citations.length === 1 ? "citation" : "citations"
+				}`,
+			}),
+		);
+		block.append(heading);
+		appendList(block, citations, true);
+		return block;
 	}
 
 	function createCodeFrame(finding) {
@@ -1874,15 +2042,14 @@ window.securityReportData = Object.freeze(__REPORT_DATA__);
 			);
 
 			const header = element("header", { className: "finding__header" });
+			const headingTitle = element("h3", { className: "finding__title" });
+			headingTitle.append(inlineText(finding.title));
 			header.append(
 				element("p", {
 					className: "finding__index",
 					text: `Finding ${String(index + 1).padStart(2, "0")} · ${finding.id}`,
 				}),
-				element("h3", {
-					className: "finding__title",
-					text: finding.title,
-				}),
+				headingTitle,
 			);
 
 			const metadata = element("dl", { className: "finding__meta" });
@@ -1906,18 +2073,18 @@ window.securityReportData = Object.freeze(__REPORT_DATA__);
 			const location = element("p", { className: "finding__location" });
 			location.append(
 				element("strong", { text: "Location: " }),
-				element("code", {
-					text: `${finding.file}:${finding.line}`,
-				}),
+				element("code", { text: finding.file }),
 				document.createTextNode(finding.target ? ` · ${finding.target}` : ""),
 			);
 			header.append(location);
 
 			const body = element("div", { className: "finding__body" });
 			const impact = element("section", { className: "finding-impact" });
+			const impactText = element("p");
+			impactText.append(inlineText(finding.impact));
 			impact.append(
 				element("h4", { text: "Security impact" }),
-				element("p", { text: finding.impact }),
+				impactText,
 			);
 			body.append(
 				impact,
@@ -1926,11 +2093,16 @@ window.securityReportData = Object.freeze(__REPORT_DATA__);
 				}),
 			);
 
+			const evidenceBlock = createEvidenceBlock(finding);
+			if (evidenceBlock) {
+				body.append(evidenceBlock);
+			}
+
 			const codeFrame = createCodeFrame(finding);
 			if (codeFrame) {
-				const evidence = createFindingBlock("Source evidence");
-				evidence.append(codeFrame);
-				body.append(evidence);
+				const sourceCode = createFindingBlock("Source code");
+				sourceCode.append(codeFrame);
+				body.append(sourceCode);
 			}
 
 			body.append(
@@ -2050,6 +2222,21 @@ window.securityReportData = Object.freeze(__REPORT_DATA__);
 		difficultyToneClass,
 	);
 	setupFilters();
+
+	// A collapsed block would print as a heading with nothing under it.
+	const evidenceBlocks = () =>
+		document.querySelectorAll(".finding-evidence");
+	window.addEventListener("beforeprint", () => {
+		for (const block of evidenceBlocks()) {
+			block.dataset.wasOpen = String(block.open);
+			block.open = true;
+		}
+	});
+	window.addEventListener("afterprint", () => {
+		for (const block of evidenceBlocks()) {
+			block.open = block.dataset.wasOpen === "true";
+		}
+	});
 })();
 
 		</script>

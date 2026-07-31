@@ -13,7 +13,6 @@
     "workflow",
     "request",
     "revision",
-    "model",
     "completion",
     "canonicalFiles"
   ],
@@ -112,9 +111,6 @@
       }
     },
     "revision": {
-      "type": "object"
-    },
-    "model": {
       "type": "object"
     },
     "completion": {

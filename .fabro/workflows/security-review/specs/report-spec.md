@@ -29,6 +29,19 @@ Severity describes impact. Difficulty describes the access, knowledge, and effor
 
 Canonical `category` slugs are part of `ruleId`, and therefore of a finding's stable identity. The HTML report maps them to display names in the renderer instead. Renaming a slug would change every `findingId` derived from it.
 
+## Evidence
+
+`evidence` is the source-to-sink proof as a list of citations, one entry per hop
+from the untrusted source to the dangerous operation. The report gives it its own
+block, collapsed by default, so a long proof does not crowd out the claim. The
+Markdown report lists the citations under **Evidence.**
+
+A researcher that reports one blob of prose instead still normalizes, becoming a
+one-entry list. That fallback exists so the older shape keeps working while
+researchers catch up, and it goes when the shape is retired. The verifier's
+`evidenceAsCited` is the citations joined by newlines, so the claim a panel saw
+stays one string.
+
 ## Source excerpts
 
 A researcher quotes one sink line in `snippet`. The excerpt shown in a report is not that quote: `final-tally` reads the lines around the finding from the reviewed tree, so the line numbers are the tree's own and no agent transcribes them. The excerpt is omitted when the file is unreadable, binary, oversized, or when the quoted line does not match the line that was read — a mismatch a stale line number or a commit-mode revision gap would cause. The report then falls back to the reporter's quoted line.
@@ -45,7 +58,9 @@ A reportable ledger record must match one entry in `findings.json`. Every report
 
 Severity describes impact. Confidence describes certainty. A two-of-three panel limits confidence to `medium`. Only a unanimous panel can produce `high` confidence.
 
-A scan is `partial` when work was deferred, verification was incomplete, a research result was unusable, or verification status is `unverified`. The report must show this status and its reasons.
+A scan is `partial` when work was deferred, verification was incomplete, a research result was unusable, a reported finding was dropped for failing the finding contract, or verification status is `unverified`. The report must show this status and its reasons, and the HTML report says so above its findings.
+
+`coverage.rejectedFindingReports` names every finding an agent reported that failed the contract, with the reason and the researcher that sent it. A dropped finding never becomes a candidate, so without this record a scan that discarded everything it was given would be indistinguishable from one that found nothing. The reasons are fixed strings naming the field at fault; they never quote the model's own text.
 
 ## Rendering safety
 

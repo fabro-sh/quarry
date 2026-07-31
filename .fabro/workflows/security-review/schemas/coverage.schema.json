@@ -33,7 +33,8 @@
     "adversarialCasualties",
     "candidatesDroppedByCap",
     "unverifiedByCap",
-    "invalidResearchResults"
+    "invalidResearchResults",
+    "rejectedFindingReports"
   ],
   "additionalProperties": false,
   "properties": {
@@ -176,6 +177,9 @@
       "minimum": 0
     },
     "invalidResearchResults": {
+      "$ref": "#/$defs/strings"
+    },
+    "rejectedFindingReports": {
       "$ref": "#/$defs/strings"
     }
   },
