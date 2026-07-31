@@ -2141,7 +2141,7 @@
     "kind": "running"
   },
   "status_updated_at": "2026-07-31T11:30:32.248036924Z",
-  "last_event_at": "2026-07-31T11:32:26.506630821Z",
+  "last_event_at": "2026-07-31T11:32:30.901685626Z",
   "pending_control": null,
   "checkpoints": [
     {
@@ -3553,9 +3553,9 @@
       }
     },
     {
-      "seq": 0,
+      "seq": 112,
       "checkpoint": {
-        "timestamp": "2026-07-31T11:32:26.751411452Z",
+        "timestamp": "2026-07-31T11:32:29.228506699Z",
         "current_node": "inventory_gate",
         "completed_nodes": [
           "start",
@@ -3567,31 +3567,24 @@
         ],
         "node_retries": {},
         "context_values": {
-          "mode": "scan",
-          "internal.retry_count.start": 0,
-          "internal.retry_count.target_gate": 0,
-          "graph.default_fidelity": "compact",
-          "graph.default_max_retries": "0",
-          "failure_class": "",
-          "use_inventory": true,
           "thread.inventory.current_node": "merge_inventory",
-          "inventory_feedback": "",
-          "inventory_done": true,
-          "inventory_correction": false,
-          "thread.merge_inventory.current_node": "inventory_gate",
-          "internal.retry_count.merge_inventory": 0,
-          "response.inventory": "{\"components\":[{\"name\":\"server-http-api\",\"paths\":[\"crates/quarry-server\"],\"language\":\"rust\",\"role\":\"HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent prompt handling\",\"internetFacing\":true},{\"name\":\"web-ui\",\"paths\":[\"ui/src\",\"ui/index.html\",\"ui/vite.config.ts\",\"ui/package.json\",\"ui/scripts\"],\"language\":\"typescript\",\"role\":\"Browser frontend consuming the server API; renders collaborative documents and handles untrusted markdown/Yjs data\",\"internetFacing\":true},{\"name\":\"collab-codec\",\"paths\":[\"crates/quarry-collab-codec\"],\"language\":\"rust\",\"role\":\"Markdown/Slate/Yjs parsing, normalization, diffing and reconciliation of untrusted document content\",\"internetFacing\":false},{\"name\":\"git-layer\",\"paths\":[\"crates/quarry-git\"],\"language\":\"rust\",\"role\":\"Git operations over user repositories; shells out to git and processes paths/refs from requests\",\"internetFacing\":false},{\"name\":\"fuse-fs\",\"paths\":[\"crates/quarry-fuse\"],\"language\":\"rust\",\"role\":\"FUSE filesystem exposing documents to local processes/agents\",\"internetFacing\":false},{\"name\":\"storage-layer\",\"paths\":[\"crates/quarry-storage\"],\"language\":\"rust\",\"role\":\"SQLite persistence: schema, documents, events, search, sync queries built from request data\",\"internetFacing\":false},{\"name\":\"cas-store\",\"paths\":[\"crates/quarry-cas\"],\"language\":\"rust\",\"role\":\"Content-addressed blob store writing/reading files by hash\",\"internetFacing\":false},{\"name\":\"cli-and-binary\",\"paths\":[\"crates/quarry-cli\",\"crates/quarry\"],\"language\":\"rust\",\"role\":\"Command-line entry point and agent detection; launches processes with user-supplied arguments\",\"internetFacing\":false},{\"name\":\"core-shared\",\"paths\":[\"crates/quarry-core\"],\"language\":\"rust\",\"role\":\"Shared types and utilities used across crates\",\"internetFacing\":false},{\"name\":\"dev-release-tooling\",\"paths\":[\"crates/quarry-dev\",\"scripts\",\"Formula\"],\"language\":\"rust+ruby\",\"role\":\"Dev/release helper crate and Homebrew formula update scripts; executes builds and rewrites release metadata\",\"internetFacing\":false},{\"name\":\"ci-and-build-config\",\"paths\":[\".github\",\".cargo\",\"Dockerfile\",\"Cargo.toml\",\"Cargo.lock\",\"rust-toolchain.toml\"],\"language\":\"yaml+toml\",\"role\":\"CI workflows, actions, cargo and toolchain configuration - supply-chain and CI-injection surface\",\"internetFacing\":false}],\"securityScanSkippedComponents\":[{\"name\":\"fixtures\",\"paths\":[\"fixtures\"],\"reason\":\"Test fixtures (slate-yjs compatibility data), not shipped code\"},{\"name\":\"docs\",\"paths\":[\"docs\"],\"reason\":\"Documentation only, no executable code\"},{\"name\":\"ai-plans\",\"paths\":[\".ai\"],\"reason\":\"Agent plan notes, not product code\"},{\"name\":\"claude-skills\",\"paths\":[\".claude\"],\"reason\":\"Agent skill/instruction files, not product code\"},{\"name\":\"fabro-workflow\",\"paths\":[\".fabro\"],\"reason\":\"Review-orchestration workflow scripts (the tooling running this scan), not the product\"},{\"name\":\"ui-tests\",\"paths\":[\"ui/tests\",\"ui/playwright.config.ts\",\"ui/playwright.live.config.ts\",\"ui/vitest.setup.ts\"],\"reason\":\"End-to-end/unit test harness, not shipped code\"},{\"name\":\"ui-public-assets\",\"paths\":[\"ui/public\"],\"reason\":\"Static public assets, no logic\"},{\"name\":\"review-output\",\"paths\":[\"SECURITY-REVIEW-20260731-113033\"],\"reason\":\"Output directory of this review run, not product code\"}]}",
-          "internal.node_visit_count": 1,
-          "internal.thread_id": "merge_inventory",
-          "last_stage": "inventory",
           "graph.rankdir": "LR",
-          "failure_signature": "",
-          "empty_target": false,
-          "products_dir": "SECURITY-REVIEW-20260731-113033",
+          "internal.run_id": "01KYVZ17V2N1DVGQX3EC3TEE92",
           "graph.model_stylesheet": "\n            * { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .inventory { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .threat-model { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .research { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n            .verification { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n        ",
+          "internal.thread_id": "merge_inventory",
+          "inventory_done": true,
+          "thread.start.current_node": "prepare",
+          "internal.retry_count.inventory": 0,
+          "internal.retry_count.inventory_gate": 0,
           "command.output": "blob://sha256/48154468b8ef045ff44b32cb28eb03bf4d0d54d06e8772fb304cd65491483ef8",
           "last_response": "{\"components\":[{\"name\":\"server-http-api\",\"paths\":[\"crates/quarry-server\"],\"language\":\"rust\",\"role\":\"HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent ",
-          "thread.prepare.current_node": "target_gate",
+          "internal.retry_count.merge_inventory": 0,
+          "graph.goal": "Perform an adversarial, read-only security review of this repository and report only panel-verified findings.",
+          "failure_signature": "",
+          "graph.default_fidelity": "compact",
+          "internal.retry_count.target_gate": 0,
+          "empty_target": false,
+          "outcome": "succeeded",
           "output.inventory": {
             "components": [
               {
@@ -3768,12 +3761,11 @@
               }
             ]
           },
-          "graph.goal": "Perform an adversarial, read-only security review of this repository and report only panel-verified findings.",
-          "internal.work_dir": "/home/daytona/workspace/quarry",
-          "internal.fidelity": "compact",
-          "outcome": "succeeded",
-          "thread.start.current_node": "prepare",
-          "current_node": "inventory_gate",
+          "products_dir": "SECURITY-REVIEW-20260731-113033",
+          "response.inventory": "{\"components\":[{\"name\":\"server-http-api\",\"paths\":[\"crates/quarry-server\"],\"language\":\"rust\",\"role\":\"HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent prompt handling\",\"internetFacing\":true},{\"name\":\"web-ui\",\"paths\":[\"ui/src\",\"ui/index.html\",\"ui/vite.config.ts\",\"ui/package.json\",\"ui/scripts\"],\"language\":\"typescript\",\"role\":\"Browser frontend consuming the server API; renders collaborative documents and handles untrusted markdown/Yjs data\",\"internetFacing\":true},{\"name\":\"collab-codec\",\"paths\":[\"crates/quarry-collab-codec\"],\"language\":\"rust\",\"role\":\"Markdown/Slate/Yjs parsing, normalization, diffing and reconciliation of untrusted document content\",\"internetFacing\":false},{\"name\":\"git-layer\",\"paths\":[\"crates/quarry-git\"],\"language\":\"rust\",\"role\":\"Git operations over user repositories; shells out to git and processes paths/refs from requests\",\"internetFacing\":false},{\"name\":\"fuse-fs\",\"paths\":[\"crates/quarry-fuse\"],\"language\":\"rust\",\"role\":\"FUSE filesystem exposing documents to local processes/agents\",\"internetFacing\":false},{\"name\":\"storage-layer\",\"paths\":[\"crates/quarry-storage\"],\"language\":\"rust\",\"role\":\"SQLite persistence: schema, documents, events, search, sync queries built from request data\",\"internetFacing\":false},{\"name\":\"cas-store\",\"paths\":[\"crates/quarry-cas\"],\"language\":\"rust\",\"role\":\"Content-addressed blob store writing/reading files by hash\",\"internetFacing\":false},{\"name\":\"cli-and-binary\",\"paths\":[\"crates/quarry-cli\",\"crates/quarry\"],\"language\":\"rust\",\"role\":\"Command-line entry point and agent detection; launches processes with user-supplied arguments\",\"internetFacing\":false},{\"name\":\"core-shared\",\"paths\":[\"crates/quarry-core\"],\"language\":\"rust\",\"role\":\"Shared types and utilities used across crates\",\"internetFacing\":false},{\"name\":\"dev-release-tooling\",\"paths\":[\"crates/quarry-dev\",\"scripts\",\"Formula\"],\"language\":\"rust+ruby\",\"role\":\"Dev/release helper crate and Homebrew formula update scripts; executes builds and rewrites release metadata\",\"internetFacing\":false},{\"name\":\"ci-and-build-config\",\"paths\":[\".github\",\".cargo\",\"Dockerfile\",\"Cargo.toml\",\"Cargo.lock\",\"rust-toolchain.toml\"],\"language\":\"yaml+toml\",\"role\":\"CI workflows, actions, cargo and toolchain configuration - supply-chain and CI-injection surface\",\"internetFacing\":false}],\"securityScanSkippedComponents\":[{\"name\":\"fixtures\",\"paths\":[\"fixtures\"],\"reason\":\"Test fixtures (slate-yjs compatibility data), not shipped code\"},{\"name\":\"docs\",\"paths\":[\"docs\"],\"reason\":\"Documentation only, no executable code\"},{\"name\":\"ai-plans\",\"paths\":[\".ai\"],\"reason\":\"Agent plan notes, not product code\"},{\"name\":\"claude-skills\",\"paths\":[\".claude\"],\"reason\":\"Agent skill/instruction files, not product code\"},{\"name\":\"fabro-workflow\",\"paths\":[\".fabro\"],\"reason\":\"Review-orchestration workflow scripts (the tooling running this scan), not the product\"},{\"name\":\"ui-tests\",\"paths\":[\"ui/tests\",\"ui/playwright.config.ts\",\"ui/playwright.live.config.ts\",\"ui/vitest.setup.ts\"],\"reason\":\"End-to-end/unit test harness, not shipped code\"},{\"name\":\"ui-public-assets\",\"paths\":[\"ui/public\"],\"reason\":\"Static public assets, no logic\"},{\"name\":\"review-output\",\"paths\":[\"SECURITY-REVIEW-20260731-113033\"],\"reason\":\"Output directory of this review run, not product code\"}]}",
+          "internal.node_visit_count": 1,
+          "thread.merge_inventory.current_node": "inventory_gate",
+          "inventory_correction": false,
           "inventory_assignment": {
             "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
             "target": {
@@ -3802,60 +3794,30 @@
             ],
             "wholeTreeCompletenessRequired": true
           },
-          "internal.retry_count.prepare": 0,
-          "internal.retry_count.inventory_gate": 0,
-          "graph.stall_timeout": "3600000ms",
-          "internal.retry_count.inventory": 0,
+          "thread.prepare.current_node": "target_gate",
+          "internal.fidelity": "compact",
+          "internal.work_dir": "/home/daytona/workspace/quarry",
           "effort": "medium",
-          "internal.run_id": "01KYVZ17V2N1DVGQX3EC3TEE92"
+          "inventory_feedback": "",
+          "last_stage": "inventory",
+          "internal.retry_count.prepare": 0,
+          "failure_class": "",
+          "current_node": "inventory_gate",
+          "graph.stall_timeout": "3600000ms",
+          "graph.default_max_retries": "0",
+          "use_inventory": true,
+          "internal.retry_count.start": 0,
+          "mode": "scan"
         },
         "node_outcomes": {
-          "prepare": {
+          "inventory_gate": {
             "status": "succeeded",
-            "context_updates": {
-              "mode": "scan",
-              "products_dir": "SECURITY-REVIEW-20260731-113033",
-              "inventory_assignment": {
-                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
-                "target": {
-                  "mode": "scan",
-                  "scope": [],
-                  "range": null,
-                  "changedFileCount": null,
-                  "changedLineCount": null,
-                  "focus": null,
-                  "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
-                  "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
-                },
-                "maxComponents": 12,
-                "topLevelDirectories": [
-                  ".ai",
-                  ".cargo",
-                  ".claude",
-                  ".fabro",
-                  ".github",
-                  "Formula",
-                  "crates",
-                  "docs",
-                  "fixtures",
-                  "scripts",
-                  "ui"
-                ],
-                "wholeTreeCompletenessRequired": true
-              },
-              "empty_target": false,
-              "use_inventory": true,
-              "command.output": "blob://sha256/6ad936f2b46186b54f6c627a4def8ca80df2eb5d1acc4171f06f6503d22e9095",
-              "effort": "medium"
-            },
-            "notes": "Script completed: python3 -c \"import hashlib,sys; pairs=list(zip(sys.argv[1::2],sys.argv[2::2])); sys.exit(0 if pairs and all(hashlib.sha256(open(path,'rb').read()).hexdigest()==expected for path,expected in pairs) else 91)\" .fabro/workflows/security-review/scripts/security_review.py db08c08320c2c1fb6cd3226fb70fa5672794c0cd12be7d78b82214fc7346258d .fabro/workflows/security-review/scripts/git_readonly.py 6bafe2418234d7887d9f4726208bc9e50325bf34c5098c4a6ef508f1a5486ec5 .fabro/workflows/security-review/scripts/render_report.py 6949cb65bf950b41cf1937deb9eac111a026fe11bf7aa35eb34d53dd670100c4 .fabro/workflows/security-review/specs/report-spec.md 18e3eb3de3c2f585cd4e24d3168b0aaf0176a72ba5efeadaf6773cee1c5f2be2 .fabro/workflows/security-review/templates/report.html 55583ce1e9272ccbc0c048bf8d2ba660e443ca3b77c929958ab0955ac4616777 && python3 .fabro/workflows/security-review/scripts/security_review.py prepare --scan-id-stdin --mode scan --effort medium --scope '' --base '' --commit '' --range '' --focus ''",
-            "usage": null,
-            "timing": {
-              "wall_time_ms": 0,
-              "inference_time_ms": 0,
-              "tool_time_ms": 1371,
-              "active_time_ms": 1371
-            }
+            "notes": "Conditional node evaluated: inventory_gate",
+            "usage": null
+          },
+          "start": {
+            "status": "succeeded",
+            "usage": null
           },
           "inventory": {
             "status": "succeeded",
@@ -4069,10 +4031,1125 @@
               "active_time_ms": 98374
             }
           },
+          "merge_inventory": {
+            "status": "succeeded",
+            "context_updates": {
+              "inventory_feedback": "",
+              "inventory_done": true,
+              "inventory_correction": false,
+              "command.output": "blob://sha256/48154468b8ef045ff44b32cb28eb03bf4d0d54d06e8772fb304cd65491483ef8"
+            },
+            "notes": "Script completed: python3 .fabro/workflows/security-review/scripts/security_review.py merge inventory",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 1346,
+              "active_time_ms": 1346
+            }
+          },
+          "prepare": {
+            "status": "succeeded",
+            "context_updates": {
+              "mode": "scan",
+              "products_dir": "SECURITY-REVIEW-20260731-113033",
+              "inventory_assignment": {
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "target": {
+                  "mode": "scan",
+                  "scope": [],
+                  "range": null,
+                  "changedFileCount": null,
+                  "changedLineCount": null,
+                  "focus": null,
+                  "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                  "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                },
+                "maxComponents": 12,
+                "topLevelDirectories": [
+                  ".ai",
+                  ".cargo",
+                  ".claude",
+                  ".fabro",
+                  ".github",
+                  "Formula",
+                  "crates",
+                  "docs",
+                  "fixtures",
+                  "scripts",
+                  "ui"
+                ],
+                "wholeTreeCompletenessRequired": true
+              },
+              "empty_target": false,
+              "use_inventory": true,
+              "command.output": "blob://sha256/6ad936f2b46186b54f6c627a4def8ca80df2eb5d1acc4171f06f6503d22e9095",
+              "effort": "medium"
+            },
+            "notes": "Script completed: python3 -c \"import hashlib,sys; pairs=list(zip(sys.argv[1::2],sys.argv[2::2])); sys.exit(0 if pairs and all(hashlib.sha256(open(path,'rb').read()).hexdigest()==expected for path,expected in pairs) else 91)\" .fabro/workflows/security-review/scripts/security_review.py db08c08320c2c1fb6cd3226fb70fa5672794c0cd12be7d78b82214fc7346258d .fabro/workflows/security-review/scripts/git_readonly.py 6bafe2418234d7887d9f4726208bc9e50325bf34c5098c4a6ef508f1a5486ec5 .fabro/workflows/security-review/scripts/render_report.py 6949cb65bf950b41cf1937deb9eac111a026fe11bf7aa35eb34d53dd670100c4 .fabro/workflows/security-review/specs/report-spec.md 18e3eb3de3c2f585cd4e24d3168b0aaf0176a72ba5efeadaf6773cee1c5f2be2 .fabro/workflows/security-review/templates/report.html 55583ce1e9272ccbc0c048bf8d2ba660e443ca3b77c929958ab0955ac4616777 && python3 .fabro/workflows/security-review/scripts/security_review.py prepare --scan-id-stdin --mode scan --effort medium --scope '' --base '' --commit '' --range '' --focus ''",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 1371,
+              "active_time_ms": 1371
+            }
+          },
           "target_gate": {
             "status": "succeeded",
             "notes": "Conditional node evaluated: target_gate",
             "usage": null
+          }
+        },
+        "next_node_id": "plan_matrix",
+        "git_commit_sha": "9ed3b8c8db7c02f6163ab71a2cc4a6d713308e1a",
+        "node_visits": {
+          "inventory_gate": 1,
+          "prepare": 1,
+          "merge_inventory": 1,
+          "start": 1,
+          "target_gate": 1,
+          "inventory": 1
+        }
+      },
+      "diff": {
+        "summary": {
+          "files_changed": 0,
+          "additions": 0,
+          "deletions": 0
+        }
+      }
+    },
+    {
+      "seq": 0,
+      "checkpoint": {
+        "timestamp": "2026-07-31T11:32:30.903879216Z",
+        "current_node": "plan_matrix",
+        "completed_nodes": [
+          "start",
+          "prepare",
+          "target_gate",
+          "inventory",
+          "merge_inventory",
+          "inventory_gate",
+          "plan_matrix"
+        ],
+        "node_retries": {},
+        "context_values": {
+          "mode": "scan",
+          "internal.retry_count.start": 0,
+          "internal.retry_count.target_gate": 0,
+          "graph.default_fidelity": "compact",
+          "graph.default_max_retries": "0",
+          "failure_class": "",
+          "use_inventory": true,
+          "thread.inventory.current_node": "merge_inventory",
+          "inventory_feedback": "",
+          "inventory_done": true,
+          "inventory_correction": false,
+          "thread.merge_inventory.current_node": "inventory_gate",
+          "internal.retry_count.merge_inventory": 0,
+          "response.inventory": "{\"components\":[{\"name\":\"server-http-api\",\"paths\":[\"crates/quarry-server\"],\"language\":\"rust\",\"role\":\"HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent prompt handling\",\"internetFacing\":true},{\"name\":\"web-ui\",\"paths\":[\"ui/src\",\"ui/index.html\",\"ui/vite.config.ts\",\"ui/package.json\",\"ui/scripts\"],\"language\":\"typescript\",\"role\":\"Browser frontend consuming the server API; renders collaborative documents and handles untrusted markdown/Yjs data\",\"internetFacing\":true},{\"name\":\"collab-codec\",\"paths\":[\"crates/quarry-collab-codec\"],\"language\":\"rust\",\"role\":\"Markdown/Slate/Yjs parsing, normalization, diffing and reconciliation of untrusted document content\",\"internetFacing\":false},{\"name\":\"git-layer\",\"paths\":[\"crates/quarry-git\"],\"language\":\"rust\",\"role\":\"Git operations over user repositories; shells out to git and processes paths/refs from requests\",\"internetFacing\":false},{\"name\":\"fuse-fs\",\"paths\":[\"crates/quarry-fuse\"],\"language\":\"rust\",\"role\":\"FUSE filesystem exposing documents to local processes/agents\",\"internetFacing\":false},{\"name\":\"storage-layer\",\"paths\":[\"crates/quarry-storage\"],\"language\":\"rust\",\"role\":\"SQLite persistence: schema, documents, events, search, sync queries built from request data\",\"internetFacing\":false},{\"name\":\"cas-store\",\"paths\":[\"crates/quarry-cas\"],\"language\":\"rust\",\"role\":\"Content-addressed blob store writing/reading files by hash\",\"internetFacing\":false},{\"name\":\"cli-and-binary\",\"paths\":[\"crates/quarry-cli\",\"crates/quarry\"],\"language\":\"rust\",\"role\":\"Command-line entry point and agent detection; launches processes with user-supplied arguments\",\"internetFacing\":false},{\"name\":\"core-shared\",\"paths\":[\"crates/quarry-core\"],\"language\":\"rust\",\"role\":\"Shared types and utilities used across crates\",\"internetFacing\":false},{\"name\":\"dev-release-tooling\",\"paths\":[\"crates/quarry-dev\",\"scripts\",\"Formula\"],\"language\":\"rust+ruby\",\"role\":\"Dev/release helper crate and Homebrew formula update scripts; executes builds and rewrites release metadata\",\"internetFacing\":false},{\"name\":\"ci-and-build-config\",\"paths\":[\".github\",\".cargo\",\"Dockerfile\",\"Cargo.toml\",\"Cargo.lock\",\"rust-toolchain.toml\"],\"language\":\"yaml+toml\",\"role\":\"CI workflows, actions, cargo and toolchain configuration - supply-chain and CI-injection surface\",\"internetFacing\":false}],\"securityScanSkippedComponents\":[{\"name\":\"fixtures\",\"paths\":[\"fixtures\"],\"reason\":\"Test fixtures (slate-yjs compatibility data), not shipped code\"},{\"name\":\"docs\",\"paths\":[\"docs\"],\"reason\":\"Documentation only, no executable code\"},{\"name\":\"ai-plans\",\"paths\":[\".ai\"],\"reason\":\"Agent plan notes, not product code\"},{\"name\":\"claude-skills\",\"paths\":[\".claude\"],\"reason\":\"Agent skill/instruction files, not product code\"},{\"name\":\"fabro-workflow\",\"paths\":[\".fabro\"],\"reason\":\"Review-orchestration workflow scripts (the tooling running this scan), not the product\"},{\"name\":\"ui-tests\",\"paths\":[\"ui/tests\",\"ui/playwright.config.ts\",\"ui/playwright.live.config.ts\",\"ui/vitest.setup.ts\"],\"reason\":\"End-to-end/unit test harness, not shipped code\"},{\"name\":\"ui-public-assets\",\"paths\":[\"ui/public\"],\"reason\":\"Static public assets, no logic\"},{\"name\":\"review-output\",\"paths\":[\"SECURITY-REVIEW-20260731-113033\"],\"reason\":\"Output directory of this review run, not product code\"}]}",
+          "internal.retry_count.plan_matrix": 0,
+          "internal.node_visit_count": 1,
+          "internal.thread_id": "inventory_gate",
+          "last_stage": "inventory",
+          "graph.rankdir": "LR",
+          "failure_signature": "",
+          "empty_target": false,
+          "products_dir": "SECURITY-REVIEW-20260731-113033",
+          "graph.model_stylesheet": "\n            * { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .inventory { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .threat-model { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .research { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n            .verification { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n        ",
+          "command.output": "blob://sha256/f7aeb61d86a6689cfaa07feaed74cedf6646c9a4e8230563a6901db65357e1a2",
+          "last_response": "{\"components\":[{\"name\":\"server-http-api\",\"paths\":[\"crates/quarry-server\"],\"language\":\"rust\",\"role\":\"HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent ",
+          "thread.prepare.current_node": "target_gate",
+          "output.inventory": {
+            "components": [
+              {
+                "name": "server-http-api",
+                "paths": [
+                  "crates/quarry-server"
+                ],
+                "language": "rust",
+                "role": "HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent prompt handling",
+                "internetFacing": true
+              },
+              {
+                "name": "web-ui",
+                "paths": [
+                  "ui/src",
+                  "ui/index.html",
+                  "ui/vite.config.ts",
+                  "ui/package.json",
+                  "ui/scripts"
+                ],
+                "language": "typescript",
+                "role": "Browser frontend consuming the server API; renders collaborative documents and handles untrusted markdown/Yjs data",
+                "internetFacing": true
+              },
+              {
+                "name": "collab-codec",
+                "paths": [
+                  "crates/quarry-collab-codec"
+                ],
+                "language": "rust",
+                "role": "Markdown/Slate/Yjs parsing, normalization, diffing and reconciliation of untrusted document content",
+                "internetFacing": false
+              },
+              {
+                "name": "git-layer",
+                "paths": [
+                  "crates/quarry-git"
+                ],
+                "language": "rust",
+                "role": "Git operations over user repositories; shells out to git and processes paths/refs from requests",
+                "internetFacing": false
+              },
+              {
+                "name": "fuse-fs",
+                "paths": [
+                  "crates/quarry-fuse"
+                ],
+                "language": "rust",
+                "role": "FUSE filesystem exposing documents to local processes/agents",
+                "internetFacing": false
+              },
+              {
+                "name": "storage-layer",
+                "paths": [
+                  "crates/quarry-storage"
+                ],
+                "language": "rust",
+                "role": "SQLite persistence: schema, documents, events, search, sync queries built from request data",
+                "internetFacing": false
+              },
+              {
+                "name": "cas-store",
+                "paths": [
+                  "crates/quarry-cas"
+                ],
+                "language": "rust",
+                "role": "Content-addressed blob store writing/reading files by hash",
+                "internetFacing": false
+              },
+              {
+                "name": "cli-and-binary",
+                "paths": [
+                  "crates/quarry-cli",
+                  "crates/quarry"
+                ],
+                "language": "rust",
+                "role": "Command-line entry point and agent detection; launches processes with user-supplied arguments",
+                "internetFacing": false
+              },
+              {
+                "name": "core-shared",
+                "paths": [
+                  "crates/quarry-core"
+                ],
+                "language": "rust",
+                "role": "Shared types and utilities used across crates",
+                "internetFacing": false
+              },
+              {
+                "name": "dev-release-tooling",
+                "paths": [
+                  "crates/quarry-dev",
+                  "scripts",
+                  "Formula"
+                ],
+                "language": "rust+ruby",
+                "role": "Dev/release helper crate and Homebrew formula update scripts; executes builds and rewrites release metadata",
+                "internetFacing": false
+              },
+              {
+                "name": "ci-and-build-config",
+                "paths": [
+                  ".github",
+                  ".cargo",
+                  "Dockerfile",
+                  "Cargo.toml",
+                  "Cargo.lock",
+                  "rust-toolchain.toml"
+                ],
+                "language": "yaml+toml",
+                "role": "CI workflows, actions, cargo and toolchain configuration - supply-chain and CI-injection surface",
+                "internetFacing": false
+              }
+            ],
+            "securityScanSkippedComponents": [
+              {
+                "name": "fixtures",
+                "paths": [
+                  "fixtures"
+                ],
+                "reason": "Test fixtures (slate-yjs compatibility data), not shipped code"
+              },
+              {
+                "name": "docs",
+                "paths": [
+                  "docs"
+                ],
+                "reason": "Documentation only, no executable code"
+              },
+              {
+                "name": "ai-plans",
+                "paths": [
+                  ".ai"
+                ],
+                "reason": "Agent plan notes, not product code"
+              },
+              {
+                "name": "claude-skills",
+                "paths": [
+                  ".claude"
+                ],
+                "reason": "Agent skill/instruction files, not product code"
+              },
+              {
+                "name": "fabro-workflow",
+                "paths": [
+                  ".fabro"
+                ],
+                "reason": "Review-orchestration workflow scripts (the tooling running this scan), not the product"
+              },
+              {
+                "name": "ui-tests",
+                "paths": [
+                  "ui/tests",
+                  "ui/playwright.config.ts",
+                  "ui/playwright.live.config.ts",
+                  "ui/vitest.setup.ts"
+                ],
+                "reason": "End-to-end/unit test harness, not shipped code"
+              },
+              {
+                "name": "ui-public-assets",
+                "paths": [
+                  "ui/public"
+                ],
+                "reason": "Static public assets, no logic"
+              },
+              {
+                "name": "review-output",
+                "paths": [
+                  "SECURITY-REVIEW-20260731-113033"
+                ],
+                "reason": "Output directory of this review run, not product code"
+              }
+            ]
+          },
+          "graph.goal": "Perform an adversarial, read-only security review of this repository and report only panel-verified findings.",
+          "internal.work_dir": "/home/daytona/workspace/quarry",
+          "internal.fidelity": "compact",
+          "outcome": "succeeded",
+          "thread.start.current_node": "prepare",
+          "current_node": "plan_matrix",
+          "inventory_assignment": {
+            "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+            "target": {
+              "mode": "scan",
+              "scope": [],
+              "range": null,
+              "changedFileCount": null,
+              "changedLineCount": null,
+              "focus": null,
+              "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+              "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+            },
+            "maxComponents": 12,
+            "topLevelDirectories": [
+              ".ai",
+              ".cargo",
+              ".claude",
+              ".fabro",
+              ".github",
+              "Formula",
+              "crates",
+              "docs",
+              "fixtures",
+              "scripts",
+              "ui"
+            ],
+            "wholeTreeCompletenessRequired": true
+          },
+          "internal.retry_count.prepare": 0,
+          "internal.retry_count.inventory_gate": 0,
+          "threat_jobs": [
+            {
+              "name": "server-http-api",
+              "paths": [
+                "crates/quarry-server"
+              ],
+              "language": "rust",
+              "role": "HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent prompt handling",
+              "internetFacing": true,
+              "artifact_key": "001-server-http-api-358d617b",
+              "job_id": "threat:001-server-http-api-358d617b",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "web-ui",
+              "paths": [
+                "ui/src",
+                "ui/index.html",
+                "ui/vite.config.ts",
+                "ui/package.json",
+                "ui/scripts"
+              ],
+              "language": "typescript",
+              "role": "Browser frontend consuming the server API; renders collaborative documents and handles untrusted markdown/Yjs data",
+              "internetFacing": true,
+              "artifact_key": "002-web-ui-40ce0b0c",
+              "job_id": "threat:002-web-ui-40ce0b0c",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "collab-codec",
+              "paths": [
+                "crates/quarry-collab-codec"
+              ],
+              "language": "rust",
+              "role": "Markdown/Slate/Yjs parsing, normalization, diffing and reconciliation of untrusted document content",
+              "internetFacing": false,
+              "artifact_key": "003-collab-codec-727e68e4",
+              "job_id": "threat:003-collab-codec-727e68e4",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "git-layer",
+              "paths": [
+                "crates/quarry-git"
+              ],
+              "language": "rust",
+              "role": "Git operations over user repositories; shells out to git and processes paths/refs from requests",
+              "internetFacing": false,
+              "artifact_key": "004-git-layer-a17792f3",
+              "job_id": "threat:004-git-layer-a17792f3",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "fuse-fs",
+              "paths": [
+                "crates/quarry-fuse"
+              ],
+              "language": "rust",
+              "role": "FUSE filesystem exposing documents to local processes/agents",
+              "internetFacing": false,
+              "artifact_key": "005-fuse-fs-120d3a54",
+              "job_id": "threat:005-fuse-fs-120d3a54",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "storage-layer",
+              "paths": [
+                "crates/quarry-storage"
+              ],
+              "language": "rust",
+              "role": "SQLite persistence: schema, documents, events, search, sync queries built from request data",
+              "internetFacing": false,
+              "artifact_key": "006-storage-layer-6b547c78",
+              "job_id": "threat:006-storage-layer-6b547c78",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "cas-store",
+              "paths": [
+                "crates/quarry-cas"
+              ],
+              "language": "rust",
+              "role": "Content-addressed blob store writing/reading files by hash",
+              "internetFacing": false,
+              "artifact_key": "007-cas-store-69c3f1c1",
+              "job_id": "threat:007-cas-store-69c3f1c1",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "cli-and-binary",
+              "paths": [
+                "crates/quarry-cli",
+                "crates/quarry"
+              ],
+              "language": "rust",
+              "role": "Command-line entry point and agent detection; launches processes with user-supplied arguments",
+              "internetFacing": false,
+              "artifact_key": "008-cli-and-binary-55d4ef1b",
+              "job_id": "threat:008-cli-and-binary-55d4ef1b",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "core-shared",
+              "paths": [
+                "crates/quarry-core"
+              ],
+              "language": "rust",
+              "role": "Shared types and utilities used across crates",
+              "internetFacing": false,
+              "artifact_key": "009-core-shared-bcbb015d",
+              "job_id": "threat:009-core-shared-bcbb015d",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "dev-release-tooling",
+              "paths": [
+                "crates/quarry-dev",
+                "scripts",
+                "Formula"
+              ],
+              "language": "rust+ruby",
+              "role": "Dev/release helper crate and Homebrew formula update scripts; executes builds and rewrites release metadata",
+              "internetFacing": false,
+              "artifact_key": "010-dev-release-tooling-b4f86a67",
+              "job_id": "threat:010-dev-release-tooling-b4f86a67",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "ci-and-build-config",
+              "paths": [
+                ".github",
+                ".cargo",
+                "Dockerfile",
+                "Cargo.toml",
+                "Cargo.lock",
+                "rust-toolchain.toml"
+              ],
+              "language": "yaml+toml",
+              "role": "CI workflows, actions, cargo and toolchain configuration - supply-chain and CI-injection surface",
+              "internetFacing": false,
+              "artifact_key": "011-ci-and-build-config-c77fe400",
+              "job_id": "threat:011-ci-and-build-config-c77fe400",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            }
+          ],
+          "thread.inventory_gate.current_node": "plan_matrix",
+          "graph.stall_timeout": "3600000ms",
+          "internal.retry_count.inventory": 0,
+          "effort": "medium",
+          "run_threat_models": true,
+          "internal.run_id": "01KYVZ17V2N1DVGQX3EC3TEE92"
+        },
+        "node_outcomes": {
+          "prepare": {
+            "status": "succeeded",
+            "context_updates": {
+              "mode": "scan",
+              "products_dir": "SECURITY-REVIEW-20260731-113033",
+              "inventory_assignment": {
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "target": {
+                  "mode": "scan",
+                  "scope": [],
+                  "range": null,
+                  "changedFileCount": null,
+                  "changedLineCount": null,
+                  "focus": null,
+                  "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                  "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                },
+                "maxComponents": 12,
+                "topLevelDirectories": [
+                  ".ai",
+                  ".cargo",
+                  ".claude",
+                  ".fabro",
+                  ".github",
+                  "Formula",
+                  "crates",
+                  "docs",
+                  "fixtures",
+                  "scripts",
+                  "ui"
+                ],
+                "wholeTreeCompletenessRequired": true
+              },
+              "empty_target": false,
+              "use_inventory": true,
+              "command.output": "blob://sha256/6ad936f2b46186b54f6c627a4def8ca80df2eb5d1acc4171f06f6503d22e9095",
+              "effort": "medium"
+            },
+            "notes": "Script completed: python3 -c \"import hashlib,sys; pairs=list(zip(sys.argv[1::2],sys.argv[2::2])); sys.exit(0 if pairs and all(hashlib.sha256(open(path,'rb').read()).hexdigest()==expected for path,expected in pairs) else 91)\" .fabro/workflows/security-review/scripts/security_review.py db08c08320c2c1fb6cd3226fb70fa5672794c0cd12be7d78b82214fc7346258d .fabro/workflows/security-review/scripts/git_readonly.py 6bafe2418234d7887d9f4726208bc9e50325bf34c5098c4a6ef508f1a5486ec5 .fabro/workflows/security-review/scripts/render_report.py 6949cb65bf950b41cf1937deb9eac111a026fe11bf7aa35eb34d53dd670100c4 .fabro/workflows/security-review/specs/report-spec.md 18e3eb3de3c2f585cd4e24d3168b0aaf0176a72ba5efeadaf6773cee1c5f2be2 .fabro/workflows/security-review/templates/report.html 55583ce1e9272ccbc0c048bf8d2ba660e443ca3b77c929958ab0955ac4616777 && python3 .fabro/workflows/security-review/scripts/security_review.py prepare --scan-id-stdin --mode scan --effort medium --scope '' --base '' --commit '' --range '' --focus ''",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 1371,
+              "active_time_ms": 1371
+            }
+          },
+          "plan_matrix": {
+            "status": "succeeded",
+            "context_updates": {
+              "threat_jobs": [
+                {
+                  "name": "server-http-api",
+                  "paths": [
+                    "crates/quarry-server"
+                  ],
+                  "language": "rust",
+                  "role": "HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent prompt handling",
+                  "internetFacing": true,
+                  "artifact_key": "001-server-http-api-358d617b",
+                  "job_id": "threat:001-server-http-api-358d617b",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "web-ui",
+                  "paths": [
+                    "ui/src",
+                    "ui/index.html",
+                    "ui/vite.config.ts",
+                    "ui/package.json",
+                    "ui/scripts"
+                  ],
+                  "language": "typescript",
+                  "role": "Browser frontend consuming the server API; renders collaborative documents and handles untrusted markdown/Yjs data",
+                  "internetFacing": true,
+                  "artifact_key": "002-web-ui-40ce0b0c",
+                  "job_id": "threat:002-web-ui-40ce0b0c",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "collab-codec",
+                  "paths": [
+                    "crates/quarry-collab-codec"
+                  ],
+                  "language": "rust",
+                  "role": "Markdown/Slate/Yjs parsing, normalization, diffing and reconciliation of untrusted document content",
+                  "internetFacing": false,
+                  "artifact_key": "003-collab-codec-727e68e4",
+                  "job_id": "threat:003-collab-codec-727e68e4",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "git-layer",
+                  "paths": [
+                    "crates/quarry-git"
+                  ],
+                  "language": "rust",
+                  "role": "Git operations over user repositories; shells out to git and processes paths/refs from requests",
+                  "internetFacing": false,
+                  "artifact_key": "004-git-layer-a17792f3",
+                  "job_id": "threat:004-git-layer-a17792f3",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "fuse-fs",
+                  "paths": [
+                    "crates/quarry-fuse"
+                  ],
+                  "language": "rust",
+                  "role": "FUSE filesystem exposing documents to local processes/agents",
+                  "internetFacing": false,
+                  "artifact_key": "005-fuse-fs-120d3a54",
+                  "job_id": "threat:005-fuse-fs-120d3a54",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "storage-layer",
+                  "paths": [
+                    "crates/quarry-storage"
+                  ],
+                  "language": "rust",
+                  "role": "SQLite persistence: schema, documents, events, search, sync queries built from request data",
+                  "internetFacing": false,
+                  "artifact_key": "006-storage-layer-6b547c78",
+                  "job_id": "threat:006-storage-layer-6b547c78",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "cas-store",
+                  "paths": [
+                    "crates/quarry-cas"
+                  ],
+                  "language": "rust",
+                  "role": "Content-addressed blob store writing/reading files by hash",
+                  "internetFacing": false,
+                  "artifact_key": "007-cas-store-69c3f1c1",
+                  "job_id": "threat:007-cas-store-69c3f1c1",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "cli-and-binary",
+                  "paths": [
+                    "crates/quarry-cli",
+                    "crates/quarry"
+                  ],
+                  "language": "rust",
+                  "role": "Command-line entry point and agent detection; launches processes with user-supplied arguments",
+                  "internetFacing": false,
+                  "artifact_key": "008-cli-and-binary-55d4ef1b",
+                  "job_id": "threat:008-cli-and-binary-55d4ef1b",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "core-shared",
+                  "paths": [
+                    "crates/quarry-core"
+                  ],
+                  "language": "rust",
+                  "role": "Shared types and utilities used across crates",
+                  "internetFacing": false,
+                  "artifact_key": "009-core-shared-bcbb015d",
+                  "job_id": "threat:009-core-shared-bcbb015d",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "dev-release-tooling",
+                  "paths": [
+                    "crates/quarry-dev",
+                    "scripts",
+                    "Formula"
+                  ],
+                  "language": "rust+ruby",
+                  "role": "Dev/release helper crate and Homebrew formula update scripts; executes builds and rewrites release metadata",
+                  "internetFacing": false,
+                  "artifact_key": "010-dev-release-tooling-b4f86a67",
+                  "job_id": "threat:010-dev-release-tooling-b4f86a67",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "ci-and-build-config",
+                  "paths": [
+                    ".github",
+                    ".cargo",
+                    "Dockerfile",
+                    "Cargo.toml",
+                    "Cargo.lock",
+                    "rust-toolchain.toml"
+                  ],
+                  "language": "yaml+toml",
+                  "role": "CI workflows, actions, cargo and toolchain configuration - supply-chain and CI-injection surface",
+                  "internetFacing": false,
+                  "artifact_key": "011-ci-and-build-config-c77fe400",
+                  "job_id": "threat:011-ci-and-build-config-c77fe400",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                }
+              ],
+              "run_threat_models": true,
+              "command.output": "blob://sha256/f7aeb61d86a6689cfaa07feaed74cedf6646c9a4e8230563a6901db65357e1a2"
+            },
+            "notes": "Script completed: python3 .fabro/workflows/security-review/scripts/security_review.py plan-matrix",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 1344,
+              "active_time_ms": 1344
+            }
+          },
+          "target_gate": {
+            "status": "succeeded",
+            "notes": "Conditional node evaluated: target_gate",
+            "usage": null
+          },
+          "inventory": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_stage": "inventory",
+              "last_response": "{\"components\":[{\"name\":\"server-http-api\",\"paths\":[\"crates/quarry-server\"],\"language\":\"rust\",\"role\":\"HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent ",
+              "response.inventory": "{\"components\":[{\"name\":\"server-http-api\",\"paths\":[\"crates/quarry-server\"],\"language\":\"rust\",\"role\":\"HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent prompt handling\",\"internetFacing\":true},{\"name\":\"web-ui\",\"paths\":[\"ui/src\",\"ui/index.html\",\"ui/vite.config.ts\",\"ui/package.json\",\"ui/scripts\"],\"language\":\"typescript\",\"role\":\"Browser frontend consuming the server API; renders collaborative documents and handles untrusted markdown/Yjs data\",\"internetFacing\":true},{\"name\":\"collab-codec\",\"paths\":[\"crates/quarry-collab-codec\"],\"language\":\"rust\",\"role\":\"Markdown/Slate/Yjs parsing, normalization, diffing and reconciliation of untrusted document content\",\"internetFacing\":false},{\"name\":\"git-layer\",\"paths\":[\"crates/quarry-git\"],\"language\":\"rust\",\"role\":\"Git operations over user repositories; shells out to git and processes paths/refs from requests\",\"internetFacing\":false},{\"name\":\"fuse-fs\",\"paths\":[\"crates/quarry-fuse\"],\"language\":\"rust\",\"role\":\"FUSE filesystem exposing documents to local processes/agents\",\"internetFacing\":false},{\"name\":\"storage-layer\",\"paths\":[\"crates/quarry-storage\"],\"language\":\"rust\",\"role\":\"SQLite persistence: schema, documents, events, search, sync queries built from request data\",\"internetFacing\":false},{\"name\":\"cas-store\",\"paths\":[\"crates/quarry-cas\"],\"language\":\"rust\",\"role\":\"Content-addressed blob store writing/reading files by hash\",\"internetFacing\":false},{\"name\":\"cli-and-binary\",\"paths\":[\"crates/quarry-cli\",\"crates/quarry\"],\"language\":\"rust\",\"role\":\"Command-line entry point and agent detection; launches processes with user-supplied arguments\",\"internetFacing\":false},{\"name\":\"core-shared\",\"paths\":[\"crates/quarry-core\"],\"language\":\"rust\",\"role\":\"Shared types and utilities used across crates\",\"internetFacing\":false},{\"name\":\"dev-release-tooling\",\"paths\":[\"crates/quarry-dev\",\"scripts\",\"Formula\"],\"language\":\"rust+ruby\",\"role\":\"Dev/release helper crate and Homebrew formula update scripts; executes builds and rewrites release metadata\",\"internetFacing\":false},{\"name\":\"ci-and-build-config\",\"paths\":[\".github\",\".cargo\",\"Dockerfile\",\"Cargo.toml\",\"Cargo.lock\",\"rust-toolchain.toml\"],\"language\":\"yaml+toml\",\"role\":\"CI workflows, actions, cargo and toolchain configuration - supply-chain and CI-injection surface\",\"internetFacing\":false}],\"securityScanSkippedComponents\":[{\"name\":\"fixtures\",\"paths\":[\"fixtures\"],\"reason\":\"Test fixtures (slate-yjs compatibility data), not shipped code\"},{\"name\":\"docs\",\"paths\":[\"docs\"],\"reason\":\"Documentation only, no executable code\"},{\"name\":\"ai-plans\",\"paths\":[\".ai\"],\"reason\":\"Agent plan notes, not product code\"},{\"name\":\"claude-skills\",\"paths\":[\".claude\"],\"reason\":\"Agent skill/instruction files, not product code\"},{\"name\":\"fabro-workflow\",\"paths\":[\".fabro\"],\"reason\":\"Review-orchestration workflow scripts (the tooling running this scan), not the product\"},{\"name\":\"ui-tests\",\"paths\":[\"ui/tests\",\"ui/playwright.config.ts\",\"ui/playwright.live.config.ts\",\"ui/vitest.setup.ts\"],\"reason\":\"End-to-end/unit test harness, not shipped code\"},{\"name\":\"ui-public-assets\",\"paths\":[\"ui/public\"],\"reason\":\"Static public assets, no logic\"},{\"name\":\"review-output\",\"paths\":[\"SECURITY-REVIEW-20260731-113033\"],\"reason\":\"Output directory of this review run, not product code\"}]}",
+              "output.inventory": {
+                "components": [
+                  {
+                    "name": "server-http-api",
+                    "paths": [
+                      "crates/quarry-server"
+                    ],
+                    "language": "rust",
+                    "role": "HTTP/WebSocket server: gateway, session/auth, SSE, document/git/library/transaction handlers, agent prompt handling",
+                    "internetFacing": true
+                  },
+                  {
+                    "name": "web-ui",
+                    "paths": [
+                      "ui/src",
+                      "ui/index.html",
+                      "ui/vite.config.ts",
+                      "ui/package.json",
+                      "ui/scripts"
+                    ],
+                    "language": "typescript",
+                    "role": "Browser frontend consuming the server API; renders collaborative documents and handles untrusted markdown/Yjs data",
+                    "internetFacing": true
+                  },
+                  {
+                    "name": "collab-codec",
+                    "paths": [
+                      "crates/quarry-collab-codec"
+                    ],
+                    "language": "rust",
+                    "role": "Markdown/Slate/Yjs parsing, normalization, diffing and reconciliation of untrusted document content",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "git-layer",
+                    "paths": [
+                      "crates/quarry-git"
+                    ],
+                    "language": "rust",
+                    "role": "Git operations over user repositories; shells out to git and processes paths/refs from requests",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "fuse-fs",
+                    "paths": [
+                      "crates/quarry-fuse"
+                    ],
+                    "language": "rust",
+                    "role": "FUSE filesystem exposing documents to local processes/agents",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "storage-layer",
+                    "paths": [
+                      "crates/quarry-storage"
+                    ],
+                    "language": "rust",
+                    "role": "SQLite persistence: schema, documents, events, search, sync queries built from request data",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "cas-store",
+                    "paths": [
+                      "crates/quarry-cas"
+                    ],
+                    "language": "rust",
+                    "role": "Content-addressed blob store writing/reading files by hash",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "cli-and-binary",
+                    "paths": [
+                      "crates/quarry-cli",
+                      "crates/quarry"
+                    ],
+                    "language": "rust",
+                    "role": "Command-line entry point and agent detection; launches processes with user-supplied arguments",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "core-shared",
+                    "paths": [
+                      "crates/quarry-core"
+                    ],
+                    "language": "rust",
+                    "role": "Shared types and utilities used across crates",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "dev-release-tooling",
+                    "paths": [
+                      "crates/quarry-dev",
+                      "scripts",
+                      "Formula"
+                    ],
+                    "language": "rust+ruby",
+                    "role": "Dev/release helper crate and Homebrew formula update scripts; executes builds and rewrites release metadata",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "ci-and-build-config",
+                    "paths": [
+                      ".github",
+                      ".cargo",
+                      "Dockerfile",
+                      "Cargo.toml",
+                      "Cargo.lock",
+                      "rust-toolchain.toml"
+                    ],
+                    "language": "yaml+toml",
+                    "role": "CI workflows, actions, cargo and toolchain configuration - supply-chain and CI-injection surface",
+                    "internetFacing": false
+                  }
+                ],
+                "securityScanSkippedComponents": [
+                  {
+                    "name": "fixtures",
+                    "paths": [
+                      "fixtures"
+                    ],
+                    "reason": "Test fixtures (slate-yjs compatibility data), not shipped code"
+                  },
+                  {
+                    "name": "docs",
+                    "paths": [
+                      "docs"
+                    ],
+                    "reason": "Documentation only, no executable code"
+                  },
+                  {
+                    "name": "ai-plans",
+                    "paths": [
+                      ".ai"
+                    ],
+                    "reason": "Agent plan notes, not product code"
+                  },
+                  {
+                    "name": "claude-skills",
+                    "paths": [
+                      ".claude"
+                    ],
+                    "reason": "Agent skill/instruction files, not product code"
+                  },
+                  {
+                    "name": "fabro-workflow",
+                    "paths": [
+                      ".fabro"
+                    ],
+                    "reason": "Review-orchestration workflow scripts (the tooling running this scan), not the product"
+                  },
+                  {
+                    "name": "ui-tests",
+                    "paths": [
+                      "ui/tests",
+                      "ui/playwright.config.ts",
+                      "ui/playwright.live.config.ts",
+                      "ui/vitest.setup.ts"
+                    ],
+                    "reason": "End-to-end/unit test harness, not shipped code"
+                  },
+                  {
+                    "name": "ui-public-assets",
+                    "paths": [
+                      "ui/public"
+                    ],
+                    "reason": "Static public assets, no logic"
+                  },
+                  {
+                    "name": "review-output",
+                    "paths": [
+                      "SECURITY-REVIEW-20260731-113033"
+                    ],
+                    "reason": "Output directory of this review run, not product code"
+                  }
+                ]
+              }
+            },
+            "notes": "Stage completed: inventory",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "kimi",
+                    "model_id": "kimi-k3"
+                  },
+                  "tokens": {
+                    "input_tokens": 10478,
+                    "output_tokens": 2222,
+                    "reasoning_tokens": 441,
+                    "cache_read_tokens": 36864,
+                    "cache_write_tokens": 0
+                  }
+                },
+                "facts": {
+                  "algorithm": "openai"
+                }
+              },
+              "total_usd_micros": 82436
+            },
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 93267,
+              "tool_time_ms": 5107,
+              "active_time_ms": 98374
+            }
           },
           "merge_inventory": {
             "status": "succeeded",
@@ -4101,13 +5178,14 @@
             "usage": null
           }
         },
-        "next_node_id": "plan_matrix",
+        "next_node_id": "threat_gate",
         "node_visits": {
           "target_gate": 1,
           "start": 1,
           "inventory": 1,
           "merge_inventory": 1,
           "inventory_gate": 1,
+          "plan_matrix": 1,
           "prepare": 1
         }
       },
@@ -4175,6 +5253,46 @@
       },
       "agent_control": "running",
       "state": "succeeded"
+    },
+    "plan_matrix@1": {
+      "first_event_seq": 115,
+      "prompt": null,
+      "response": null,
+      "completion": null,
+      "provider_used": null,
+      "diff": null,
+      "script_invocation": {
+        "script": "python3 .fabro/workflows/security-review/scripts/security_review.py plan-matrix",
+        "command": "exec 2>&1\npython3 .fabro/workflows/security-review/scripts/security_review.py plan-matrix",
+        "language": "shell",
+        "timeout_ms": 180000
+      },
+      "script_timing": {
+        "output": "blob://sha256/f7aeb61d86a6689cfaa07feaed74cedf6646c9a4e8230563a6901db65357e1a2",
+        "exit_code": 0,
+        "duration_ms": 1344,
+        "termination": "exited",
+        "output_bytes": 6734,
+        "live_streaming": true
+      },
+      "parallel_results": null,
+      "output": null,
+      "output_bytes": 6734,
+      "live_streaming": true,
+      "termination": "exited",
+      "started_at": "2026-07-31T11:32:29.247221630Z",
+      "handler": "command",
+      "graph_visit": 1,
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "agent_control": "running",
+      "state": "running"
     },
     "inventory@1": {
       "first_event_seq": 46,
@@ -4425,7 +5543,12 @@
       "first_event_seq": 107,
       "prompt": null,
       "response": null,
-      "completion": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": "Conditional node evaluated: inventory_gate",
+        "failure_reason": null,
+        "timestamp": "2026-07-31T11:32:26.750420834Z"
+      },
       "provider_used": null,
       "diff": null,
       "script_invocation": null,
@@ -4435,6 +5558,12 @@
       "started_at": "2026-07-31T11:32:26.506630821Z",
       "handler": "conditional",
       "graph_visit": 1,
+      "timing": {
+        "wall_time_ms": 0,
+        "inference_time_ms": 0,
+        "tool_time_ms": 0,
+        "active_time_ms": 0
+      },
       "usage": {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -4444,7 +5573,7 @@
         "cache_write_tokens": 0
       },
       "agent_control": "running",
-      "state": "running"
+      "state": "succeeded"
     },
     "merge_inventory@1": {
       "first_event_seq": 95,
