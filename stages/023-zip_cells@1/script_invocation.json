@@ -1,0 +1,6 @@
+{
+  "script": "python3 .fabro/workflows/security-review/scripts/security_review.py zip-cells",
+  "command": "exec 2>&1\npython3 .fabro/workflows/security-review/scripts/security_review.py zip-cells",
+  "language": "shell",
+  "timeout_ms": 180000
+}
