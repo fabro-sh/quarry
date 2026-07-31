@@ -12,6 +12,9 @@ commit = ""
 range = ""
 focus = ""
 
+[run.model.fallbacks]
+"kimi-k3" = ["openrouter:kimi-k3", "claude-opus-5"]
+
 [run.environment]
 id = "security-review"
 
