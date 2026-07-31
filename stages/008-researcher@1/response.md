@@ -1,0 +1,180 @@
+```json
+{
+  "findings": [
+    {
+      "file": "crates/quarry-git/src/lib.rs",
+      "line": 1263,
+      "ruleId": "path-traversal.arbitrary-file-write",
+      "identity": {
+        "anchor": "worktree-export-repo-path"
+      },
+      "category": "path-traversal",
+      "severity": "HIGH",
+      "difficulty": "LOW",
+      "confidence": "HIGH",
+      "title": "Unauthenticated git/export wipes any directory on the host, then writes attacker-controlled files into it",
+      "rationale": "POST /v1/libraries/{library}/git/export accepts a caller-supplied `repo` filesystem path and passes it, with no validation, to export_worktree. execute_worktree_export creates the directory if missing, then calls clean_worktree, which recursively deletes every entry in that directory except `.git`, and finally writes every library document (whose content the same unauthenticated caller controls via PUT) into it. The only guard, verify_or_write_marker, rejects the operation solely when a Quarry marker file already exists and names a different library id; on any ordinary directory it silently writes a marker and proceeds, so it is not an effective defense. Export works even with an empty library (the wipe still runs), and an attacker can first PUT a document with arbitrary content and a chosen relative name to achieve arbitrary file write with controlled content (e.g. ~/.ssh/authorized_keys, ~/.bashrc, cron files), turning the primitive into remote command execution as the server user.",
+      "evidence": [
+        "crates/quarry-server/src/lib.rs:461-464 registers `POST /v1/libraries/{library}/git/export` to git_handlers::git_export in the lib-documents build; the only router layers (lib.rs:215-217) are error-envelope, tracing, and security-header middleware — there is no authentication or authorization on any library route.",
+        "crates/quarry-server/src/git_handlers.rs:123-137 — git_export deserializes GitExportRequest and calls export_worktree with `std::path::Path::new(&request.repo)` (line 132); no path validation, canonicalization, or allowlist exists anywhere on this hop.",
+        "crates/quarry-git/src/lib.rs:976-1027 — export_worktree loads the library's documents (caller can create a library via POST /v1/libraries with `{\"slug\": \"x\"}` per crates/quarry-server/src/library_handlers.rs:20-28, and PUT arbitrary document content) and dispatches execute_worktree_export with the attacker-chosen repo_dir.",
+        "crates/quarry-git/src/lib.rs:1029-1032 — execute_worktree_export runs fs::create_dir_all(&plan.repo_dir), then verify_or_write_marker, then clean_worktree(&plan.repo_dir).",
+        "crates/quarry-git/src/lib.rs:1195-1209 — guard check: verify_or_write_marker only errors when .quarry/marker.json already exists AND names a different library_id; on any marker-less directory it calls write_marker and returns Ok, so the guard is ineffective for arbitrary victim directories.",
+        "crates/quarry-git/src/lib.rs:1254-1268 — clean_worktree iterates fs::read_dir(repo_dir) and deletes every entry (fs::remove_dir_all for directories at line 1263, fs::remove_file at 1265), skipping only entries named `.git`.",
+        "crates/quarry-git/src/lib.rs:1035-1050 — after the wipe, each library document is written to plan.repo_dir.join(&file.path) via write_atomic; document paths are normalized (crates/quarry-core/src/lib.rs:606-628 rejects `..`), but that guard does not constrain repo_dir itself, so the attacker chooses the absolute target directory and the file names within it."
+      ],
+      "snippet": "            fs::remove_dir_all(path)?;",
+      "symbol": "clean_worktree",
+      "impact": "Any unauthenticated client that can reach the Quarry HTTP port (any local process or invited AI agent on loopback; any network host when the server is bound to 0.0.0.0 as the shipped Docker CMD does) can recursively delete the contents of any directory writable by the server user (home directory, application data, other sites) and overwrite arbitrary files with attacker-controlled content, yielding persistent code execution (e.g. via ~/.ssh/authorized_keys or shell startup files) as the server user.",
+      "exploitScenarios": [
+        "Start or reach a quarry server built with --features lib-documents (documented in README.md:69 and docs/development.md:21).",
+        "POST /v1/libraries {\"slug\": \"x\"} to create a library (no auth).",
+        "PUT /v1/libraries/x/documents/authorized_keys with an attacker SSH public key body and any raw content type.",
+        "POST /v1/libraries/x/git/export {\"repo\": \"/home/victim/.ssh\"} — the handler passes the path to export_worktree; clean_worktree deletes the victim's existing .ssh contents, then the attacker's authorized_keys is written.",
+        "Alternatively POST /v1/libraries/x/git/export {\"repo\": \"/home/victim\"} with no documents to destroy the victim's entire home directory contents (everything except entries named .git).",
+        "SSH into the host with the planted key, or wait for a shell startup file / cron target to execute."
+      ],
+      "preconditions": [
+        "Server binary built with the non-default `lib-documents` cargo feature (advertised as a supported configuration in README.md and docs/development.md).",
+        "Attacker can reach the server's HTTP port: any local process or invited agent when bound to 127.0.0.1 (the default), or any network host when bound to 0.0.0.0 (the Dockerfile CMD does exactly this).",
+        "Target paths are readable/writable by the server process user."
+      ],
+      "recommendations": [
+        "Root cause: stop letting the request choose the filesystem target — constrain `repo` for import/export/peers to a server-operator-configured base directory (resolve and require containment after canonicalization), or remove the HTTP import/export routes and keep them CLI-only.",
+        "Hardening: refuse export into any directory that is not empty and does not already contain a valid .quarry/marker.json for the same library id (verify marker BEFORE create_dir_all/clean_worktree, and never auto-create the marker on a non-empty directory); add authentication/authorization to the entire /v1/libraries surface before any non-loopback deployment.",
+        "Regression test: export to a temp directory containing sentinel files (no marker) must fail and leave the sentinels byte-identical; export to a path outside the configured base must be rejected with 4xx."
+      ],
+      "cweId": "CWE-73"
+    },
+    {
+      "file": "crates/quarry-git/src/lib.rs",
+      "line": 903,
+      "ruleId": "path-traversal.arbitrary-file-read",
+      "identity": {
+        "anchor": "worktree-import-repo-path"
+      },
+      "category": "path-traversal",
+      "severity": "HIGH",
+      "difficulty": "LOW",
+      "confidence": "HIGH",
+      "title": "Unauthenticated git/import reads arbitrary host files and stores them as documents anyone can download",
+      "rationale": "POST /v1/libraries/{library}/git/import accepts a caller-supplied `repo` path, verifies only that the directory exists, then recursively walks it with WalkDir and reads every regular file (skipping only `.git` and `.quarry` names) into the library as documents. The same unauthenticated caller then retrieves the contents byte-for-byte via GET /v1/libraries/{library}/documents/{*path}. There is no path allowlist, no content filtering, and no authentication anywhere on the route chain, so the endpoint is a direct arbitrary-file-read oracle for everything the server user can read (~/.ssh, ~/.aws, /etc, application secrets).",
+      "evidence": [
+        "crates/quarry-server/src/lib.rs:460-463 registers `POST /v1/libraries/{library}/git/import` to git_handlers::git_import in the lib-documents build; no auth middleware exists on the router (lib.rs:215-217).",
+        "crates/quarry-server/src/git_handlers.rs:98-106 — git_import passes `std::path::Path::new(&request.repo)` straight to import_worktree (line 104); the only validation is that the string is valid JSON.",
+        "crates/quarry-git/src/lib.rs:825-851 — import_worktree calls ensure_worktree_exists, whose only check (crates/quarry-git/src/lib.rs:853-868) is that the directory exists; an ineffective guard for confinement.",
+        "crates/quarry-git/src/lib.rs:881-929 — scan_worktree_import_files walks repo_dir with WalkDir (symlinks not followed, but direct paths need no symlinks), skipping only entries named .git/.quarry, and at line 903 reads every regular file's bytes with fs::read.",
+        "crates/quarry-git/src/lib.rs:931-974 — import_worktree_transaction stores each file as a document via write_markdown_file / store.stage_put + commit_transaction, keyed by its relative path.",
+        "crates/quarry-server/src/document_handlers.rs:457-465 — get_document returns document.content with the stored content type via bytes_response_with_expiry, with no authorization check, so the attacker downloads the exfiltrated files."
+      ],
+      "snippet": "        let bytes = fs::read(entry.path())?;",
+      "symbol": "scan_worktree_import_files",
+      "impact": "Unauthenticated disclosure of every file readable by the server process — SSH private keys, cloud credentials, /etc configuration, other tenants' data on the host — to any client that can reach the HTTP port, with a built-in exfiltration channel (the read-back document GET).",
+      "exploitScenarios": [
+        "Reach a quarry server built with lib-documents (loopback as any local process/agent, or remotely if bound to 0.0.0.0).",
+        "POST /v1/libraries {\"slug\": \"loot\"} to create a library.",
+        "POST /v1/libraries/loot/git/import {\"repo\": \"/home/victim/.ssh\"} — import reads id_rsa, id_ed25519, etc. into the library (unreadable files abort the import, so target directories of readable files).",
+        "GET /v1/libraries/loot/documents/id_ed25519 to download the private key.",
+        "Repeat with /home/victim/.aws, /etc, or application directories to harvest further secrets."
+      ],
+      "preconditions": [
+        "Server binary built with the non-default `lib-documents` cargo feature.",
+        "Attacker can reach the server HTTP port (loopback or network, depending on --addr).",
+        "Target files are readable by the server process user."
+      ],
+      "recommendations": [
+        "Root cause: confine import sources to an operator-configured base directory (canonicalize and verify containment) or drop the HTTP import route in favor of the CLI, which already runs with the operator's own shell privileges.",
+        "Hardening: require an existing, matching .quarry marker before importing; add authentication to the library API; consider rejecting imports of dotfile directories.",
+        "Regression test: import with repo pointing at a directory outside the allowed base (e.g. a fixture /etc tree) must return 4xx and create zero documents."
+      ],
+      "cweId": "CWE-22"
+    },
+    {
+      "file": "crates/quarry-git/src/lib.rs",
+      "line": 1362,
+      "ruleId": "ssrf.unvalidated-remote-url",
+      "identity": {
+        "anchor": "git-peer-remote-url"
+      },
+      "category": "ssrf",
+      "severity": "MEDIUM",
+      "difficulty": "MEDIUM",
+      "confidence": "HIGH",
+      "title": "Unauthenticated git peer creation plus pull/sync makes the server clone/fetch/push arbitrary URLs (SSRF with a read-back channel)",
+      "rationale": "POST /v1/libraries/{library}/git/peers stores a caller-supplied `repo` path, `remote` URL, and `branch` with no validation. POST .../peers/{peer}/pull or /sync then calls fetch_remote_worktree, which passes the URL verbatim to libgit2 clone/fetch with no scheme allowlist, no host allowlist, and no egress restriction; push_peer additionally pushes the full exported library to the attacker-chosen remote. Cloned content is imported into the library and is readable back over the unauthenticated REST API, giving a complete SSRF read-back channel against any git-protocol endpoint reachable from the server (internal GitLab/Gitea, link-local services), including file:// URLs. The branch value is also interpolated unvalidated into refspec strings (`refs/heads/{branch}:refs/heads/{branch}`), and no RemoteCallbacks are set, so credential use is governed by ambient libgit2 defaults rather than an explicit policy.",
+      "evidence": [
+        "crates/quarry-server/src/lib.rs:456-479 registers the /v1/libraries/{library}/git/peers routes (create, pull, push, sync) in the lib-documents build; the router has no auth layer (lib.rs:215-217).",
+        "crates/quarry-server/src/git_handlers.rs:55-71 — create_git_peer copies request.repo, request.remote, and request.branch into the stored peer config without any validation of the URL scheme/host or the branch name.",
+        "crates/quarry-git/src/lib.rs:1476-1510 — peer_config reads the stored config back into PeerConfig { repo: PathBuf::from(repo), branch, remote } verbatim.",
+        "crates/quarry-git/src/lib.rs:296-298 — pull_peer_inner calls fetch_remote_worktree(&peer.repo, remote, &peer.branch) when a remote is configured; sync_peer_inner does the same at lines 369-371.",
+        "crates/quarry-git/src/lib.rs:1326-1362 — fetch_remote_worktree_blocking fetches or, at line 1362, clones remote_url into repo_dir with no URL validation; FetchOptions at line 1331 has no RemoteCallbacks (no explicit credential policy).",
+        "crates/quarry-git/src/lib.rs:299-301 and 931-974 — after fetch, import_worktree loads the cloned files into the library, and crates/quarry-server/src/document_handlers.rs:457-465 serves them back unauthenticated, completing the read-back channel.",
+        "crates/quarry-git/src/lib.rs:1401-1409 — push_remote_blocking formats the unvalidated branch into the refspec `refs/heads/{branch}:refs/heads/{branch}` (line 1405) and pushes to the attacker-chosen URL, exfiltrating the exported library content."
+      ],
+      "snippet": "    builder.clone(remote_url, repo_dir).map_err(map_git)?;",
+      "symbol": "fetch_remote_worktree_blocking",
+      "impact": "Server-side request forgery: the server initiates git-protocol connections (clone/fetch/push) to arbitrary URLs — internal hosts, link-local metadata-adjacent services speaking git smart-HTTP, or file:// paths — with fetched repository content readable back through the unauthenticated document API, and full library content pushable to an attacker-controlled remote.",
+      "exploitScenarios": [
+        "Reach a lib-documents build of the server; POST /v1/libraries {\"slug\": \"x\"}.",
+        "POST /v1/libraries/x/git/peers {\"repo\": \"/tmp/q\", \"remote\": \"http://internal-git.corp/team/secrets.git\", \"branch\": \"main\"}.",
+        "POST /v1/libraries/x/git/peers/{peer}/pull — the server clones the internal repository (a host the attacker cannot reach directly).",
+        "GET /v1/libraries/x/documents/{path} to read the internal repository's files through the read-back channel.",
+        "Variant: PUT sensitive-looking documents, then POST .../peers/{peer}/push with remote pointing at an attacker-controlled git server to exfiltrate the library."
+      ],
+      "preconditions": [
+        "Server binary built with the non-default `lib-documents` cargo feature.",
+        "Attacker can reach the server HTTP port.",
+        "For content read-back, the target URL must speak the git protocol (smart HTTP, git://, ssh, or file://) and be reachable from the server host."
+      ],
+      "recommendations": [
+        "Root cause: validate peer configuration at creation — allowlist URL schemes (https/ssh only), resolve and reject loopback/RFC1918/link-local hosts unless explicitly operator-enabled, and reject file:// URLs outright.",
+        "Hardening: validate `branch` with git2::Reference::is_valid_name (or normalize to a strict `[A-Za-z0-9._/-]+` subset) before it is interpolated into refspecs; set explicit RemoteCallbacks implementing a least-privilege credential policy instead of ambient defaults; authenticate the library API.",
+        "Regression test: creating a peer with remote `file:///etc` or `http://169.254.169.254/` must be rejected, and a branch containing `:` or whitespace must fail validation."
+      ],
+      "cweId": "CWE-918"
+    },
+    {
+      "file": "crates/quarry-storage/src/tmp_documents.rs",
+      "line": 198,
+      "ruleId": "dos.unclamped-document-ttl",
+      "identity": {
+        "anchor": "tmp-document-ttl-clamp"
+      },
+      "category": "dos",
+      "severity": "MEDIUM",
+      "difficulty": "LOW",
+      "confidence": "HIGH",
+      "title": "Client-supplied expires_at is stored unclamped, so anonymous tmp documents never expire (permanent storage / disk exhaustion in the shipped build)",
+      "rationale": "In the shipped tmp-documents build, anonymous creation is the intended public endpoint, and the 30-day default TTL is the only mechanism bounding anonymous storage. Both create (expires_at in the JSON body) and the PATCH .../ttl sub-resource accept a client-supplied expiry string and store it verbatim — TmpTtl::ExpiresAt(expires_at) => expires_at with no parse, no format validation, and no maximum clamp. Expiry is enforced only lazily at read time by string comparison (expires_at <= now), so a far-future or even non-date value keeps the document live forever. An anonymous attacker can therefore mint unlimited 1 MiB documents that are never reclaimed, permanently growing the database/CAS and defeating the abuse control the deployment model relies on. There is no background reaper and no quota; the only GC is the compile-time-gated, manual /v1/admin/gc.",
+      "evidence": [
+        "crates/quarry-server/src/lib.rs:353-358 registers `POST /v1/tmp/documents` in the default tmp-documents build with a ~1 MiB body limit and no authentication or rate limiting.",
+        "crates/quarry-server/src/tmp_document_handlers.rs:80-83 — create_tmp_document maps the client JSON `expires_at` directly to TmpTtl::ExpiresAt with no validation or clamp.",
+        "crates/quarry-storage/src/tmp_documents.rs:192-212 — the ttl match stores `TmpTtl::ExpiresAt(expires_at) => expires_at` (line 198) verbatim into the documents row; only TmpTtl::Default gets the 30-day default_tmp_expires_at (crates/quarry-storage/src/lib.rs:1368-1370).",
+        "crates/quarry-storage/src/tmp_documents.rs:388-411 — set_tmp_document_ttl (the PATCH .../ttl handler path) likewise stores any client string; it rejects only a null value.",
+        "crates/quarry-storage/src/lib.rs:1386-1426 — expiry is checked only at read time via `expires_at <= now` string comparison; a far-future or lexicographically large value never compares <= now, so the document never becomes Gone.",
+        "crates/quarry-server/src/lib.rs:319-323 — the only garbage collection is POST /v1/admin/gc behind the compile-time admin-api feature (off in shipped builds), and no background TTL reaper exists anywhere in the codebase (grep for reaper/sweep finds none); docs/security/threat-model.md:502-511 (T13) records this clamp as still missing."
+      ],
+      "snippet": "                        TmpTtl::ExpiresAt(expires_at) => expires_at,",
+      "symbol": "put_tmp_document_with_transaction_and_creation_ip",
+      "impact": "Anonymous, unauthenticated attackers can store permanent content on the service (abuse hosting that the TTL model was supposed to bound) and, by scripting creation requests, grow server storage without limit until disk exhaustion denies service to all tenants of the shared store.",
+      "exploitScenarios": [
+        "Against the shipped tmp-documents build (e.g. the public Docker image bound to 0.0.0.0), POST /v1/tmp/documents with {\"content\": \"<1 MiB>\", \"expires_at\": \"9999-01-01T00:00:00Z\"}.",
+        "Repeat the request in a loop from multiple clients; every document is retained indefinitely because the stored expiry never compares <= now.",
+        "Observe the SQLite database and CAS tree grow until the volume fills, denying service to all tenants; alternatively use the permanent documents for long-lived abuse content hosting.",
+        "The same bypass works on an existing document via PATCH /v1/tmp/documents/{secret}/ttl with a far-future expires_at."
+      ],
+      "preconditions": [
+        "A tmp-documents build (the default and the only shipped configuration).",
+        "Attacker can reach the HTTP port (in the Docker deployment this is the public network).",
+        "No edge rate limit (the project's own threat model states none is deployed)."
+      ],
+      "recommendations": [
+        "Root cause: clamp expires_at server-side on both create and the ttl sub-resource — parse as RFC3339 (rejecting invalid values) and cap at now + operator-configured maximum (e.g. 30 days), rejecting or truncating anything later.",
+        "Hardening: add a background TTL reaper that hard-deletes expired tmp documents and their CAS blobs, plus a per-IP/global creation rate limit or storage quota for anonymous creation.",
+        "Regression test: creating a document with expires_at 9999-01-01 must result in a stored expiry <= now + max TTL, and a non-RFC3339 expires_at must be rejected with 400."
+      ],
+      "cweId": "CWE-770"
+    }
+  ]
+}
+```
