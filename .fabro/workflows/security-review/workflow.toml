@@ -5,7 +5,7 @@ graph = "security-review.fabro"
 
 [run.inputs]
 mode = "scan"
-effort = "low"
+effort = "medium"
 scope = ""
 base = ""
 commit = ""
