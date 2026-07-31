@@ -1,0 +1,6 @@
+{
+  "outcome": "succeeded",
+  "notes": "Script completed: python3 .fabro/workflows/security-review/scripts/security_review.py tally",
+  "failure_reason": null,
+  "timestamp": "2026-07-31T04:10:33.753649663Z"
+}
