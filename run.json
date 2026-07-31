@@ -2141,7 +2141,7 @@
     "kind": "running"
   },
   "status_updated_at": "2026-07-31T11:30:25.966911118Z",
-  "last_event_at": "2026-07-31T11:30:38.339549896Z",
+  "last_event_at": "2026-07-31T11:30:41.059712331Z",
   "pending_control": null,
   "checkpoints": [
     {
@@ -2605,9 +2605,9 @@
       }
     },
     {
-      "seq": 0,
+      "seq": 63,
       "checkpoint": {
-        "timestamp": "2026-07-31T11:30:38.517432667Z",
+        "timestamp": "2026-07-31T11:30:41.044552589Z",
         "current_node": "threat_gate",
         "completed_nodes": [
           "start",
@@ -2615,6 +2615,211 @@
           "target_gate",
           "plan_matrix",
           "threat_gate"
+        ],
+        "node_retries": {},
+        "context_values": {
+          "graph.goal": "Perform an adversarial, read-only security review of this repository and report only panel-verified findings.",
+          "empty_target": false,
+          "internal.work_dir": "/home/daytona/workspace/quarry",
+          "failure_signature": "",
+          "thread.plan_matrix.current_node": "threat_gate",
+          "current_node": "threat_gate",
+          "thread.start.current_node": "prepare",
+          "internal.retry_count.threat_gate": 0,
+          "inventory_assignment": {
+            "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+            "target": {
+              "mode": "scan",
+              "scope": [],
+              "range": null,
+              "changedFileCount": null,
+              "changedLineCount": null,
+              "focus": null,
+              "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+              "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+            },
+            "maxComponents": 12,
+            "topLevelDirectories": null,
+            "wholeTreeCompletenessRequired": false
+          },
+          "thread.target_gate.current_node": "plan_matrix",
+          "thread.prepare.current_node": "target_gate",
+          "graph.model_stylesheet": "\n            * { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .inventory { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .threat-model { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .research { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n            .verification { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n        ",
+          "graph.stall_timeout": "3600000ms",
+          "internal.node_visit_count": 1,
+          "internal.retry_count.start": 0,
+          "use_inventory": false,
+          "internal.retry_count.plan_matrix": 0,
+          "internal.thread_id": "plan_matrix",
+          "graph.rankdir": "LR",
+          "products_dir": "SECURITY-REVIEW-20260731-113027",
+          "effort": "low",
+          "run_sweeps": false,
+          "graph.default_max_retries": "0",
+          "run_threat_models": false,
+          "command.output": "blob://sha256/e0dc6b828db8ae3bf817d052df5b8551ef0d550b9d604c1e89ba76736311c43e",
+          "failure_class": "",
+          "internal.run_id": "01KYVZ12WKCD6CG5JJK2R7A2E3",
+          "graph.default_fidelity": "compact",
+          "run_research": true,
+          "internal.fidelity": "compact",
+          "outcome": "succeeded",
+          "internal.retry_count.prepare": 0,
+          "research_jobs": [
+            {
+              "name": "repository:all",
+              "job_id": "research:001-repository-e2885f2b:all",
+              "kind": "research",
+              "component": {
+                "name": "repository",
+                "paths": [
+                  "."
+                ],
+                "language": "mixed",
+                "role": "whole scan target"
+              },
+              "lens": "every category at once — you are the only research pass, so map the attack surface briefly and hunt breadth-first for the highest-severity, most reachable issues across: injection and input handling: SQL/command/code injection, XSS, XXE, deserialization, template injection, ReDoS, path traversal from user input, and prompt injection; authentication and authorization: auth bypass, missing or wrong authorization checks, IDOR, privilege escalation, CSRF, SSRF, open redirect, and race conditions in access decisions; memory and unsafe operations: buffer overflows, out-of-bounds access, use-after-free, integer overflow, type confusion, unsafe FFI, and unchecked unsafe blocks; cryptography and secrets: weak or misused crypto, weak randomness, key/nonce reuse, timing side channels, hardcoded secrets, and credential handling and exposure",
+              "threatModel": null,
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            }
+          ],
+          "mode": "scan",
+          "internal.retry_count.target_gate": 0
+        },
+        "node_outcomes": {
+          "prepare": {
+            "status": "succeeded",
+            "context_updates": {
+              "mode": "scan",
+              "command.output": "blob://sha256/5b0f240611eb1b6c4f67009dd41230cc25a2da855d0f5ae67296a8f1e9778814",
+              "effort": "low",
+              "use_inventory": false,
+              "products_dir": "SECURITY-REVIEW-20260731-113027",
+              "inventory_assignment": {
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "target": {
+                  "mode": "scan",
+                  "scope": [],
+                  "range": null,
+                  "changedFileCount": null,
+                  "changedLineCount": null,
+                  "focus": null,
+                  "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                  "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                },
+                "maxComponents": 12,
+                "topLevelDirectories": null,
+                "wholeTreeCompletenessRequired": false
+              },
+              "empty_target": false
+            },
+            "notes": "Script completed: python3 -c \"import hashlib,sys; pairs=list(zip(sys.argv[1::2],sys.argv[2::2])); sys.exit(0 if pairs and all(hashlib.sha256(open(path,'rb').read()).hexdigest()==expected for path,expected in pairs) else 91)\" .fabro/workflows/security-review/scripts/security_review.py db08c08320c2c1fb6cd3226fb70fa5672794c0cd12be7d78b82214fc7346258d .fabro/workflows/security-review/scripts/git_readonly.py 6bafe2418234d7887d9f4726208bc9e50325bf34c5098c4a6ef508f1a5486ec5 .fabro/workflows/security-review/scripts/render_report.py 6949cb65bf950b41cf1937deb9eac111a026fe11bf7aa35eb34d53dd670100c4 .fabro/workflows/security-review/specs/report-spec.md 18e3eb3de3c2f585cd4e24d3168b0aaf0176a72ba5efeadaf6773cee1c5f2be2 .fabro/workflows/security-review/templates/report.html 55583ce1e9272ccbc0c048bf8d2ba660e443ca3b77c929958ab0955ac4616777 && python3 .fabro/workflows/security-review/scripts/security_review.py prepare --scan-id-stdin --mode scan --effort low --scope '' --base '' --commit '' --range '' --focus ''",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 1352,
+              "active_time_ms": 1352
+            }
+          },
+          "plan_matrix": {
+            "status": "succeeded",
+            "context_updates": {
+              "run_threat_models": false,
+              "research_jobs": [
+                {
+                  "name": "repository:all",
+                  "job_id": "research:001-repository-e2885f2b:all",
+                  "kind": "research",
+                  "component": {
+                    "name": "repository",
+                    "paths": [
+                      "."
+                    ],
+                    "language": "mixed",
+                    "role": "whole scan target"
+                  },
+                  "lens": "every category at once — you are the only research pass, so map the attack surface briefly and hunt breadth-first for the highest-severity, most reachable issues across: injection and input handling: SQL/command/code injection, XSS, XXE, deserialization, template injection, ReDoS, path traversal from user input, and prompt injection; authentication and authorization: auth bypass, missing or wrong authorization checks, IDOR, privilege escalation, CSRF, SSRF, open redirect, and race conditions in access decisions; memory and unsafe operations: buffer overflows, out-of-bounds access, use-after-free, integer overflow, type confusion, unsafe FFI, and unchecked unsafe blocks; cryptography and secrets: weak or misused crypto, weak randomness, key/nonce reuse, timing side channels, hardcoded secrets, and credential handling and exposure",
+                  "threatModel": null,
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                }
+              ],
+              "run_sweeps": false,
+              "command.output": "blob://sha256/e0dc6b828db8ae3bf817d052df5b8551ef0d550b9d604c1e89ba76736311c43e",
+              "run_research": true
+            },
+            "notes": "Script completed: python3 .fabro/workflows/security-review/scripts/security_review.py plan-matrix",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 1248,
+              "active_time_ms": 1248
+            }
+          },
+          "target_gate": {
+            "status": "succeeded",
+            "notes": "Conditional node evaluated: target_gate",
+            "usage": null
+          },
+          "threat_gate": {
+            "status": "succeeded",
+            "notes": "Conditional node evaluated: threat_gate",
+            "usage": null
+          },
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          }
+        },
+        "next_node_id": "research_gate",
+        "git_commit_sha": "5519d68557da4b634e07e899f9b93b92b89c5344",
+        "node_visits": {
+          "target_gate": 1,
+          "start": 1,
+          "plan_matrix": 1,
+          "prepare": 1,
+          "threat_gate": 1
+        }
+      },
+      "diff": {
+        "summary": {
+          "files_changed": 0,
+          "additions": 0,
+          "deletions": 0
+        }
+      }
+    },
+    {
+      "seq": 0,
+      "checkpoint": {
+        "timestamp": "2026-07-31T11:30:41.191744555Z",
+        "current_node": "research_gate",
+        "completed_nodes": [
+          "start",
+          "prepare",
+          "target_gate",
+          "plan_matrix",
+          "threat_gate",
+          "research_gate"
         ],
         "node_retries": {},
         "context_values": {
@@ -2648,11 +2853,13 @@
           "failure_signature": "",
           "run_research": true,
           "internal.work_dir": "/home/daytona/workspace/quarry",
+          "thread.threat_gate.current_node": "research_gate",
           "internal.retry_count.plan_matrix": 0,
           "graph.stall_timeout": "3600000ms",
           "internal.retry_count.prepare": 0,
           "effort": "low",
           "internal.run_id": "01KYVZ12WKCD6CG5JJK2R7A2E3",
+          "internal.retry_count.research_gate": 0,
           "graph.rankdir": "LR",
           "thread.plan_matrix.current_node": "threat_gate",
           "thread.prepare.current_node": "target_gate",
@@ -2685,7 +2892,7 @@
           "empty_target": false,
           "mode": "scan",
           "failure_class": "",
-          "current_node": "threat_gate",
+          "current_node": "research_gate",
           "command.output": "blob://sha256/e0dc6b828db8ae3bf817d052df5b8551ef0d550b9d604c1e89ba76736311c43e",
           "internal.retry_count.target_gate": 0,
           "graph.default_fidelity": "compact",
@@ -2693,7 +2900,7 @@
           "internal.node_visit_count": 1,
           "products_dir": "SECURITY-REVIEW-20260731-113027",
           "thread.start.current_node": "prepare",
-          "internal.thread_id": "plan_matrix"
+          "internal.thread_id": "threat_gate"
         },
         "node_outcomes": {
           "prepare": {
@@ -2780,6 +2987,11 @@
               "active_time_ms": 1248
             }
           },
+          "research_gate": {
+            "status": "succeeded",
+            "notes": "Conditional node evaluated: research_gate",
+            "usage": null
+          },
           "start": {
             "status": "succeeded",
             "usage": null
@@ -2790,12 +3002,13 @@
             "usage": null
           }
         },
-        "next_node_id": "research_gate",
+        "next_node_id": "research",
         "node_visits": {
           "start": 1,
           "plan_matrix": 1,
           "prepare": 1,
           "threat_gate": 1,
+          "research_gate": 1,
           "target_gate": 1
         }
       },
@@ -2832,7 +3045,12 @@
       "first_event_seq": 58,
       "prompt": null,
       "response": null,
-      "completion": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": "Conditional node evaluated: threat_gate",
+        "failure_reason": null,
+        "timestamp": "2026-07-31T11:30:38.516740453Z"
+      },
       "provider_used": null,
       "diff": null,
       "script_invocation": null,
@@ -2842,6 +3060,12 @@
       "started_at": "2026-07-31T11:30:38.339549896Z",
       "handler": "conditional",
       "graph_visit": 1,
+      "timing": {
+        "wall_time_ms": 0,
+        "inference_time_ms": 0,
+        "tool_time_ms": 0,
+        "active_time_ms": 0
+      },
       "usage": {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -2851,7 +3075,7 @@
         "cache_write_tokens": 0
       },
       "agent_control": "running",
-      "state": "running"
+      "state": "succeeded"
     },
     "start@1": {
       "first_event_seq": 18,
@@ -2939,6 +3163,31 @@
       },
       "agent_control": "running",
       "state": "succeeded"
+    },
+    "research_gate@1": {
+      "first_event_seq": 66,
+      "prompt": null,
+      "response": null,
+      "completion": null,
+      "provider_used": null,
+      "diff": null,
+      "script_invocation": null,
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-07-31T11:30:41.059712331Z",
+      "handler": "conditional",
+      "graph_visit": 1,
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "agent_control": "running",
+      "state": "running"
     },
     "target_gate@1": {
       "first_event_seq": 38,
