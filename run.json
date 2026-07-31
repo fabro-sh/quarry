@@ -2132,14 +2132,160 @@
     }
   },
   "web_url": "https://fabro-testing.walleye-rainbow.ts.net/runs/01KYVZ12WKCD6CG5JJK2R7A2E3",
-  "start": null,
-  "status": {
-    "kind": "starting"
+  "start": {
+    "start_time": "2026-07-31T11:30:25.966883566Z",
+    "run_branch": "fabro/run/01KYVZ12WKCD6CG5JJK2R7A2E3",
+    "base_sha": "92ff6db4709633fdd23b8af5ac72f2bf662bf69a"
   },
-  "status_updated_at": "2026-07-31T11:30:22.900540368Z",
-  "last_event_at": "2026-07-31T11:30:25.792270063Z",
+  "status": {
+    "kind": "running"
+  },
+  "status_updated_at": "2026-07-31T11:30:25.966911118Z",
+  "last_event_at": "2026-07-31T11:30:28.779033261Z",
   "pending_control": null,
-  "checkpoints": [],
+  "checkpoints": [
+    {
+      "seq": 22,
+      "checkpoint": {
+        "timestamp": "2026-07-31T11:30:27.377674129Z",
+        "current_node": "start",
+        "completed_nodes": [
+          "start"
+        ],
+        "node_retries": {},
+        "context_values": {
+          "graph.default_max_retries": "0",
+          "internal.retry_count.start": 0,
+          "graph.rankdir": "LR",
+          "failure_class": "",
+          "failure_signature": "",
+          "graph.stall_timeout": "3600000ms",
+          "graph.default_fidelity": "compact",
+          "outcome": "succeeded",
+          "internal.fidelity": "compact",
+          "internal.work_dir": "/home/daytona/workspace/quarry",
+          "internal.thread_id": null,
+          "internal.node_visit_count": 1,
+          "graph.goal": "Perform an adversarial, read-only security review of this repository and report only panel-verified findings.",
+          "graph.model_stylesheet": "\n            * { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .inventory { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .threat-model { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .research { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n            .verification { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n        ",
+          "internal.run_id": "01KYVZ12WKCD6CG5JJK2R7A2E3",
+          "current_node": "start"
+        },
+        "node_outcomes": {
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          }
+        },
+        "next_node_id": "prepare",
+        "node_visits": {
+          "start": 1
+        }
+      },
+      "diff": {}
+    },
+    {
+      "seq": 0,
+      "checkpoint": {
+        "timestamp": "2026-07-31T11:30:28.983939348Z",
+        "current_node": "prepare",
+        "completed_nodes": [
+          "start",
+          "prepare"
+        ],
+        "node_retries": {},
+        "context_values": {
+          "failure_signature": "",
+          "internal.work_dir": "/home/daytona/workspace/quarry",
+          "graph.stall_timeout": "3600000ms",
+          "internal.retry_count.prepare": 0,
+          "effort": "low",
+          "internal.run_id": "01KYVZ12WKCD6CG5JJK2R7A2E3",
+          "graph.rankdir": "LR",
+          "internal.retry_count.start": 0,
+          "graph.goal": "Perform an adversarial, read-only security review of this repository and report only panel-verified findings.",
+          "outcome": "succeeded",
+          "graph.default_max_retries": "0",
+          "use_inventory": false,
+          "inventory_assignment": {
+            "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+            "target": {
+              "mode": "scan",
+              "scope": [],
+              "range": null,
+              "changedFileCount": null,
+              "changedLineCount": null,
+              "focus": null,
+              "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+              "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+            },
+            "maxComponents": 12,
+            "topLevelDirectories": null,
+            "wholeTreeCompletenessRequired": false
+          },
+          "internal.fidelity": "compact",
+          "empty_target": false,
+          "mode": "scan",
+          "failure_class": "",
+          "current_node": "prepare",
+          "command.output": "blob://sha256/5b0f240611eb1b6c4f67009dd41230cc25a2da855d0f5ae67296a8f1e9778814",
+          "graph.default_fidelity": "compact",
+          "graph.model_stylesheet": "\n            * { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .inventory { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .threat-model { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .research { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n            .verification { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n        ",
+          "internal.node_visit_count": 1,
+          "products_dir": "SECURITY-REVIEW-20260731-113027",
+          "thread.start.current_node": "prepare",
+          "internal.thread_id": "start"
+        },
+        "node_outcomes": {
+          "prepare": {
+            "status": "succeeded",
+            "context_updates": {
+              "mode": "scan",
+              "command.output": "blob://sha256/5b0f240611eb1b6c4f67009dd41230cc25a2da855d0f5ae67296a8f1e9778814",
+              "effort": "low",
+              "use_inventory": false,
+              "products_dir": "SECURITY-REVIEW-20260731-113027",
+              "inventory_assignment": {
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "target": {
+                  "mode": "scan",
+                  "scope": [],
+                  "range": null,
+                  "changedFileCount": null,
+                  "changedLineCount": null,
+                  "focus": null,
+                  "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                  "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                },
+                "maxComponents": 12,
+                "topLevelDirectories": null,
+                "wholeTreeCompletenessRequired": false
+              },
+              "empty_target": false
+            },
+            "notes": "Script completed: python3 -c \"import hashlib,sys; pairs=list(zip(sys.argv[1::2],sys.argv[2::2])); sys.exit(0 if pairs and all(hashlib.sha256(open(path,'rb').read()).hexdigest()==expected for path,expected in pairs) else 91)\" .fabro/workflows/security-review/scripts/security_review.py db08c08320c2c1fb6cd3226fb70fa5672794c0cd12be7d78b82214fc7346258d .fabro/workflows/security-review/scripts/git_readonly.py 6bafe2418234d7887d9f4726208bc9e50325bf34c5098c4a6ef508f1a5486ec5 .fabro/workflows/security-review/scripts/render_report.py 6949cb65bf950b41cf1937deb9eac111a026fe11bf7aa35eb34d53dd670100c4 .fabro/workflows/security-review/specs/report-spec.md 18e3eb3de3c2f585cd4e24d3168b0aaf0176a72ba5efeadaf6773cee1c5f2be2 .fabro/workflows/security-review/templates/report.html 55583ce1e9272ccbc0c048bf8d2ba660e443ca3b77c929958ab0955ac4616777 && python3 .fabro/workflows/security-review/scripts/security_review.py prepare --scan-id-stdin --mode scan --effort low --scope '' --base '' --commit '' --range '' --focus ''",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 1352,
+              "active_time_ms": 1352
+            }
+          },
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          }
+        },
+        "next_node_id": "target_gate",
+        "node_visits": {
+          "prepare": 1,
+          "start": 1
+        }
+      },
+      "diff": {}
+    }
+  ],
   "conclusion": null,
   "sandbox": {
     "kind": "ready",
@@ -2165,5 +2311,82 @@
   "pull_request": null,
   "superseded_by": null,
   "pending_interviews": {},
-  "stages": {}
+  "stages": {
+    "start@1": {
+      "first_event_seq": 18,
+      "prompt": null,
+      "response": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": null,
+        "failure_reason": null,
+        "timestamp": "2026-07-31T11:30:27.377563708Z"
+      },
+      "provider_used": null,
+      "diff": null,
+      "script_invocation": null,
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-07-31T11:30:27.317706016Z",
+      "handler": "start",
+      "graph_visit": 1,
+      "timing": {
+        "wall_time_ms": 0,
+        "inference_time_ms": 0,
+        "tool_time_ms": 0,
+        "active_time_ms": 0
+      },
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "agent_control": "running",
+      "state": "succeeded"
+    },
+    "prepare@1": {
+      "first_event_seq": 23,
+      "prompt": null,
+      "response": null,
+      "completion": null,
+      "provider_used": null,
+      "diff": null,
+      "script_invocation": {
+        "script": "python3 -c \"import hashlib,sys; pairs=list(zip(sys.argv[1::2],sys.argv[2::2])); sys.exit(0 if pairs and all(hashlib.sha256(open(path,'rb').read()).hexdigest()==expected for path,expected in pairs) else 91)\" .fabro/workflows/security-review/scripts/security_review.py db08c08320c2c1fb6cd3226fb70fa5672794c0cd12be7d78b82214fc7346258d .fabro/workflows/security-review/scripts/git_readonly.py 6bafe2418234d7887d9f4726208bc9e50325bf34c5098c4a6ef508f1a5486ec5 .fabro/workflows/security-review/scripts/render_report.py 6949cb65bf950b41cf1937deb9eac111a026fe11bf7aa35eb34d53dd670100c4 .fabro/workflows/security-review/specs/report-spec.md 18e3eb3de3c2f585cd4e24d3168b0aaf0176a72ba5efeadaf6773cee1c5f2be2 .fabro/workflows/security-review/templates/report.html 55583ce1e9272ccbc0c048bf8d2ba660e443ca3b77c929958ab0955ac4616777 && python3 .fabro/workflows/security-review/scripts/security_review.py prepare --scan-id-stdin --mode scan --effort low --scope '' --base '' --commit '' --range '' --focus ''",
+        "command": "exec 2>&1\npython3 -c \"import hashlib,sys; pairs=list(zip(sys.argv[1::2],sys.argv[2::2])); sys.exit(0 if pairs and all(hashlib.sha256(open(path,'rb').read()).hexdigest()==expected for path,expected in pairs) else 91)\" .fabro/workflows/security-review/scripts/security_review.py db08c08320c2c1fb6cd3226fb70fa5672794c0cd12be7d78b82214fc7346258d .fabro/workflows/security-review/scripts/git_readonly.py 6bafe2418234d7887d9f4726208bc9e50325bf34c5098c4a6ef508f1a5486ec5 .fabro/workflows/security-review/scripts/render_report.py 6949cb65bf950b41cf1937deb9eac111a026fe11bf7aa35eb34d53dd670100c4 .fabro/workflows/security-review/specs/report-spec.md 18e3eb3de3c2f585cd4e24d3168b0aaf0176a72ba5efeadaf6773cee1c5f2be2 .fabro/workflows/security-review/templates/report.html 55583ce1e9272ccbc0c048bf8d2ba660e443ca3b77c929958ab0955ac4616777 && python3 .fabro/workflows/security-review/scripts/security_review.py prepare --scan-id-stdin --mode scan --effort low --scope '' --base '' --commit '' --range '' --focus ''",
+        "language": "shell",
+        "timeout_ms": 180000
+      },
+      "script_timing": {
+        "output": "blob://sha256/5b0f240611eb1b6c4f67009dd41230cc25a2da855d0f5ae67296a8f1e9778814",
+        "exit_code": 0,
+        "duration_ms": 1352,
+        "termination": "exited",
+        "output_bytes": 729,
+        "live_streaming": true
+      },
+      "parallel_results": null,
+      "output": null,
+      "output_bytes": 729,
+      "live_streaming": true,
+      "termination": "exited",
+      "started_at": "2026-07-31T11:30:27.389617180Z",
+      "handler": "command",
+      "graph_visit": 1,
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "agent_control": "running",
+      "state": "running"
+    }
+  }
 }
