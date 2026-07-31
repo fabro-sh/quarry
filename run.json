@@ -2141,7 +2141,7 @@
     "kind": "running"
   },
   "status_updated_at": "2026-07-31T11:30:31.834221989Z",
-  "last_event_at": "2026-07-31T11:32:19.297304102Z",
+  "last_event_at": "2026-07-31T11:32:23.199845849Z",
   "pending_control": null,
   "checkpoints": [
     {
@@ -3653,9 +3653,9 @@
       }
     },
     {
-      "seq": 0,
+      "seq": 106,
       "checkpoint": {
-        "timestamp": "2026-07-31T11:32:19.551377832Z",
+        "timestamp": "2026-07-31T11:32:21.926802581Z",
         "current_node": "inventory_gate",
         "completed_nodes": [
           "start",
@@ -3667,9 +3667,628 @@
         ],
         "node_retries": {},
         "context_values": {
+          "internal.retry_count.target_gate": 0,
+          "last_response": "{\"components\":[{\"name\":\"http-server\",\"paths\":[\"crates/quarry-server\"],\"language\":\"Rust\",\"role\":\"HTTP/SSE API server: gateway, document/library/git/collab handlers, auth/session, headers, log redaction",
+          "inventory_feedback": "",
+          "graph.rankdir": "LR",
+          "products_dir": "SECURITY-REVIEW-20260731-113033",
+          "graph.model_stylesheet": "\n            * { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .inventory { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .threat-model { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .research { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n            .verification { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n        ",
+          "graph.default_max_retries": "0",
+          "internal.run_id": "01KYVZ18NEGT9FXSCHY51G9MVW",
+          "internal.thread_id": "merge_inventory",
+          "current_node": "inventory_gate",
+          "empty_target": false,
+          "internal.retry_count.prepare": 0,
+          "inventory_correction": false,
+          "failure_signature": "",
+          "thread.start.current_node": "prepare",
+          "inventory_assignment": {
+            "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+            "target": {
+              "mode": "scan",
+              "scope": [],
+              "range": null,
+              "changedFileCount": null,
+              "changedLineCount": null,
+              "focus": null,
+              "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+              "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+            },
+            "maxComponents": 24,
+            "topLevelDirectories": [
+              ".ai",
+              ".cargo",
+              ".claude",
+              ".fabro",
+              ".github",
+              "Formula",
+              "crates",
+              "docs",
+              "fixtures",
+              "scripts",
+              "ui"
+            ],
+            "wholeTreeCompletenessRequired": true
+          },
+          "thread.merge_inventory.current_node": "inventory_gate",
+          "internal.retry_count.start": 0,
+          "mode": "scan",
+          "internal.work_dir": "/home/daytona/workspace/quarry",
+          "thread.inventory.current_node": "merge_inventory",
+          "outcome": "succeeded",
+          "graph.default_fidelity": "compact",
+          "inventory_done": true,
+          "command.output": "blob://sha256/48154468b8ef045ff44b32cb28eb03bf4d0d54d06e8772fb304cd65491483ef8",
+          "effort": "high",
+          "output.inventory": {
+            "components": [
+              {
+                "name": "http-server",
+                "paths": [
+                  "crates/quarry-server"
+                ],
+                "language": "Rust",
+                "role": "HTTP/SSE API server: gateway, document/library/git/collab handlers, auth/session, headers, log redaction",
+                "internetFacing": true
+              },
+              {
+                "name": "web-ui",
+                "paths": [
+                  "ui/src",
+                  "ui/public"
+                ],
+                "language": "TypeScript/React",
+                "role": "Browser frontend rendering remote documents and collab content (XSS/injection surface)",
+                "internetFacing": true
+              },
+              {
+                "name": "collab-codec",
+                "paths": [
+                  "crates/quarry-collab-codec"
+                ],
+                "language": "Rust",
+                "role": "Markdown/Yjs/Slate parsing and reconciliation of untrusted collaborative document content",
+                "internetFacing": true
+              },
+              {
+                "name": "git-integration",
+                "paths": [
+                  "crates/quarry-git"
+                ],
+                "language": "Rust",
+                "role": "Git worktree import/export and peer push/pull/sync of remote content",
+                "internetFacing": true
+              },
+              {
+                "name": "fuse-mount",
+                "paths": [
+                  "crates/quarry-fuse"
+                ],
+                "language": "Rust",
+                "role": "FUSE filesystem exposing documents to local processes; path and write handling",
+                "internetFacing": false
+              },
+              {
+                "name": "storage",
+                "paths": [
+                  "crates/quarry-storage"
+                ],
+                "language": "Rust",
+                "role": "SQLite-backed document/block/library store, search, sync, transactions, schema",
+                "internetFacing": false
+              },
+              {
+                "name": "cas",
+                "paths": [
+                  "crates/quarry-cas"
+                ],
+                "language": "Rust",
+                "role": "Content-addressable storage of untrusted blobs",
+                "internetFacing": false
+              },
+              {
+                "name": "core",
+                "paths": [
+                  "crates/quarry-core"
+                ],
+                "language": "Rust",
+                "role": "Shared types, path normalization, error model used across crates",
+                "internetFacing": false
+              },
+              {
+                "name": "cli",
+                "paths": [
+                  "crates/quarry-cli",
+                  "crates/quarry"
+                ],
+                "language": "Rust",
+                "role": "Command-line entrypoint and subcommands including agent detection and server startup",
+                "internetFacing": false
+              },
+              {
+                "name": "dev-tooling",
+                "paths": [
+                  "crates/quarry-dev"
+                ],
+                "language": "Rust",
+                "role": "Internal dev/release automation binary",
+                "internetFacing": false
+              },
+              {
+                "name": "ci-workflows",
+                "paths": [
+                  ".github"
+                ],
+                "language": "YAML",
+                "role": "GitHub Actions CI/release workflows and reusable actions; secret handling and script injection surface",
+                "internetFacing": false
+              },
+              {
+                "name": "packaging",
+                "paths": [
+                  "Formula",
+                  "scripts",
+                  "Dockerfile"
+                ],
+                "language": "Ruby/Dockerfile",
+                "role": "Homebrew formula and release packaging scripts plus container build definition",
+                "internetFacing": false
+              },
+              {
+                "name": "review-workflow",
+                "paths": [
+                  ".fabro/workflows/security-review"
+                ],
+                "language": "Python/YAML",
+                "role": "Security-review workflow scripts that read the repository and render reports",
+                "internetFacing": false
+              },
+              {
+                "name": "workspace-manifests",
+                "paths": [
+                  "Cargo.toml",
+                  "Cargo.lock",
+                  "rust-toolchain.toml",
+                  "rustfmt.toml",
+                  ".cargo"
+                ],
+                "language": "TOML",
+                "role": "Rust workspace manifests, pinned dependencies, and toolchain configuration",
+                "internetFacing": false
+              }
+            ],
+            "securityScanSkippedComponents": [
+              {
+                "name": "docs",
+                "paths": [
+                  "docs"
+                ],
+                "reason": "Documentation only; no executable code"
+              },
+              {
+                "name": "fixtures",
+                "paths": [
+                  "fixtures"
+                ],
+                "reason": "Test fixtures, not shipped or executed by production code"
+              },
+              {
+                "name": "ui-tests",
+                "paths": [
+                  "ui/tests"
+                ],
+                "reason": "UI test suite, not shipped"
+              },
+              {
+                "name": "ui-codegen-scripts",
+                "paths": [
+                  "ui/scripts"
+                ],
+                "reason": "Codegen/build-time scripts producing checked-in output; not part of runtime attack surface"
+              },
+              {
+                "name": "ai-notes",
+                "paths": [
+                  ".ai"
+                ],
+                "reason": "Agent planning notes; not code"
+              },
+              {
+                "name": "claude-config",
+                "paths": [
+                  ".claude"
+                ],
+                "reason": "Agent skill configuration; not product code"
+              },
+              {
+                "name": "review-products",
+                "paths": [
+                  "SECURITY-REVIEW-20260731-113033"
+                ],
+                "reason": "Output directory of this review run, not repository product code"
+              },
+              {
+                "name": "root-metadata",
+                "paths": [
+                  "README.md",
+                  "spec.md",
+                  "spec-browser.md",
+                  "LICENSE",
+                  ".gitignore",
+                  ".dockerignore"
+                ],
+                "reason": "Top-level documentation and ignore metadata, no executable content"
+              }
+            ]
+          },
+          "thread.prepare.current_node": "target_gate",
+          "internal.fidelity": "compact",
+          "failure_class": "",
+          "graph.stall_timeout": "3600000ms",
+          "internal.retry_count.merge_inventory": 0,
+          "response.inventory": "{\"components\":[{\"name\":\"http-server\",\"paths\":[\"crates/quarry-server\"],\"language\":\"Rust\",\"role\":\"HTTP/SSE API server: gateway, document/library/git/collab handlers, auth/session, headers, log redaction\",\"internetFacing\":true},{\"name\":\"web-ui\",\"paths\":[\"ui/src\",\"ui/public\"],\"language\":\"TypeScript/React\",\"role\":\"Browser frontend rendering remote documents and collab content (XSS/injection surface)\",\"internetFacing\":true},{\"name\":\"collab-codec\",\"paths\":[\"crates/quarry-collab-codec\"],\"language\":\"Rust\",\"role\":\"Markdown/Yjs/Slate parsing and reconciliation of untrusted collaborative document content\",\"internetFacing\":true},{\"name\":\"git-integration\",\"paths\":[\"crates/quarry-git\"],\"language\":\"Rust\",\"role\":\"Git worktree import/export and peer push/pull/sync of remote content\",\"internetFacing\":true},{\"name\":\"fuse-mount\",\"paths\":[\"crates/quarry-fuse\"],\"language\":\"Rust\",\"role\":\"FUSE filesystem exposing documents to local processes; path and write handling\",\"internetFacing\":false},{\"name\":\"storage\",\"paths\":[\"crates/quarry-storage\"],\"language\":\"Rust\",\"role\":\"SQLite-backed document/block/library store, search, sync, transactions, schema\",\"internetFacing\":false},{\"name\":\"cas\",\"paths\":[\"crates/quarry-cas\"],\"language\":\"Rust\",\"role\":\"Content-addressable storage of untrusted blobs\",\"internetFacing\":false},{\"name\":\"core\",\"paths\":[\"crates/quarry-core\"],\"language\":\"Rust\",\"role\":\"Shared types, path normalization, error model used across crates\",\"internetFacing\":false},{\"name\":\"cli\",\"paths\":[\"crates/quarry-cli\",\"crates/quarry\"],\"language\":\"Rust\",\"role\":\"Command-line entrypoint and subcommands including agent detection and server startup\",\"internetFacing\":false},{\"name\":\"dev-tooling\",\"paths\":[\"crates/quarry-dev\"],\"language\":\"Rust\",\"role\":\"Internal dev/release automation binary\",\"internetFacing\":false},{\"name\":\"ci-workflows\",\"paths\":[\".github\"],\"language\":\"YAML\",\"role\":\"GitHub Actions CI/release workflows and reusable actions; secret handling and script injection surface\",\"internetFacing\":false},{\"name\":\"packaging\",\"paths\":[\"Formula\",\"scripts\",\"Dockerfile\"],\"language\":\"Ruby/Dockerfile\",\"role\":\"Homebrew formula and release packaging scripts plus container build definition\",\"internetFacing\":false},{\"name\":\"review-workflow\",\"paths\":[\".fabro/workflows/security-review\"],\"language\":\"Python/YAML\",\"role\":\"Security-review workflow scripts that read the repository and render reports\",\"internetFacing\":false},{\"name\":\"workspace-manifests\",\"paths\":[\"Cargo.toml\",\"Cargo.lock\",\"rust-toolchain.toml\",\"rustfmt.toml\",\".cargo\"],\"language\":\"TOML\",\"role\":\"Rust workspace manifests, pinned dependencies, and toolchain configuration\",\"internetFacing\":false}],\"securityScanSkippedComponents\":[{\"name\":\"docs\",\"paths\":[\"docs\"],\"reason\":\"Documentation only; no executable code\"},{\"name\":\"fixtures\",\"paths\":[\"fixtures\"],\"reason\":\"Test fixtures, not shipped or executed by production code\"},{\"name\":\"ui-tests\",\"paths\":[\"ui/tests\"],\"reason\":\"UI test suite, not shipped\"},{\"name\":\"ui-codegen-scripts\",\"paths\":[\"ui/scripts\"],\"reason\":\"Codegen/build-time scripts producing checked-in output; not part of runtime attack surface\"},{\"name\":\"ai-notes\",\"paths\":[\".ai\"],\"reason\":\"Agent planning notes; not code\"},{\"name\":\"claude-config\",\"paths\":[\".claude\"],\"reason\":\"Agent skill configuration; not product code\"},{\"name\":\"review-products\",\"paths\":[\"SECURITY-REVIEW-20260731-113033\"],\"reason\":\"Output directory of this review run, not repository product code\"},{\"name\":\"root-metadata\",\"paths\":[\"README.md\",\"spec.md\",\"spec-browser.md\",\"LICENSE\",\".gitignore\",\".dockerignore\"],\"reason\":\"Top-level documentation and ignore metadata, no executable content\"}]}",
+          "use_inventory": true,
+          "graph.goal": "Perform an adversarial, read-only security review of this repository and report only panel-verified findings.",
+          "internal.retry_count.inventory_gate": 0,
+          "internal.node_visit_count": 1,
+          "last_stage": "inventory",
+          "internal.retry_count.inventory": 0
+        },
+        "node_outcomes": {
+          "target_gate": {
+            "status": "succeeded",
+            "notes": "Conditional node evaluated: target_gate",
+            "usage": null
+          },
+          "prepare": {
+            "status": "succeeded",
+            "context_updates": {
+              "empty_target": false,
+              "effort": "high",
+              "mode": "scan",
+              "command.output": "blob://sha256/079df93d496fac0a928d5bbc0850ae6563d2ef2d5883227bd07d9382a7abe52e",
+              "inventory_assignment": {
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "target": {
+                  "mode": "scan",
+                  "scope": [],
+                  "range": null,
+                  "changedFileCount": null,
+                  "changedLineCount": null,
+                  "focus": null,
+                  "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                  "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                },
+                "maxComponents": 24,
+                "topLevelDirectories": [
+                  ".ai",
+                  ".cargo",
+                  ".claude",
+                  ".fabro",
+                  ".github",
+                  "Formula",
+                  "crates",
+                  "docs",
+                  "fixtures",
+                  "scripts",
+                  "ui"
+                ],
+                "wholeTreeCompletenessRequired": true
+              },
+              "use_inventory": true,
+              "products_dir": "SECURITY-REVIEW-20260731-113033"
+            },
+            "notes": "Script completed: python3 -c \"import hashlib,sys; pairs=list(zip(sys.argv[1::2],sys.argv[2::2])); sys.exit(0 if pairs and all(hashlib.sha256(open(path,'rb').read()).hexdigest()==expected for path,expected in pairs) else 91)\" .fabro/workflows/security-review/scripts/security_review.py db08c08320c2c1fb6cd3226fb70fa5672794c0cd12be7d78b82214fc7346258d .fabro/workflows/security-review/scripts/git_readonly.py 6bafe2418234d7887d9f4726208bc9e50325bf34c5098c4a6ef508f1a5486ec5 .fabro/workflows/security-review/scripts/render_report.py 6949cb65bf950b41cf1937deb9eac111a026fe11bf7aa35eb34d53dd670100c4 .fabro/workflows/security-review/specs/report-spec.md 18e3eb3de3c2f585cd4e24d3168b0aaf0176a72ba5efeadaf6773cee1c5f2be2 .fabro/workflows/security-review/templates/report.html 55583ce1e9272ccbc0c048bf8d2ba660e443ca3b77c929958ab0955ac4616777 && python3 .fabro/workflows/security-review/scripts/security_review.py prepare --scan-id-stdin --mode scan --effort high --scope '' --base '' --commit '' --range '' --focus ''",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 1324,
+              "active_time_ms": 1324
+            }
+          },
+          "inventory": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_stage": "inventory",
+              "last_response": "{\"components\":[{\"name\":\"http-server\",\"paths\":[\"crates/quarry-server\"],\"language\":\"Rust\",\"role\":\"HTTP/SSE API server: gateway, document/library/git/collab handlers, auth/session, headers, log redaction",
+              "output.inventory": {
+                "components": [
+                  {
+                    "name": "http-server",
+                    "paths": [
+                      "crates/quarry-server"
+                    ],
+                    "language": "Rust",
+                    "role": "HTTP/SSE API server: gateway, document/library/git/collab handlers, auth/session, headers, log redaction",
+                    "internetFacing": true
+                  },
+                  {
+                    "name": "web-ui",
+                    "paths": [
+                      "ui/src",
+                      "ui/public"
+                    ],
+                    "language": "TypeScript/React",
+                    "role": "Browser frontend rendering remote documents and collab content (XSS/injection surface)",
+                    "internetFacing": true
+                  },
+                  {
+                    "name": "collab-codec",
+                    "paths": [
+                      "crates/quarry-collab-codec"
+                    ],
+                    "language": "Rust",
+                    "role": "Markdown/Yjs/Slate parsing and reconciliation of untrusted collaborative document content",
+                    "internetFacing": true
+                  },
+                  {
+                    "name": "git-integration",
+                    "paths": [
+                      "crates/quarry-git"
+                    ],
+                    "language": "Rust",
+                    "role": "Git worktree import/export and peer push/pull/sync of remote content",
+                    "internetFacing": true
+                  },
+                  {
+                    "name": "fuse-mount",
+                    "paths": [
+                      "crates/quarry-fuse"
+                    ],
+                    "language": "Rust",
+                    "role": "FUSE filesystem exposing documents to local processes; path and write handling",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "storage",
+                    "paths": [
+                      "crates/quarry-storage"
+                    ],
+                    "language": "Rust",
+                    "role": "SQLite-backed document/block/library store, search, sync, transactions, schema",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "cas",
+                    "paths": [
+                      "crates/quarry-cas"
+                    ],
+                    "language": "Rust",
+                    "role": "Content-addressable storage of untrusted blobs",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "core",
+                    "paths": [
+                      "crates/quarry-core"
+                    ],
+                    "language": "Rust",
+                    "role": "Shared types, path normalization, error model used across crates",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "cli",
+                    "paths": [
+                      "crates/quarry-cli",
+                      "crates/quarry"
+                    ],
+                    "language": "Rust",
+                    "role": "Command-line entrypoint and subcommands including agent detection and server startup",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "dev-tooling",
+                    "paths": [
+                      "crates/quarry-dev"
+                    ],
+                    "language": "Rust",
+                    "role": "Internal dev/release automation binary",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "ci-workflows",
+                    "paths": [
+                      ".github"
+                    ],
+                    "language": "YAML",
+                    "role": "GitHub Actions CI/release workflows and reusable actions; secret handling and script injection surface",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "packaging",
+                    "paths": [
+                      "Formula",
+                      "scripts",
+                      "Dockerfile"
+                    ],
+                    "language": "Ruby/Dockerfile",
+                    "role": "Homebrew formula and release packaging scripts plus container build definition",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "review-workflow",
+                    "paths": [
+                      ".fabro/workflows/security-review"
+                    ],
+                    "language": "Python/YAML",
+                    "role": "Security-review workflow scripts that read the repository and render reports",
+                    "internetFacing": false
+                  },
+                  {
+                    "name": "workspace-manifests",
+                    "paths": [
+                      "Cargo.toml",
+                      "Cargo.lock",
+                      "rust-toolchain.toml",
+                      "rustfmt.toml",
+                      ".cargo"
+                    ],
+                    "language": "TOML",
+                    "role": "Rust workspace manifests, pinned dependencies, and toolchain configuration",
+                    "internetFacing": false
+                  }
+                ],
+                "securityScanSkippedComponents": [
+                  {
+                    "name": "docs",
+                    "paths": [
+                      "docs"
+                    ],
+                    "reason": "Documentation only; no executable code"
+                  },
+                  {
+                    "name": "fixtures",
+                    "paths": [
+                      "fixtures"
+                    ],
+                    "reason": "Test fixtures, not shipped or executed by production code"
+                  },
+                  {
+                    "name": "ui-tests",
+                    "paths": [
+                      "ui/tests"
+                    ],
+                    "reason": "UI test suite, not shipped"
+                  },
+                  {
+                    "name": "ui-codegen-scripts",
+                    "paths": [
+                      "ui/scripts"
+                    ],
+                    "reason": "Codegen/build-time scripts producing checked-in output; not part of runtime attack surface"
+                  },
+                  {
+                    "name": "ai-notes",
+                    "paths": [
+                      ".ai"
+                    ],
+                    "reason": "Agent planning notes; not code"
+                  },
+                  {
+                    "name": "claude-config",
+                    "paths": [
+                      ".claude"
+                    ],
+                    "reason": "Agent skill configuration; not product code"
+                  },
+                  {
+                    "name": "review-products",
+                    "paths": [
+                      "SECURITY-REVIEW-20260731-113033"
+                    ],
+                    "reason": "Output directory of this review run, not repository product code"
+                  },
+                  {
+                    "name": "root-metadata",
+                    "paths": [
+                      "README.md",
+                      "spec.md",
+                      "spec-browser.md",
+                      "LICENSE",
+                      ".gitignore",
+                      ".dockerignore"
+                    ],
+                    "reason": "Top-level documentation and ignore metadata, no executable content"
+                  }
+                ]
+              },
+              "response.inventory": "{\"components\":[{\"name\":\"http-server\",\"paths\":[\"crates/quarry-server\"],\"language\":\"Rust\",\"role\":\"HTTP/SSE API server: gateway, document/library/git/collab handlers, auth/session, headers, log redaction\",\"internetFacing\":true},{\"name\":\"web-ui\",\"paths\":[\"ui/src\",\"ui/public\"],\"language\":\"TypeScript/React\",\"role\":\"Browser frontend rendering remote documents and collab content (XSS/injection surface)\",\"internetFacing\":true},{\"name\":\"collab-codec\",\"paths\":[\"crates/quarry-collab-codec\"],\"language\":\"Rust\",\"role\":\"Markdown/Yjs/Slate parsing and reconciliation of untrusted collaborative document content\",\"internetFacing\":true},{\"name\":\"git-integration\",\"paths\":[\"crates/quarry-git\"],\"language\":\"Rust\",\"role\":\"Git worktree import/export and peer push/pull/sync of remote content\",\"internetFacing\":true},{\"name\":\"fuse-mount\",\"paths\":[\"crates/quarry-fuse\"],\"language\":\"Rust\",\"role\":\"FUSE filesystem exposing documents to local processes; path and write handling\",\"internetFacing\":false},{\"name\":\"storage\",\"paths\":[\"crates/quarry-storage\"],\"language\":\"Rust\",\"role\":\"SQLite-backed document/block/library store, search, sync, transactions, schema\",\"internetFacing\":false},{\"name\":\"cas\",\"paths\":[\"crates/quarry-cas\"],\"language\":\"Rust\",\"role\":\"Content-addressable storage of untrusted blobs\",\"internetFacing\":false},{\"name\":\"core\",\"paths\":[\"crates/quarry-core\"],\"language\":\"Rust\",\"role\":\"Shared types, path normalization, error model used across crates\",\"internetFacing\":false},{\"name\":\"cli\",\"paths\":[\"crates/quarry-cli\",\"crates/quarry\"],\"language\":\"Rust\",\"role\":\"Command-line entrypoint and subcommands including agent detection and server startup\",\"internetFacing\":false},{\"name\":\"dev-tooling\",\"paths\":[\"crates/quarry-dev\"],\"language\":\"Rust\",\"role\":\"Internal dev/release automation binary\",\"internetFacing\":false},{\"name\":\"ci-workflows\",\"paths\":[\".github\"],\"language\":\"YAML\",\"role\":\"GitHub Actions CI/release workflows and reusable actions; secret handling and script injection surface\",\"internetFacing\":false},{\"name\":\"packaging\",\"paths\":[\"Formula\",\"scripts\",\"Dockerfile\"],\"language\":\"Ruby/Dockerfile\",\"role\":\"Homebrew formula and release packaging scripts plus container build definition\",\"internetFacing\":false},{\"name\":\"review-workflow\",\"paths\":[\".fabro/workflows/security-review\"],\"language\":\"Python/YAML\",\"role\":\"Security-review workflow scripts that read the repository and render reports\",\"internetFacing\":false},{\"name\":\"workspace-manifests\",\"paths\":[\"Cargo.toml\",\"Cargo.lock\",\"rust-toolchain.toml\",\"rustfmt.toml\",\".cargo\"],\"language\":\"TOML\",\"role\":\"Rust workspace manifests, pinned dependencies, and toolchain configuration\",\"internetFacing\":false}],\"securityScanSkippedComponents\":[{\"name\":\"docs\",\"paths\":[\"docs\"],\"reason\":\"Documentation only; no executable code\"},{\"name\":\"fixtures\",\"paths\":[\"fixtures\"],\"reason\":\"Test fixtures, not shipped or executed by production code\"},{\"name\":\"ui-tests\",\"paths\":[\"ui/tests\"],\"reason\":\"UI test suite, not shipped\"},{\"name\":\"ui-codegen-scripts\",\"paths\":[\"ui/scripts\"],\"reason\":\"Codegen/build-time scripts producing checked-in output; not part of runtime attack surface\"},{\"name\":\"ai-notes\",\"paths\":[\".ai\"],\"reason\":\"Agent planning notes; not code\"},{\"name\":\"claude-config\",\"paths\":[\".claude\"],\"reason\":\"Agent skill configuration; not product code\"},{\"name\":\"review-products\",\"paths\":[\"SECURITY-REVIEW-20260731-113033\"],\"reason\":\"Output directory of this review run, not repository product code\"},{\"name\":\"root-metadata\",\"paths\":[\"README.md\",\"spec.md\",\"spec-browser.md\",\"LICENSE\",\".gitignore\",\".dockerignore\"],\"reason\":\"Top-level documentation and ignore metadata, no executable content\"}]}"
+            },
+            "notes": "Stage completed: inventory",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "kimi",
+                    "model_id": "kimi-k3"
+                  },
+                  "tokens": {
+                    "input_tokens": 11378,
+                    "output_tokens": 2170,
+                    "reasoning_tokens": 349,
+                    "cache_read_tokens": 32256,
+                    "cache_write_tokens": 0
+                  }
+                },
+                "facts": {
+                  "algorithm": "openai"
+                }
+              },
+              "total_usd_micros": 81594
+            },
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 88949,
+              "tool_time_ms": 3753,
+              "active_time_ms": 92702
+            }
+          },
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          },
+          "merge_inventory": {
+            "status": "succeeded",
+            "context_updates": {
+              "command.output": "blob://sha256/48154468b8ef045ff44b32cb28eb03bf4d0d54d06e8772fb304cd65491483ef8",
+              "inventory_feedback": "",
+              "inventory_done": true,
+              "inventory_correction": false
+            },
+            "notes": "Script completed: python3 .fabro/workflows/security-review/scripts/security_review.py merge inventory",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 1282,
+              "active_time_ms": 1282
+            }
+          },
+          "inventory_gate": {
+            "status": "succeeded",
+            "notes": "Conditional node evaluated: inventory_gate",
+            "usage": null
+          }
+        },
+        "next_node_id": "plan_matrix",
+        "git_commit_sha": "2725585b2706f23492e4ac9ce18656d60c6f104c",
+        "node_visits": {
+          "inventory": 1,
+          "target_gate": 1,
+          "start": 1,
+          "inventory_gate": 1,
+          "merge_inventory": 1,
+          "prepare": 1
+        }
+      },
+      "diff": {
+        "summary": {
+          "files_changed": 0,
+          "additions": 0,
+          "deletions": 0
+        }
+      }
+    },
+    {
+      "seq": 0,
+      "checkpoint": {
+        "timestamp": "2026-07-31T11:32:23.410057467Z",
+        "current_node": "plan_matrix",
+        "completed_nodes": [
+          "start",
+          "prepare",
+          "target_gate",
+          "inventory",
+          "merge_inventory",
+          "inventory_gate",
+          "plan_matrix"
+        ],
+        "node_retries": {},
+        "context_values": {
           "graph.stall_timeout": "3600000ms",
           "mode": "scan",
-          "command.output": "blob://sha256/48154468b8ef045ff44b32cb28eb03bf4d0d54d06e8772fb304cd65491483ef8",
+          "command.output": "blob://sha256/f7468dd1d6a6686a8b96c90cbe4ee07ffe0b23427aa440debd1d5973222a4a43",
           "graph.model_stylesheet": "\n            * { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .inventory { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .threat-model { model: kimi-k3; provider: kimi; reasoning_effort: low; }\n            .research { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n            .verification { model: kimi-k3; provider: kimi; reasoning_effort: high; }\n        ",
           "response.inventory": "{\"components\":[{\"name\":\"http-server\",\"paths\":[\"crates/quarry-server\"],\"language\":\"Rust\",\"role\":\"HTTP/SSE API server: gateway, document/library/git/collab handlers, auth/session, headers, log redaction\",\"internetFacing\":true},{\"name\":\"web-ui\",\"paths\":[\"ui/src\",\"ui/public\"],\"language\":\"TypeScript/React\",\"role\":\"Browser frontend rendering remote documents and collab content (XSS/injection surface)\",\"internetFacing\":true},{\"name\":\"collab-codec\",\"paths\":[\"crates/quarry-collab-codec\"],\"language\":\"Rust\",\"role\":\"Markdown/Yjs/Slate parsing and reconciliation of untrusted collaborative document content\",\"internetFacing\":true},{\"name\":\"git-integration\",\"paths\":[\"crates/quarry-git\"],\"language\":\"Rust\",\"role\":\"Git worktree import/export and peer push/pull/sync of remote content\",\"internetFacing\":true},{\"name\":\"fuse-mount\",\"paths\":[\"crates/quarry-fuse\"],\"language\":\"Rust\",\"role\":\"FUSE filesystem exposing documents to local processes; path and write handling\",\"internetFacing\":false},{\"name\":\"storage\",\"paths\":[\"crates/quarry-storage\"],\"language\":\"Rust\",\"role\":\"SQLite-backed document/block/library store, search, sync, transactions, schema\",\"internetFacing\":false},{\"name\":\"cas\",\"paths\":[\"crates/quarry-cas\"],\"language\":\"Rust\",\"role\":\"Content-addressable storage of untrusted blobs\",\"internetFacing\":false},{\"name\":\"core\",\"paths\":[\"crates/quarry-core\"],\"language\":\"Rust\",\"role\":\"Shared types, path normalization, error model used across crates\",\"internetFacing\":false},{\"name\":\"cli\",\"paths\":[\"crates/quarry-cli\",\"crates/quarry\"],\"language\":\"Rust\",\"role\":\"Command-line entrypoint and subcommands including agent detection and server startup\",\"internetFacing\":false},{\"name\":\"dev-tooling\",\"paths\":[\"crates/quarry-dev\"],\"language\":\"Rust\",\"role\":\"Internal dev/release automation binary\",\"internetFacing\":false},{\"name\":\"ci-workflows\",\"paths\":[\".github\"],\"language\":\"YAML\",\"role\":\"GitHub Actions CI/release workflows and reusable actions; secret handling and script injection surface\",\"internetFacing\":false},{\"name\":\"packaging\",\"paths\":[\"Formula\",\"scripts\",\"Dockerfile\"],\"language\":\"Ruby/Dockerfile\",\"role\":\"Homebrew formula and release packaging scripts plus container build definition\",\"internetFacing\":false},{\"name\":\"review-workflow\",\"paths\":[\".fabro/workflows/security-review\"],\"language\":\"Python/YAML\",\"role\":\"Security-review workflow scripts that read the repository and render reports\",\"internetFacing\":false},{\"name\":\"workspace-manifests\",\"paths\":[\"Cargo.toml\",\"Cargo.lock\",\"rust-toolchain.toml\",\"rustfmt.toml\",\".cargo\"],\"language\":\"TOML\",\"role\":\"Rust workspace manifests, pinned dependencies, and toolchain configuration\",\"internetFacing\":false}],\"securityScanSkippedComponents\":[{\"name\":\"docs\",\"paths\":[\"docs\"],\"reason\":\"Documentation only; no executable code\"},{\"name\":\"fixtures\",\"paths\":[\"fixtures\"],\"reason\":\"Test fixtures, not shipped or executed by production code\"},{\"name\":\"ui-tests\",\"paths\":[\"ui/tests\"],\"reason\":\"UI test suite, not shipped\"},{\"name\":\"ui-codegen-scripts\",\"paths\":[\"ui/scripts\"],\"reason\":\"Codegen/build-time scripts producing checked-in output; not part of runtime attack surface\"},{\"name\":\"ai-notes\",\"paths\":[\".ai\"],\"reason\":\"Agent planning notes; not code\"},{\"name\":\"claude-config\",\"paths\":[\".claude\"],\"reason\":\"Agent skill configuration; not product code\"},{\"name\":\"review-products\",\"paths\":[\"SECURITY-REVIEW-20260731-113033\"],\"reason\":\"Output directory of this review run, not repository product code\"},{\"name\":\"root-metadata\",\"paths\":[\"README.md\",\"spec.md\",\"spec-browser.md\",\"LICENSE\",\".gitignore\",\".dockerignore\"],\"reason\":\"Top-level documentation and ignore metadata, no executable content\"}]}",
           "internal.work_dir": "/home/daytona/workspace/quarry",
@@ -3680,13 +4299,320 @@
           "last_response": "{\"components\":[{\"name\":\"http-server\",\"paths\":[\"crates/quarry-server\"],\"language\":\"Rust\",\"role\":\"HTTP/SSE API server: gateway, document/library/git/collab handlers, auth/session, headers, log redaction",
           "inventory_feedback": "",
           "inventory_done": true,
+          "thread.inventory_gate.current_node": "plan_matrix",
+          "threat_jobs": [
+            {
+              "name": "http-server",
+              "paths": [
+                "crates/quarry-server"
+              ],
+              "language": "Rust",
+              "role": "HTTP/SSE API server: gateway, document/library/git/collab handlers, auth/session, headers, log redaction",
+              "internetFacing": true,
+              "artifact_key": "001-http-server-71604076",
+              "job_id": "threat:001-http-server-71604076",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "web-ui",
+              "paths": [
+                "ui/src",
+                "ui/public"
+              ],
+              "language": "TypeScript/React",
+              "role": "Browser frontend rendering remote documents and collab content (XSS/injection surface)",
+              "internetFacing": true,
+              "artifact_key": "002-web-ui-40ce0b0c",
+              "job_id": "threat:002-web-ui-40ce0b0c",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "collab-codec",
+              "paths": [
+                "crates/quarry-collab-codec"
+              ],
+              "language": "Rust",
+              "role": "Markdown/Yjs/Slate parsing and reconciliation of untrusted collaborative document content",
+              "internetFacing": true,
+              "artifact_key": "003-collab-codec-727e68e4",
+              "job_id": "threat:003-collab-codec-727e68e4",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "git-integration",
+              "paths": [
+                "crates/quarry-git"
+              ],
+              "language": "Rust",
+              "role": "Git worktree import/export and peer push/pull/sync of remote content",
+              "internetFacing": true,
+              "artifact_key": "004-git-integration-d162f88f",
+              "job_id": "threat:004-git-integration-d162f88f",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "fuse-mount",
+              "paths": [
+                "crates/quarry-fuse"
+              ],
+              "language": "Rust",
+              "role": "FUSE filesystem exposing documents to local processes; path and write handling",
+              "internetFacing": false,
+              "artifact_key": "005-fuse-mount-9a6e73fc",
+              "job_id": "threat:005-fuse-mount-9a6e73fc",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "storage",
+              "paths": [
+                "crates/quarry-storage"
+              ],
+              "language": "Rust",
+              "role": "SQLite-backed document/block/library store, search, sync, transactions, schema",
+              "internetFacing": false,
+              "artifact_key": "006-storage-49a25f9f",
+              "job_id": "threat:006-storage-49a25f9f",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "cas",
+              "paths": [
+                "crates/quarry-cas"
+              ],
+              "language": "Rust",
+              "role": "Content-addressable storage of untrusted blobs",
+              "internetFacing": false,
+              "artifact_key": "007-cas-0ab2b186",
+              "job_id": "threat:007-cas-0ab2b186",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "core",
+              "paths": [
+                "crates/quarry-core"
+              ],
+              "language": "Rust",
+              "role": "Shared types, path normalization, error model used across crates",
+              "internetFacing": false,
+              "artifact_key": "008-core-0d45f5fd",
+              "job_id": "threat:008-core-0d45f5fd",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "cli",
+              "paths": [
+                "crates/quarry-cli",
+                "crates/quarry"
+              ],
+              "language": "Rust",
+              "role": "Command-line entrypoint and subcommands including agent detection and server startup",
+              "internetFacing": false,
+              "artifact_key": "009-cli-99bb8840",
+              "job_id": "threat:009-cli-99bb8840",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "dev-tooling",
+              "paths": [
+                "crates/quarry-dev"
+              ],
+              "language": "Rust",
+              "role": "Internal dev/release automation binary",
+              "internetFacing": false,
+              "artifact_key": "010-dev-tooling-b2ecb3ec",
+              "job_id": "threat:010-dev-tooling-b2ecb3ec",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "ci-workflows",
+              "paths": [
+                ".github"
+              ],
+              "language": "YAML",
+              "role": "GitHub Actions CI/release workflows and reusable actions; secret handling and script injection surface",
+              "internetFacing": false,
+              "artifact_key": "011-ci-workflows-98c071e8",
+              "job_id": "threat:011-ci-workflows-98c071e8",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "packaging",
+              "paths": [
+                "Formula",
+                "scripts",
+                "Dockerfile"
+              ],
+              "language": "Ruby/Dockerfile",
+              "role": "Homebrew formula and release packaging scripts plus container build definition",
+              "internetFacing": false,
+              "artifact_key": "012-packaging-71669691",
+              "job_id": "threat:012-packaging-71669691",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "review-workflow",
+              "paths": [
+                ".fabro/workflows/security-review"
+              ],
+              "language": "Python/YAML",
+              "role": "Security-review workflow scripts that read the repository and render reports",
+              "internetFacing": false,
+              "artifact_key": "013-review-workflow-39d1649a",
+              "job_id": "threat:013-review-workflow-39d1649a",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            },
+            {
+              "name": "workspace-manifests",
+              "paths": [
+                "Cargo.toml",
+                "Cargo.lock",
+                "rust-toolchain.toml",
+                "rustfmt.toml",
+                ".cargo"
+              ],
+              "language": "TOML",
+              "role": "Rust workspace manifests, pinned dependencies, and toolchain configuration",
+              "internetFacing": false,
+              "artifact_key": "014-workspace-manifests-c060da06",
+              "job_id": "threat:014-workspace-manifests-c060da06",
+              "target": {
+                "mode": "scan",
+                "scope": [],
+                "range": null,
+                "changedFileCount": null,
+                "changedLineCount": null,
+                "focus": null,
+                "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+              }
+            }
+          ],
           "internal.node_visit_count": 1,
+          "run_threat_models": true,
           "internal.retry_count.target_gate": 0,
+          "internal.retry_count.plan_matrix": 0,
           "effort": "high",
           "internal.retry_count.inventory": 0,
           "thread.start.current_node": "prepare",
           "failure_signature": "",
-          "internal.thread_id": "merge_inventory",
+          "internal.thread_id": "inventory_gate",
           "internal.retry_count.prepare": 0,
           "last_stage": "inventory",
           "failure_class": "",
@@ -3903,7 +4829,7 @@
             ]
           },
           "thread.inventory.current_node": "merge_inventory",
-          "current_node": "inventory_gate",
+          "current_node": "plan_matrix",
           "inventory_assignment": {
             "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
             "target": {
@@ -4176,15 +5102,329 @@
             "status": "succeeded",
             "usage": null
           },
-          "target_gate": {
-            "status": "succeeded",
-            "notes": "Conditional node evaluated: target_gate",
-            "usage": null
-          },
           "inventory_gate": {
             "status": "succeeded",
             "notes": "Conditional node evaluated: inventory_gate",
             "usage": null
+          },
+          "plan_matrix": {
+            "status": "succeeded",
+            "context_updates": {
+              "command.output": "blob://sha256/f7468dd1d6a6686a8b96c90cbe4ee07ffe0b23427aa440debd1d5973222a4a43",
+              "run_threat_models": true,
+              "threat_jobs": [
+                {
+                  "name": "http-server",
+                  "paths": [
+                    "crates/quarry-server"
+                  ],
+                  "language": "Rust",
+                  "role": "HTTP/SSE API server: gateway, document/library/git/collab handlers, auth/session, headers, log redaction",
+                  "internetFacing": true,
+                  "artifact_key": "001-http-server-71604076",
+                  "job_id": "threat:001-http-server-71604076",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "web-ui",
+                  "paths": [
+                    "ui/src",
+                    "ui/public"
+                  ],
+                  "language": "TypeScript/React",
+                  "role": "Browser frontend rendering remote documents and collab content (XSS/injection surface)",
+                  "internetFacing": true,
+                  "artifact_key": "002-web-ui-40ce0b0c",
+                  "job_id": "threat:002-web-ui-40ce0b0c",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "collab-codec",
+                  "paths": [
+                    "crates/quarry-collab-codec"
+                  ],
+                  "language": "Rust",
+                  "role": "Markdown/Yjs/Slate parsing and reconciliation of untrusted collaborative document content",
+                  "internetFacing": true,
+                  "artifact_key": "003-collab-codec-727e68e4",
+                  "job_id": "threat:003-collab-codec-727e68e4",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "git-integration",
+                  "paths": [
+                    "crates/quarry-git"
+                  ],
+                  "language": "Rust",
+                  "role": "Git worktree import/export and peer push/pull/sync of remote content",
+                  "internetFacing": true,
+                  "artifact_key": "004-git-integration-d162f88f",
+                  "job_id": "threat:004-git-integration-d162f88f",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "fuse-mount",
+                  "paths": [
+                    "crates/quarry-fuse"
+                  ],
+                  "language": "Rust",
+                  "role": "FUSE filesystem exposing documents to local processes; path and write handling",
+                  "internetFacing": false,
+                  "artifact_key": "005-fuse-mount-9a6e73fc",
+                  "job_id": "threat:005-fuse-mount-9a6e73fc",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "storage",
+                  "paths": [
+                    "crates/quarry-storage"
+                  ],
+                  "language": "Rust",
+                  "role": "SQLite-backed document/block/library store, search, sync, transactions, schema",
+                  "internetFacing": false,
+                  "artifact_key": "006-storage-49a25f9f",
+                  "job_id": "threat:006-storage-49a25f9f",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "cas",
+                  "paths": [
+                    "crates/quarry-cas"
+                  ],
+                  "language": "Rust",
+                  "role": "Content-addressable storage of untrusted blobs",
+                  "internetFacing": false,
+                  "artifact_key": "007-cas-0ab2b186",
+                  "job_id": "threat:007-cas-0ab2b186",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "core",
+                  "paths": [
+                    "crates/quarry-core"
+                  ],
+                  "language": "Rust",
+                  "role": "Shared types, path normalization, error model used across crates",
+                  "internetFacing": false,
+                  "artifact_key": "008-core-0d45f5fd",
+                  "job_id": "threat:008-core-0d45f5fd",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "cli",
+                  "paths": [
+                    "crates/quarry-cli",
+                    "crates/quarry"
+                  ],
+                  "language": "Rust",
+                  "role": "Command-line entrypoint and subcommands including agent detection and server startup",
+                  "internetFacing": false,
+                  "artifact_key": "009-cli-99bb8840",
+                  "job_id": "threat:009-cli-99bb8840",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "dev-tooling",
+                  "paths": [
+                    "crates/quarry-dev"
+                  ],
+                  "language": "Rust",
+                  "role": "Internal dev/release automation binary",
+                  "internetFacing": false,
+                  "artifact_key": "010-dev-tooling-b2ecb3ec",
+                  "job_id": "threat:010-dev-tooling-b2ecb3ec",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "ci-workflows",
+                  "paths": [
+                    ".github"
+                  ],
+                  "language": "YAML",
+                  "role": "GitHub Actions CI/release workflows and reusable actions; secret handling and script injection surface",
+                  "internetFacing": false,
+                  "artifact_key": "011-ci-workflows-98c071e8",
+                  "job_id": "threat:011-ci-workflows-98c071e8",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "packaging",
+                  "paths": [
+                    "Formula",
+                    "scripts",
+                    "Dockerfile"
+                  ],
+                  "language": "Ruby/Dockerfile",
+                  "role": "Homebrew formula and release packaging scripts plus container build definition",
+                  "internetFacing": false,
+                  "artifact_key": "012-packaging-71669691",
+                  "job_id": "threat:012-packaging-71669691",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "review-workflow",
+                  "paths": [
+                    ".fabro/workflows/security-review"
+                  ],
+                  "language": "Python/YAML",
+                  "role": "Security-review workflow scripts that read the repository and render reports",
+                  "internetFacing": false,
+                  "artifact_key": "013-review-workflow-39d1649a",
+                  "job_id": "threat:013-review-workflow-39d1649a",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                },
+                {
+                  "name": "workspace-manifests",
+                  "paths": [
+                    "Cargo.toml",
+                    "Cargo.lock",
+                    "rust-toolchain.toml",
+                    "rustfmt.toml",
+                    ".cargo"
+                  ],
+                  "language": "TOML",
+                  "role": "Rust workspace manifests, pinned dependencies, and toolchain configuration",
+                  "internetFacing": false,
+                  "artifact_key": "014-workspace-manifests-c060da06",
+                  "job_id": "threat:014-workspace-manifests-c060da06",
+                  "target": {
+                    "mode": "scan",
+                    "scope": [],
+                    "range": null,
+                    "changedFileCount": null,
+                    "changedLineCount": null,
+                    "focus": null,
+                    "scanRoot": "/home/daytona/repos/fabro-sh/quarry",
+                    "gitWrapper": "python3 .fabro/workflows/security-review/scripts/git_readonly.py"
+                  }
+                }
+              ]
+            },
+            "notes": "Script completed: python3 .fabro/workflows/security-review/scripts/security_review.py plan-matrix",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 1255,
+              "active_time_ms": 1255
+            }
           },
           "prepare": {
             "status": "succeeded",
@@ -4249,13 +5489,19 @@
               "tool_time_ms": 1282,
               "active_time_ms": 1282
             }
+          },
+          "target_gate": {
+            "status": "succeeded",
+            "notes": "Conditional node evaluated: target_gate",
+            "usage": null
           }
         },
-        "next_node_id": "plan_matrix",
+        "next_node_id": "threat_gate",
         "node_visits": {
           "inventory": 1,
           "merge_inventory": 1,
           "inventory_gate": 1,
+          "plan_matrix": 1,
           "target_gate": 1,
           "prepare": 1,
           "start": 1
@@ -4590,7 +5836,12 @@
       "first_event_seq": 101,
       "prompt": null,
       "response": null,
-      "completion": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": "Conditional node evaluated: inventory_gate",
+        "failure_reason": null,
+        "timestamp": "2026-07-31T11:32:19.550262360Z"
+      },
       "provider_used": null,
       "diff": null,
       "script_invocation": null,
@@ -4600,6 +5851,12 @@
       "started_at": "2026-07-31T11:32:19.297304102Z",
       "handler": "conditional",
       "graph_visit": 1,
+      "timing": {
+        "wall_time_ms": 0,
+        "inference_time_ms": 0,
+        "tool_time_ms": 0,
+        "active_time_ms": 0
+      },
       "usage": {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -4609,7 +5866,7 @@
         "cache_write_tokens": 0
       },
       "agent_control": "running",
-      "state": "running"
+      "state": "succeeded"
     },
     "start@1": {
       "first_event_seq": 18,
@@ -4646,6 +5903,46 @@
       },
       "agent_control": "running",
       "state": "succeeded"
+    },
+    "plan_matrix@1": {
+      "first_event_seq": 109,
+      "prompt": null,
+      "response": null,
+      "completion": null,
+      "provider_used": null,
+      "diff": null,
+      "script_invocation": {
+        "script": "python3 .fabro/workflows/security-review/scripts/security_review.py plan-matrix",
+        "command": "exec 2>&1\npython3 .fabro/workflows/security-review/scripts/security_review.py plan-matrix",
+        "language": "shell",
+        "timeout_ms": 180000
+      },
+      "script_timing": {
+        "output": "blob://sha256/f7468dd1d6a6686a8b96c90cbe4ee07ffe0b23427aa440debd1d5973222a4a43",
+        "exit_code": 0,
+        "duration_ms": 1255,
+        "termination": "exited",
+        "output_bytes": 7997,
+        "live_streaming": true
+      },
+      "parallel_results": null,
+      "output": null,
+      "output_bytes": 7997,
+      "live_streaming": true,
+      "termination": "exited",
+      "started_at": "2026-07-31T11:32:21.941400966Z",
+      "handler": "command",
+      "graph_visit": 1,
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "agent_control": "running",
+      "state": "running"
     },
     "merge_inventory@1": {
       "first_event_seq": 89,
