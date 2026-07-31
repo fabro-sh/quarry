@@ -1,0 +1,2057 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta
+			name="description"
+			content="Panel-verified findings and coverage from one security review."
+		/>
+		<title>Security review results</title>
+		<style>
+:root {
+	--ink: #18181b;
+	--ink-soft: #3f3f46;
+	--muted: #71717a;
+	--line: #d4d4d8;
+	--line-strong: #a1a1aa;
+	--paper: #ffffff;
+	--canvas: #fafafa;
+	--surface: #f4f4f5;
+	--accent: #b42343;
+	--accent-dark: #861a33;
+	--accent-soft: #f8e7eb;
+	--high: #b42343;
+	--high-soft: #f7dce2;
+	--medium: #b45309;
+	--medium-soft: #f8e7cf;
+	--low: #047857;
+	--low-soft: #d7eee6;
+	--informational: #2563a6;
+	--informational-soft: #dceafb;
+	--undetermined: #64748b;
+	--undetermined-soft: #e6eaf0;
+	--difficulty-low: #b42343;
+	--difficulty-low-soft: #f7dce2;
+	--difficulty-medium: #b45309;
+	--difficulty-medium-soft: #f8e7cf;
+	--difficulty-high: #047857;
+	--difficulty-high-soft: #d7eee6;
+	--difficulty-undetermined: #64748b;
+	--difficulty-undetermined-soft: #e6eaf0;
+	--container: 70rem;
+	--reading-width: 68ch;
+	--font-sans:
+		"InterVariable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+		sans-serif;
+	--font-mono:
+		"SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html {
+	scroll-behavior: smooth;
+}
+
+body {
+	margin: 0;
+	background: var(--canvas);
+	color: var(--ink);
+	font-family: var(--font-sans);
+	font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01";
+	font-size: 1rem;
+	line-height: 1.6;
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+select {
+	font: inherit;
+}
+
+button,
+a,
+input,
+select {
+	-webkit-tap-highlight-color: transparent;
+}
+
+a {
+	color: inherit;
+}
+
+button {
+	cursor: pointer;
+}
+
+code,
+pre {
+	font-family: var(--font-mono);
+}
+
+::selection {
+	background: var(--accent-soft);
+	color: var(--accent-dark);
+}
+
+:focus-visible {
+	outline: 3px solid rgb(180 35 67 / 0.28);
+	outline-offset: 3px;
+}
+
+.page-container {
+	width: min(calc(100% - 3rem), var(--container));
+	margin-inline: auto;
+}
+
+.skip-link {
+	position: fixed;
+	z-index: 100;
+	top: 0.75rem;
+	left: 0.75rem;
+	padding: 0.75rem 1rem;
+	background: var(--ink);
+	color: white;
+	font-weight: 650;
+	text-decoration: none;
+	transform: translateY(-160%);
+}
+
+.skip-link:focus {
+	transform: translateY(0);
+}
+
+.report {
+	isolation: isolate;
+}
+
+.report-hero {
+	padding: 2.5rem 0 2.75rem;
+	background: var(--paper);
+}
+
+.report-hero__topline {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 1rem;
+}
+
+.report-hero__topline > p:last-child {
+	margin: 0;
+	color: var(--muted);
+	font-size: 0.75rem;
+}
+
+.eyebrow {
+	margin: 0;
+	color: var(--accent);
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+
+.report-hero h1 {
+	max-width: 24ch;
+	margin: 0.65rem 0 0;
+	font-size: clamp(2.25rem, 5vw, 3.5rem);
+	font-weight: 620;
+	letter-spacing: -0.045em;
+	line-height: 1.05;
+	text-wrap: balance;
+}
+
+.report-hero__summary {
+	max-width: 64ch;
+	margin: 0.75rem 0 0;
+	color: var(--ink-soft);
+	font-size: 1rem;
+	line-height: 1.65;
+	text-wrap: pretty;
+}
+
+.scan-identity {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 0;
+	max-width: 58rem;
+	padding: 1rem 0 0;
+	margin: 1.5rem 0 0;
+	border-top: 1px solid var(--line);
+}
+
+.scan-identity div {
+	display: grid;
+	gap: 0.25rem;
+	padding-inline: 1.25rem;
+	border-left: 1px solid var(--line);
+}
+
+.scan-identity div:first-child {
+	padding-left: 0;
+	border-left: 0;
+}
+
+.scan-identity dt,
+.scan-identity dd {
+	margin: 0;
+}
+
+.scan-identity dt {
+	color: var(--muted);
+	font-size: 0.75rem;
+}
+
+.scan-identity dd {
+	font-size: 0.9375rem;
+	font-weight: 620;
+}
+
+.scan-identity code {
+	font-size: 0.85em;
+}
+
+.report-section {
+	padding: 5.5rem 0 6rem;
+	border-top: 1px solid var(--line);
+	background: var(--paper);
+}
+
+.report-section--muted {
+	background: var(--surface);
+}
+
+.section-heading {
+	display: grid;
+	gap: 0.7rem;
+	max-width: var(--reading-width);
+}
+
+.section-heading h2 {
+	max-width: 22ch;
+	margin: 0;
+	font-size: clamp(2rem, 5vw, 3.25rem);
+	font-weight: 620;
+	letter-spacing: -0.04em;
+	text-wrap: balance;
+}
+
+.section-heading > p:last-child {
+	max-width: var(--reading-width);
+	margin: 0.35rem 0 0;
+	color: var(--ink-soft);
+	font-size: 1.0625rem;
+	line-height: 1.75;
+	text-wrap: pretty;
+}
+
+.subsection-heading {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 1rem;
+	padding-bottom: 0.9rem;
+	border-bottom: 2px solid var(--ink);
+}
+
+.subsection-heading h3 {
+	margin: 0;
+	font-size: 1.125rem;
+	font-weight: 650;
+}
+
+.count-label {
+	color: var(--muted);
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.overview-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 5rem;
+	padding-top: 3rem;
+}
+
+.overview-column {
+	min-width: 0;
+}
+
+.distribution-list,
+.category-list {
+	display: grid;
+	gap: 0;
+}
+
+.distribution-row,
+.category-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 0.55rem 1rem;
+	align-items: center;
+	padding: 0.9rem 0;
+	border-bottom: 1px solid var(--line);
+}
+
+.distribution-row__label,
+.category-row__label {
+	display: flex;
+	align-items: center;
+	gap: 0.65rem;
+	font-size: 0.9375rem;
+	font-weight: 590;
+}
+
+.distribution-row__swatch {
+	width: 0.65rem;
+	aspect-ratio: 1;
+	background: var(--tone);
+}
+
+.distribution-row__count,
+.category-row__count {
+	color: var(--muted);
+	font-family: var(--font-mono);
+	font-size: 0.8rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.distribution-row__track,
+.category-row__track {
+	grid-column: 1 / -1;
+	height: 0.35rem;
+	overflow: hidden;
+	background: #e4e4e7;
+}
+
+.distribution-row__fill,
+.category-row__fill {
+	display: block;
+	width: var(--bar-width);
+	height: 100%;
+	background: var(--tone, #8a94a3);
+}
+
+.scan-facts {
+	display: grid;
+	grid-template-columns: 1.4fr repeat(3, minmax(0, 1fr));
+	padding: 1.5rem 0;
+	margin: 3rem 0 0;
+	border-top: 1px solid var(--line-strong);
+	border-bottom: 1px solid var(--line-strong);
+}
+
+.scan-facts div {
+	display: grid;
+	gap: 0.3rem;
+	padding-inline: 1.25rem;
+	border-left: 1px solid var(--line);
+}
+
+.scan-facts div:first-child {
+	padding-left: 0;
+	border-left: 0;
+}
+
+.scan-facts dt,
+.scan-facts dd {
+	margin: 0;
+}
+
+.scan-facts dt {
+	color: var(--muted);
+	font-size: 0.75rem;
+}
+
+.scan-facts dd {
+	overflow-wrap: anywhere;
+	font-size: 0.9375rem;
+	font-weight: 620;
+}
+
+.scan-facts code {
+	font-size: 0.82em;
+}
+
+.coverage-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 5rem;
+	padding-top: 3rem;
+}
+
+.coverage-list {
+	display: grid;
+}
+
+.coverage-item {
+	display: grid;
+	gap: 0.45rem;
+	padding: 1rem 0;
+	border-bottom: 1px solid var(--line);
+}
+
+.coverage-item h4 {
+	margin: 0;
+	font-size: 0.975rem;
+	font-weight: 650;
+}
+
+.coverage-item__paths {
+	margin: 0;
+	color: var(--ink-soft);
+	font-family: var(--font-mono);
+	font-size: 0.775rem;
+	line-height: 1.65;
+	overflow-wrap: anywhere;
+}
+
+.coverage-item__reason {
+	max-width: 60ch;
+	margin: 0;
+	color: var(--muted);
+	font-size: 0.9375rem;
+	line-height: 1.65;
+	text-wrap: pretty;
+}
+
+.coverage-note {
+	max-width: var(--reading-width);
+	padding: 1rem 1.1rem;
+	margin: 2.5rem 0 0;
+	border-left: 0.25rem solid var(--low);
+	background: var(--paper);
+	color: var(--ink-soft);
+	font-size: 0.9375rem;
+	line-height: 1.65;
+	text-wrap: pretty;
+}
+
+.finding-filters {
+	display: grid;
+	grid-template-columns: minmax(15rem, 1.6fr) repeat(2, minmax(9rem, 0.7fr)) auto;
+	gap: 0.85rem;
+	align-items: end;
+	padding-top: 2.75rem;
+}
+
+.finding-filters label {
+	display: grid;
+	gap: 0.4rem;
+}
+
+.finding-filters label span {
+	color: var(--muted);
+	font-size: 0.75rem;
+	font-weight: 620;
+}
+
+.finding-filters input,
+.finding-filters select {
+	width: 100%;
+	min-height: 2.75rem;
+	padding: 0.6rem 0.75rem;
+	border: 1px solid var(--line-strong);
+	border-radius: 0.2rem;
+	background: var(--paper);
+	color: var(--ink);
+	font-size: 0.9375rem;
+}
+
+.finding-filters input:focus,
+.finding-filters select:focus {
+	border-color: var(--accent);
+	outline: 3px solid rgb(180 35 67 / 0.14);
+}
+
+.text-button {
+	min-height: 2.75rem;
+	padding: 0.6rem 0.8rem;
+	border: 0;
+	background: transparent;
+	color: var(--accent);
+	font-size: 0.875rem;
+	font-weight: 650;
+}
+
+.text-button:hover {
+	color: var(--accent-dark);
+	text-decoration: underline;
+	text-underline-offset: 0.2rem;
+}
+
+.filter-result {
+	min-height: 1.5rem;
+	margin: 0.75rem 0 0;
+	color: var(--muted);
+	font-size: 0.8125rem;
+}
+
+.table-scroll {
+	width: 100%;
+	overflow-x: auto;
+	white-space: nowrap;
+}
+
+.table-scroll__inner {
+	display: inline-block;
+	min-width: 100%;
+	vertical-align: middle;
+}
+
+table {
+	width: 100%;
+	border-collapse: collapse;
+	text-align: left;
+}
+
+th {
+	padding: 0.75rem 0.8rem;
+	border-bottom: 2px solid var(--ink);
+	color: var(--ink-soft);
+	font-size: 0.75rem;
+	font-weight: 680;
+	white-space: nowrap;
+}
+
+td {
+	padding: 0.85rem 0.8rem;
+	border-bottom: 1px solid var(--line);
+	font-size: 0.875rem;
+	vertical-align: top;
+	white-space: normal;
+}
+
+.findings-table {
+	min-width: 54rem;
+}
+
+.findings-table th:first-child,
+.findings-table td:first-child {
+	width: 5rem;
+	padding-left: 0;
+}
+
+.findings-table th:nth-child(2),
+.findings-table td:nth-child(2) {
+	width: 43%;
+}
+
+.findings-table th:nth-child(4),
+.findings-table td:nth-child(4),
+.findings-table th:nth-child(5),
+.findings-table td:nth-child(5) {
+	width: 8rem;
+}
+
+.findings-table tbody tr[data-hidden="true"] {
+	display: none;
+}
+
+.finding-id-cell {
+	color: var(--muted);
+	font-family: var(--font-mono);
+	font-size: 0.8rem;
+	font-weight: 650;
+}
+
+.finding-title-link {
+	color: var(--accent);
+	font-weight: 620;
+	line-height: 1.5;
+	text-decoration: none;
+}
+
+.finding-title-link:hover {
+	color: var(--accent-dark);
+	text-decoration: underline;
+	text-underline-offset: 0.2rem;
+}
+
+.finding-category-cell {
+	color: var(--ink-soft);
+	line-height: 1.5;
+}
+
+.rating-cell {
+	position: relative;
+	background: var(--tone-soft);
+	font-weight: 650;
+}
+
+.rating-cell::before {
+	position: absolute;
+	inset: 0 auto 0 0;
+	width: 0.25rem;
+	background: var(--tone);
+	content: "";
+}
+
+.report-section--details {
+	background: var(--canvas);
+}
+
+.finding-list {
+	display: grid;
+	gap: 6rem;
+	padding-top: 4rem;
+}
+
+.finding {
+	--finding-tone: var(--undetermined);
+	--finding-tone-soft: var(--undetermined-soft);
+	padding-top: 1.75rem;
+	border-top: 0.35rem solid var(--finding-tone);
+	scroll-margin-top: 2rem;
+}
+
+.finding__header {
+	display: grid;
+	gap: 1rem;
+	max-width: 58rem;
+}
+
+.finding__index {
+	margin: 0;
+	color: var(--finding-tone);
+	font-family: var(--font-mono);
+	font-size: 0.8rem;
+	font-weight: 700;
+	letter-spacing: 0.05em;
+}
+
+.finding__title {
+	max-width: 26ch;
+	margin: 0;
+	font-size: clamp(1.75rem, 4vw, 2.7rem);
+	font-weight: 620;
+	letter-spacing: -0.035em;
+	line-height: 1.1;
+	text-wrap: balance;
+}
+
+.finding__meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.55rem;
+	margin: 0;
+}
+
+.finding__meta div {
+	display: flex;
+	align-items: baseline;
+	gap: 0.4rem;
+	padding: 0.4rem 0.65rem;
+	border: 1px solid var(--line);
+	background: var(--paper);
+}
+
+.finding__meta div[data-rating] {
+	border-color: transparent;
+	background: var(--tone-soft);
+	box-shadow: inset 0.2rem 0 var(--tone);
+}
+
+.finding__meta dt,
+.finding__meta dd {
+	margin: 0;
+	font-size: 0.8rem;
+}
+
+.finding__meta dt {
+	color: var(--muted);
+}
+
+.finding__meta dd {
+	font-weight: 650;
+}
+
+.finding__location {
+	max-width: 58rem;
+	padding: 0.85rem 0;
+	margin: 0.5rem 0 0;
+	border-top: 1px solid var(--line);
+	border-bottom: 1px solid var(--line);
+	color: var(--ink-soft);
+	font-size: 0.875rem;
+	line-height: 1.6;
+	overflow-wrap: anywhere;
+}
+
+.finding__location strong {
+	color: var(--ink);
+	font-weight: 650;
+}
+
+.finding__location code {
+	font-size: 0.9em;
+}
+
+.finding__body {
+	display: grid;
+	gap: 2.25rem;
+	max-width: 74ch;
+	padding-top: 2rem;
+}
+
+.finding-block {
+	display: grid;
+	gap: 0.7rem;
+}
+
+.finding-block h4 {
+	margin: 0;
+	font-size: 1rem;
+	font-weight: 680;
+}
+
+.finding-block p,
+.finding-block li {
+	margin: 0;
+	color: var(--ink-soft);
+	font-size: 1rem;
+	line-height: 1.75;
+	text-wrap: pretty;
+}
+
+.finding-block p + p {
+	margin-top: 0.65rem;
+}
+
+.finding-block ul,
+.finding-block ol {
+	display: grid;
+	gap: 0.7rem;
+	padding-left: 1.25rem;
+	margin: 0;
+}
+
+.finding-block li::marker {
+	color: var(--finding-tone);
+	font-weight: 700;
+}
+
+.finding-impact {
+	padding: 1.1rem 1.2rem;
+	border-left: 0.3rem solid var(--finding-tone);
+	background: var(--finding-tone-soft);
+}
+
+.finding-impact h4 {
+	margin: 0 0 0.4rem;
+	font-size: 0.875rem;
+	font-weight: 700;
+}
+
+.finding-impact p {
+	margin: 0;
+	color: var(--ink-soft);
+	font-size: 1rem;
+	line-height: 1.7;
+	text-wrap: pretty;
+}
+
+.code-frame {
+	width: min(100%, 56rem);
+	overflow: hidden;
+	border: 1px solid var(--line);
+	background: #f7f7f8;
+}
+
+.code-frame__header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	padding: 0.65rem 0.8rem;
+	border-bottom: 1px solid var(--line);
+	background: #eceef1;
+	color: #52525b;
+	font-family: var(--font-mono);
+	font-size: 0.72rem;
+}
+
+.code-frame pre {
+	margin: 0;
+	padding: 0.7rem 0;
+	overflow-x: auto;
+	font-size: 0.78rem;
+	line-height: 1.65;
+}
+
+.code-line {
+	display: grid;
+	grid-template-columns: 3.25rem minmax(max-content, 1fr);
+	min-height: 1.3rem;
+	padding-right: 0.8rem;
+}
+
+.code-line__number {
+	padding-right: 0.85rem;
+	color: #9a9aa2;
+	text-align: right;
+	user-select: none;
+}
+
+.code-line__text {
+	white-space: pre;
+}
+
+.code-line.is-highlighted {
+	background: var(--finding-tone-soft);
+	box-shadow: inset 0.22rem 0 var(--finding-tone);
+}
+
+.code-line.is-highlighted .code-line__number {
+	color: var(--finding-tone);
+	font-weight: 700;
+}
+
+.reference-section {
+	padding-top: 3rem;
+}
+
+.taxonomy-table {
+	min-width: 48rem;
+}
+
+.taxonomy-table th:first-child,
+.taxonomy-table td:first-child {
+	width: 13rem;
+	padding-left: 0;
+}
+
+.taxonomy-table td:first-child {
+	font-weight: 650;
+}
+
+.taxonomy-table td {
+	line-height: 1.55;
+}
+
+.rating-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 5rem;
+	padding-top: 4rem;
+}
+
+.rating-list {
+	display: grid;
+}
+
+.rating-definition {
+	position: relative;
+	display: grid;
+	grid-template-columns: 7.5rem 1fr;
+	gap: 1rem;
+	padding: 1rem 0 1rem 1rem;
+	border-bottom: 1px solid var(--line);
+}
+
+.rating-definition::before {
+	position: absolute;
+	inset: 1rem auto 1rem 0;
+	width: 0.25rem;
+	background: var(--tone);
+	content: "";
+}
+
+.rating-definition strong {
+	font-size: 0.9rem;
+}
+
+.rating-definition p {
+	margin: 0;
+	color: var(--ink-soft);
+	font-size: 0.9375rem;
+	line-height: 1.65;
+	text-wrap: pretty;
+}
+
+.site-footer {
+	border-top: 1px solid var(--line);
+	background: var(--paper);
+}
+
+.site-footer .page-container {
+	display: flex;
+	min-height: 5rem;
+	align-items: center;
+	justify-content: space-between;
+	gap: 2rem;
+	color: var(--muted);
+	font-size: 0.8125rem;
+}
+
+.noscript-message {
+	position: fixed;
+	z-index: 90;
+	right: 1rem;
+	bottom: 1rem;
+	left: 1rem;
+	padding: 1rem;
+	background: var(--high);
+	color: white;
+	text-align: center;
+}
+
+.tone--high {
+	--tone: var(--high);
+	--tone-soft: var(--high-soft);
+}
+
+.tone--medium {
+	--tone: var(--medium);
+	--tone-soft: var(--medium-soft);
+}
+
+.tone--low {
+	--tone: var(--low);
+	--tone-soft: var(--low-soft);
+}
+
+.tone--informational {
+	--tone: var(--informational);
+	--tone-soft: var(--informational-soft);
+}
+
+.tone--undetermined {
+	--tone: var(--undetermined);
+	--tone-soft: var(--undetermined-soft);
+}
+
+.difficulty-tone--low {
+	--tone: var(--difficulty-low);
+	--tone-soft: var(--difficulty-low-soft);
+}
+
+.difficulty-tone--medium {
+	--tone: var(--difficulty-medium);
+	--tone-soft: var(--difficulty-medium-soft);
+}
+
+.difficulty-tone--high {
+	--tone: var(--difficulty-high);
+	--tone-soft: var(--difficulty-high-soft);
+}
+
+.difficulty-tone--undetermined {
+	--tone: var(--difficulty-undetermined);
+	--tone-soft: var(--difficulty-undetermined-soft);
+}
+
+@media (max-width: 860px) {
+	.page-container {
+		width: min(calc(100% - 2rem), var(--container));
+	}
+
+	.report-hero {
+		padding: 2.25rem 0 2.5rem;
+	}
+
+	.report-hero h1 {
+		font-size: clamp(2.25rem, 8vw, 3rem);
+	}
+
+	.scan-identity {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.scan-identity div {
+		padding: 0.75rem 1rem;
+		border-top: 1px solid var(--line);
+	}
+
+	.scan-identity div:nth-child(-n + 2) {
+		border-top: 0;
+	}
+
+	.scan-identity div:nth-child(odd) {
+		padding-left: 0;
+		border-left: 0;
+	}
+
+	.report-section {
+		padding: 4.25rem 0 4.75rem;
+	}
+
+	.overview-grid,
+	.coverage-grid,
+	.rating-grid {
+		grid-template-columns: 1fr;
+		gap: 3.5rem;
+	}
+
+	.scan-facts {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.scan-facts div {
+		padding: 0.8rem 1rem;
+		border-top: 1px solid var(--line);
+	}
+
+	.scan-facts div:nth-child(-n + 2) {
+		border-top: 0;
+	}
+
+	.scan-facts div:nth-child(odd) {
+		padding-left: 0;
+		border-left: 0;
+	}
+
+	.finding-filters {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.finding-filters__search {
+		grid-column: 1 / -1;
+	}
+
+	.finding-filters .text-button {
+		justify-self: start;
+	}
+}
+
+@media (max-width: 560px) {
+	.report-hero h1 {
+		font-size: 2.25rem;
+	}
+
+	.report-hero__summary,
+	.section-heading > p:last-child {
+		font-size: 1rem;
+	}
+
+	.scan-facts {
+		grid-template-columns: 1fr;
+	}
+
+	.scan-facts div:nth-child(n) {
+		padding: 0.75rem 0;
+		border-top: 1px solid var(--line);
+		border-left: 0;
+	}
+
+	.scan-facts div:first-child {
+		border-top: 0;
+	}
+
+	.finding-filters {
+		grid-template-columns: 1fr;
+	}
+
+	.finding-filters__search {
+		grid-column: 1;
+	}
+
+	.finding-filters input,
+	.finding-filters select,
+	.text-button {
+		min-height: 3rem;
+		font-size: 1rem;
+	}
+
+	.table-scroll {
+		width: calc(100% + 2rem);
+		margin-inline: -1rem;
+	}
+
+	.table-scroll__inner {
+		padding-inline: 1rem;
+	}
+
+	.finding-list {
+		gap: 5rem;
+	}
+
+	.finding__title {
+		font-size: 2rem;
+	}
+
+	.finding__meta {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.finding__meta div {
+		display: grid;
+		gap: 0.15rem;
+	}
+
+	.code-frame {
+		width: calc(100% + 2rem);
+		margin-inline: -1rem;
+		border-inline: 0;
+	}
+
+	.code-frame pre {
+		font-size: 0.75rem;
+	}
+
+	.rating-definition {
+		grid-template-columns: 1fr;
+		gap: 0.35rem;
+	}
+
+	.site-footer .page-container {
+		flex-direction: column;
+		align-items: flex-start;
+		justify-content: center;
+		gap: 0.25rem;
+	}
+}
+
+@media print {
+	@page {
+		size: Letter;
+		margin: 0.6in;
+	}
+
+	body {
+		background: white;
+		-webkit-print-color-adjust: exact;
+		print-color-adjust: exact;
+	}
+
+	.page-container {
+		width: 100%;
+	}
+
+	.site-footer,
+	.finding-filters,
+	.filter-result {
+		display: none;
+	}
+
+	.report-hero,
+	.report-section,
+	.report-section--muted,
+	.report-section--details {
+		padding: 0.35in 0;
+		border-top: 1px solid var(--line);
+		background: white;
+	}
+
+	.report-hero {
+		padding-top: 0;
+		border-top: 0;
+	}
+
+	.report-hero h1 {
+		font-size: 34pt;
+	}
+
+	.overview-grid,
+	.coverage-grid,
+	.rating-grid {
+		gap: 0.35in;
+	}
+
+	.finding {
+		break-before: page;
+		page-break-before: always;
+	}
+
+	.finding__body {
+		max-width: 72ch;
+	}
+
+	.findings-table tbody tr[data-hidden="true"] {
+		display: table-row;
+	}
+
+	.table-scroll,
+	.table-scroll__inner {
+		display: block;
+		width: 100%;
+		padding: 0;
+		margin: 0;
+		overflow: visible;
+		white-space: normal;
+	}
+
+	.findings-table,
+	.taxonomy-table {
+		min-width: 0;
+	}
+
+	a {
+		color: inherit;
+		text-decoration: none;
+	}
+}
+
+		</style>
+	</head>
+	<body>
+		<a class="skip-link" href="#report-content">Skip to report</a>
+
+		<main class="report" id="report-content">
+			<section class="report-hero">
+				<div class="page-container">
+					<div class="report-hero__topline">
+						<p class="eyebrow">Security review</p>
+						<p id="report-target"></p>
+					</div>
+					<h1 id="report-title"></h1>
+					<p class="report-hero__summary" id="report-summary"></p>
+
+					<dl class="scan-identity" aria-label="Report identity">
+						<div>
+							<dt>Report date</dt>
+							<dd id="report-date"></dd>
+						</div>
+						<div>
+							<dt>Revision</dt>
+							<dd><code id="scan-revision"></code></dd>
+						</div>
+						<div>
+							<dt>Scan mode</dt>
+							<dd id="scan-mode"></dd>
+						</div>
+						<div>
+							<dt>Effort</dt>
+							<dd id="scan-effort"></dd>
+						</div>
+					</dl>
+				</div>
+			</section>
+
+			<section class="report-section" id="risk-overview">
+				<div class="page-container">
+					<header class="section-heading">
+						<p class="eyebrow">Findings overview</p>
+						<h2>Risk at a glance</h2>
+						<p>
+							The scan identified <span data-total-findings>12</span> findings.
+							Severity describes potential impact. Categories describe the security
+							control involved.
+						</p>
+					</header>
+
+					<div class="overview-grid">
+						<section class="overview-column" aria-labelledby="severity-heading">
+							<div class="subsection-heading">
+								<h3 id="severity-heading">Severity</h3>
+								<span class="count-label" data-total-findings>12</span>
+							</div>
+							<div class="distribution-list" id="severity-distribution"></div>
+						</section>
+
+						<section class="overview-column" aria-labelledby="category-heading">
+							<div class="subsection-heading">
+								<h3 id="category-heading">Categories</h3>
+								<span class="count-label">Finding count</span>
+							</div>
+							<div class="category-list" id="category-distribution"></div>
+						</section>
+					</div>
+				</div>
+			</section>
+
+			<section class="report-section report-section--muted" id="targets-and-coverage">
+				<div class="page-container">
+					<header class="section-heading">
+						<p class="eyebrow">Scan boundary</p>
+						<h2>Target and coverage</h2>
+						<p>
+							This section uses only target, inventory, and coverage fields produced
+							by the scan.
+						</p>
+					</header>
+
+					<dl class="scan-facts" id="scan-facts"></dl>
+
+					<div class="coverage-grid">
+						<section aria-labelledby="examined-heading">
+							<div class="subsection-heading">
+								<h3 id="examined-heading">Examined components</h3>
+								<span class="count-label" id="component-count"></span>
+							</div>
+							<div class="coverage-list" id="coverage-components"></div>
+						</section>
+
+						<section aria-labelledby="skipped-heading">
+							<div class="subsection-heading">
+								<h3 id="skipped-heading">Skipped components</h3>
+								<span class="count-label" id="skipped-count"></span>
+							</div>
+							<div class="coverage-list" id="coverage-skips"></div>
+						</section>
+					</div>
+
+					<p class="coverage-note" id="coverage-note"></p>
+				</div>
+			</section>
+
+			<section class="report-section" id="findings-summary">
+				<div class="page-container">
+					<header class="section-heading">
+						<p class="eyebrow">Prioritized index</p>
+						<h2>Findings</h2>
+						<p>
+							Select a finding to read its evidence and recommendations.
+						</p>
+					</header>
+
+					<form class="finding-filters" id="finding-filters">
+						<label class="finding-filters__search">
+							<span>Search</span>
+							<input
+								id="finding-search"
+								name="search"
+								type="search"
+								placeholder="Title, ID, category, or path"
+							/>
+						</label>
+						<label>
+							<span>Severity</span>
+							<select id="severity-filter" name="severity">
+								<option value="">All severities</option>
+							</select>
+						</label>
+						<label>
+							<span>Difficulty</span>
+							<select id="difficulty-filter" name="difficulty">
+								<option value="">All difficulties</option>
+							</select>
+						</label>
+						<button class="text-button" id="clear-filters" type="button">Reset</button>
+					</form>
+
+					<p class="filter-result" id="filter-result" aria-live="polite"></p>
+
+					<div class="table-scroll">
+						<div class="table-scroll__inner">
+							<table class="findings-table">
+								<thead>
+									<tr>
+										<th scope="col">ID</th>
+										<th scope="col">Finding</th>
+										<th scope="col">Category</th>
+										<th scope="col">Difficulty</th>
+										<th scope="col">Severity</th>
+									</tr>
+								</thead>
+								<tbody id="findings-table-body"></tbody>
+							</table>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<section class="report-section report-section--details" id="detailed-findings">
+				<div class="page-container">
+					<header class="section-heading">
+						<p class="eyebrow">Technical detail</p>
+						<h2>Detailed findings</h2>
+						<p>
+							Each finding records the observed code path, a concrete exploit
+							scenario, and the recommended change.
+						</p>
+					</header>
+
+					<div class="finding-list" id="finding-pages"></div>
+				</div>
+			</section>
+
+			<section class="report-section report-section--muted" id="rating-guide">
+				<div class="page-container">
+					<header class="section-heading">
+						<p class="eyebrow">Reference</p>
+						<h2>Categories and ratings</h2>
+						<p>
+							Severity measures impact. Difficulty estimates the access,
+							knowledge, and effort required for exploitation.
+						</p>
+					</header>
+
+					<section class="reference-section" aria-labelledby="category-reference-heading">
+						<div class="subsection-heading">
+							<h3 id="category-reference-heading">Vulnerability categories</h3>
+						</div>
+						<div class="table-scroll">
+							<div class="table-scroll__inner">
+								<table class="taxonomy-table">
+									<thead>
+										<tr>
+											<th scope="col">Category</th>
+											<th scope="col">Description</th>
+										</tr>
+									</thead>
+									<tbody id="category-definitions"></tbody>
+								</table>
+							</div>
+						</div>
+					</section>
+
+					<div class="rating-grid">
+						<section aria-labelledby="severity-reference-heading">
+							<div class="subsection-heading">
+								<h3 id="severity-reference-heading">Severity levels</h3>
+							</div>
+							<div class="rating-list" id="severity-definitions"></div>
+						</section>
+
+						<section aria-labelledby="difficulty-reference-heading">
+							<div class="subsection-heading">
+								<h3 id="difficulty-reference-heading">Difficulty levels</h3>
+							</div>
+							<div class="rating-list" id="difficulty-definitions"></div>
+						</section>
+					</div>
+				</div>
+			</section>
+		</main>
+
+		<footer class="site-footer">
+			<div class="page-container">
+				<span id="footer-title"></span>
+				<span id="footer-date"></span>
+			</div>
+		</footer>
+
+		<noscript>
+			<div class="noscript-message">
+				This report uses JavaScript to render its findings and coverage.
+			</div>
+		</noscript>
+
+		<script>
+window.securityReportData = Object.freeze(__REPORT_DATA__);
+
+		</script>
+		<script>
+(() => {
+	const data = window.securityReportData;
+
+	if (!data) {
+		throw new Error("Report data was not loaded.");
+	}
+
+	const byId = (id) => document.getElementById(id);
+	const slugify = (value) =>
+		String(value)
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, "-")
+			.replace(/(^-|-$)/g, "");
+	const labelize = (value) =>
+		String(value)
+			.replaceAll("-", " ")
+			.replace(/\b\w/g, (letter) => letter.toUpperCase());
+	const toneClass = (value) => `tone--${slugify(value)}`;
+	const difficultyToneClass = (value) => `difficulty-tone--${slugify(value)}`;
+
+	function element(tagName, options = {}) {
+		const node = document.createElement(tagName);
+
+		if (options.className) {
+			node.className = options.className;
+		}
+		if (options.text !== undefined) {
+			node.textContent = options.text;
+		}
+		if (options.attributes) {
+			for (const [name, value] of Object.entries(options.attributes)) {
+				node.setAttribute(name, String(value));
+			}
+		}
+
+		return node;
+	}
+
+	function countBy(items, keyForItem) {
+		return items.reduce((counts, item) => {
+			const key = keyForItem(item);
+			counts.set(key, (counts.get(key) || 0) + 1);
+			return counts;
+		}, new Map());
+	}
+
+	function findingCategory(finding) {
+		return finding.category || finding.type || "Undetermined";
+	}
+
+	function findingDifficulty(finding) {
+		return finding.difficulty || "Undetermined";
+	}
+
+	function asParagraphs(value) {
+		if (Array.isArray(value)) {
+			return value.filter(Boolean).map(String);
+		}
+		return value ? [String(value)] : [];
+	}
+
+	function asItems(value) {
+		if (Array.isArray(value)) {
+			return value.filter(Boolean).map(String);
+		}
+		return value ? [String(value)] : [];
+	}
+
+	function normalizedFinding(finding) {
+		return {
+			...finding,
+			category: findingCategory(finding),
+			difficulty: findingDifficulty(finding),
+			description: [
+				...(finding.summary ? [String(finding.summary)] : []),
+				...asParagraphs(finding.description),
+			],
+			exploitScenarios: asItems(
+				finding.exploitScenarios || finding.exploit_scenario,
+			),
+			preconditions: asItems(finding.preconditions),
+			recommendations: asItems(
+				finding.recommendations || finding.recommendation,
+			),
+		};
+	}
+
+	const findings = data.findings.map(normalizedFinding);
+
+	function appendList(container, items, ordered = false) {
+		const list = element(ordered ? "ol" : "ul");
+		for (const item of items) {
+			list.append(element("li", { text: item }));
+		}
+		container.append(list);
+	}
+
+	function renderIdentity() {
+		const components = data.coverage.components || [];
+		const componentCount = components.length;
+
+		document.title = data.report.title;
+		byId("report-title").textContent = data.report.title;
+		byId("report-target").textContent = data.scan.root;
+		byId("report-summary").textContent =
+			`Source review of ${componentCount} ` +
+			`${componentCount === 1 ? "component" : "components"} at ` +
+			`${labelize(data.scan.effort).toLowerCase()} effort, reporting only ` +
+			"findings a three-lens panel confirmed.";
+		byId("report-date").textContent = data.report.date;
+		byId("scan-revision").textContent = data.scan.revision;
+		byId("scan-mode").textContent = data.scan.modeLabel;
+		byId("scan-effort").textContent = labelize(data.scan.effort);
+		byId("footer-title").textContent = data.report.title;
+		byId("footer-date").textContent = data.report.date;
+
+		for (const node of document.querySelectorAll("[data-total-findings]")) {
+			node.textContent = String(findings.length);
+		}
+	}
+
+	function renderSeverityDistribution() {
+		const container = byId("severity-distribution");
+		const counts = countBy(findings, (finding) => finding.severity);
+		const maximum = Math.max(
+			...data.severityOrder.map((name) => counts.get(name) || 0),
+			1,
+		);
+
+		for (const severity of data.severityOrder) {
+			const count = counts.get(severity) || 0;
+			const row = element("div", {
+				className: `distribution-row ${toneClass(severity)}`,
+			});
+			const label = element("span", { className: "distribution-row__label" });
+			label.append(
+				element("span", {
+					className: "distribution-row__swatch",
+					attributes: { "aria-hidden": "true" },
+				}),
+				document.createTextNode(severity),
+			);
+
+			const track = element("span", {
+				className: "distribution-row__track",
+				attributes: { "aria-hidden": "true" },
+			});
+			const fill = element("span", { className: "distribution-row__fill" });
+			fill.style.setProperty("--bar-width", `${(count / maximum) * 100}%`);
+			track.append(fill);
+
+			row.append(
+				label,
+				element("span", {
+					className: "distribution-row__count",
+					text: String(count),
+				}),
+				track,
+			);
+			container.append(row);
+		}
+	}
+
+	function renderCategoryDistribution() {
+		const container = byId("category-distribution");
+		const counts = countBy(findings, findingCategory);
+		const populated = [...counts.entries()].sort(
+			([leftName, leftCount], [rightName, rightCount]) =>
+				rightCount - leftCount || leftName.localeCompare(rightName),
+		);
+		const maximum = Math.max(...populated.map(([, count]) => count), 1);
+
+		for (const [name, count] of populated) {
+			const row = element("div", { className: "category-row" });
+			const track = element("span", {
+				className: "category-row__track",
+				attributes: { "aria-hidden": "true" },
+			});
+			const fill = element("span", { className: "category-row__fill" });
+			fill.style.setProperty("--bar-width", `${(count / maximum) * 100}%`);
+			track.append(fill);
+
+			row.append(
+				element("span", { className: "category-row__label", text: name }),
+				element("span", {
+					className: "category-row__count",
+					text: String(count),
+				}),
+				track,
+			);
+			container.append(row);
+		}
+	}
+
+	function addFact(container, label, value, code = false) {
+		const item = element("div");
+		const term = element("dt", { text: label });
+		const description = element("dd");
+		description.append(
+			code ? element("code", { text: value }) : document.createTextNode(value),
+		);
+		item.append(term, description);
+		container.append(item);
+	}
+
+	function renderCoverage() {
+		const coverage = data.coverage;
+		const facts = byId("scan-facts");
+		const scope =
+			data.scan.scope.length > 0
+				? data.scan.scope.join(", ")
+				: "Whole repository";
+
+		addFact(facts, "Target", data.scan.root, true);
+		addFact(facts, "Scope", scope);
+		addFact(facts, "Components", String(coverage.components.length));
+		addFact(
+			facts,
+			"Review agents",
+			`${coverage.researchersReturned} of ${coverage.researchersDispatched} returned`,
+		);
+
+		byId("component-count").textContent =
+			`${coverage.components.length} ${coverage.components.length === 1 ? "component" : "components"}`;
+		byId("skipped-count").textContent =
+			`${coverage.skippedComponents.length} ${coverage.skippedComponents.length === 1 ? "component" : "components"}`;
+
+		const components = byId("coverage-components");
+		for (const component of coverage.components) {
+			const item = element("article", { className: "coverage-item" });
+			item.append(
+				element("h4", { text: component.name }),
+				element("p", {
+					className: "coverage-item__paths",
+					text: component.paths.join(" · "),
+				}),
+			);
+			components.append(item);
+		}
+
+		const skips = byId("coverage-skips");
+		if (coverage.skippedComponents.length === 0) {
+			const item = element("article", { className: "coverage-item" });
+			item.append(
+				element("h4", { text: "None" }),
+				element("p", {
+					className: "coverage-item__reason",
+					text: "The scan did not record any deliberately skipped components.",
+				}),
+			);
+			skips.append(item);
+		} else {
+			for (const skipped of coverage.skippedComponents) {
+				const item = element("article", { className: "coverage-item" });
+				item.append(
+					element("h4", { text: skipped.name }),
+					element("p", {
+						className: "coverage-item__paths",
+						text: skipped.paths.join(" · "),
+					}),
+					element("p", {
+						className: "coverage-item__reason",
+						text: skipped.reason,
+					}),
+				);
+				skips.append(item);
+			}
+		}
+
+		const note = byId("coverage-note");
+		const unaccounted = coverage.unaccountedTopLevelDirs || [];
+		if (coverage.completeness === "checked") {
+			note.textContent =
+				"Coverage completeness was checked. Every top-level directory appears in an examined or skipped component.";
+		} else if (coverage.completeness === "partial" && unaccounted.length > 0) {
+			note.textContent = `Coverage is partial. These top-level directories were neither examined nor skipped: ${unaccounted.join(", ")}.`;
+		} else if (coverage.completeness === "not-applicable") {
+			note.textContent =
+				"A completeness check does not apply. This review covered an explicit scope or change range rather than the whole tree.";
+		} else {
+			note.textContent =
+				"Coverage completeness could not be checked from the available scan inventory.";
+		}
+	}
+
+	function renderFilterOptions() {
+		for (const severity of data.severityOrder) {
+			byId("severity-filter").append(
+				element("option", {
+					text: severity,
+					attributes: { value: severity },
+				}),
+			);
+		}
+		for (const difficulty of data.difficultyOrder) {
+			byId("difficulty-filter").append(
+				element("option", {
+					text: difficulty,
+					attributes: { value: difficulty },
+				}),
+			);
+		}
+	}
+
+	function renderFindingsTable() {
+		const body = byId("findings-table-body");
+
+		for (const finding of findings) {
+			const row = element("tr");
+			row.dataset.search = [
+				finding.id,
+				finding.title,
+				finding.category,
+				finding.target,
+				finding.file,
+			]
+				.join(" ")
+				.toLowerCase();
+			row.dataset.severity = finding.severity;
+			row.dataset.difficulty = finding.difficulty;
+
+			const titleCell = element("td");
+			titleCell.append(
+				element("a", {
+					className: "finding-title-link",
+					text: finding.title,
+					attributes: { href: `#finding-${slugify(finding.id)}` },
+				}),
+			);
+
+			row.append(
+				element("td", {
+					className: "finding-id-cell",
+					text: finding.id,
+				}),
+				titleCell,
+				element("td", {
+					className: "finding-category-cell",
+					text: finding.category,
+				}),
+				element("td", {
+					className: `rating-cell ${difficultyToneClass(finding.difficulty)}`,
+					text: finding.difficulty,
+				}),
+				element("td", {
+					className: `rating-cell ${toneClass(finding.severity)}`,
+					text: finding.severity,
+				}),
+			);
+			body.append(row);
+		}
+	}
+
+	function createFindingBlock(title, options = {}) {
+		const section = element("section", { className: "finding-block" });
+		section.append(element("h4", { text: title }));
+
+		for (const paragraph of options.paragraphs || []) {
+			section.append(element("p", { text: paragraph }));
+		}
+		if (options.items?.length) {
+			appendList(section, options.items, options.ordered);
+		}
+
+		return section;
+	}
+
+	function createCodeFrame(finding) {
+		if (!finding.code?.lines?.length && !finding.snippet) {
+			return null;
+		}
+
+		const frame = element("div", { className: "code-frame" });
+		const header = element("div", { className: "code-frame__header" });
+		header.append(
+			element("span", {
+				text: finding.code?.label || `${finding.file}:${finding.line}`,
+			}),
+			element("span", { text: finding.code?.language || "Source" }),
+		);
+
+		const pre = element("pre", { attributes: { tabindex: "0" } });
+		const code = element("code");
+		const lines =
+			finding.code?.lines ||
+			String(finding.snippet)
+				.split("\n")
+				.map((text, index) => ({
+					number: finding.line + index,
+					text,
+					highlight: index === 0,
+				}));
+
+		for (const line of lines) {
+			const lineNode = element("span", {
+				className: `code-line${line.highlight ? " is-highlighted" : ""}`,
+			});
+			lineNode.append(
+				element("span", {
+					className: "code-line__number",
+					text: String(line.number),
+					attributes: { "aria-hidden": "true" },
+				}),
+				element("span", {
+					className: "code-line__text",
+					text: line.text || " ",
+				}),
+			);
+			code.append(lineNode);
+		}
+
+		pre.append(code);
+		frame.append(header, pre);
+		return frame;
+	}
+
+	function addMetadata(metadata, label, value, className = "") {
+		const item = element("div", { className });
+		item.append(element("dt", { text: label }), element("dd", { text: value }));
+		metadata.append(item);
+	}
+
+	function renderFindingPages() {
+		const container = byId("finding-pages");
+
+		findings.forEach((finding, index) => {
+			const article = element("article", {
+				className: "finding",
+				attributes: { id: `finding-${slugify(finding.id)}` },
+			});
+			article.style.setProperty(
+				"--finding-tone",
+				`var(--${slugify(finding.severity)})`,
+			);
+			article.style.setProperty(
+				"--finding-tone-soft",
+				`var(--${slugify(finding.severity)}-soft)`,
+			);
+
+			const header = element("header", { className: "finding__header" });
+			header.append(
+				element("p", {
+					className: "finding__index",
+					text: `Finding ${String(index + 1).padStart(2, "0")} · ${finding.id}`,
+				}),
+				element("h3", {
+					className: "finding__title",
+					text: finding.title,
+				}),
+			);
+
+			const metadata = element("dl", { className: "finding__meta" });
+			addMetadata(
+				metadata,
+				"Severity",
+				finding.severity,
+				toneClass(finding.severity),
+			);
+			metadata.lastElementChild.dataset.rating = "severity";
+			addMetadata(
+				metadata,
+				"Difficulty",
+				finding.difficulty,
+				difficultyToneClass(finding.difficulty),
+			);
+			metadata.lastElementChild.dataset.rating = "difficulty";
+			addMetadata(metadata, "Category", finding.category);
+			header.append(metadata);
+
+			const location = element("p", { className: "finding__location" });
+			location.append(
+				element("strong", { text: "Location: " }),
+				element("code", {
+					text: `${finding.file}:${finding.line}`,
+				}),
+				document.createTextNode(finding.target ? ` · ${finding.target}` : ""),
+			);
+			header.append(location);
+
+			const body = element("div", { className: "finding__body" });
+			const impact = element("section", { className: "finding-impact" });
+			impact.append(
+				element("h4", { text: "Security impact" }),
+				element("p", { text: finding.impact }),
+			);
+			body.append(
+				impact,
+				createFindingBlock("Description", {
+					paragraphs: finding.description,
+				}),
+			);
+
+			const codeFrame = createCodeFrame(finding);
+			if (codeFrame) {
+				const evidence = createFindingBlock("Source evidence");
+				evidence.append(codeFrame);
+				body.append(evidence);
+			}
+
+			body.append(
+				createFindingBlock(
+					finding.exploitScenarios.length === 1
+						? "Exploit scenario"
+						: "Exploit scenarios",
+					{
+						items: finding.exploitScenarios,
+						ordered: finding.exploitScenarios.length > 1,
+					},
+				),
+				createFindingBlock("Required conditions", {
+					items:
+						finding.preconditions.length > 0
+							? finding.preconditions
+							: ["None recorded."],
+				}),
+				createFindingBlock(
+					finding.recommendations.length === 1
+						? "Recommendation"
+						: "Recommendations",
+					{
+						items: finding.recommendations,
+						ordered: finding.recommendations.length > 1,
+					},
+				),
+			);
+
+			article.append(header, body);
+			container.append(article);
+		});
+	}
+
+	function renderTaxonomy() {
+		const body = byId("category-definitions");
+		for (const category of data.categories) {
+			const row = element("tr");
+			row.append(
+				element("td", { text: category.name }),
+				element("td", { text: category.description }),
+			);
+			body.append(row);
+		}
+	}
+
+	function renderRatingDefinitions(containerId, definitions, classForValue) {
+		const container = byId(containerId);
+		for (const definition of definitions) {
+			const item = element("div", {
+				className: `rating-definition ${classForValue(definition.name)}`,
+			});
+			item.append(
+				element("strong", { text: definition.name }),
+				element("p", { text: definition.description }),
+			);
+			container.append(item);
+		}
+	}
+
+	function setupFilters() {
+		const search = byId("finding-search");
+		const severity = byId("severity-filter");
+		const difficulty = byId("difficulty-filter");
+		const reset = byId("clear-filters");
+		const result = byId("filter-result");
+		const rows = [...byId("findings-table-body").rows];
+
+		const apply = () => {
+			const query = search.value.trim().toLowerCase();
+			let visible = 0;
+
+			for (const row of rows) {
+				const matches =
+					(!query || row.dataset.search.includes(query)) &&
+					(!severity.value || row.dataset.severity === severity.value) &&
+					(!difficulty.value || row.dataset.difficulty === difficulty.value);
+				row.dataset.hidden = matches ? "false" : "true";
+				visible += matches ? 1 : 0;
+			}
+
+			result.textContent =
+				visible === findings.length
+					? `Showing all ${visible} findings.`
+					: `Showing ${visible} of ${findings.length} findings.`;
+		};
+
+		search.addEventListener("input", apply);
+		severity.addEventListener("change", apply);
+		difficulty.addEventListener("change", apply);
+		reset.addEventListener("click", () => {
+			search.value = "";
+			severity.value = "";
+			difficulty.value = "";
+			apply();
+			search.focus();
+		});
+		apply();
+	}
+
+	renderIdentity();
+	renderSeverityDistribution();
+	renderCategoryDistribution();
+	renderCoverage();
+	renderFilterOptions();
+	renderFindingsTable();
+	renderFindingPages();
+	renderTaxonomy();
+	renderRatingDefinitions(
+		"severity-definitions",
+		data.severityDefinitions,
+		toneClass,
+	);
+	renderRatingDefinitions(
+		"difficulty-definitions",
+		data.difficultyDefinitions,
+		difficultyToneClass,
+	);
+	setupFilters();
+})();
+
+		</script>
+	</body>
+</html>

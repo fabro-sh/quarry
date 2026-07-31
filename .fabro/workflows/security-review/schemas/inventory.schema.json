@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "required": ["components", "securityScanSkippedComponents"],
+  "properties": {
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "paths", "language"],
+        "properties": {
+          "name": { "type": "string" },
+          "paths": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "language": { "type": "string" },
+          "role": { "type": "string" },
+          "internetFacing": { "type": "boolean" }
+        }
+      }
+    },
+    "securityScanSkippedComponents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "paths", "reason"],
+        "properties": {
+          "name": { "type": "string" },
+          "paths": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  }
+}

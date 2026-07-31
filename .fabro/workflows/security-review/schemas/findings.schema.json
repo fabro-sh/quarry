@@ -1,0 +1,91 @@
+{
+  "type": "object",
+  "required": ["findings"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "file",
+          "line",
+          "ruleId",
+          "identity",
+          "category",
+          "severity",
+          "difficulty",
+          "confidence",
+          "title",
+          "rationale",
+          "evidence",
+          "snippet",
+          "symbol",
+          "impact",
+          "exploitScenarios",
+          "preconditions",
+          "recommendations"
+        ],
+        "properties": {
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "ruleId": {
+            "type": "string",
+            "maxLength": 160,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*$"
+          },
+          "identity": {
+            "type": "object",
+            "required": ["anchor"],
+            "additionalProperties": false,
+            "properties": {
+              "anchor": {
+                "type": "string",
+                "maxLength": 160,
+                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+              },
+              "instance": {
+                "type": "string",
+                "maxLength": 160,
+                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+              }
+            }
+          },
+          "category": { "type": "string" },
+          "severity": {
+            "type": "string",
+            "enum": ["HIGH", "MEDIUM", "LOW"]
+          },
+          "difficulty": {
+            "type": "string",
+            "enum": ["LOW", "MEDIUM", "HIGH"]
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["HIGH", "MEDIUM", "LOW"]
+          },
+          "title": { "type": "string" },
+          "rationale": { "type": "string" },
+          "evidence": { "type": "string" },
+          "snippet": { "type": "string" },
+          "symbol": { "type": "string" },
+          "impact": { "type": "string" },
+          "exploitScenarios": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "preconditions": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "recommendations": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "cweId": { "type": "string" }
+        }
+      }
+    }
+  }
+}

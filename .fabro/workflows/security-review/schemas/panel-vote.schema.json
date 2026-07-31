@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "panel-vote.schema.json",
+  "title": "Canonical panel vote JSONL record",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "voteId",
+    "findingId",
+    "occurrenceId",
+    "candidateRank",
+    "round",
+    "lens",
+    "claim",
+    "status",
+    "verdict",
+    "reasoning"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "voteId": {
+      "type": "string",
+      "pattern": "^(?:panel|repanel|redteam):occ_[0-9a-f]{24}:(?:reachability|impact|defenses|red_team)$"
+    },
+    "findingId": {
+      "type": "string",
+      "pattern": "^csf_[0-9a-f]{24}$"
+    },
+    "occurrenceId": {
+      "type": "string",
+      "pattern": "^occ_[0-9a-f]{24}$"
+    },
+    "candidateRank": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "round": {
+      "type": "string",
+      "enum": ["panel", "repanel", "redteam"]
+    },
+    "lens": {
+      "type": "string",
+      "enum": ["REACHABILITY", "IMPACT", "DEFENSES", "RED_TEAM"]
+    },
+    "claim": {
+      "type": "object",
+      "required": [
+        "file",
+        "line",
+        "category",
+        "severityAsReported",
+        "title",
+        "rationale",
+        "evidenceAsCited",
+        "snippetAsQuoted",
+        "symbol",
+        "reports"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "category": {
+          "type": "string"
+        },
+        "severityAsReported": {
+          "type": "string",
+          "enum": ["HIGH", "MEDIUM", "LOW"]
+        },
+        "title": {
+          "type": "string"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "evidenceAsCited": {
+          "type": "string"
+        },
+        "snippetAsQuoted": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "reports": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "missing"]
+    },
+    "verdict": {
+      "type": ["string", "null"],
+      "enum": ["TRUE_POSITIVE", "FALSE_POSITIVE", null]
+    },
+    "reasoning": {
+      "type": "string"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "completed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "verdict": {
+            "enum": ["TRUE_POSITIVE", "FALSE_POSITIVE"]
+          },
+          "reasoning": {
+            "minLength": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "verdict": {
+            "const": null
+          },
+          "reasoning": {
+            "const": ""
+          }
+        }
+      }
+    }
+  ]
+}

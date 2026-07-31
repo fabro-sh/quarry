@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "canonical-findings.schema.json",
+  "title": "Canonical security review findings",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/finding"
+  },
+  "$defs": {
+    "identity": {
+      "type": "object",
+      "required": ["anchor"],
+      "additionalProperties": false,
+      "properties": {
+        "anchor": {
+          "type": "string",
+          "maxLength": 160,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "instance": {
+          "type": "string",
+          "maxLength": 160,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        }
+      }
+    },
+    "fingerprints": {
+      "type": "object",
+      "required": ["primary"],
+      "additionalProperties": false,
+      "properties": {
+        "primary": {
+          "type": "string",
+          "pattern": "^codex-security/v1:sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "code": {
+      "type": "object",
+      "required": ["language", "label", "lines"],
+      "additionalProperties": false,
+      "properties": {
+        "language": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["number", "text"],
+            "additionalProperties": false,
+            "properties": {
+              "number": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "text": {
+                "type": "string"
+              },
+              "highlight": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "candidateFields": {
+      "type": "object",
+      "required": [
+        "findingId",
+        "occurrenceId",
+        "fingerprints",
+        "ruleId",
+        "identity",
+        "title",
+        "impact",
+        "file",
+        "line",
+        "description",
+        "evidence",
+        "exploit_scenarios",
+        "preconditions",
+        "category",
+        "severity",
+        "difficulty",
+        "confidence",
+        "recommendations",
+        "cwe_id",
+        "snippet",
+        "symbol"
+      ],
+      "properties": {
+        "findingId": {
+          "type": "string",
+          "pattern": "^csf_[0-9a-f]{24}$"
+        },
+        "occurrenceId": {
+          "type": "string",
+          "pattern": "^occ_[0-9a-f]{24}$"
+        },
+        "fingerprints": {
+          "$ref": "#/$defs/fingerprints"
+        },
+        "ruleId": {
+          "type": "string",
+          "maxLength": 160,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "impact": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "exploit_scenarios": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "preconditions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["HIGH", "MEDIUM", "LOW"]
+        },
+        "difficulty": {
+          "type": "string",
+          "enum": ["LOW", "MEDIUM", "HIGH"]
+        },
+        "confidence": {
+          "type": "string",
+          "enum": ["high", "medium", "low"]
+        },
+        "recommendations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwe_id": {
+          "type": ["string", "null"],
+          "pattern": "^CWE-[0-9]{1,5}$"
+        },
+        "snippet": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        }
+      }
+    },
+    "candidate": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/candidateFields"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "finding": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/candidateFields"
+        },
+        {
+          "type": "object",
+          "required": ["id", "code"],
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^F[1-9][0-9]*$"
+            },
+            "code": {
+              "$ref": "#/$defs/code"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

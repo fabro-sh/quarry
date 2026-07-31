@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "required": ["entryPoints", "sinks", "hotFiles"],
+  "properties": {
+    "entryPoints": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "sinks": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "assumptions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "trustBoundaries": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "hotFiles": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "required": ["verdict", "reasoning"],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["TRUE_POSITIVE", "FALSE_POSITIVE"]
+    },
+    "reasoning": { "type": "string" }
+  }
+}

@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "coverage.schema.json",
+  "title": "Canonical security review coverage",
+  "type": "object",
+  "required": [
+    "droppedComponents",
+    "skippedComponents",
+    "components",
+    "effort",
+    "focus",
+    "diffFiles",
+    "diffLines",
+    "diffSizeRejected",
+    "scopeFiles",
+    "scopeSizeRejected",
+    "collapsed",
+    "completenessCheckOutcome",
+    "topLevelCount",
+    "topLevelRejected",
+    "unaccountedTopLevelDirs",
+    "inventoryRejected",
+    "inventoryFallback",
+    "emptyDiff",
+    "emptyScope",
+    "mode",
+    "scope",
+    "range",
+    "researchersPerCell",
+    "researchersDispatched",
+    "researchersReturned",
+    "prunedBuckets",
+    "adversarialCasualties",
+    "candidatesDroppedByCap",
+    "unverifiedByCap",
+    "invalidResearchResults"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "droppedComponents": {
+      "$ref": "#/$defs/strings"
+    },
+    "skippedComponents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "paths", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "paths": {
+            "$ref": "#/$defs/strings"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "paths"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "effort": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "max"]
+    },
+    "focus": {
+      "type": "string"
+    },
+    "diffFiles": {
+      "$ref": "#/$defs/optionalCount"
+    },
+    "diffLines": {
+      "$ref": "#/$defs/optionalCount"
+    },
+    "diffSizeRejected": {
+      "type": ["string", "null"]
+    },
+    "scopeFiles": {
+      "$ref": "#/$defs/optionalCount"
+    },
+    "scopeSizeRejected": {
+      "type": ["string", "null"]
+    },
+    "collapsed": {
+      "type": ["string", "null"],
+      "enum": ["small-diff", "small-scope", null]
+    },
+    "completenessCheckOutcome": {
+      "type": "string",
+      "enum": ["checked", "partial", "not-checkable", "not-applicable"]
+    },
+    "topLevelCount": {
+      "$ref": "#/$defs/optionalCount"
+    },
+    "topLevelRejected": {
+      "type": ["string", "null"]
+    },
+    "unaccountedTopLevelDirs": {
+      "$ref": "#/$defs/strings"
+    },
+    "inventoryRejected": {
+      "$ref": "#/$defs/strings"
+    },
+    "inventoryFallback": {
+      "type": ["string", "null"],
+      "enum": [
+        "incomplete-partition",
+        "inventory-failed",
+        "empty-partition",
+        null
+      ]
+    },
+    "emptyDiff": {
+      "type": "boolean"
+    },
+    "emptyScope": {
+      "type": "boolean"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["scan", "changes", "commit"]
+    },
+    "scope": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "string"
+      }
+    },
+    "range": {
+      "type": ["string", "null"]
+    },
+    "researchersPerCell": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "researchersDispatched": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "researchersReturned": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "prunedBuckets": {
+      "$ref": "#/$defs/strings"
+    },
+    "adversarialCasualties": {
+      "$ref": "#/$defs/strings"
+    },
+    "candidatesDroppedByCap": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "unverifiedByCap": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "invalidResearchResults": {
+      "$ref": "#/$defs/strings"
+    }
+  },
+  "$defs": {
+    "strings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "optionalCount": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    }
+  }
+}

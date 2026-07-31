@@ -1,0 +1,58 @@
+_version = 1
+
+[workflow]
+graph = "security-review.fabro"
+
+[run]
+goal = "Verify the security-review workflow against its deliberate command-injection fixture."
+
+[run.inputs]
+mode = "scan"
+effort = "low"
+scope = ".fabro/workflows/security-review/fixtures/command_injection.py"
+base = ""
+commit = ""
+range = ""
+focus = ""
+
+[run.run_branch]
+enabled = false
+
+[run.environment]
+id = "security-review"
+
+[run.environment.env]
+GITHUB_TOKEN = ""
+GH_TOKEN = ""
+
+[run.artifacts]
+include = [
+  ".fabro/workflows/security-review/runtime/**",
+  "SECURITY-REVIEW-*/.gitignore",
+  "SECURITY-REVIEW-*/.security-review-run/**",
+  "SECURITY-REVIEW-*/scan-manifest.json",
+  "SECURITY-REVIEW-*/candidate-ledger.jsonl",
+  "SECURITY-REVIEW-*/findings.json",
+  "SECURITY-REVIEW-*/coverage.json",
+  "SECURITY-REVIEW-*/panel-votes.jsonl",
+  "SECURITY-REVIEW-*/SECURITY-REVIEW-RESULTS.md",
+  "SECURITY-REVIEW-*/SECURITY-REVIEW-RESULTS.html",
+  "SECURITY-REVIEW-*/SECURITY-REVIEW-RESULTS.jsonl",
+  "SECURITY-REVIEW-*/SECURITY-REVIEW-REVISION-*.json",
+]
+
+[environments.security-review]
+provider = "daytona"
+
+# The scan's agents search the tree constantly. buildpack-deps:noble, the
+# Daytona default base, ships grep but not ripgrep, which respects .gitignore
+# and is far faster on a large repository.
+[environments.security-review.image]
+dockerfile = """
+FROM buildpack-deps:noble
+RUN apt-get update && apt-get install -y --no-install-recommends ripgrep && rm -rf /var/lib/apt/lists/*
+"""
+
+[environments.security-review.resources]
+cpu = 2
+memory = "4GB"

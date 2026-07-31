@@ -1,0 +1,370 @@
+digraph SecurityReview {
+    graph [
+        goal="Perform an adversarial, read-only security review of this repository and report only panel-verified findings.",
+        default_max_retries=0,
+        default_fidelity="compact",
+        stall_timeout="3600s",
+        model_stylesheet="
+            * { model: kimi-k3; provider: kimi; reasoning_effort: low; }
+            .inventory { model: kimi-k3; provider: kimi; reasoning_effort: low; }
+            .threat-model { model: kimi-k3; provider: kimi; reasoning_effort: low; }
+            .research { model: kimi-k3; provider: kimi; reasoning_effort: high; }
+            .verification { model: kimi-k3; provider: kimi; reasoning_effort: high; }
+        "
+    ]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+    abort [
+        shape=parallelogram,
+        label="Abort after fatal deterministic failure",
+        timeout="10s",
+        script="echo 'Security-review workflow stopped after a fatal deterministic failure.' >&2; exit 1"
+    ]
+
+    prepare [
+        shape=parallelogram,
+        label="Resolve and size scan target",
+        timeout="180s",
+        output_schema="routing",
+        stdin_source="context.internal.run_id",
+        script="python3 -c \"import hashlib,sys; pairs=list(zip(sys.argv[1::2],sys.argv[2::2])); sys.exit(0 if pairs and all(hashlib.sha256(open(path,'rb').read()).hexdigest()==expected for path,expected in pairs) else 91)\" .fabro/workflows/security-review/scripts/security_review.py 4905ba7d097f5dc736fc652a3874897d6dd019f4e367800189ca07d351519fe2 .fabro/workflows/security-review/scripts/git_readonly.py 6bafe2418234d7887d9f4726208bc9e50325bf34c5098c4a6ef508f1a5486ec5 .fabro/workflows/security-review/scripts/render_report.py bebe4392f1ec67e48b3696470b79413a9b1dfb63eaaa89629df41fe79c8610dd .fabro/workflows/security-review/specs/report-spec.md 7a62c6ccab557b79691735d92c4247802903b967417511e2febdc9de98aff755 .fabro/workflows/security-review/templates/report.html 001a8421f2bf83634121811d8965939bc723895e13c89a00a83cb6f20bcbd0e2 && python3 .fabro/workflows/security-review/scripts/security_review.py prepare --scan-id-stdin --mode {{ inputs.mode }} --effort {{ inputs.effort }} --scope {{ inputs.scope }} --base {{ inputs.base }} --commit {{ inputs.commit }} --range {{ inputs.range }} --focus {{ inputs.focus }}"
+    ]
+    target_gate [shape=diamond, label="Target has work?"]
+
+    inventory [
+        label="Inventory",
+        class="inventory",
+        prompt="@prompts/inventory.md",
+        output_schema="@schemas/inventory.schema.json",
+        output_retries=2,
+        max_retries=2,
+        auto_status=true,
+        timeout="1200s",
+        fidelity="compact",
+        project_memory=false,
+        max_visits=2
+    ]
+    merge_inventory [
+        shape=parallelogram,
+        label="Merge inventory output",
+        stdin_source="context.output.inventory",
+        script="python3 .fabro/workflows/security-review/scripts/security_review.py merge inventory",
+        output_schema="routing",
+        timeout="180s",
+        max_visits=2
+    ]
+    inventory_gate [
+        shape=diamond,
+        label="Inventory complete or correct?",
+        max_visits=2
+    ]
+    inventory_failed [
+        shape=parallelogram,
+        label="Record inventory-failed fallback",
+        timeout="180s",
+        output_schema="routing",
+        script="python3 .fabro/workflows/security-review/scripts/security_review.py inventory-failed"
+    ]
+
+    plan_matrix [
+        shape=parallelogram,
+        label="Plan component matrix",
+        timeout="180s",
+        output_schema="routing",
+        script="python3 .fabro/workflows/security-review/scripts/security_review.py plan-matrix"
+    ]
+    threat_gate [shape=diamond, label="Threat models needed?"]
+
+    threat_models [
+        shape=component,
+        label="Threat models",
+        for_each="context.threat_jobs",
+        max_parallel=4,
+        auto_status=true
+    ]
+    threat_model [
+        label="Threat-model component",
+        class="threat-model",
+        prompt="@prompts/threat-model.md",
+        output_schema="@schemas/threat-model.schema.json",
+        output_retries=2,
+        max_retries=2,
+        auto_status=true,
+        timeout="1200s",
+        project_memory=false
+    ]
+    threat_join [shape=tripleoctagon, label="Gather threat-model outputs"]
+    merge_threat [
+        shape=parallelogram,
+        label="Merge threat-model outputs",
+        stdin_source="context.parallel.results",
+        script="python3 .fabro/workflows/security-review/scripts/security_review.py merge threat",
+        output_schema="routing",
+        timeout="180s"
+    ]
+    zip_cells [
+        shape=parallelogram,
+        label="Build research and sweep cells",
+        timeout="180s",
+        output_schema="routing",
+        script="python3 .fabro/workflows/security-review/scripts/security_review.py zip-cells"
+    ]
+
+    research_gate [shape=diamond, label="Researchers needed?"]
+    research [
+        shape=component,
+        label="Research",
+        for_each="context.research_jobs",
+        max_parallel=8,
+        auto_status=true
+    ]
+    researcher [
+        label="Research component and category",
+        class="research",
+        prompt="@prompts/research.md",
+        output_schema="@schemas/findings.schema.json",
+        output_retries=2,
+        max_retries=2,
+        auto_status=true,
+        timeout="1800s",
+        project_memory=false
+    ]
+    research_join [shape=tripleoctagon, label="Gather research outputs"]
+    merge_research [
+        shape=parallelogram,
+        label="Merge research outputs",
+        stdin_source="context.parallel.results",
+        script="python3 .fabro/workflows/security-review/scripts/security_review.py merge research",
+        output_schema="routing",
+        timeout="180s"
+    ]
+    sweep_gate [shape=diamond, label="Sweeps needed?"]
+    sweep [
+        shape=component,
+        label="Gap-fill sweeps",
+        for_each="context.sweep_jobs",
+        max_parallel=3,
+        auto_status=true
+    ]
+    sweeper [
+        label="Gap-fill sweep",
+        class="research",
+        prompt="@prompts/sweep.md",
+        output_schema="@schemas/findings.schema.json",
+        output_retries=2,
+        max_retries=2,
+        auto_status=true,
+        timeout="1800s",
+        project_memory=false
+    ]
+    sweep_join [shape=tripleoctagon, label="Gather sweep outputs"]
+    merge_sweep [
+        shape=parallelogram,
+        label="Merge sweep outputs",
+        stdin_source="context.parallel.results",
+        script="python3 .fabro/workflows/security-review/scripts/security_review.py merge sweep",
+        output_schema="routing",
+        timeout="180s"
+    ]
+
+    dedup_rank [
+        shape=parallelogram,
+        label="Deduplicate, rank, and cap candidates",
+        timeout="180s",
+        output_schema="routing",
+        script="python3 .fabro/workflows/security-review/scripts/security_review.py dedup-rank"
+    ]
+    panel_gate [shape=diamond, label="Panel votes needed?"]
+    panel [
+        shape=component,
+        label="Three-lens panel",
+        for_each="context.verification_jobs",
+        max_parallel=12,
+        auto_status=true
+    ]
+    panel_verifier [
+        label="Verify candidate",
+        class="verification",
+        prompt="@prompts/verify.md",
+        output_schema="@schemas/verdict.schema.json",
+        output_retries=2,
+        max_retries=2,
+        auto_status=true,
+        timeout="1200s",
+        project_memory=false
+    ]
+    panel_join [shape=tripleoctagon, label="Gather panel votes"]
+    merge_panel [
+        shape=parallelogram,
+        label="Merge panel votes",
+        stdin_source="context.parallel.results",
+        script="python3 .fabro/workflows/security-review/scripts/security_review.py merge panel",
+        output_schema="routing",
+        timeout="180s"
+    ]
+    tally [
+        shape=parallelogram,
+        label="Tally initial panels",
+        timeout="180s",
+        output_schema="routing",
+        script="python3 .fabro/workflows/security-review/scripts/security_review.py tally"
+    ]
+
+    effort_gate [shape=diamond, label="Max effort?"]
+    repanel_gate [shape=diamond, label="Marginal keeps need repanel?"]
+    repanel [
+        shape=component,
+        label="Repanel marginal keeps",
+        for_each="context.repanel_jobs",
+        max_parallel=12,
+        auto_status=true
+    ]
+    repanel_verifier [
+        label="Recheck marginal candidate",
+        class="verification",
+        prompt="@prompts/verify.md",
+        output_schema="@schemas/verdict.schema.json",
+        output_retries=2,
+        max_retries=2,
+        auto_status=true,
+        timeout="1200s",
+        project_memory=false
+    ]
+    repanel_join [shape=tripleoctagon, label="Gather repanel votes"]
+    merge_repanel [
+        shape=parallelogram,
+        label="Merge repanel votes",
+        stdin_source="context.parallel.results",
+        script="python3 .fabro/workflows/security-review/scripts/security_review.py merge repanel",
+        output_schema="routing",
+        timeout="180s"
+    ]
+    adversarial_plan [
+        shape=parallelogram,
+        label="Apply repanel and plan red-team round",
+        timeout="180s",
+        output_schema="routing",
+        script="python3 .fabro/workflows/security-review/scripts/security_review.py adversarial-plan"
+    ]
+
+    redteam_gate [shape=diamond, label="Red-team votes needed?"]
+    redteam [
+        shape=component,
+        label="Red-team every survivor",
+        for_each="context.redteam_jobs",
+        max_parallel=4,
+        auto_status=true
+    ]
+    redteam_verifier [
+        label="Red-team candidate",
+        class="verification",
+        prompt="@prompts/redteam.md",
+        output_schema="@schemas/verdict.schema.json",
+        output_retries=2,
+        max_retries=2,
+        auto_status=true,
+        timeout="1200s",
+        project_memory=false
+    ]
+    redteam_join [shape=tripleoctagon, label="Gather red-team votes"]
+    merge_redteam [
+        shape=parallelogram,
+        label="Merge red-team votes",
+        stdin_source="context.parallel.results",
+        script="python3 .fabro/workflows/security-review/scripts/security_review.py merge redteam",
+        output_schema="routing",
+        timeout="180s"
+    ]
+
+    final_tally [
+        shape=parallelogram,
+        label="Write completed canonical scan bundle",
+        timeout="180s",
+        output_schema="routing",
+        script="python3 .fabro/workflows/security-review/scripts/security_review.py final-tally"
+    ]
+    render_report [
+        shape=parallelogram,
+        label="Derive Markdown, HTML, JSONL, and revision stamp",
+        timeout="180s",
+        output_schema="routing",
+        script="python3 .fabro/workflows/security-review/scripts/security_review.py render-report"
+    ]
+
+    start -> prepare
+    prepare -> target_gate [condition="outcome=succeeded"]
+    prepare -> abort
+    target_gate -> exit [condition="context.empty_target=true"]
+    target_gate -> inventory [condition="context.use_inventory=true"]
+    target_gate -> plan_matrix
+
+    inventory -> merge_inventory [condition="outcome=succeeded"]
+    inventory -> inventory_failed
+    inventory_failed -> plan_matrix [condition="outcome=succeeded"]
+    inventory_failed -> abort
+    merge_inventory -> inventory_gate [condition="outcome=succeeded"]
+    merge_inventory -> abort
+    inventory_gate -> inventory [condition="context.inventory_correction=true"]
+    inventory_gate -> plan_matrix
+
+    plan_matrix -> threat_gate [condition="outcome=succeeded"]
+    plan_matrix -> abort
+    threat_gate -> threat_models [condition="context.run_threat_models=true"]
+    threat_gate -> research_gate
+    threat_models -> threat_model [fidelity="truncate"]
+    threat_model -> threat_join -> merge_threat
+    merge_threat -> zip_cells [condition="outcome=succeeded"]
+    merge_threat -> abort
+    zip_cells -> research_gate [condition="outcome=succeeded"]
+    zip_cells -> abort
+
+    research_gate -> research [condition="context.run_research=true"]
+    research_gate -> sweep_gate
+    research -> researcher [fidelity="truncate"]
+    researcher -> research_join -> merge_research
+    merge_research -> sweep_gate [condition="outcome=succeeded"]
+    merge_research -> abort
+
+    sweep_gate -> sweep [condition="context.run_sweeps=true"]
+    sweep_gate -> dedup_rank
+    sweep -> sweeper [fidelity="truncate"]
+    sweeper -> sweep_join -> merge_sweep
+    merge_sweep -> dedup_rank [condition="outcome=succeeded"]
+    merge_sweep -> abort
+
+    dedup_rank -> panel_gate [condition="outcome=succeeded"]
+    dedup_rank -> abort
+    panel_gate -> panel [condition="context.run_panel=true"]
+    panel_gate -> tally
+    panel -> panel_verifier [fidelity="truncate"]
+    panel_verifier -> panel_join -> merge_panel
+    merge_panel -> tally [condition="outcome=succeeded"]
+    merge_panel -> abort
+
+    tally -> effort_gate [condition="outcome=succeeded"]
+    tally -> abort
+    effort_gate -> repanel_gate [condition="context.max_effort=true"]
+    effort_gate -> final_tally
+    repanel_gate -> repanel [condition="context.run_repanel=true"]
+    repanel_gate -> adversarial_plan
+    repanel -> repanel_verifier [fidelity="truncate"]
+    repanel_verifier -> repanel_join -> merge_repanel
+    merge_repanel -> adversarial_plan [condition="outcome=succeeded"]
+    merge_repanel -> abort
+
+    adversarial_plan -> redteam_gate [condition="outcome=succeeded"]
+    adversarial_plan -> abort
+    redteam_gate -> redteam [condition="context.run_redteam=true"]
+    redteam_gate -> final_tally
+    redteam -> redteam_verifier [fidelity="truncate"]
+    redteam_verifier -> redteam_join -> merge_redteam
+    merge_redteam -> final_tally [condition="outcome=succeeded"]
+    merge_redteam -> abort
+
+    final_tally -> render_report [condition="outcome=succeeded"]
+    final_tally -> abort
+    render_report -> exit [condition="outcome=succeeded"]
+    render_report -> abort
+}

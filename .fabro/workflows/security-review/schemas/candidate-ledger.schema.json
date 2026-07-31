@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "candidate-ledger.schema.json",
+  "title": "Canonical candidate ledger JSONL record",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "rank",
+    "disposition",
+    "dispositionReason",
+    "displayId",
+    "selectedForPanel",
+    "withinCandidateBudget",
+    "reports",
+    "reporters",
+    "candidate"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "rank": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "disposition": {
+      "type": "string",
+      "enum": [
+        "reportable",
+        "rejected",
+        "deferred",
+        "verification-incomplete"
+      ]
+    },
+    "dispositionReason": {
+      "type": "string",
+      "enum": [
+        "verified-panel-quorum",
+        "panel-rejected",
+        "repanel-rejected",
+        "redteam-refuted",
+        "candidate-budget",
+        "verification-budget",
+        "panel-record-missing",
+        "panel-incomplete"
+      ]
+    },
+    "displayId": {
+      "type": ["string", "null"],
+      "pattern": "^F[1-9][0-9]*$"
+    },
+    "selectedForPanel": {
+      "type": "boolean"
+    },
+    "withinCandidateBudget": {
+      "type": "boolean"
+    },
+    "reports": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "reporters": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "candidate": {
+      "$ref": "canonical-findings.schema.json#/$defs/candidate"
+    }
+  }
+}

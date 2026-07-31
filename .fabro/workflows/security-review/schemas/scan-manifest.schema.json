@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "scan-manifest.schema.json",
+  "title": "Completed canonical security scan manifest",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "kind",
+    "scanId",
+    "target",
+    "startedAt",
+    "completedAt",
+    "workflow",
+    "request",
+    "revision",
+    "model",
+    "completion",
+    "canonicalFiles"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "kind": {
+      "const": "security-review.completed-scan"
+    },
+    "scanId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+    },
+    "target": {
+      "type": "object",
+      "required": ["id", "idSource", "scanRoot"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^security-review-target/v1:sha256:[0-9a-f]{64}$"
+        },
+        "idSource": {
+          "type": "string",
+          "enum": ["git-origin", "git-root", "local-path"]
+        },
+        "scanRoot": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "workflow": {
+      "type": "object",
+      "required": ["name", "stateVersion"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "const": "security-review"
+        },
+        "stateVersion": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": [
+        "mode",
+        "scope",
+        "range",
+        "base",
+        "commit",
+        "effort",
+        "focus"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["scan", "changes", "commit"]
+        },
+        "scope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "range": {
+          "type": ["string", "null"]
+        },
+        "base": {
+          "type": ["string", "null"]
+        },
+        "commit": {
+          "type": ["string", "null"]
+        },
+        "effort": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "max"]
+        },
+        "focus": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "revision": {
+      "type": "object"
+    },
+    "model": {
+      "type": "object"
+    },
+    "completion": {
+      "type": "object",
+      "required": [
+        "status",
+        "reasons",
+        "verificationStatus",
+        "rawCandidateReports",
+        "uniqueCandidates",
+        "dispositions",
+        "findings",
+        "panelVoteRecords",
+        "completedVoteRecords",
+        "missingVoteRecords"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["complete", "partial"]
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "verificationStatus": {
+          "type": "string",
+          "enum": ["verified", "unverified"]
+        },
+        "rawCandidateReports": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "uniqueCandidates": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dispositions": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reportable": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "rejected": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deferred": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "verification-incomplete": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "findings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "panelVoteRecords": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "completedVoteRecords": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missingVoteRecords": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "canonicalFiles": {
+      "const": [
+        "scan-manifest.json",
+        "candidate-ledger.jsonl",
+        "findings.json",
+        "coverage.json",
+        "panel-votes.jsonl"
+      ]
+    }
+  }
+}
