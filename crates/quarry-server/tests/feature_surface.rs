@@ -267,7 +267,8 @@ async fn document_feature_surface_matches_compiled_features() -> anyhow::Result<
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn security_headers_present_and_tmp_responses_are_uncacheable() -> anyhow::Result<()> {
+async fn security_headers_present_and_tmp_responses_are_uncacheable_and_non_indexable()
+-> anyhow::Result<()> {
     let (_root, app, _store) = document_test_app().await;
 
     let health = app
@@ -294,6 +295,10 @@ async fn security_headers_present_and_tmp_responses_are_uncacheable() -> anyhow:
         !headers.contains_key(header::CACHE_CONTROL),
         "a non-tmp response must not be marked no-store"
     );
+    assert!(
+        !headers.contains_key("x-robots-tag"),
+        "a non-tmp response must remain indexable"
+    );
 
     let created = app
         .clone()
@@ -305,6 +310,11 @@ async fn security_headers_present_and_tmp_responses_are_uncacheable() -> anyhow:
         .await
         .context("create tmp document")?;
     assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(created.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(
+        created.headers()["x-robots-tag"],
+        "noindex, nofollow, noarchive"
+    );
     let created_json = response_json(created).await;
     let secret = created_json["document"]["path"]
         .as_str()
@@ -312,6 +322,7 @@ async fn security_headers_present_and_tmp_responses_are_uncacheable() -> anyhow:
         .to_string();
 
     let fetched = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method(Method::GET)
@@ -323,9 +334,34 @@ async fn security_headers_present_and_tmp_responses_are_uncacheable() -> anyhow:
         .context("send tmp document read request")?;
     assert_eq!(fetched.status(), StatusCode::OK);
     // The secret rides in the URL, so the tmp response must be uncacheable and
-    // still carry the hardening headers.
+    // non-indexable, and it must still carry the hardening headers.
     assert_eq!(fetched.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(
+        fetched.headers()["x-robots-tag"],
+        "noindex, nofollow, noarchive"
+    );
     assert_eq!(fetched.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+
+    for path in ["/tmp".to_string(), format!("/tmp/{secret}")] {
+        let browser = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(&path)
+                    .header(header::ACCEPT, "text/html")
+                    .body(Body::empty())
+                    .context("build tmp browser request")?,
+            )
+            .await
+            .context("send tmp browser request")?;
+        assert_eq!(browser.status(), StatusCode::OK);
+        assert_eq!(browser.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(
+            browser.headers()["x-robots-tag"],
+            "noindex, nofollow, noarchive"
+        );
+    }
     Ok(())
 }
 
