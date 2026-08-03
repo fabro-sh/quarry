@@ -113,6 +113,7 @@ pub struct ServerConfig {
 
 const REQUEST_ID_HEADER: &str = "x-quarry-request-id";
 const ALLOW_DOCUMENT_KIND_CHANGE_HEADER: &str = "x-quarry-allow-document-kind-change";
+const X_ROBOTS_TAG_HEADER: &str = "x-robots-tag";
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
 const TMP_DOCUMENT_HTTP_BODY_LIMIT: usize =
     quarry_storage::TMP_DOCUMENT_MARKDOWN_MAX_BYTES + 16 * 1024;
@@ -285,14 +286,17 @@ const CONTENT_SECURITY_POLICY: HeaderValue = HeaderValue::from_static(
 );
 
 /// Sets response-hardening headers on every response (handler, fallback, and
-/// error alike) and marks secret-bearing tmp responses uncacheable. Runs as an
-/// outer layer so it also covers the asset fallback and error bodies.
+/// error alike) and marks tmp responses uncacheable and non-indexable. Runs as
+/// an outer layer so it also covers the asset fallback and error bodies.
 async fn security_headers_middleware(request: Request, next: Next) -> Response {
-    // A tmp path carries the document secret in the URL, so its responses must
-    // never be cached by shared proxies. `/tmp/` is the SPA shell; `/v1/tmp/`
-    // is the API surface (including inline and error responses).
+    // Tmp paths can carry the document secret in the URL, so their responses
+    // must never be cached by shared proxies or indexed by search engines.
+    // `/tmp` is the SPA surface; `/v1/tmp` is the API surface (including
+    // inline and error responses).
     let path = request.uri().path();
-    let is_tmp_path = path.starts_with("/v1/tmp/") || path.starts_with("/tmp/");
+    let is_tmp_path = matches!(path, "/tmp" | "/v1/tmp")
+        || path.starts_with("/tmp/")
+        || path.starts_with("/v1/tmp/");
 
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
@@ -308,6 +312,10 @@ async fn security_headers_middleware(request: Request, next: Next) -> Response {
     headers.insert(header::CONTENT_SECURITY_POLICY, CONTENT_SECURITY_POLICY);
     if is_tmp_path {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        headers.insert(
+            X_ROBOTS_TAG_HEADER,
+            HeaderValue::from_static("noindex, nofollow, noarchive"),
+        );
     }
     response
 }
