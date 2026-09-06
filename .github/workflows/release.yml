@@ -81,11 +81,12 @@ jobs:
         with:
           no-cache: true
 
+      - uses: ./.github/actions/setup-document
       - name: Verify browser workspace
         working-directory: ui
         run: |
           bun install --frozen-lockfile
-          bun run fixtures:check
+          bun run check:architecture
           bun run typecheck
           bun run test
           bun run build

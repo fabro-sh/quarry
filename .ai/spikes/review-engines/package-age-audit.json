@@ -1,0 +1,521 @@
+{
+  "cutoff": "2026-09-04T02:04:36+00:00",
+  "packages": [
+    {
+      "name": "@acemir/cssom",
+      "version": "0.9.31",
+      "published": "2026-01-12T13:17:15.019Z",
+      "eligible": true
+    },
+    {
+      "name": "@asamuzakjp/css-color",
+      "version": "4.1.2",
+      "published": "2026-02-05T13:42:15.026Z",
+      "eligible": true
+    },
+    {
+      "name": "@asamuzakjp/dom-selector",
+      "version": "6.8.1",
+      "published": "2026-02-14T16:09:21.337Z",
+      "eligible": true
+    },
+    {
+      "name": "@asamuzakjp/nwsapi",
+      "version": "2.3.9",
+      "published": "2025-03-28T13:43:07.844Z",
+      "eligible": true
+    },
+    {
+      "name": "@automerge/automerge",
+      "version": "3.4.1",
+      "published": "2026-08-12T08:28:28.692Z",
+      "eligible": true
+    },
+    {
+      "name": "@automerge/automerge-repo",
+      "version": "2.5.6",
+      "published": "2026-05-18T10:55:00.901Z",
+      "eligible": true
+    },
+    {
+      "name": "@automerge/prosemirror",
+      "version": "0.2.0",
+      "published": "2026-02-25T09:43:46.337Z",
+      "eligible": true
+    },
+    {
+      "name": "@cbor-extract/cbor-extract-darwin-arm64",
+      "version": "2.2.2",
+      "published": "2026-03-10T23:02:45.012Z",
+      "eligible": true
+    },
+    {
+      "name": "@cbor-extract/cbor-extract-darwin-x64",
+      "version": "2.2.2",
+      "published": "2026-03-10T23:02:42.918Z",
+      "eligible": true
+    },
+    {
+      "name": "@cbor-extract/cbor-extract-linux-arm",
+      "version": "2.2.2",
+      "published": "2026-03-10T23:02:50.006Z",
+      "eligible": true
+    },
+    {
+      "name": "@cbor-extract/cbor-extract-linux-arm64",
+      "version": "2.2.2",
+      "published": "2026-03-10T23:02:48.633Z",
+      "eligible": true
+    },
+    {
+      "name": "@cbor-extract/cbor-extract-linux-x64",
+      "version": "2.2.2",
+      "published": "2026-03-10T23:02:46.819Z",
+      "eligible": true
+    },
+    {
+      "name": "@cbor-extract/cbor-extract-win32-x64",
+      "version": "2.2.2",
+      "published": "2026-03-14T12:46:10.669Z",
+      "eligible": true
+    },
+    {
+      "name": "@csstools/color-helpers",
+      "version": "6.1.1",
+      "published": "2026-08-15T16:44:34.927Z",
+      "eligible": true
+    },
+    {
+      "name": "@csstools/css-calc",
+      "version": "3.3.0",
+      "published": "2026-07-22T16:17:20.299Z",
+      "eligible": true
+    },
+    {
+      "name": "@csstools/css-color-parser",
+      "version": "4.2.2",
+      "published": "2026-08-30T17:18:27.955Z",
+      "eligible": true
+    },
+    {
+      "name": "@csstools/css-parser-algorithms",
+      "version": "4.0.0",
+      "published": "2026-01-14T07:20:09.455Z",
+      "eligible": true
+    },
+    {
+      "name": "@csstools/css-syntax-patches-for-csstree",
+      "version": "1.1.12",
+      "published": "2026-08-31T19:09:33.109Z",
+      "eligible": true
+    },
+    {
+      "name": "@csstools/css-tokenizer",
+      "version": "4.0.0",
+      "published": "2026-01-14T07:14:15.368Z",
+      "eligible": true
+    },
+    {
+      "name": "@noble/hashes",
+      "version": "1.8.0",
+      "published": "2025-04-21T21:24:05.654Z",
+      "eligible": true
+    },
+    {
+      "name": "agent-base",
+      "version": "7.1.4",
+      "published": "2025-07-07T17:44:01.356Z",
+      "eligible": true
+    },
+    {
+      "name": "base-x",
+      "version": "4.0.1",
+      "published": "2025-03-08T01:04:30.477Z",
+      "eligible": true
+    },
+    {
+      "name": "bidi-js",
+      "version": "1.0.3",
+      "published": "2023-07-31T17:15:17.072Z",
+      "eligible": true
+    },
+    {
+      "name": "bs58",
+      "version": "5.0.0",
+      "published": "2022-02-17T13:19:37.346Z",
+      "eligible": true
+    },
+    {
+      "name": "bs58check",
+      "version": "3.0.1",
+      "published": "2023-02-25T05:11:34.958Z",
+      "eligible": true
+    },
+    {
+      "name": "cbor-extract",
+      "version": "2.2.2",
+      "published": "2026-03-10T23:02:51.733Z",
+      "eligible": true
+    },
+    {
+      "name": "cbor-x",
+      "version": "1.6.6",
+      "published": "2026-08-25T04:09:26.455Z",
+      "eligible": true
+    },
+    {
+      "name": "css-tree",
+      "version": "3.2.1",
+      "published": "2026-03-05T14:12:36.884Z",
+      "eligible": true
+    },
+    {
+      "name": "cssstyle",
+      "version": "5.3.7",
+      "published": "2026-01-06T03:19:29.159Z",
+      "eligible": true
+    },
+    {
+      "name": "data-urls",
+      "version": "6.0.1",
+      "published": "2026-01-20T03:18:12.611Z",
+      "eligible": true
+    },
+    {
+      "name": "debug",
+      "version": "4.4.3",
+      "published": "2025-09-13T17:25:19.732Z",
+      "eligible": true
+    },
+    {
+      "name": "decimal.js",
+      "version": "10.6.0",
+      "published": "2025-07-06T22:50:38.844Z",
+      "eligible": true
+    },
+    {
+      "name": "detect-libc",
+      "version": "2.1.2",
+      "published": "2025-10-05T12:46:33.077Z",
+      "eligible": true
+    },
+    {
+      "name": "entities",
+      "version": "8.0.0",
+      "published": "2026-03-17T11:47:45.464Z",
+      "eligible": true
+    },
+    {
+      "name": "eventemitter3",
+      "version": "5.0.4",
+      "published": "2026-01-19T15:08:56.257Z",
+      "eligible": true
+    },
+    {
+      "name": "fast-sha256",
+      "version": "1.3.0",
+      "published": "2020-01-16T15:52:26.112Z",
+      "eligible": true
+    },
+    {
+      "name": "html-encoding-sniffer",
+      "version": "4.0.0",
+      "published": "2023-11-12T07:38:15.637Z",
+      "eligible": true
+    },
+    {
+      "name": "http-proxy-agent",
+      "version": "7.0.2",
+      "published": "2024-02-15T19:14:20.532Z",
+      "eligible": true
+    },
+    {
+      "name": "https-proxy-agent",
+      "version": "7.0.6",
+      "published": "2024-12-07T03:32:09.302Z",
+      "eligible": true
+    },
+    {
+      "name": "iconv-lite",
+      "version": "0.6.3",
+      "published": "2021-05-24T03:00:17.928Z",
+      "eligible": true
+    },
+    {
+      "name": "is-potential-custom-element-name",
+      "version": "1.0.1",
+      "published": "2021-04-07T07:43:00.708Z",
+      "eligible": true
+    },
+    {
+      "name": "isomorphic.js",
+      "version": "0.2.5",
+      "published": "2022-03-26T08:57:33.350Z",
+      "eligible": true
+    },
+    {
+      "name": "jsdom",
+      "version": "27.2.0",
+      "published": "2025-11-12T05:09:04.834Z",
+      "eligible": true
+    },
+    {
+      "name": "lib0",
+      "version": "0.2.117",
+      "published": "2025-12-30T22:03:12.521Z",
+      "eligible": true
+    },
+    {
+      "name": "lru-cache",
+      "version": "11.5.2",
+      "published": "2026-07-07T23:27:14.327Z",
+      "eligible": true
+    },
+    {
+      "name": "mdn-data",
+      "version": "2.27.1",
+      "published": "2026-02-13T22:41:03.295Z",
+      "eligible": true
+    },
+    {
+      "name": "ms",
+      "version": "2.1.3",
+      "published": "2020-12-08T13:54:35.223Z",
+      "eligible": true
+    },
+    {
+      "name": "node-gyp-build-optional-packages",
+      "version": "5.1.1",
+      "published": "2023-07-28T13:19:27.221Z",
+      "eligible": true
+    },
+    {
+      "name": "ordered-map",
+      "version": "0.1.0",
+      "published": "2014-11-04T00:27:22.506Z",
+      "eligible": true
+    },
+    {
+      "name": "orderedmap",
+      "version": "2.1.1",
+      "published": "2023-05-17T08:10:28.237Z",
+      "eligible": true
+    },
+    {
+      "name": "parse5",
+      "version": "8.0.1",
+      "published": "2026-04-19T20:16:16.612Z",
+      "eligible": true
+    },
+    {
+      "name": "prosemirror-changeset",
+      "version": "2.4.2",
+      "published": "2026-08-21T08:09:21.245Z",
+      "eligible": true
+    },
+    {
+      "name": "prosemirror-collab",
+      "version": "1.3.1",
+      "published": "2023-05-17T13:39:51.826Z",
+      "eligible": true
+    },
+    {
+      "name": "prosemirror-commands",
+      "version": "1.7.1",
+      "published": "2025-04-13T19:38:08.462Z",
+      "eligible": true
+    },
+    {
+      "name": "prosemirror-history",
+      "version": "1.5.0",
+      "published": "2025-11-13T07:22:48.243Z",
+      "eligible": true
+    },
+    {
+      "name": "prosemirror-model",
+      "version": "1.25.11",
+      "published": "2026-07-11T10:11:35.322Z",
+      "eligible": true
+    },
+    {
+      "name": "prosemirror-schema-basic",
+      "version": "1.2.4",
+      "published": "2025-03-18T08:15:15.254Z",
+      "eligible": true
+    },
+    {
+      "name": "prosemirror-schema-list",
+      "version": "1.5.1",
+      "published": "2025-03-04T09:49:04.076Z",
+      "eligible": true
+    },
+    {
+      "name": "prosemirror-state",
+      "version": "1.4.4",
+      "published": "2025-10-23T11:57:46.551Z",
+      "eligible": true
+    },
+    {
+      "name": "prosemirror-transform",
+      "version": "1.12.1",
+      "published": "2026-09-02T06:06:20.248Z",
+      "eligible": true
+    },
+    {
+      "name": "prosemirror-view",
+      "version": "1.42.3",
+      "published": "2026-08-24T23:40:03.983Z",
+      "eligible": true
+    },
+    {
+      "name": "punycode",
+      "version": "2.3.1",
+      "published": "2023-10-30T18:28:32.512Z",
+      "eligible": true
+    },
+    {
+      "name": "require-from-string",
+      "version": "2.0.2",
+      "published": "2018-04-09T09:49:47.301Z",
+      "eligible": true
+    },
+    {
+      "name": "rope-sequence",
+      "version": "1.3.4",
+      "published": "2023-05-17T08:25:11.198Z",
+      "eligible": true
+    },
+    {
+      "name": "safer-buffer",
+      "version": "2.1.2",
+      "published": "2018-04-08T10:42:42.130Z",
+      "eligible": true
+    },
+    {
+      "name": "saxes",
+      "version": "6.0.0",
+      "published": "2021-11-07T19:06:31.264Z",
+      "eligible": true
+    },
+    {
+      "name": "source-map-js",
+      "version": "1.2.1",
+      "published": "2024-09-08T16:22:55.645Z",
+      "eligible": true
+    },
+    {
+      "name": "symbol-tree",
+      "version": "3.2.4",
+      "published": "2019-06-12T18:10:21.305Z",
+      "eligible": true
+    },
+    {
+      "name": "tldts",
+      "version": "7.4.11",
+      "published": "2026-08-24T07:31:22.093Z",
+      "eligible": true
+    },
+    {
+      "name": "tldts-core",
+      "version": "7.4.11",
+      "published": "2026-08-24T07:30:13.892Z",
+      "eligible": true
+    },
+    {
+      "name": "tough-cookie",
+      "version": "6.0.2",
+      "published": "2026-07-07T18:32:22.813Z",
+      "eligible": true
+    },
+    {
+      "name": "tr46",
+      "version": "6.0.0",
+      "published": "2025-09-18T00:42:31.639Z",
+      "eligible": true
+    },
+    {
+      "name": "uuid",
+      "version": "9.0.1",
+      "published": "2023-09-12T08:56:35.205Z",
+      "eligible": true
+    },
+    {
+      "name": "w3c-xmlserializer",
+      "version": "5.0.0",
+      "published": "2023-11-12T07:59:26.966Z",
+      "eligible": true
+    },
+    {
+      "name": "webidl-conversions",
+      "version": "8.0.1",
+      "published": "2026-01-02T12:56:45.580Z",
+      "eligible": true
+    },
+    {
+      "name": "whatwg-encoding",
+      "version": "3.1.1",
+      "published": "2023-11-12T07:29:21.747Z",
+      "eligible": true
+    },
+    {
+      "name": "whatwg-mimetype",
+      "version": "4.0.0",
+      "published": "2023-11-11T07:43:44.007Z",
+      "eligible": true
+    },
+    {
+      "name": "whatwg-mimetype",
+      "version": "5.0.0",
+      "published": "2026-01-20T03:04:38.058Z",
+      "eligible": true
+    },
+    {
+      "name": "whatwg-url",
+      "version": "15.1.0",
+      "published": "2025-09-18T00:51:00.815Z",
+      "eligible": true
+    },
+    {
+      "name": "ws",
+      "version": "8.21.3",
+      "published": "2026-08-07T14:10:25.816Z",
+      "eligible": true
+    },
+    {
+      "name": "xml-name-validator",
+      "version": "5.0.0",
+      "published": "2023-11-12T05:38:09.927Z",
+      "eligible": true
+    },
+    {
+      "name": "xmlchars",
+      "version": "2.2.0",
+      "published": "2019-09-06T16:38:51.976Z",
+      "eligible": true
+    },
+    {
+      "name": "xstate",
+      "version": "5.32.6",
+      "published": "2026-08-25T22:59:26.555Z",
+      "eligible": true
+    },
+    {
+      "name": "y-prosemirror",
+      "version": "1.3.7",
+      "published": "2025-07-03T13:43:50.972Z",
+      "eligible": true
+    },
+    {
+      "name": "y-protocols",
+      "version": "1.0.6",
+      "published": "2023-09-18T08:18:54.061Z",
+      "eligible": true
+    },
+    {
+      "name": "yjs",
+      "version": "13.6.31",
+      "published": "2026-05-28T16:32:20.157Z",
+      "eligible": true
+    }
+  ]
+}

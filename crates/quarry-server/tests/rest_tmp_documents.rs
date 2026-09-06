@@ -1,4 +1,4 @@
-#![cfg(feature = "lib-documents")]
+#![cfg(all(feature = "lib-documents", feature = "tmp-documents"))]
 #![allow(
     clippy::unwrap_used,
     reason = "tests use unwrap for HTTP and CRDT fixtures"
@@ -115,6 +115,7 @@ async fn tmp_block_transactions_scope_minted_ids_to_each_document() -> anyhow::R
                 &format!("/v1/tmp/documents/{secret}/transactions"),
                 serde_json::json!({
                     "client_tx_id": "shared-review-transaction",
+                    "base_clock": get_tmp_block_tree(&app, secret).await["document_clock"],
                     "actor": {"kind": "agent", "id": "reviewer", "label": "Reviewer"},
                     "ops": [
                         {
@@ -795,6 +796,7 @@ async fn tmp_document_fork_clones_history_and_review_state_independently() -> an
             &format!("/v1/tmp/documents/{source_secret}/transactions"),
             serde_json::json!({
                 "client_tx_id": "fork-source-review",
+                "base_clock": tree["document_clock"],
                 "actor": {"kind": "agent", "id": "reviewer", "label": "Reviewer"},
                 "ops": [
                     {
@@ -831,6 +833,7 @@ async fn tmp_document_fork_clones_history_and_review_state_independently() -> an
             &format!("/v1/tmp/documents/{source_secret}/transactions"),
             serde_json::json!({
                 "client_tx_id": "fork-source-reply",
+                "base_clock": source_review["baseToken"],
                 "actor": {"kind": "user", "id": "author"},
                 "ops": [{
                     "op": "comment.reply",
@@ -913,8 +916,8 @@ async fn tmp_document_fork_clones_history_and_review_state_independently() -> an
     let fork_tree = get_tmp_block_tree(&app, &fork_secret).await;
     let fork_block_id = fork_tree["blocks"][0]["block_id"]
         .as_str()
-        .context("fork should expose its remapped block id")?;
-    assert_ne!(fork_block_id, source_block_id);
+        .context("fork should expose its retained block id")?;
+    assert_eq!(fork_block_id, source_block_id);
     assert_eq!(fork_tree["blocks"][0]["text"], "Draft wording.");
 
     let fork_review = get_tmp_review(&app, &fork_secret, true).await;
@@ -925,15 +928,15 @@ async fn tmp_document_fork_clones_history_and_review_state_independently() -> an
         fork_review["suggestions"][0]["body"],
         "Use stronger wording."
     );
-    assert_ne!(
+    assert_eq!(
         fork_review["comments"][0]["id"],
         source_review["comments"][0]["id"]
     );
-    assert_ne!(
+    assert_eq!(
         fork_review["suggestions"][0]["id"],
         source_review["suggestions"][0]["id"]
     );
-    assert_ne!(
+    assert_eq!(
         fork_review["comments"][0]["replies"][0]["id"],
         get_tmp_review(&app, &source_secret, true).await["comments"][0]["replies"][0]["id"]
     );
@@ -953,6 +956,7 @@ async fn tmp_document_fork_clones_history_and_review_state_independently() -> an
             &format!("/v1/tmp/documents/{fork_secret}/transactions"),
             serde_json::json!({
                 "client_tx_id": "fork-accept-suggestion",
+                "base_clock": fork_review["baseToken"],
                 "actor": {"kind": "user", "id": "fork-author"},
                 "ops": [{"op": "suggestion.accept", "item_id": fork_suggestion_id}]
             }),

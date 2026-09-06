@@ -1,6 +1,6 @@
 # Git Import And Export
 
-Git import reads ordinary files from a working tree into Quarry documents:
+Git import creates Quarry documents from ordinary worktree files. A changed existing Markdown document requires a recorded read version, so plain import rejects it and retains the input file. Byte-identical imports are no-ops. Use configured peer sync for ongoing edits:
 
 ```sh
 cargo run -p quarry -- git import notes /path/to/repo
@@ -27,7 +27,7 @@ Export writes `.quarry/marker.json` with the Library ID and slug. A later export
 Markdown frontmatter is imported as metadata and can be exported back into Markdown. Non-Markdown sidecars use `path.ext.quarrymeta.yaml`.
 Paths ending in `.quarrymeta.yaml` are reserved for Git metadata sidecars: import skips them as sidecars, and export refuses Quarry documents with that suffix so a document cannot be lost on a later import.
 
-Peer sync stores a per-path baseline in `sync_state`. When both Quarry and Git change the same path from that baseline, Quarry keeps the canonical document as the local/Quarry winner, writes the Git side as a sibling `*.conflict-git-*` document, records a conflict row, and exports both files back to Git.
+Peer sync stores a per-path baseline in `sync_state`. For Markdown, concurrent changes merge from the recorded version. Conflicting hunks retain the current text and store incoming text as review conflicts. Raw-file and delete/change conflicts retain the incoming side as a sibling `*.conflict-git-*` document.
 
 Peers may include a `remote` URL or local bare repository path plus a single `branch`. `pull` and `sync` fetch the configured remote before reading the working tree. `push` and `sync` push the committed export back to `refs/heads/{branch}` before advancing sync state.
 

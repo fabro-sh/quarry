@@ -5,6 +5,7 @@ import {
   type SlateEditor,
   type TElement,
   type TText,
+  type Point,
 } from 'platejs';
 import { usesLiteralInlineSyntax } from './block-capabilities';
 
@@ -21,21 +22,24 @@ export interface WikiLinkNode extends TElement {
   alias?: string;
   anchor?: string;
   embed?: boolean;
+  quarrySource?: string;
+  quarryMarks?: Record<string, unknown>;
+  quarryLeaves?: TText[];
   children: [TText];
 }
 
 // `![[embed]]`, `[[target]]`, `[[target#anchor]]`, `[[target|alias]]`, and any
 // combination. `target` stops at the first `#`, `|`, or `]`; subpaths (`a/b`)
 // are part of the target. Mirrors the backend's split_alias / split_anchor.
-const WIKILINK_RE = /(!?)\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|([^\]]+))?]]/g;
+const WIKILINK_RE = /(!?)\[\[([^\]|#\r\n]+)(?:#([^\]|\r\n]+))?(?:\|([^\]\r\n]+))?]]/g;
 
 function isText(node: Descendant): node is TText {
   return typeof (node as { text?: unknown }).text === 'string';
 }
 
-function wikiLinkFromMatch(match: RegExpExecArray): WikiLinkNode {
+function wikiLinkFromMatch(match: RegExpExecArray, marks: Record<string, unknown> = {}): WikiLinkNode {
   const [, bang, target, anchor, alias] = match;
-  const node: WikiLinkNode = { type: WIKILINK_KEY, target: target.trim(), children: [{ text: '' }] };
+  const node: WikiLinkNode = { type: WIKILINK_KEY, target: target.trim(), quarrySource: match[0], quarryMarks: marks, children: [{ text: '' }] };
   if (anchor) node.anchor = anchor.trim();
   if (alias) node.alias = alias.trim();
   if (bang) node.embed = true;
@@ -44,32 +48,51 @@ function wikiLinkFromMatch(match: RegExpExecArray): WikiLinkNode {
 
 // Split a text leaf into [text · wikilink · text · …], preserving the leaf's
 // marks on the surrounding text. Inline code keeps `[[...]]` literal.
-function splitText(leaf: TText): Descendant[] {
-  if (leaf.code === true || !leaf.text.includes('[[')) return [leaf];
+export function wikiLinkLeaves(node: WikiLinkNode): TText[] {
+  return node.quarryLeaves ?? [{ ...node.quarryMarks, text: wikiLinkMarkdown(node) }];
+}
+
+export function sliceWikiLeaves(leaves: TText[], start: number, end: number): TText[] {
+  let offset = 0;
+  return leaves.flatMap((leaf) => {
+    const from = Math.max(start - offset, 0), to = Math.min(end - offset, leaf.text.length);
+    offset += leaf.text.length;
+    return from < to ? [{ ...leaf, text: leaf.text.slice(from, to) }] : [];
+  });
+}
+
+function splitText(leaves: TText[]): Descendant[] {
+  const text = leaves.map((leaf) => leaf.text).join('');
+  if (!text.includes('[[')) return leaves;
   const out: Descendant[] = [];
   let last = 0;
   WIKILINK_RE.lastIndex = 0;
-  for (let match = WIKILINK_RE.exec(leaf.text); match; match = WIKILINK_RE.exec(leaf.text)) {
-    if (match.index > last) out.push({ ...leaf, text: leaf.text.slice(last, match.index) });
-    out.push(wikiLinkFromMatch(match));
+  for (let match = WIKILINK_RE.exec(text); match; match = WIKILINK_RE.exec(text)) {
+    if (match.index > last) out.push(...sliceWikiLeaves(leaves, last, match.index));
+    const parts = sliceWikiLeaves(leaves, match.index, match.index + match[0].length);
+    const marks = Object.fromEntries(Object.entries(parts[0]).filter(([key, value]) => key !== 'text' && parts.every((part) => part[key] === value)));
+    out.push({ ...wikiLinkFromMatch(match, marks), quarryLeaves: parts });
     last = match.index + match[0].length;
   }
-  if (out.length === 0) return [leaf];
-  if (last < leaf.text.length) out.push({ ...leaf, text: leaf.text.slice(last) });
+  if (out.length === 0) return leaves;
+  if (last < text.length) out.push(...sliceWikiLeaves(leaves, last, text.length));
   return out;
 }
 
 function splitChildren(children: Descendant[]): Descendant[] {
   const out: Descendant[] = [];
+  let leaves: TText[] = [];
+  const flush = () => { out.push(...splitText(leaves)); leaves = []; };
   for (const child of children) {
-    if (isText(child)) {
-      out.push(...splitText(child));
-    } else if (usesLiteralInlineSyntax((child as TElement).type) || (child as TElement).type === WIKILINK_KEY) {
+    if (isText(child) && (child.code !== true || child.wikilink === true)) { leaves.push(child); continue; }
+    flush();
+    if (isText(child) || usesLiteralInlineSyntax((child as TElement).type) || (child as TElement).type === WIKILINK_KEY) {
       out.push(child);
     } else {
       out.push({ ...child, children: splitChildren((child as TElement).children) });
     }
   }
+  flush();
   return out;
 }
 
@@ -85,6 +108,7 @@ export function applyWikiLinks(value: Descendant[]): Descendant[] {
 
 /** The exact `[[...]]` markdown for a wiki-link node. */
 export function wikiLinkMarkdown(node: WikiLinkNode): string {
+  if (node.quarrySource) return node.quarrySource;
   const anchor = node.anchor ? `#${node.anchor}` : '';
   const alias = node.alias ? `|${node.alias}` : '';
   return `${node.embed ? '!' : ''}[[${node.target}${anchor}${alias}]]`;
@@ -96,7 +120,21 @@ export function wikiLinkDisplay(node: WikiLinkNode): string {
   return node.anchor ? `${node.target}#${node.anchor}` : node.target;
 }
 
-const FIRST_WIKILINK_RE = /(!?)\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|([^\]]+))?]]/;
+/** Preserve formatting on the visible label without exposing the syntax. */
+export function wikiLinkDisplayLeaves(node: WikiLinkNode): TText[] {
+  const source = wikiLinkMarkdown(node), leaves = wikiLinkLeaves(node);
+  const match = FIRST_WIKILINK_RE.exec(source);
+  if (!match) return [{ text: wikiLinkDisplay(node) }];
+  const trim = (start: number, text: string) => sliceWikiLeaves(leaves, start + text.length - text.trimStart().length, start + text.trimEnd().length);
+  if (match[4]) return trim(source.length - 2 - match[4].length, match[4]);
+  const start = match[1].length + 2;
+  return [...trim(start, match[2]), ...(match[3] ? [
+    ...sliceWikiLeaves(leaves, start + match[2].length, start + match[2].length + 1),
+    ...trim(start + match[2].length + 1, match[3]),
+  ] : [])];
+}
+
+const FIRST_WIKILINK_RE = /(!?)\[\[([^\]|#\r\n]+)(?:#([^\]|\r\n]+))?(?:\|([^\]\r\n]+))?]]/;
 
 /**
  * Live conversion: if a text node holds a complete `[[...]]`, replace that span
@@ -105,25 +143,30 @@ const FIRST_WIKILINK_RE = /(!?)\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|([^\]]+))?]]/;
  * catches any further matches). Used by the editor's normalizeNode override so a
  * link becomes a chip as soon as you close `]]`.
  */
-export function convertWikiLinkInText(editor: SlateEditor, node: TText, path: Path): boolean {
+export function convertWikiLinkInText(editor: SlateEditor, node: TText, path: Path, preserve?: (at: Point, text: string, action: () => void) => void): boolean {
   if (node.code === true || !node.text.includes('[[')) return false;
   if (editor.api.above({ at: path, match: (n) => usesLiteralInlineSyntax((n as TElement).type) })) return false;
   const match = FIRST_WIKILINK_RE.exec(node.text);
   if (!match) return false;
   const start = { offset: match.index, path };
   const end = { offset: match.index + match[0].length, path };
-  editor.tf.withoutNormalizing(() => {
+  const selection = editor.selection;
+  const selected = !!selection && [selection.anchor, selection.focus].every((point) =>
+    point.path.join('.') === path.join('.') && point.offset >= start.offset && point.offset <= end.offset);
+  const convert = () => editor.tf.withoutNormalizing(() => {
     editor.tf.delete({ at: { anchor: start, focus: end } });
     // Insert the chip plus a trailing text node (à la Plate's inline-void date
     // node); insertNodes advances the cursor past it, so typing continues after.
-    editor.tf.insertNodes([wikiLinkFromMatch(match), { text: '' }]);
+    const { text: _text, ...marks } = node;
+    editor.tf.insertNodes([wikiLinkFromMatch(match, marks), { text: '' }], { at: start, select: selected });
   });
+  if (preserve) preserve(start, match[0], convert); else convert();
   return true;
 }
 
 export const BaseWikiLinkPlugin = createSlatePlugin({
   key: WIKILINK_KEY,
-  node: { isElement: true, isInline: true, isVoid: true },
+  node: { isElement: true, isInline: true, isVoid: true, isMarkableVoid: true },
 });
 
 // MarkdownPlugin serialize rule: emit the link as a raw `html` mdast node so the

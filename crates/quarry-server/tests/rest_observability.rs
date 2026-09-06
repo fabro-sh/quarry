@@ -7,12 +7,15 @@
 use anyhow::Context as _;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
+#[cfg(feature = "tmp-documents")]
 use serde_json::Value;
 use tower::ServiceExt;
 
 mod common;
 
-use common::{capture_debug_logs, document_test_app, json_request, response_json};
+use common::document_test_app;
+#[cfg(feature = "tmp-documents")]
+use common::{capture_debug_logs, json_request, response_json};
 
 #[tokio::test]
 async fn rest_api_attaches_and_preserves_request_ids() -> anyhow::Result<()> {

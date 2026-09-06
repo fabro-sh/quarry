@@ -22,13 +22,13 @@ function loaded(overrides: Partial<LoadedDocument> = {}): LoadedDocument {
 }
 
 describe('open document reducer', () => {
-  test('preserves the live Markdown mirror across persisted-head refreshes', () => {
+  test('refreshes the saved preview independently of native editor state', () => {
     const opened = reduceDocumentState(
       { type: 'closed' },
       { type: 'document-loaded', document: loaded(), identity: IDENTITY }
     );
     const edited = reduceDocumentState(opened, {
-      type: 'mirror-changed',
+      type: 'preview-changed',
       content: '# Local edit',
     });
     const refreshed = reduceDocumentState(edited, {
@@ -37,7 +37,7 @@ describe('open document reducer', () => {
       identity: IDENTITY,
     });
 
-    expect(refreshed).toMatchObject({ content: '# Local edit', etag: '"v2"' });
+    expect(refreshed).toMatchObject({ content: '# Canonical checkpoint', etag: '"v2"' });
   });
 
   test('resets state when the same path is recreated with a new document identity', () => {
@@ -60,7 +60,7 @@ describe('open document reducer', () => {
     });
   });
 
-  test('refreshes raw text content because it has no live session mirror', () => {
+  test('refreshes the saved raw text preview', () => {
     const rawIdentity = { ...IDENTITY, documentId: 'raw-1', path: 'data.json' };
     const opened = reduceDocumentState(
       { type: 'closed' },

@@ -374,7 +374,7 @@ export type BlockTransactionOp =
 export interface BlockTransactionRequest {
   client_tx_id: string;
   /** Document clock the ops were computed against; ETag-quoted tokens are tolerated. */
-  base_clock?: string;
+  base_clock: string;
   actor: BlockTransactionActor;
   ops: BlockTransactionOp[];
 }
@@ -390,6 +390,7 @@ export type ApiErrorCode =
   | 'INVALID_REQUEST'
   | 'NOT_FOUND'
   | 'GONE'
+  | 'PRECONDITION_REQUIRED'
   | 'PRECONDITION_FAILED'
   | 'CONFLICT'
   | 'METHOD_NOT_ALLOWED'

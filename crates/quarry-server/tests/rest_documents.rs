@@ -42,13 +42,16 @@ async fn block_test_app() -> (tempfile::TempDir, axum::Router, QuarryStore) {
 }
 
 async fn put_block_markdown(app: &axum::Router, path: &str, body: &str) {
+    let uri = format!("/v1/libraries/blocks/documents/{path}");
+    let (name, value) = common::markdown_precondition(app, &uri).await;
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method(Method::PUT)
-                .uri(format!("/v1/libraries/blocks/documents/{path}"))
+                .uri(uri)
                 .header(header::CONTENT_TYPE, "text/markdown")
+                .header(name, value)
                 .body(Body::from(body.to_string()))
                 .unwrap(),
         )
@@ -97,9 +100,13 @@ async fn commit_block_transaction(app: &axum::Router, path: &str, body: Value) -
     ack
 }
 
-fn block_tx(client_tx_id: &str, ops: Value) -> Value {
+// Sequential fixture operations use the clock read when the request is built.
+// Concurrency tests supply their saved clock explicitly; retries reuse the built body.
+async fn current_block_tx(app: &axum::Router, path: &str, client_tx_id: &str, ops: Value) -> Value {
+    let base = get_block_tree(app, path).await;
     serde_json::json!({
         "client_tx_id": client_tx_id,
+        "base_clock": base["document_clock"],
         "actor": {"kind": "agent", "id": "agent-1", "label": "Agent One"},
         "ops": ops
     })
@@ -1369,20 +1376,23 @@ transaction: quarry_storage::TransactionMetadata::default(),
             .get("baseToken")
             .is_none()
     );
-    let block_ref_required = openapi["components"]["schemas"]["AgentBlockRef"]["required"]
-        .as_array()
-        .context("AgentBlockRef should expose required fields")?;
-    assert!(block_ref_required.iter().any(|value| value == "ordinal"));
-    assert!(
-        !block_ref_required
-            .iter()
-            .any(|value| value == "contentHash")
-    );
-    let content_hash_schema =
-        &openapi["components"]["schemas"]["AgentBlockRef"]["properties"]["contentHash"];
-    assert_schema_type_contains(content_hash_schema, "string");
-    assert_schema_type_contains(content_hash_schema, "null");
+    let reference = &openapi["components"]["schemas"]["AgentBlockRef"]["properties"];
+    assert_schema_type_contains(&reference["blockId"], "string");
+    assert_schema_type_contains(&reference["blockId"], "null");
+    assert!(reference.get("ordinal").is_none());
+    assert!(reference.get("contentHash").is_none());
     // The single mutation contract: the transaction envelope and ack.
+    let transaction_schema = &openapi["components"]["schemas"]["BlockTransactionRequest"];
+    assert!(
+        transaction_schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("base_clock"))
+    );
+    assert_eq!(
+        transaction_schema["properties"]["base_clock"]["type"],
+        "string"
+    );
     assert!(
         openapi["components"]["schemas"]["BlockTransactionRequest"]["properties"]["ops"]
             .is_object()
@@ -1456,16 +1466,20 @@ transaction: quarry_storage::TransactionMetadata::default(),
             .any(|field| field == "updatedAt")
     );
     assert!(!tmp_presence_required.iter().any(|field| field == "path"));
-    assert_eq!(
-        openapi["paths"]["/v1/tmp/documents/{secret}/presence"]["get"]["responses"]["200"]["content"]
-            ["application/json"]["schema"]["$ref"],
-        "#/components/schemas/TmpAgentPresenceListResponse"
-    );
-    assert_eq!(
-        openapi["paths"]["/v1/tmp/documents/{secret}/presence"]["post"]["responses"]["200"]["content"]
-            ["application/json"]["schema"]["$ref"],
-        "#/components/schemas/TmpAgentPresenceResponse"
-    );
+    if cfg!(feature = "tmp-documents") {
+        assert_eq!(
+            openapi["paths"]["/v1/tmp/documents/{secret}/presence"]["get"]["responses"]["200"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            "#/components/schemas/TmpAgentPresenceListResponse"
+        );
+        assert_eq!(
+            openapi["paths"]["/v1/tmp/documents/{secret}/presence"]["post"]["responses"]["200"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            "#/components/schemas/TmpAgentPresenceResponse"
+        );
+    } else {
+        assert!(openapi["paths"]["/v1/tmp/documents/{secret}/presence"].is_null());
+    }
     assert_path_parameter_enum_contains(
         &openapi,
         "/v1/libraries/{library}/documents/{path}/review",
@@ -1813,10 +1827,14 @@ async fn put_markdown(
     body: &str,
     actor_header: Option<&str>,
 ) -> anyhow::Result<String> {
+    let (name, value) =
+        common::markdown_precondition(app, &format!("/v1/libraries/{library}/documents/{path}"))
+            .await;
     let mut request = Request::builder()
         .method(Method::PUT)
         .uri(format!("/v1/libraries/{library}/documents/{path}"))
-        .header(header::CONTENT_TYPE, "text/markdown");
+        .header(header::CONTENT_TYPE, "text/markdown")
+        .header(name, value);
     if let Some(actor) = actor_header {
         request = request.header("x-quarry-transaction-actor", actor);
     }
@@ -1868,7 +1886,7 @@ async fn version_actor(
 }
 
 #[tokio::test]
-async fn agent_snapshot_exposes_snapshot_scoped_block_refs() -> anyhow::Result<()> {
+async fn agent_snapshot_exposes_native_block_identity() -> anyhow::Result<()> {
     let (_root, store) = open_test_store().await;
     let library = store
         .create_library("agent")
@@ -1909,15 +1927,12 @@ async fn agent_snapshot_exposes_snapshot_scoped_block_refs() -> anyhow::Result<(
             .len(),
         3
     );
-    assert_eq!(body["blocks"][0]["markdown"], "# Title\n\n");
+    assert_eq!(body["blocks"][0]["markdown"], "# Title\n");
     assert!(body["blocks"][0]["ref"].get("baseToken").is_none());
-    assert_eq!(body["blocks"][0]["ref"]["ordinal"], 0);
-    assert_eq!(
-        body["blocks"][0]["ref"]["contentHash"]
+    assert!(
+        body["blocks"][0]["ref"]["blockId"]
             .as_str()
-            .context("snapshot block ref should include content hash")?
-            .len(),
-        64
+            .is_some_and(|id| !id.is_empty())
     );
     Ok(())
 }
@@ -1975,8 +1990,12 @@ async fn agent_review_lists_open_comments_replies_and_suggestions() -> anyhow::R
             .as_array()
             .context("review response should include comments")?
             .len(),
-        1
+        2
     );
+    // Missing markers remain explicit unattached records; code stays literal.
+    assert_eq!(body["comments"][1]["id"], "c_code");
+    assert_eq!(body["comments"][1]["target"]["state"], "unattached");
+    assert_eq!(body["suggestions"][1]["target"]["state"], "unattached");
     assert_eq!(body["comments"][0]["id"], "c1");
     assert_eq!(body["comments"][0]["status"], "open");
     assert_eq!(body["comments"][0]["by"], "user:a");
@@ -2001,11 +2020,11 @@ async fn agent_review_lists_open_comments_replies_and_suggestions() -> anyhow::R
             .as_array()
             .context("review response should include suggestions")?
             .len(),
-        1
+        3
     );
     assert_eq!(body["suggestions"][0]["id"], "s1");
     assert_eq!(body["suggestions"][0]["status"], "open");
-    assert_eq!(body["suggestions"][0]["kind"], "substitution");
+    assert_eq!(body["suggestions"][0]["kind"], "replace");
     assert_eq!(body["suggestions"][0]["by"], "ai:codex");
     assert_eq!(body["suggestions"][0]["at"], "2026-01-03T00:00:00.000Z");
     assert_eq!(body["suggestions"][0]["ref"], snapshot["blocks"][1]["ref"]);
@@ -2035,7 +2054,7 @@ async fn agent_review_lists_open_comments_replies_and_suggestions() -> anyhow::R
             .as_array()
             .context("resolved review response should include comments")?
             .len(),
-        2
+        3
     );
     assert_eq!(body["comments"][1]["id"], "c2");
     assert_eq!(body["comments"][1]["status"], "resolved");
@@ -2598,6 +2617,15 @@ async fn rest_api_rejects_stale_transaction_commit_with_precondition_failed() ->
                 .method(Method::PUT)
                 .uri("/v1/libraries/txpreconditions/documents/docs/a.md")
                 .header(header::CONTENT_TYPE, "text/markdown")
+                .header(
+                    header::IF_MATCH,
+                    common::markdown_precondition(
+                        &app,
+                        "/v1/libraries/txpreconditions/documents/docs/a.md",
+                    )
+                    .await
+                    .1,
+                )
                 .body(Body::from("newer"))
                 .context("build newer document PUT request")?,
         )
@@ -2798,7 +2826,7 @@ async fn raw_document_put_bypasses_the_block_model_entirely() -> anyhow::Result<
             .load_block_tree(&document.id)
             .await
             .context("load raw document block projection")?,
-        Vec::<quarry_collab_codec::BlockRow>::new()
+        Vec::<quarry_markdown::BlockRow>::new()
     );
     Ok(())
 }
@@ -2834,7 +2862,12 @@ async fn metadata_patch_preserves_rows_anchors_and_conflict_items() -> anyhow::R
          "base_markdown": "Old.\n", "incoming_markdown": "New.\n",
          "canonical_markdown": "Alpha.\n"}
     ]);
-    commit_block_transaction(&app, "meta.md", block_tx("tx-meta-anchor", ops)).await;
+    commit_block_transaction(
+        &app,
+        "meta.md",
+        current_block_tx(&app, "meta.md", "tx-meta-anchor", ops).await,
+    )
+    .await;
 
     let response = app
         .clone()
@@ -2924,13 +2957,16 @@ async fn markdown_put_preserves_comment_on_unchanged_code_line() -> anyhow::Resu
     commit_block_transaction(
         &app,
         "plan.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "plan.md",
             "tx-comment-code-line",
             serde_json::json!([
                 {"op": "comment.add", "block_id": sha_line_id, "start": 0, "end": 6,
                  "body": "is sha256 optional?"}
             ]),
-        ),
+        )
+        .await,
     )
     .await;
 

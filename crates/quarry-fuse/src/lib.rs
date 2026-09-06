@@ -49,13 +49,15 @@ pub struct FuseProjection {
 
 #[derive(Clone, Debug)]
 struct OpenHandle {
+    /// Flush and close publish in order while writes can update the buffer.
+    publication: Arc<Mutex<()>>,
     path: String,
+    document_id: String,
+    content_type: String,
     content: Vec<u8>,
     base_version_id: Option<String>,
-    /// diff3 shadow base for Markdown documents, captured at `open()` (Phase
-    /// 4): the document text this handle last saw (or last wrote). `None`
-    /// for raw documents and non-UTF-8 content — those writes degrade to the
-    /// two-way merge.
+    /// Markdown read base captured at open, then advanced to this handle's
+    /// last published buffer. Raw documents use strict version preconditions.
     base_markdown: Option<String>,
     created: bool,
     dirty: bool,
@@ -218,49 +220,52 @@ impl FuseProjection {
     }
 
     pub async fn create_file(&self, path: &str) -> Result<u64> {
-        self.ensure_writable()?;
-        let path = normalize_mount_path(path)?;
-        self.ensure_parent_dir(&path).await?;
-        if self.path_exists(&path).await? {
-            return Err(QuarryError::Conflict(format!("{path} already exists")));
-        }
-        let content_type = content_type_for_path(&path);
-        let version_id = if is_block_document(&path, &content_type) {
-            // Markdown creation routes through the Phase 4 reconciled write
-            // (first import), so the block projection exists from byte one.
-            self.store
-                .write_block_markdown(self.block_write(&path, String::new(), None, None))
-                .await?
-                .outcome
-                .version
-                .id
-        } else {
-            self.store
-                .put_document(PutDocumentRequest {
-                    library: self.library.clone(),
-                    path: path.clone(),
-                    content: Vec::new(),
-                    metadata: serde_json::json!({ "content_type": content_type }),
+        self.store
+            .run_global_operation(Box::pin(async {
+                self.ensure_writable()?;
+                let path = normalize_mount_path(path)?;
+                self.ensure_parent_dir(&path).await?;
+                if self.path_exists(&path).await? {
+                    return Err(QuarryError::Conflict(format!("{path} already exists")));
+                }
+                let content_type = content_type_for_path(&path);
+                let outcome = if is_block_document(&path, &content_type) {
+                    // Markdown creation routes through the Phase 4 reconciled write
+                    // (first import), so the block projection exists from byte one.
+                    self.store
+                        .write_block_markdown(self.block_write(&path, String::new(), None, None))
+                        .await?
+                        .outcome
+                } else {
+                    self.store
+                        .put_document(PutDocumentRequest {
+                            library: self.library.clone(),
+                            path: path.clone(),
+                            content: Vec::new(),
+                            metadata: serde_json::json!({ "content_type": content_type }),
+                            content_type: content_type.clone(),
+                            source: DocumentSource::Fuse,
+                            precondition: WritePrecondition::IfNoneMatch,
+                            origin_id: None,
+                            transaction: TransactionMetadata::default(),
+                        })
+                        .await?
+                };
+                self.remember_parent_dirs(&path).await;
+                self.insert_handle(OpenHandle {
+                    publication: Arc::default(),
+                    path,
+                    document_id: outcome.document.id.to_string(),
                     content_type,
-                    source: DocumentSource::Fuse,
-                    precondition: WritePrecondition::IfNoneMatch,
-                    origin_id: None,
-                    transaction: TransactionMetadata::default(),
+                    content: Vec::new(),
+                    base_version_id: Some(outcome.version.id.to_string()),
+                    base_markdown: Some(String::new()),
+                    created: false,
+                    dirty: false,
                 })
-                .await?
-                .version
-                .id
-        };
-        self.remember_parent_dirs(&path).await;
-        self.insert_handle(OpenHandle {
-            path,
-            content: Vec::new(),
-            base_version_id: Some(version_id.to_string()),
-            base_markdown: Some(String::new()),
-            created: false,
-            dirty: false,
-        })
-        .await
+                .await
+            }))
+            .await
     }
 
     pub async fn open_file_for_write(&self, path: &str) -> Result<u64> {
@@ -269,7 +274,10 @@ impl FuseProjection {
         let document = self.store.get_document(&self.library, &path).await?;
         let base_markdown = String::from_utf8(document.content.clone()).ok();
         self.insert_handle(OpenHandle {
+            publication: Arc::default(),
             path,
+            document_id: document.id.to_string(),
+            content_type: document.version.content_type,
             content: document.content,
             base_version_id: Some(document.version.id.to_string()),
             base_markdown,
@@ -287,7 +295,10 @@ impl FuseProjection {
         // even though the handle starts empty.
         let base_markdown = String::from_utf8(document.content).ok();
         self.insert_handle(OpenHandle {
+            publication: Arc::default(),
             path,
+            document_id: document.id.to_string(),
+            content_type: document.version.content_type,
             content: Vec::new(),
             base_version_id: Some(document.version.id.to_string()),
             base_markdown,
@@ -341,6 +352,15 @@ impl FuseProjection {
     }
 
     pub async fn flush_handle(&self, handle_id: u64) -> Result<()> {
+        let Some(publication) = self.handle_publication(handle_id).await else {
+            return Ok(());
+        };
+        let _publishing = publication.lock().await;
+        self.publish_handle(handle_id).await
+    }
+
+    /// Caller holds the handle's publication mutex. Buffer writes can continue.
+    async fn publish_handle(&self, handle_id: u64) -> Result<()> {
         let snapshot = {
             let handles = self.handles.lock().await;
             let Some(handle) = handles.get(&handle_id) else {
@@ -354,28 +374,41 @@ impl FuseProjection {
         let outcome = self.commit_handle(&snapshot).await?;
         let mut handles = self.handles.lock().await;
         if let Some(handle) = handles.get_mut(&handle_id) {
+            handle.path = outcome.document.path.clone();
             handle.base_version_id = Some(outcome.version.id.to_string());
             // The next diff3 base is what this handle just wrote (its own
             // view); canonical-side divergence stays mergeable.
             handle.base_markdown = String::from_utf8(snapshot.content.clone()).ok();
             handle.created = false;
-            handle.dirty = false;
+            // An acknowledgement covers only the captured bytes. Writes made
+            // while publication was pending still require another flush.
+            handle.dirty = handle.content != snapshot.content;
         }
         Ok(())
     }
 
     pub async fn release_handle(&self, handle_id: u64) -> Result<()> {
-        let handle = {
-            let mut handles = self.handles.lock().await;
-            let Some(handle) = handles.remove(&handle_id) else {
-                return Ok(());
-            };
-            handle
+        let Some(publication) = self.handle_publication(handle_id).await else {
+            return Ok(());
         };
-        if handle.dirty {
-            self.commit_handle(&handle).await?;
+        let _publishing = publication.lock().await;
+        loop {
+            // Publish before removing the handle. Errors retain the buffer.
+            self.publish_handle(handle_id).await?;
+            let mut handles = self.handles.lock().await;
+            if handles.get(&handle_id).is_none_or(|handle| !handle.dirty) {
+                handles.remove(&handle_id);
+                return Ok(());
+            }
         }
-        Ok(())
+    }
+
+    async fn handle_publication(&self, handle_id: u64) -> Option<Arc<Mutex<()>>> {
+        self.handles
+            .lock()
+            .await
+            .get(&handle_id)
+            .map(|handle| handle.publication.clone())
     }
 
     pub async fn mkdir(&self, path: &str) -> Result<()> {
@@ -470,18 +503,10 @@ impl FuseProjection {
                 .await
                 .is_ok();
             if target_exists && is_block_document(&to_path, &content_type_for_path(&to_path)) {
-                // The atomic-save pattern (vim/sed -i/emacs: write a temp
-                // file, rename it over the document) is a WHOLE-FILE WRITE
-                // to the TARGET document, not a replacement: the temp file's
-                // content reconciles through the Phase 4 writer, preserving
-                // the target's document id, block ids, review anchors, and
-                // any live session; then the temp document is removed.
-                // There is no open handle on the target, so no captured
-                // base: the merge is the two-way degenerate case (base =
-                // current canonical), the same contract as the CLI. A temp
-                // file that is not UTF-8 is a content error (the target is
-                // a markdown document), surfaced as an errno — never a
-                // silent byte replacement that would destroy the projection.
+                // A temp-file replacement lacks the target's original read
+                // version. The writer allows an identical no-op and otherwise
+                // rejects it, preserving both files. Never invent a merge base
+                // from the target's latest content.
                 let source = self.store.get_document(&self.library, &from_path).await?;
                 let markdown = String::from_utf8(source.content).map_err(|_| {
                     QuarryError::InvalidInput(format!(
@@ -611,15 +636,14 @@ impl FuseProjection {
             let markdown = String::from_utf8(document.content).map_err(|_| {
                 QuarryError::InvalidInput(format!("truncating {path} would split a UTF-8 sequence"))
             })?;
-            self.store
-                .write_block_markdown(self.block_write(
-                    &path,
-                    markdown,
-                    base_markdown,
-                    Some(document.version.id.to_string()),
-                ))
-                .await
-                .map(|_| ())
+            let mut write = self.block_write(
+                &path,
+                markdown,
+                base_markdown,
+                Some(document.version.id.to_string()),
+            );
+            write.document_id = Some(document.id.to_string());
+            self.store.write_block_markdown(write).await.map(|_| ())
         } else {
             self.store
                 .put_document(PutDocumentRequest {
@@ -659,6 +683,7 @@ impl FuseProjection {
     ) -> BlockMarkdownWrite {
         let content_type = content_type_for_path(path);
         BlockMarkdownWrite {
+            document_id: None,
             scope: DocumentScopeRef::library(&self.library),
             path: path.to_string(),
             markdown,
@@ -668,7 +693,7 @@ impl FuseProjection {
                     markdown,
                     version_id: base_version_id,
                 },
-                None => BlockWriteBase::CurrentCanonical,
+                None => BlockWriteBase::Unversioned,
             },
             source: DocumentSource::Fuse,
             surface: "fuse".to_string(),
@@ -677,7 +702,7 @@ impl FuseProjection {
     }
 
     async fn commit_handle(&self, handle: &OpenHandle) -> Result<quarry_core::WriteOutcome> {
-        let content_type = content_type_for_path(&handle.path);
+        let content_type = handle.content_type.clone();
         let started = Instant::now();
         tracing::debug!(
             event = "fuse.write.started",
@@ -690,7 +715,7 @@ impl FuseProjection {
         );
         let outcome = if is_block_document(&handle.path, &content_type) {
             // Markdown flushes reconcile via diff3 against the handle's base
-            // (Phase 4): merges never fail; non-UTF-8 bytes or CriticMarkup
+            // against the recorded base; non-UTF-8 bytes or CriticMarkup
             // are content errors that surface as an errno.
             let markdown = String::from_utf8(handle.content.clone()).map_err(|_| {
                 QuarryError::InvalidInput(format!(
@@ -698,15 +723,15 @@ impl FuseProjection {
                     handle.path
                 ))
             })?;
-            self.store
-                .write_block_markdown(self.block_write(
-                    &handle.path,
-                    markdown,
-                    handle.base_markdown.clone(),
-                    handle.base_version_id.clone(),
-                ))
-                .await?
-                .outcome
+            let mut write = self.block_write(
+                &handle.path,
+                markdown,
+                handle.base_markdown.clone(),
+                handle.base_version_id.clone(),
+            );
+            write.document_id = Some(handle.document_id.clone());
+            write.metadata = serde_json::json!({"content_type": content_type});
+            self.store.write_block_markdown(write).await?.outcome
         } else {
             let precondition = if handle.created {
                 WritePrecondition::IfNoneMatch
@@ -716,16 +741,27 @@ impl FuseProjection {
                 WritePrecondition::None
             };
             self.store
-                .put_document(PutDocumentRequest {
-                    library: self.library.clone(),
-                    path: handle.path.clone(),
-                    content: handle.content.clone(),
-                    metadata: serde_json::json!({ "content_type": content_type }),
-                    content_type,
-                    source: DocumentSource::Fuse,
-                    precondition,
-                    origin_id: None,
-                    transaction: TransactionMetadata::default(),
+                .run_global_operation(async {
+                    let path = self
+                        .store
+                        .document_path_for_scope_id(
+                            &DocumentScopeRef::library(&self.library),
+                            &handle.document_id,
+                        )
+                        .await?;
+                    self.store
+                        .put_document(PutDocumentRequest {
+                            library: self.library.clone(),
+                            path,
+                            content: handle.content.clone(),
+                            metadata: serde_json::json!({ "content_type": content_type }),
+                            content_type: content_type.clone(),
+                            source: DocumentSource::Fuse,
+                            precondition,
+                            origin_id: None,
+                            transaction: TransactionMetadata::default(),
+                        })
+                        .await
                 })
                 .await?
         };

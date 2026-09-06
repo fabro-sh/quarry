@@ -1,176 +1,6 @@
-//! Semantic mutation gateway — Phases 2 and 3 of the session-scoped
-//! collaboration rewrite: a mode-independent apply engine with a
-//! per-document mode switch (rows-authoritative vs session-authoritative
-//! dispatch; see `apply_rows_transaction` / `apply_session_transaction` and
-//! the `session` module).
-//!
-//! `POST /v1/libraries/{library}/documents/{path}/transactions` is the public
-//! mutation contract for agents (and later Git/FUSE/CLI via Phase 4's
-//! reconciler). A transaction is an envelope
-//! `{client_tx_id, base_clock?, actor{kind,id,label}, ops[]}`; ops are
-//! validated and applied to the canonical block rows in memory, then committed
-//! atomically as ONE new document version, ONE legacy history row, and ONE
-//! `block_transactions` history record (see
-//! [`quarry_storage::BlockMutationCommit`]). The normalized Markdown export
-//! is published through the existing `document_versions` path in the same SQL
-//! transaction, so legacy readers, links, and the document event stream keep
-//! working; the same `doc.changed` events as other writes fire after commit.
-//!
-//! ## Clock semantics
-//!
-//! The document clock is the head `document_versions` id. ETag-shaped tokens
-//! (`"…"`, `W/"…"`) are tolerated by unquoting. A missing or head-matching
-//! `base_clock` acks `committed`; a clock naming any OLDER version of the
-//! document applies against CURRENT rows (every referenced block/anchor must
-//! still validate) and acks `committed_rebased`; an unknown or garbage clock
-//! fails with retryable `STALE_BASE`. There are no generic 409s.
-//!
-//! ## Typed errors
-//!
-//! Failures return `{code, retryable, message, details?}`. `details` is the
-//! machine-actionable part: transaction failures identify `op_index`, `op`,
-//! and (when addressable) `target: {kind, id}`; validation failures may add
-//! `field`, rejected `value`, `current_value`, or `allowed_values`. Clients
-//! should branch on these fields rather than parse the human-facing message.
-//!
-//! | code | status | retryable |
-//! |------|--------|-----------|
-//! | `STALE_BASE` | 412 | yes |
-//! | `BLOCK_MOVE_CONFLICT` | 412 | yes |
-//! | `BLOCK_DELETED` | 404 | no |
-//! | `ANCHOR_NOT_FOUND` | 404 | no |
-//! | `SUGGESTION_INVALIDATED` | 422 | no |
-//! | `SUGGESTION_ALREADY_RESOLVED` | 422 | no |
-//! | `UNSUPPORTED_MARKDOWN` | 422 | no |
-//! | `UNSUPPORTED_BLOCK_DOCUMENT` | 422 | no |
-//! | `PAYLOAD_TOO_LARGE` | 413 | no |
-//! | `INVALID_TRANSACTION` | 400 | no |
-//! | `CONFLICT` | 409 | no |
-//!
-//! `retryable: true` means "refetch `/blocks` and resubmit with a fresh
-//! clock"; `retryable: false` means the op as stated can never succeed.
-//!
-//! ## Vocabulary decisions (binding, from the Phase 0 findings)
-//!
-//! - `replace_block_content` computes a multi-hunk character-level UTF-16
-//!   diff between old and new text (falling back to the single minimal
-//!   common-prefix/suffix hunk when the changed middle exceeds
-//!   [`quarry_collab_codec::MULTI_HUNK_CHAR_LIMIT`]). Review
-//!   anchors entirely inside preserved
-//!   spans — including unchanged text BETWEEN hunks — keep their offsets,
-//!   shifted by the length delta of the hunks before them; anchors
-//!   overlapping a changed hunk die — open comments orphan, open suggestions
-//!   invalidate, and dead anchors collapse to `start == end` at the change
-//!   site (Gate A rule). Per hunk, a pure insertion at an anchor's start
-//!   boundary is excluded from the anchor (never grows leftward); at its end
-//!   boundary it is also excluded (never grows rightward); strictly interior
-//!   inserts grow the anchor. Mark/link ranges adjust the same way except
-//!   overlap clamps to the preserved portions instead of dying (an interior
-//!   insert grows a formatting run — the Gate A formatting-inheritance rule).
-//! - `set_block_type` changes `block_type` while preserving `block_id`, text,
-//!   marks, links, children, and anchors (design delta 3). If `attrs` is
-//!   provided it replaces the block's attrs wholesale (the gateway normalizes
-//!   them for the new type); otherwise compatible attrs are kept. Converting
-//!   a list paragraph to another type drops its list-only attrs.
-//! - `raw_markdown` blocks carry their source in `attrs.markdown` and have no
-//!   flat text, so text/mark/link/anchor ops against them — and
-//!   `set_block_type` to or from `raw_markdown` — are `INVALID_TRANSACTION`.
-//!   Edit raw blocks with `set_block_attrs` or replace them wholesale;
-//!   `insert_block` and `set_block_attrs` require raw_markdown attrs to
-//!   carry a non-empty string `markdown` key (attrs replace wholesale, so a
-//!   missing key would silently erase the block's content).
-//! - `insert_markdown` parses one Markdown fragment and inserts its complete
-//!   block tree between top-level blocks (`after_block_id = null` means
-//!   document start). `suggestion.add_markdown` stores the same fragment as a
-//!   structural review item; accepting it runs through `insert_markdown`, and
-//!   rejecting it leaves document content untouched. Structural Markdown
-//!   suggestions live in the rows-backed review projection rather than as an
-//!   inline Yjs mark, so browser checkpoints pass them through unchanged.
-//! - `set_link` replaces every link range that intersects `[start, end)`;
-//!   `url: null` just removes them. Partial overlaps are not trimmed.
-//! - `comment.edit` updates the body and `updated_at` of an open comment root
-//!   or reply. It never rewrites anchors, quotes, authors, creation
-//!   timestamps, replies, or document text. Suggestion/conflict ids are
-//!   `ANCHOR_NOT_FOUND`; non-open comments are `INVALID_TRANSACTION`.
-//! - `suggestion.add_block_delete` proposes deleting a block and its
-//!   descendants. It is anchored to block identity rather than inline text,
-//!   so text and attribute edits do not invalidate it. `suggestion.accept`
-//!   either applies the stored inline replacement through the same
-//!   minimal-diff rules or performs the proposed structural deletion, then
-//!   resolves the suggestion. Accepted inline suggestions re-anchor on their
-//!   replacement text. `suggestion.reject` resolves
-//!   without changing text; rejecting an invalidated/orphaned suggestion is
-//!   allowed (it dismisses the dead item), while accepting one fails with
-//!   `SUGGESTION_INVALIDATED`.
-//! - `conflict.add` (Phase 4) persists a diff3 conflict artifact as a
-//!   `kind = conflict` review item without mutating the document: the
-//!   attachment point rides in the item's `block_id` (`""` = document start,
-//!   from `after_block_id`), the losing incoming hunk in `body`, the base
-//!   context in `context_before`, and the retained canonical side in
-//!   `quote`. `conflict.keep_canonical` resolves it without changing content;
-//!   `conflict.accept_incoming` first verifies that the saved canonical hunk
-//!   still matches the document, then replaces it and resolves the item in the
-//!   same transaction. The legacy `comment.resolve` / `comment.delete` paths
-//!   remain available for dismissal; replies stay comment-only. Deleting a
-//!   conflict's attachment block orphans the item like any other anchored item.
-//! - Deleting the last block re-mints the canonical empty-paragraph row (the
-//!   editor's empty-document shape); its id is listed in `changed_block_ids`.
-//! - Ops apply sequentially: each op's offsets, positions, and block
-//!   references are interpreted against the document as left by the previous
-//!   ops in the same transaction, not against the pre-transaction state.
-//! - `changed_block_ids` lists every block an op directly targeted: content,
-//!   attrs, or type changes, the moved block of `move_block`, every deleted
-//!   block (including descendants), inserted blocks (including every row
-//!   parsed by `insert_markdown`), and the block rewritten
-//!   by `suggestion.accept`. Siblings displaced by an insert/move/delete
-//!   (position renumbering) are NOT listed; review-metadata-only ops touch
-//!   no blocks. The list is sorted and deduplicated.
-//!
-//! ## Idempotency
-//!
-//! `client_tx_id` is unique per document (`block_transactions`). A duplicate
-//! returns the ORIGINAL ack without re-applying — the ack's status and
-//! `changed_block_ids` are stored alongside the request ops in the history
-//! record's `ops` JSON (`{ops, actor, ack}`). Request bodies are not hashed:
-//! a reused `client_tx_id` with different ops still replays the original ack.
-//!
-//! ## Reads and the review projection
-//!
-//! `GET …/{path}/blocks` returns the canonical rows plus the current clock.
-//! For a BlockDocument whose projection is missing (legacy write cleared it,
-//! or it was never imported), the read materializes rows from the head
-//! Markdown via the Phase 1 import path — publishing the one-time normalized
-//! version — so the returned `block_id`s are durable and addressable.
-//! `POST /transactions` against a projection-less document materializes rows
-//! in memory and persists them with the ops as one version.
-//!
-//! `GET …/{path}/review` projects from `block_review_items` whenever the
-//! document has block rows, preserving the legacy response shape: `ref` holds
-//! the anchored block's depth-first ordinal (0 when the block is gone),
-//! `contentHash` is omitted, and each item additionally carries
-//! `anchor: {blockId, startOffset, endOffset}` while the block exists.
-//! Resolved items are filtered unless `includeResolved`; orphaned and
-//! invalidated items always show. Suggestion rationale is returned as `body`.
-//! Comments and replies include `editedAt` when `updated_at != created_at`,
-//! otherwise `null`.
-//! `conflict`-kind rows (Phase 4) project as `conflicts[]` with
-//! `afterBlockId` (`null` = document start) and the base/incoming/canonical
-//! Markdown payloads. Documents without rows keep the legacy
-//! CriticMarkup/endmatter projection untouched (`conflicts` empty).
-//!
-//! ## Whole-file writes (Phase 4)
-//!
-//! Markdown PUTs, Git sync/import, FUSE flushes, and CLI puts reconcile via
-//! diff3 against the canonical rows and dispatch through
-//! [`execute_block_transaction`] — see the `markdown_write` module. They are
-//! ordinary transactions here: rows-mode or session-mode per the switch,
-//! identity-preserving, conflicts as `conflict.add` ops.
-//!
-//! ## Known limitation (recorded in the README limitations)
-//!
-//! Session-mode commit failure can land merged content without its
-//! review-item side effects when the caller ignores the typed retryable
-//! error — see the HONEST WINDOW note in [`apply_session_transaction`].
+//! Public agent operations and validation for the Automerge document authority.
+#[path = "document_operations.rs"]
+mod native;
 
 use crate::{
     AgentBlockRef, AgentReviewComment, AgentReviewReply, AgentReviewResponse,
@@ -179,22 +9,18 @@ use crate::{
 };
 use axum::http::StatusCode;
 use axum::response::Response;
-use quarry_collab_codec::{
-    Attrs, BlockContentModel, BlockRow, LinkRange, MarkRun, TextDiff, block_capabilities,
-    block_rows_to_markdown, carries_inline_content, is_known_block_type, is_utf16_boundary,
-    known_block_types, markdown_to_block_rows, utf16_len, utf16_text_diff_hunks,
-};
-use quarry_core::{
-    DocumentSource, QuarryError, WritePrecondition, now_timestamp, render_markdown_frontmatter,
+use quarry_core::{DocumentSource, QuarryError, now_timestamp, render_markdown_frontmatter};
+use quarry_markdown::{
+    Attrs, BlockRow, LinkRange, MarkRun, block_rows_to_markdown, is_known_block_type,
+    is_utf16_boundary, known_block_types, markdown_to_block_rows, utf16_len,
 };
 use quarry_storage::{
-    BlockMutationCommit, BlockMutationOutcome, BlockMutationState, BlockReviewItem,
-    BlockReviewKind, BlockReviewState, BlockTransactionRecord, DocumentKind, DocumentScopeRef,
-    MARKDOWN_INSERT_SUGGESTION_CONTEXT, document_kind,
+    BlockMutationOutcome, BlockMutationState, BlockReviewItem, BlockReviewKind, BlockReviewState,
+    BlockTransactionRecord, DocumentKind, DocumentScopeRef, document_kind,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -380,8 +206,8 @@ pub(crate) fn gateway_reply(
 #[serde(deny_unknown_fields)]
 pub struct BlockTransactionRequest {
     pub client_tx_id: String,
-    #[serde(default)]
-    pub base_clock: Option<String>,
+    /// The document_clock of the read used to construct these operations.
+    pub base_clock: String,
     pub actor: BlockTransactionActor,
     /// Semantic operations; see the module docs for the vocabulary.
     #[schema(value_type = Vec<Object>)]
@@ -409,9 +235,8 @@ impl BlockTransactionActor {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct BlockTransactionAck {
-    /// `committed` (clock matched the head or was omitted) or
-    /// `committed_rebased` (stale-but-valid clock; ops validated against the
-    /// current rows).
+    /// `committed` (clock matched the head) or `committed_rebased` (operations
+    /// resolved against a known older version and merged into the current head).
     pub status: String,
     /// The new document clock: the head version id after the commit.
     pub document_clock: String,
@@ -724,13 +549,23 @@ impl BlockOp {
 #[derive(Debug)]
 struct ParsedTransaction {
     client_tx_id: String,
-    base_clock: Option<String>,
+    base_clock: String,
     actor: BlockTransactionActor,
     ops: Vec<BlockOp>,
     ops_json: JsonValue,
 }
 
 fn parse_transaction(payload: JsonValue) -> Result<ParsedTransaction, GatewayError> {
+    if payload.is_object()
+        && payload
+            .get("base_clock")
+            .and_then(JsonValue::as_str)
+            .is_none_or(|clock| clock.trim().is_empty())
+    {
+        return Err(GatewayError::invalid(
+            "base_clock must be the nonempty document_clock from the read used to construct these operations",
+        ).with_field("base_clock"));
+    }
     let request: BlockTransactionRequest = serde_json::from_value(payload)
         .map_err(|error| GatewayError::invalid(format!("invalid transaction envelope: {error}")))?;
     if request.client_tx_id.trim().is_empty() {
@@ -853,117 +688,8 @@ fn unquote_clock(token: &str) -> Option<String> {
 
 // ---------------------------------------------------------------------------
 // Anchor adjustment over text-diff hunks (the diff helper is shared with the
-// session splice through the quarry_collab_codec facade).
+// session splice through the quarry_markdown facade).
 // ---------------------------------------------------------------------------
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AnchorFate {
-    Keep(u32, u32),
-    /// The anchor overlapped the changed middle: it collapses to the change
-    /// site; open comments orphan, open suggestions invalidate.
-    Dead(u32),
-}
-
-fn adjust_anchor(diff: TextDiff, start: u32, end: u32) -> AnchorFate {
-    // A collapsed anchor (start == end, a dead orphaned/invalidated/resolved
-    // marker) is a single point: both ends move together so they can never
-    // cross. Without this, a pure insertion exactly at the point would shift
-    // the start (start-boundary inserts are excluded) but keep the end
-    // (end-boundary inserts are excluded too), inverting the range.
-    if start == end {
-        let point = if end <= diff.prefix {
-            end
-        } else if start >= diff.old_mid_end {
-            diff.shift_suffix(start)
-        } else {
-            diff.prefix
-        };
-        return AnchorFate::Keep(point, point);
-    }
-    if diff.is_pure_insertion() {
-        // Inserts exactly at the start boundary are excluded (the anchor
-        // never grows leftward); at the end boundary likewise. Interior
-        // inserts grow the anchor.
-        let start = if start < diff.prefix {
-            start
-        } else {
-            diff.shift_suffix(start)
-        };
-        let end = if end <= diff.prefix {
-            end
-        } else {
-            diff.shift_suffix(end)
-        };
-        return AnchorFate::Keep(start, end);
-    }
-    if end <= diff.prefix {
-        AnchorFate::Keep(start, end)
-    } else if start >= diff.old_mid_end {
-        AnchorFate::Keep(diff.shift_suffix(start), diff.shift_suffix(end))
-    } else {
-        AnchorFate::Dead(diff.prefix)
-    }
-}
-
-/// Folds an anchor through the hunks in order. One killing hunk makes the
-/// anchor dead; the collapsed point keeps riding the remaining hunks so it
-/// lands on a valid offset in the final text.
-fn adjust_anchor_multi(hunks: &[TextDiff], start: u32, end: u32) -> AnchorFate {
-    let mut dead = false;
-    let (mut start, mut end) = (start, end);
-    for hunk in hunks {
-        match adjust_anchor(*hunk, start, end) {
-            AnchorFate::Keep(next_start, next_end) => {
-                start = next_start;
-                end = next_end;
-            }
-            AnchorFate::Dead(at) => {
-                dead = true;
-                start = at;
-                end = at;
-            }
-        }
-    }
-    if dead {
-        AnchorFate::Dead(start)
-    } else {
-        AnchorFate::Keep(start, end)
-    }
-}
-
-/// Folds a mark/link range through the hunks; `None` once the range has
-/// vanished entirely inside a changed span.
-fn adjust_range_multi(hunks: &[TextDiff], start: u32, end: u32) -> Option<(u32, u32)> {
-    hunks.iter().try_fold((start, end), |(start, end), hunk| {
-        adjust_range(*hunk, start, end)
-    })
-}
-
-/// Mark/link ranges clamp to the preserved prefix/suffix instead of dying;
-/// `None` means the range vanished entirely inside the changed middle.
-fn adjust_range(diff: TextDiff, start: u32, end: u32) -> Option<(u32, u32)> {
-    if diff.is_pure_insertion() {
-        return match adjust_anchor(diff, start, end) {
-            AnchorFate::Keep(start, end) => Some((start, end)),
-            AnchorFate::Dead(_) => unreachable!("pure insertions never kill ranges"),
-        };
-    }
-    let new_start = if start <= diff.prefix {
-        start
-    } else if start >= diff.old_mid_end {
-        diff.shift_suffix(start)
-    } else {
-        diff.new_mid_end
-    };
-    let new_end = if end <= diff.prefix {
-        end
-    } else if end >= diff.old_mid_end {
-        diff.shift_suffix(end)
-    } else {
-        diff.prefix
-    };
-    (new_start < new_end).then_some((new_start, new_end))
-}
 
 fn utf16_byte_offset(text: &str, target: u32) -> usize {
     let mut seen = 0u32;
@@ -983,916 +709,6 @@ fn utf16_slice(text: &str, start: u32, end: u32) -> String {
 // ---------------------------------------------------------------------------
 // In-memory document model
 // ---------------------------------------------------------------------------
-
-#[derive(Clone, Debug)]
-struct ModelBlock {
-    parent: Option<String>,
-    block_type: String,
-    attrs: Attrs,
-    text: String,
-    marks: Vec<MarkRun>,
-    links: Vec<LinkRange>,
-}
-
-#[derive(Clone, Debug, Default)]
-struct DocModel {
-    blocks: HashMap<String, ModelBlock>,
-    children: HashMap<Option<String>, Vec<String>>,
-}
-
-impl DocModel {
-    fn from_rows(rows: &[BlockRow]) -> Self {
-        let mut model = Self::default();
-        // `load_block_tree` returns depth-first order with siblings already
-        // position-sorted, so pushing in encounter order preserves sibling
-        // order under every parent.
-        for row in rows {
-            model.blocks.insert(
-                row.block_id.clone(),
-                ModelBlock {
-                    parent: row.parent_block_id.clone(),
-                    block_type: row.block_type.clone(),
-                    attrs: row.attrs.clone(),
-                    text: row.text.clone(),
-                    marks: row.marks.clone(),
-                    links: row.links.clone(),
-                },
-            );
-            model
-                .children
-                .entry(row.parent_block_id.clone())
-                .or_default()
-                .push(row.block_id.clone());
-        }
-        model
-    }
-
-    fn to_rows(&self) -> Vec<BlockRow> {
-        let mut rows = Vec::with_capacity(self.blocks.len());
-        self.collect_rows(None, &mut rows);
-        rows
-    }
-
-    fn collect_rows(&self, parent: Option<&str>, out: &mut Vec<BlockRow>) {
-        let Some(children) = self.children.get(&parent.map(str::to_string)) else {
-            return;
-        };
-        for (position, block_id) in children.iter().enumerate() {
-            self.collect_block_rows(block_id, parent, position as u32, out);
-        }
-    }
-
-    fn collect_block_rows(
-        &self,
-        block_id: &str,
-        parent: Option<&str>,
-        position: u32,
-        out: &mut Vec<BlockRow>,
-    ) {
-        let block = &self.blocks[block_id];
-        out.push(BlockRow {
-            block_id: block_id.to_string(),
-            parent_block_id: parent.map(str::to_string),
-            position,
-            block_type: block.block_type.clone(),
-            attrs: block.attrs.clone(),
-            text: block.text.clone(),
-            marks: block.marks.clone(),
-            links: block.links.clone(),
-        });
-        self.collect_rows(Some(block_id), out);
-    }
-
-    /// Renders a contiguous top-level region as a standalone row tree. The
-    /// returned root ids are the exact blocks an accepted conflict replaces.
-    fn top_level_region(&self, start: usize, count: usize) -> Option<(Vec<String>, Vec<BlockRow>)> {
-        let roots = self.children.get(&None)?;
-        let region = roots.get(start..start.checked_add(count)?)?;
-        let mut rows = Vec::new();
-        for (position, block_id) in region.iter().enumerate() {
-            self.collect_block_rows(block_id, None, position as u32, &mut rows);
-        }
-        Some((region.to_vec(), rows))
-    }
-
-    fn has_children(&self, block_id: &str) -> bool {
-        self.children
-            .get(&Some(block_id.to_string()))
-            .is_some_and(|children| !children.is_empty())
-    }
-
-    fn is_or_descends_from(&self, root: &str, candidate: &str) -> bool {
-        let mut current = Some(candidate.to_string());
-        while let Some(id) = current {
-            if id == root {
-                return true;
-            }
-            current = self.blocks.get(&id).and_then(|block| block.parent.clone());
-        }
-        false
-    }
-
-    fn detach(&mut self, block_id: &str) {
-        let parent = self.blocks[block_id].parent.clone();
-        if let Some(siblings) = self.children.get_mut(&parent) {
-            siblings.retain(|id| id != block_id);
-        }
-    }
-
-    fn attach(&mut self, block_id: &str, parent: Option<String>, position: u32) {
-        let siblings = self.children.entry(parent.clone()).or_default();
-        let index = (position as usize).min(siblings.len());
-        siblings.insert(index, block_id.to_string());
-        if let Some(block) = self.blocks.get_mut(block_id) {
-            block.parent = parent;
-        }
-    }
-
-    /// Removes a block and its whole subtree, returning every removed id in
-    /// depth-first order.
-    fn remove_subtree(&mut self, block_id: &str) -> Vec<String> {
-        self.detach(block_id);
-        let mut removed = Vec::new();
-        let mut stack = vec![block_id.to_string()];
-        while let Some(id) = stack.pop() {
-            if let Some(children) = self.children.remove(&Some(id.clone())) {
-                stack.extend(children);
-            }
-            self.blocks.remove(&id);
-            removed.push(id);
-        }
-        removed
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Op application
-// ---------------------------------------------------------------------------
-
-#[derive(Debug)]
-struct ApplyResult {
-    rows: Vec<BlockRow>,
-    review_items: Vec<BlockReviewItem>,
-    changed_block_ids: Vec<String>,
-    created_conflict_ids: Vec<String>,
-}
-
-struct ApplyContext {
-    model: DocModel,
-    items: Vec<BlockReviewItem>,
-    changed: BTreeSet<String>,
-    created_conflict_ids: Vec<String>,
-    document_id: String,
-    author: String,
-    now: String,
-    minted: DeterministicIds,
-}
-
-impl ApplyContext {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "block insert ops expose the transaction shape directly"
-    )]
-    fn insert_block(
-        &mut self,
-        block_id: &Option<String>,
-        parent_block_id: &Option<String>,
-        position: u32,
-        block_type: &str,
-        attrs: &Attrs,
-        text: &str,
-        marks: &[MarkRun],
-        links: &[LinkRange],
-    ) -> Result<(), GatewayError> {
-        let block_id = match block_id {
-            Some(id) if id.trim().is_empty() => {
-                return Err(GatewayError::invalid("block_id must not be empty"));
-            }
-            Some(id) => id.clone(),
-            None => self.minted.mint(),
-        };
-        // Caller-supplied AND minted ids collide here: minted ids are
-        // deterministic per (document_id, client_tx_id, op), so a retried
-        // transaction whose first application already reached the doc fails
-        // typed instead of silently duplicating the inserted block.
-        if self.model.blocks.contains_key(&block_id) {
-            return Err(GatewayError::invalid(format!(
-                "block {block_id} already exists in this document"
-            )));
-        }
-        if let Some(parent) = parent_block_id
-            && !self.model.blocks.contains_key(parent)
-        {
-            return Err(GatewayError::block_deleted(parent));
-        }
-        validate_block_type(block_type)?;
-        validate_attrs(attrs)?;
-        let attrs = normalize_list_attrs(block_type, attrs)?;
-        if !carries_inline_content(block_type)
-            && (!text.is_empty() || !marks.is_empty() || !links.is_empty())
-        {
-            return Err(GatewayError::invalid(format!(
-                "{block_type} blocks carry no flat text, marks, or links"
-            )));
-        }
-        if block_type == "raw_markdown" {
-            validate_raw_markdown_attrs(&attrs)?;
-        }
-        validate_inline_ranges(text, marks, links)?;
-        self.model.blocks.insert(
-            block_id.clone(),
-            ModelBlock {
-                parent: parent_block_id.clone(),
-                block_type: block_type.to_string(),
-                attrs,
-                text: text.to_string(),
-                marks: marks.to_vec(),
-                links: links.to_vec(),
-            },
-        );
-        self.model
-            .attach(&block_id, parent_block_id.clone(), position);
-        self.changed.insert(block_id);
-        Ok(())
-    }
-
-    fn markdown_insert_position(
-        &self,
-        after_block_id: &Option<String>,
-    ) -> Result<u32, GatewayError> {
-        let Some(after_block_id) = after_block_id else {
-            return Ok(0);
-        };
-        let Some(block) = self.model.blocks.get(after_block_id) else {
-            return Err(GatewayError::block_deleted(after_block_id));
-        };
-        if block.parent.is_some() {
-            return Err(GatewayError::invalid(format!(
-                "after_block_id {after_block_id} must name a top-level block"
-            )));
-        }
-        let siblings = self
-            .model
-            .children
-            .get(&None)
-            .ok_or_else(|| GatewayError::invalid("document has no top-level block sequence"))?;
-        let position = siblings
-            .iter()
-            .position(|block_id| block_id == after_block_id)
-            .ok_or_else(|| GatewayError::block_deleted(after_block_id))?;
-        Ok(position as u32 + 1)
-    }
-
-    fn insert_markdown(
-        &mut self,
-        after_block_id: &Option<String>,
-        markdown: &str,
-    ) -> Result<(), GatewayError> {
-        let insertion_position = self.markdown_insert_position(after_block_id)?;
-        let rows = parse_markdown_fragment(markdown, || self.minted.mint())?;
-        let mut root_offset = 0u32;
-        for row in rows {
-            let position = if row.parent_block_id.is_none() {
-                let position = insertion_position + root_offset;
-                root_offset += 1;
-                position
-            } else {
-                row.position
-            };
-            self.insert_block(
-                &Some(row.block_id),
-                &row.parent_block_id,
-                position,
-                &row.block_type,
-                &row.attrs,
-                &row.text,
-                &row.marks,
-                &row.links,
-            )?;
-        }
-        Ok(())
-    }
-
-    fn delete_block(&mut self, block_id: &str) -> Result<(), GatewayError> {
-        self.delete_block_except(block_id, None)
-    }
-
-    fn delete_block_except(
-        &mut self,
-        block_id: &str,
-        protected_item: Option<&str>,
-    ) -> Result<(), GatewayError> {
-        if !self.model.blocks.contains_key(block_id) {
-            return Err(GatewayError::block_deleted(block_id));
-        }
-        let removed = self.model.remove_subtree(block_id);
-        for item in &mut self.items {
-            if removed.contains(&item.block_id)
-                && item.state == BlockReviewState::Open
-                && protected_item != Some(item.id.as_str())
-            {
-                item.state = match item.kind {
-                    BlockReviewKind::Suggestion => BlockReviewState::Invalidated,
-                    _ => BlockReviewState::Orphaned,
-                };
-                item.updated_at = self.now.clone();
-            }
-        }
-        self.changed.extend(removed);
-        Ok(())
-    }
-
-    fn move_block(
-        &mut self,
-        block_id: &str,
-        parent_block_id: &Option<String>,
-        position: u32,
-    ) -> Result<(), GatewayError> {
-        if !self.model.blocks.contains_key(block_id) {
-            return Err(GatewayError::block_deleted(block_id));
-        }
-        if let Some(parent) = parent_block_id {
-            if !self.model.blocks.contains_key(parent) {
-                return Err(GatewayError::new(
-                    GatewayErrorCode::BlockMoveConflict,
-                    format!("move target parent {parent} does not exist"),
-                ));
-            }
-            if self.model.is_or_descends_from(block_id, parent) {
-                return Err(GatewayError::new(
-                    GatewayErrorCode::BlockMoveConflict,
-                    format!("moving {block_id} under {parent} would create a cycle"),
-                ));
-            }
-        }
-        self.model.detach(block_id);
-        self.model
-            .attach(block_id, parent_block_id.clone(), position);
-        self.changed.insert(block_id.to_string());
-        Ok(())
-    }
-
-    fn replace_block_content(
-        &mut self,
-        block_id: &str,
-        text: &str,
-        marks: &Option<Vec<MarkRun>>,
-        links: &Option<Vec<LinkRange>>,
-    ) -> Result<(), GatewayError> {
-        replace_block_text(self, block_id, text.to_string(), None)?;
-        let block = self
-            .model
-            .blocks
-            .get_mut(block_id)
-            .expect("replace_block_text verified existence");
-        if let Some(marks) = marks {
-            validate_inline_ranges(text, marks, &[])?;
-            block.marks = marks.clone();
-        }
-        if let Some(links) = links {
-            validate_inline_ranges(text, &[], links)?;
-            block.links = links.clone();
-        }
-        Ok(())
-    }
-
-    fn set_block_attrs(&mut self, block_id: &str, attrs: &Attrs) -> Result<(), GatewayError> {
-        validate_attrs(attrs)?;
-        let block = require_block_mut(&mut self.model, block_id)?;
-        let attrs = normalize_list_attrs(&block.block_type, attrs)?;
-        if block.block_type == "raw_markdown" {
-            // Attrs replace wholesale: dropping or blanking the markdown
-            // attribute would silently erase the block's content.
-            validate_raw_markdown_attrs(&attrs)?;
-        }
-        block.attrs = attrs;
-        self.changed.insert(block_id.to_string());
-        Ok(())
-    }
-
-    fn set_block_type(
-        &mut self,
-        block_id: &str,
-        block_type: &str,
-        attrs: &Option<Attrs>,
-    ) -> Result<(), GatewayError> {
-        validate_block_type(block_type)?;
-        if let Some(attrs) = attrs {
-            validate_attrs(attrs)?;
-        }
-        let has_children = self.model.has_children(block_id);
-        let block = require_block_mut(&mut self.model, block_id)?;
-        if block.block_type == "raw_markdown" || block_type == "raw_markdown" {
-            return Err(GatewayError::invalid(
-                "set_block_type cannot convert to or from raw_markdown; \
-                 replace the block instead",
-            ));
-        }
-        let target = block_capabilities(block_type).expect("validated block type has capabilities");
-        if target.content != BlockContentModel::Text
-            && (!block.text.is_empty() || !block.marks.is_empty() || !block.links.is_empty())
-        {
-            return Err(GatewayError::invalid(format!(
-                "set_block_type cannot convert block {block_id} with flat content to {block_type}"
-            )));
-        }
-        if has_children && target.content != BlockContentModel::Container {
-            return Err(GatewayError::invalid(format!(
-                "set_block_type cannot convert container block {block_id} to {block_type}"
-            )));
-        }
-        let attrs = match attrs {
-            Some(attrs) => normalize_list_attrs(block_type, attrs)?,
-            None => normalize_inherited_list_attrs(block_type, &block.attrs)?,
-        };
-        block.block_type = block_type.to_string();
-        block.attrs = attrs;
-        self.changed.insert(block_id.to_string());
-        Ok(())
-    }
-
-    fn add_mark(
-        &mut self,
-        block_id: &str,
-        start: u32,
-        end: u32,
-        marks: &Attrs,
-    ) -> Result<(), GatewayError> {
-        if marks.is_empty() {
-            return Err(GatewayError::invalid("add_mark requires at least one mark"));
-        }
-        validate_attrs(marks)?;
-        let block = require_inline_block_mut(self, block_id)?;
-        validate_span(&block.text, start, end)?;
-        block.marks = rewrite_marks(&block.marks, &block.text, start, end, |attrs| {
-            for (key, value) in marks {
-                attrs.insert(key.clone(), value.clone());
-            }
-        });
-        self.changed.insert(block_id.to_string());
-        Ok(())
-    }
-
-    fn remove_mark(
-        &mut self,
-        block_id: &str,
-        start: u32,
-        end: u32,
-        marks: &[String],
-    ) -> Result<(), GatewayError> {
-        if marks.is_empty() {
-            return Err(GatewayError::invalid(
-                "remove_mark requires at least one mark key",
-            ));
-        }
-        let block = require_inline_block_mut(self, block_id)?;
-        validate_span(&block.text, start, end)?;
-        block.marks = rewrite_marks(&block.marks, &block.text, start, end, |attrs| {
-            for key in marks {
-                attrs.shift_remove(key);
-            }
-        });
-        self.changed.insert(block_id.to_string());
-        Ok(())
-    }
-
-    fn set_link(
-        &mut self,
-        block_id: &str,
-        start: u32,
-        end: u32,
-        url: &Option<String>,
-    ) -> Result<(), GatewayError> {
-        let block = require_inline_block_mut(self, block_id)?;
-        validate_span(&block.text, start, end)?;
-        block
-            .links
-            .retain(|link| link.end <= start || link.start >= end);
-        if let Some(url) = url {
-            block.links.push(LinkRange {
-                start,
-                end,
-                url: url.clone(),
-            });
-            block.links.sort_by_key(|link| link.start);
-        }
-        self.changed.insert(block_id.to_string());
-        Ok(())
-    }
-
-    fn add_comment(
-        &mut self,
-        block_id: &str,
-        start: u32,
-        end: u32,
-        body: &str,
-        quote: &Option<String>,
-    ) -> Result<(), GatewayError> {
-        add_review_item(
-            self,
-            ReviewItemDraft {
-                block_id,
-                start,
-                end,
-                kind: BlockReviewKind::Comment,
-                body: Some(body.to_string()),
-                replacement: None,
-                quote: quote.clone(),
-                parent_item_id: None,
-            },
-        )?;
-        Ok(())
-    }
-
-    fn reply_to_comment(&mut self, item_id: &str, body: &str) -> Result<(), GatewayError> {
-        let target = require_reply_target(self, item_id)?;
-        let root_id = target.parent_item_id.clone().unwrap_or(target.id.clone());
-        let root = self
-            .items
-            .iter()
-            .find(|item| item.id == root_id)
-            .ok_or_else(|| anchor_not_found(&root_id))?
-            .clone();
-        require_open_reply_root(&root, &root_id)?;
-        let reply_id = self.minted.mint();
-        require_unused_item_id(self, &reply_id)?;
-        self.items.push(BlockReviewItem {
-            id: reply_id,
-            document_id: self.document_id.clone(),
-            block_id: root.block_id,
-            kind: BlockReviewKind::Comment,
-            start_offset: root.start_offset,
-            end_offset: root.end_offset,
-            body: Some(body.to_string()),
-            replacement: None,
-            author: Some(self.author.clone()),
-            state: root.state,
-            quote: root.quote,
-            context_before: None,
-            context_after: None,
-            parent_item_id: Some(root_id),
-            created_at: self.now.clone(),
-            updated_at: self.now.clone(),
-        });
-        Ok(())
-    }
-
-    fn edit_comment(&mut self, item_id: &str, body: &str) -> Result<(), GatewayError> {
-        let target = require_open_comment_for_edit(self, item_id)?;
-        let target_id = target.id.clone();
-        for item in &mut self.items {
-            if item.id == target_id {
-                item.body = Some(body.to_string());
-                item.updated_at = self.now.clone();
-                break;
-            }
-        }
-        Ok(())
-    }
-
-    fn resolve_comment(&mut self, item_id: &str) -> Result<(), GatewayError> {
-        let _ = require_resolvable(self, item_id)?;
-        let now = self.now.clone();
-        for item in &mut self.items {
-            if item.id == item_id {
-                item.state = BlockReviewState::Resolved;
-                item.updated_at = now.clone();
-            }
-        }
-        Ok(())
-    }
-
-    fn delete_comment(&mut self, item_id: &str) -> Result<(), GatewayError> {
-        let _ = require_resolvable(self, item_id)?;
-        self.items
-            .retain(|item| item.id != item_id && item.parent_item_id.as_deref() != Some(item_id));
-        Ok(())
-    }
-
-    fn add_suggestion(
-        &mut self,
-        block_id: &str,
-        start: u32,
-        end: u32,
-        replacement: &str,
-        body: &Option<String>,
-        quote: &Option<String>,
-    ) -> Result<(), GatewayError> {
-        add_review_item(
-            self,
-            ReviewItemDraft {
-                block_id,
-                start,
-                end,
-                kind: BlockReviewKind::Suggestion,
-                body: body.clone(),
-                replacement: Some(replacement.to_string()),
-                quote: quote.clone(),
-                parent_item_id: None,
-            },
-        )?;
-        Ok(())
-    }
-
-    fn add_block_delete_suggestion(
-        &mut self,
-        block_id: &str,
-        body: &Option<String>,
-        quote: &Option<String>,
-    ) -> Result<(), GatewayError> {
-        let Some(block) = self.model.blocks.get(block_id) else {
-            return Err(GatewayError::block_deleted(block_id));
-        };
-        let quote = quote.clone().unwrap_or_else(|| {
-            if block.block_type == "raw_markdown" {
-                block
-                    .attrs
-                    .get("markdown")
-                    .and_then(JsonValue::as_str)
-                    .unwrap_or("raw Markdown block")
-                    .to_string()
-            } else if block.text.is_empty() {
-                format!("{} block", block.block_type)
-            } else {
-                block.text.clone()
-            }
-        });
-        let id = self.minted.mint();
-        require_unused_item_id(self, &id)?;
-        self.items.push(BlockReviewItem {
-            id,
-            document_id: self.document_id.clone(),
-            block_id: block_id.to_string(),
-            kind: BlockReviewKind::Suggestion,
-            start_offset: 0,
-            end_offset: 0,
-            body: body.clone(),
-            replacement: None,
-            author: Some(self.author.clone()),
-            state: BlockReviewState::Open,
-            quote: Some(quote),
-            context_before: None,
-            context_after: None,
-            parent_item_id: None,
-            created_at: self.now.clone(),
-            updated_at: self.now.clone(),
-        });
-        Ok(())
-    }
-
-    fn add_markdown_suggestion(
-        &mut self,
-        after_block_id: &Option<String>,
-        markdown: &str,
-        body: &Option<String>,
-    ) -> Result<(), GatewayError> {
-        self.markdown_insert_position(after_block_id)?;
-        let mut fragment_id = 0u32;
-        parse_markdown_fragment(markdown, || {
-            let id = format!("fragment-{fragment_id}");
-            fragment_id += 1;
-            id
-        })?;
-
-        let (block_id, quote) = match after_block_id {
-            Some(block_id) => {
-                let block = self
-                    .model
-                    .blocks
-                    .get(block_id)
-                    .ok_or_else(|| GatewayError::block_deleted(block_id))?;
-                let quote = if block.block_type == "raw_markdown" {
-                    block
-                        .attrs
-                        .get("markdown")
-                        .and_then(JsonValue::as_str)
-                        .unwrap_or("raw Markdown block")
-                        .to_string()
-                } else if block.text.is_empty() {
-                    format!("{} block", block.block_type)
-                } else {
-                    block.text.clone()
-                };
-                (block_id.clone(), quote)
-            }
-            None => (String::new(), "Document start".to_string()),
-        };
-        let id = self.minted.mint();
-        require_unused_item_id(self, &id)?;
-        self.items.push(BlockReviewItem {
-            id,
-            document_id: self.document_id.clone(),
-            block_id,
-            kind: BlockReviewKind::Suggestion,
-            start_offset: 0,
-            end_offset: 0,
-            body: body.clone(),
-            replacement: Some(markdown.to_string()),
-            author: Some(self.author.clone()),
-            state: BlockReviewState::Open,
-            quote: Some(quote),
-            context_before: None,
-            context_after: Some(MARKDOWN_INSERT_SUGGESTION_CONTEXT.to_string()),
-            parent_item_id: None,
-            created_at: self.now.clone(),
-            updated_at: self.now.clone(),
-        });
-        Ok(())
-    }
-
-    fn accept_suggestion(&mut self, item_id: &str) -> Result<(), GatewayError> {
-        let suggestion = require_suggestion(self, item_id)?;
-        match suggestion.state {
-            BlockReviewState::Open => {}
-            BlockReviewState::Resolved => {
-                return Err(GatewayError::new(
-                    GatewayErrorCode::SuggestionAlreadyResolved,
-                    format!("suggestion {item_id} is already resolved"),
-                )
-                .with_target("suggestion", item_id));
-            }
-            BlockReviewState::Invalidated | BlockReviewState::Orphaned => {
-                return Err(suggestion_invalidated(item_id));
-            }
-        }
-        let markdown_insert = suggestion.is_markdown_insert_suggestion();
-        let block_id = suggestion.block_id.clone();
-        let replacement = suggestion.replacement.clone();
-        let (start, end) = (suggestion.start_offset, suggestion.end_offset);
-        let replacement_len = if markdown_insert {
-            let markdown = replacement
-                .as_deref()
-                .ok_or_else(|| suggestion_invalidated(item_id))?;
-            let after_block_id = (!block_id.is_empty()).then_some(block_id.clone());
-            self.insert_markdown(&after_block_id, markdown)?;
-            None
-        } else {
-            match replacement {
-                Some(replacement) => {
-                    let Some(block) = self.model.blocks.get(&block_id) else {
-                        return Err(suggestion_invalidated(item_id));
-                    };
-                    let new_text = format!(
-                        "{}{}{}",
-                        utf16_slice(&block.text, 0, start),
-                        replacement,
-                        utf16_slice(&block.text, end, utf16_len(&block.text)),
-                    );
-                    replace_block_text(self, &block_id, new_text, Some(item_id))?;
-                    Some(utf16_len(&replacement))
-                }
-                None => {
-                    self.delete_block_except(&block_id, Some(item_id))?;
-                    None
-                }
-            }
-        };
-        let now = self.now.clone();
-        for item in &mut self.items {
-            if item.id == item_id {
-                item.state = BlockReviewState::Resolved;
-                if let Some(replacement_len) = replacement_len {
-                    item.start_offset = start;
-                    item.end_offset = start + replacement_len;
-                }
-                item.updated_at = now.clone();
-            }
-        }
-        self.items
-            .retain(|item| item.parent_item_id.as_deref() != Some(item_id));
-        Ok(())
-    }
-
-    fn reject_suggestion(&mut self, item_id: &str) -> Result<(), GatewayError> {
-        let suggestion = require_suggestion(self, item_id)?;
-        if suggestion.state == BlockReviewState::Resolved {
-            return Err(GatewayError::new(
-                GatewayErrorCode::SuggestionAlreadyResolved,
-                format!("suggestion {item_id} is already resolved"),
-            )
-            .with_target("suggestion", item_id));
-        }
-        let now = self.now.clone();
-        for item in &mut self.items {
-            if item.id == item_id {
-                item.state = BlockReviewState::Resolved;
-                item.updated_at = now.clone();
-            }
-        }
-        self.items
-            .retain(|item| item.parent_item_id.as_deref() != Some(item_id));
-        Ok(())
-    }
-
-    fn add_conflict(
-        &mut self,
-        after_block_id: &Option<String>,
-        base_markdown: &str,
-        incoming_markdown: &str,
-        canonical_markdown: &str,
-    ) -> Result<(), GatewayError> {
-        if let Some(after) = after_block_id
-            && !self.model.blocks.contains_key(after)
-        {
-            return Err(GatewayError::block_deleted(after));
-        }
-        let id = self.minted.mint();
-        require_unused_item_id(self, &id)?;
-        self.items.push(BlockReviewItem {
-            id: id.clone(),
-            document_id: self.document_id.clone(),
-            // `block_id` holds the attachment point; "" = document start.
-            block_id: after_block_id.clone().unwrap_or_default(),
-            kind: BlockReviewKind::Conflict,
-            start_offset: 0,
-            end_offset: 0,
-            body: Some(incoming_markdown.to_string()),
-            replacement: None,
-            author: Some(self.author.clone()),
-            state: BlockReviewState::Open,
-            quote: Some(canonical_markdown.to_string()),
-            context_before: Some(base_markdown.to_string()),
-            context_after: None,
-            parent_item_id: None,
-            created_at: self.now.clone(),
-            updated_at: self.now.clone(),
-        });
-        self.created_conflict_ids.push(id);
-        Ok(())
-    }
-
-    fn keep_canonical_conflict(&mut self, item_id: &str) -> Result<(), GatewayError> {
-        let _ = require_open_conflict(self, item_id)?;
-        self.resolve_conflict(item_id);
-        Ok(())
-    }
-
-    fn accept_incoming_conflict(&mut self, item_id: &str) -> Result<(), GatewayError> {
-        let conflict = require_open_conflict(self, item_id)?.clone();
-        if conflict
-            .context_before
-            .as_deref()
-            .unwrap_or_default()
-            .trim()
-            .is_empty()
-            && conflict
-                .quote
-                .as_deref()
-                .unwrap_or_default()
-                .trim()
-                .is_empty()
-        {
-            return Err(GatewayError::new(
-                GatewayErrorCode::Conflict,
-                format!(
-                    "conflict {item_id} is a conflict-marker warning whose content already landed; keep canonical to dismiss it"
-                ),
-            )
-            .with_target("conflict", item_id));
-        }
-        let after_block_id = (!conflict.block_id.is_empty()).then_some(conflict.block_id.clone());
-        let insertion_position = self.markdown_insert_position(&after_block_id)? as usize;
-        let canonical_markdown = conflict.quote.as_deref().unwrap_or_default();
-        let (root_count, expected_canonical) = normalize_conflict_fragment(canonical_markdown)?;
-        let (replaced_root_ids, current_rows) = self
-            .model
-            .top_level_region(insertion_position, root_count)
-            .ok_or_else(|| conflict_hunk_changed(item_id))?;
-        let current_canonical = if current_rows.is_empty() {
-            String::new()
-        } else {
-            block_rows_to_markdown(&current_rows).map_err(|unsupported| {
-                GatewayError::new(
-                    GatewayErrorCode::UnsupportedMarkdown,
-                    unsupported.to_string(),
-                )
-            })?
-        };
-        if current_canonical != expected_canonical {
-            return Err(conflict_hunk_changed(item_id));
-        }
-
-        for block_id in replaced_root_ids {
-            self.delete_block_except(&block_id, Some(item_id))?;
-        }
-        let incoming_markdown = conflict.body.as_deref().unwrap_or_default();
-        if !incoming_markdown.trim().is_empty() {
-            self.insert_markdown(&after_block_id, incoming_markdown)?;
-        }
-        self.resolve_conflict(item_id);
-        Ok(())
-    }
-
-    fn resolve_conflict(&mut self, item_id: &str) {
-        let now = self.now.clone();
-        for item in &mut self.items {
-            if item.id == item_id {
-                item.state = BlockReviewState::Resolved;
-                item.updated_at = now.clone();
-            }
-        }
-    }
-}
 
 fn normalize_conflict_fragment(markdown: &str) -> Result<(usize, String), GatewayError> {
     if markdown.trim().is_empty() {
@@ -1971,480 +787,6 @@ impl DeterministicIds {
     }
 }
 
-fn apply_ops(
-    state: &BlockMutationState,
-    ops: &[BlockOp],
-    actor: &BlockTransactionActor,
-    client_tx_id: &str,
-) -> Result<ApplyResult, GatewayError> {
-    let mut ctx = ApplyContext {
-        model: DocModel::from_rows(&state.rows),
-        items: state.review_items.clone(),
-        changed: BTreeSet::new(),
-        created_conflict_ids: Vec::new(),
-        document_id: state.document_id.clone(),
-        author: actor.display(),
-        now: now_timestamp(),
-        minted: DeterministicIds::new(&state.document_id, client_tx_id),
-    };
-    for (op_index, op) in ops.iter().enumerate() {
-        apply_op(&mut ctx, op).map_err(|error| {
-            let error = error.with_operation(op_index, op.name());
-            match op.primary_target() {
-                Some((kind, id)) if !error.has_target() => error.with_target(kind, id),
-                _ => error,
-            }
-        })?;
-    }
-    // Deleting the last block leaves the canonical empty-document shape: one
-    // empty paragraph row (Phase 1's "zero rows means no projection" rule).
-    if ctx
-        .model
-        .children
-        .get(&None)
-        .is_none_or(|top| top.is_empty())
-    {
-        let block_id = ctx.minted.mint();
-        ctx.model.blocks.insert(
-            block_id.clone(),
-            ModelBlock {
-                parent: None,
-                block_type: "p".to_string(),
-                attrs: Attrs::new(),
-                text: String::new(),
-                marks: Vec::new(),
-                links: Vec::new(),
-            },
-        );
-        ctx.model.attach(&block_id, None, 0);
-        ctx.changed.insert(block_id);
-    }
-    Ok(ApplyResult {
-        rows: ctx.model.to_rows(),
-        review_items: ctx.items,
-        changed_block_ids: ctx.changed.into_iter().collect(),
-        created_conflict_ids: ctx.created_conflict_ids,
-    })
-}
-
-fn apply_op(ctx: &mut ApplyContext, op: &BlockOp) -> Result<(), GatewayError> {
-    match op {
-        BlockOp::InsertBlock {
-            block_id,
-            parent_block_id,
-            position,
-            block_type,
-            attrs,
-            text,
-            marks,
-            links,
-        } => ctx.insert_block(
-            block_id,
-            parent_block_id,
-            *position,
-            block_type,
-            attrs,
-            text,
-            marks,
-            links,
-        ),
-        BlockOp::InsertMarkdown {
-            after_block_id,
-            markdown,
-        } => ctx.insert_markdown(after_block_id, markdown),
-        BlockOp::DeleteBlock { block_id } => ctx.delete_block(block_id),
-        BlockOp::MoveBlock {
-            block_id,
-            parent_block_id,
-            position,
-        } => ctx.move_block(block_id, parent_block_id, *position),
-        BlockOp::ReplaceBlockContent {
-            block_id,
-            text,
-            marks,
-            links,
-        } => ctx.replace_block_content(block_id, text, marks, links),
-        BlockOp::SetBlockAttrs { block_id, attrs } => ctx.set_block_attrs(block_id, attrs),
-        BlockOp::SetBlockType {
-            block_id,
-            block_type,
-            attrs,
-        } => ctx.set_block_type(block_id, block_type, attrs),
-        BlockOp::AddMark {
-            block_id,
-            start,
-            end,
-            marks,
-        } => ctx.add_mark(block_id, *start, *end, marks),
-        BlockOp::RemoveMark {
-            block_id,
-            start,
-            end,
-            marks,
-        } => ctx.remove_mark(block_id, *start, *end, marks),
-        BlockOp::SetLink {
-            block_id,
-            start,
-            end,
-            url,
-        } => ctx.set_link(block_id, *start, *end, url),
-        BlockOp::CommentAdd {
-            block_id,
-            start,
-            end,
-            body,
-            quote,
-        } => ctx.add_comment(block_id, *start, *end, body, quote),
-        BlockOp::CommentReply { item_id, body } => ctx.reply_to_comment(item_id, body),
-        BlockOp::CommentEdit { item_id, body } => ctx.edit_comment(item_id, body),
-        BlockOp::CommentResolve { item_id } => ctx.resolve_comment(item_id),
-        BlockOp::CommentDelete { item_id } => ctx.delete_comment(item_id),
-        BlockOp::SuggestionAdd {
-            block_id,
-            start,
-            end,
-            replacement,
-            body,
-            quote,
-        } => ctx.add_suggestion(block_id, *start, *end, replacement, body, quote),
-        BlockOp::SuggestionAddBlockDelete {
-            block_id,
-            body,
-            quote,
-        } => ctx.add_block_delete_suggestion(block_id, body, quote),
-        BlockOp::SuggestionAddMarkdown {
-            after_block_id,
-            markdown,
-            body,
-        } => ctx.add_markdown_suggestion(after_block_id, markdown, body),
-        BlockOp::SuggestionAccept { item_id } => ctx.accept_suggestion(item_id),
-        BlockOp::SuggestionReject { item_id } => ctx.reject_suggestion(item_id),
-        BlockOp::ConflictAdd {
-            after_block_id,
-            base_markdown,
-            incoming_markdown,
-            canonical_markdown,
-        } => ctx.add_conflict(
-            after_block_id,
-            base_markdown,
-            incoming_markdown,
-            canonical_markdown,
-        ),
-        BlockOp::ConflictKeepCanonical { item_id } => ctx.keep_canonical_conflict(item_id),
-        BlockOp::ConflictAcceptIncoming { item_id } => ctx.accept_incoming_conflict(item_id),
-    }
-}
-
-/// Replaces a block's full text via the minimal prefix/suffix diff, adjusting
-/// the block's mark/link ranges and every review anchor on the block.
-/// `protected_item` (the accepting suggestion) is skipped — its anchor is
-/// re-set explicitly by the caller.
-fn replace_block_text(
-    ctx: &mut ApplyContext,
-    block_id: &str,
-    new_text: String,
-    protected_item: Option<&str>,
-) -> Result<(), GatewayError> {
-    if ctx.model.has_children(block_id) {
-        return Err(GatewayError::invalid(format!(
-            "block {block_id} is a container and carries no inline text"
-        )));
-    }
-    {
-        let block = require_block_mut(&mut ctx.model, block_id)?;
-        if !carries_inline_content(&block.block_type) {
-            return Err(GatewayError::invalid(format!(
-                "block {block_id} of type {} carries no flat text",
-                block.block_type
-            )));
-        }
-    }
-    let block = ctx
-        .model
-        .blocks
-        .get_mut(block_id)
-        .expect("checked just above");
-    let hunks = utf16_text_diff_hunks(&block.text, &new_text);
-    block.text = new_text;
-    block.marks = block
-        .marks
-        .iter()
-        .filter_map(|run| {
-            adjust_range_multi(&hunks, run.start, run.end).map(|(start, end)| MarkRun {
-                start,
-                end,
-                marks: run.marks.clone(),
-            })
-        })
-        .collect();
-    block.links = block
-        .links
-        .iter()
-        .filter_map(|link| {
-            adjust_range_multi(&hunks, link.start, link.end).map(|(start, end)| LinkRange {
-                start,
-                end,
-                url: link.url.clone(),
-            })
-        })
-        .collect();
-    let structural_threads: BTreeSet<String> = ctx
-        .items
-        .iter()
-        .filter(|item| item.is_block_delete_suggestion() || item.is_markdown_insert_suggestion())
-        .map(|item| item.id.clone())
-        .collect();
-    for item in &mut ctx.items {
-        let belongs_to_structural_thread = item.is_block_delete_suggestion()
-            || item.is_markdown_insert_suggestion()
-            || item
-                .parent_item_id
-                .as_ref()
-                .is_some_and(|parent_id| structural_threads.contains(parent_id));
-        if item.block_id != block_id
-            || protected_item == Some(item.id.as_str())
-            || belongs_to_structural_thread
-        {
-            continue;
-        }
-        match adjust_anchor_multi(&hunks, item.start_offset, item.end_offset) {
-            AnchorFate::Keep(start, end) => {
-                item.start_offset = start;
-                item.end_offset = end;
-            }
-            AnchorFate::Dead(at) => {
-                item.start_offset = at;
-                item.end_offset = at;
-                if item.state == BlockReviewState::Open {
-                    item.state = match item.kind {
-                        BlockReviewKind::Suggestion => BlockReviewState::Invalidated,
-                        _ => BlockReviewState::Orphaned,
-                    };
-                }
-                item.updated_at = ctx.now.clone();
-            }
-        }
-    }
-    ctx.changed.insert(block_id.to_string());
-    Ok(())
-}
-
-struct ReviewItemDraft<'a> {
-    block_id: &'a str,
-    start: u32,
-    end: u32,
-    kind: BlockReviewKind,
-    body: Option<String>,
-    replacement: Option<String>,
-    quote: Option<String>,
-    parent_item_id: Option<String>,
-}
-
-fn add_review_item(
-    ctx: &mut ApplyContext,
-    draft: ReviewItemDraft<'_>,
-) -> Result<String, GatewayError> {
-    let ReviewItemDraft {
-        block_id,
-        start,
-        end,
-        kind,
-        body,
-        replacement,
-        quote,
-        parent_item_id,
-    } = draft;
-    let Some(block) = ctx.model.blocks.get(block_id) else {
-        return Err(GatewayError::block_deleted(block_id));
-    };
-    if !carries_inline_content(&block.block_type) || ctx.model.has_children(block_id) {
-        return Err(GatewayError::invalid(format!(
-            "block {block_id} carries no inline text to anchor a review item"
-        )));
-    }
-    validate_span(&block.text, start, end)?;
-    let quote = quote.unwrap_or_else(|| utf16_slice(&block.text, start, end));
-    let id = ctx.minted.mint();
-    require_unused_item_id(ctx, &id)?;
-    ctx.items.push(BlockReviewItem {
-        id: id.clone(),
-        document_id: ctx.document_id.clone(),
-        block_id: block_id.to_string(),
-        kind,
-        start_offset: start,
-        end_offset: end,
-        body,
-        replacement,
-        author: Some(ctx.author.clone()),
-        state: BlockReviewState::Open,
-        quote: Some(quote),
-        context_before: None,
-        context_after: None,
-        parent_item_id,
-        created_at: ctx.now.clone(),
-        updated_at: ctx.now.clone(),
-    });
-    Ok(id)
-}
-
-/// Minted review-item ids are deterministic per transaction (see
-/// [`DeterministicIds`]); a retried transaction whose first application
-/// already reached the doc collides here instead of duplicating the item.
-fn require_unused_item_id(ctx: &ApplyContext, id: &str) -> Result<(), GatewayError> {
-    if ctx.items.iter().any(|item| item.id == id) {
-        return Err(GatewayError::invalid(format!(
-            "review item {id} already exists in this document"
-        )));
-    }
-    Ok(())
-}
-
-fn require_block_mut<'a>(
-    model: &'a mut DocModel,
-    block_id: &str,
-) -> Result<&'a mut ModelBlock, GatewayError> {
-    model
-        .blocks
-        .get_mut(block_id)
-        .ok_or_else(|| GatewayError::block_deleted(block_id))
-}
-
-/// A block that can carry inline content according to the shared capability
-/// registry and has no structural children.
-fn require_inline_block_mut<'a>(
-    ctx: &'a mut ApplyContext,
-    block_id: &str,
-) -> Result<&'a mut ModelBlock, GatewayError> {
-    if ctx.model.has_children(block_id) {
-        return Err(GatewayError::invalid(format!(
-            "block {block_id} is a container and carries no inline text"
-        )));
-    }
-    let block = require_block_mut(&mut ctx.model, block_id)?;
-    if !carries_inline_content(&block.block_type) {
-        return Err(GatewayError::invalid(format!(
-            "block {block_id} of type {} carries no flat text",
-            block.block_type
-        )));
-    }
-    Ok(block)
-}
-
-fn require_comment<'a>(
-    ctx: &'a ApplyContext,
-    item_id: &str,
-) -> Result<&'a BlockReviewItem, GatewayError> {
-    ctx.items
-        .iter()
-        .find(|item| item.id == item_id && item.kind == BlockReviewKind::Comment)
-        .ok_or_else(|| anchor_not_found(item_id))
-}
-
-fn require_reply_target<'a>(
-    ctx: &'a ApplyContext,
-    item_id: &str,
-) -> Result<&'a BlockReviewItem, GatewayError> {
-    let item = ctx
-        .items
-        .iter()
-        .find(|item| {
-            item.id == item_id
-                && matches!(
-                    item.kind,
-                    BlockReviewKind::Comment | BlockReviewKind::Suggestion
-                )
-        })
-        .ok_or_else(|| anchor_not_found(item_id))?;
-    if item.state != BlockReviewState::Open {
-        return Err(GatewayError::invalid(format!(
-            "review item {item_id} is not open"
-        )));
-    }
-    Ok(item)
-}
-
-fn require_open_reply_root(root: &BlockReviewItem, root_id: &str) -> Result<(), GatewayError> {
-    if !matches!(
-        root.kind,
-        BlockReviewKind::Comment | BlockReviewKind::Suggestion
-    ) {
-        return Err(anchor_not_found(root_id));
-    }
-    if root.state != BlockReviewState::Open {
-        return Err(GatewayError::invalid(format!(
-            "review thread {root_id} is not open"
-        )));
-    }
-    Ok(())
-}
-
-fn require_open_comment_for_edit<'a>(
-    ctx: &'a ApplyContext,
-    item_id: &str,
-) -> Result<&'a BlockReviewItem, GatewayError> {
-    let item = require_comment(ctx, item_id)?;
-    if item.state != BlockReviewState::Open {
-        return Err(GatewayError::invalid(format!(
-            "comment {item_id} is not open"
-        )));
-    }
-    if let Some(parent_id) = item.parent_item_id.as_deref() {
-        let parent = ctx
-            .items
-            .iter()
-            .find(|parent| {
-                parent.id == parent_id
-                    && matches!(
-                        parent.kind,
-                        BlockReviewKind::Comment | BlockReviewKind::Suggestion
-                    )
-            })
-            .ok_or_else(|| anchor_not_found(parent_id))?;
-        require_open_reply_root(parent, parent_id).map_err(|_| {
-            GatewayError::invalid(format!("comment {item_id} belongs to a non-open thread"))
-        })?;
-    }
-    Ok(item)
-}
-
-/// Conflict review items resolve and delete with the comment vocabulary
-/// (`comment.resolve` / `comment.delete`) — resolution never mutates the
-/// document. Replies stay comment-only.
-fn require_resolvable<'a>(
-    ctx: &'a ApplyContext,
-    item_id: &str,
-) -> Result<&'a BlockReviewItem, GatewayError> {
-    ctx.items
-        .iter()
-        .find(|item| {
-            item.id == item_id
-                && matches!(
-                    item.kind,
-                    BlockReviewKind::Comment | BlockReviewKind::Conflict
-                )
-        })
-        .ok_or_else(|| anchor_not_found(item_id))
-}
-
-fn require_open_conflict<'a>(
-    ctx: &'a ApplyContext,
-    item_id: &str,
-) -> Result<&'a BlockReviewItem, GatewayError> {
-    let conflict = ctx
-        .items
-        .iter()
-        .find(|item| item.id == item_id && item.kind == BlockReviewKind::Conflict)
-        .ok_or_else(|| anchor_not_found(item_id))?;
-    if conflict.state != BlockReviewState::Open {
-        return Err(GatewayError::new(
-            GatewayErrorCode::Conflict,
-            format!("conflict {item_id} is no longer open; re-read /review"),
-        )
-        .with_target("conflict", item_id));
-    }
-    Ok(conflict)
-}
-
 fn conflict_hunk_changed(item_id: &str) -> GatewayError {
     GatewayError::new(
         GatewayErrorCode::Conflict,
@@ -2453,32 +795,6 @@ fn conflict_hunk_changed(item_id: &str) -> GatewayError {
         ),
     )
     .with_target("conflict", item_id)
-}
-
-fn require_suggestion<'a>(
-    ctx: &'a ApplyContext,
-    item_id: &str,
-) -> Result<&'a BlockReviewItem, GatewayError> {
-    ctx.items
-        .iter()
-        .find(|item| item.id == item_id && item.kind == BlockReviewKind::Suggestion)
-        .ok_or_else(|| anchor_not_found(item_id))
-}
-
-fn anchor_not_found(item_id: &str) -> GatewayError {
-    GatewayError::new(
-        GatewayErrorCode::AnchorNotFound,
-        format!("review item {item_id} does not exist"),
-    )
-    .with_target("review_item", item_id)
-}
-
-fn suggestion_invalidated(item_id: &str) -> GatewayError {
-    GatewayError::new(
-        GatewayErrorCode::SuggestionInvalidated,
-        format!("suggestion {item_id} was invalidated by a content change"),
-    )
-    .with_target("suggestion", item_id)
 }
 
 fn validate_block_type(block_type: &str) -> Result<(), GatewayError> {
@@ -2499,7 +815,7 @@ fn validate_block_type(block_type: &str) -> Result<(), GatewayError> {
     .with_validation("block_type", block_type, allowed_values))
 }
 
-/// The `id` attribute is the block identity on exported Slate elements; ops
+/// The `id` attribute is the block identity on exported syntax nodes; ops
 /// never smuggle it through attrs.
 fn validate_attrs(attrs: &Attrs) -> Result<(), GatewayError> {
     if attrs.contains_key("id") {
@@ -2512,13 +828,9 @@ fn validate_attrs(attrs: &Attrs) -> Result<(), GatewayError> {
 
 const LIST_STYLE_TYPES: [&str; 3] = ["disc", "decimal", "todo"];
 
-/// Canonicalizes the documented list subset before rows or a live session see
-/// it. Plate treats `listStyleType` as authoritative and may later remove
-/// incompatible list-only fields; doing that after the transaction ack would
-/// create a second checkpoint/clock for one logical mutation. Normalize them
-/// here instead: lists are paragraphs with a positive integer `indent`,
-/// `listStart` belongs only to decimal lists, and `checked` belongs only to
-/// todo lists (defaulting to false).
+/// Validates list attributes before translating them into native commands.
+/// Lists use paragraphs with a positive indent. Only numbered lists use a
+/// start number. Only task lists use a checked state.
 fn normalize_list_attrs(block_type: &str, attrs: &Attrs) -> Result<Attrs, GatewayError> {
     let mut attrs = attrs.clone();
     let Some(style_value) = attrs.get("listStyleType") else {
@@ -2693,56 +1005,6 @@ fn validate_inline_ranges(
 /// Rebuilds a block's mark runs with `change` applied to every segment of
 /// `[start, end)`, preserving formatting outside the span and coalescing
 /// adjacent equal runs.
-fn rewrite_marks(
-    marks: &[MarkRun],
-    text: &str,
-    start: u32,
-    end: u32,
-    change: impl Fn(&mut Attrs),
-) -> Vec<MarkRun> {
-    let len = utf16_len(text);
-    let mut boundaries = BTreeSet::from([0, len, start, end]);
-    for run in marks {
-        boundaries.insert(run.start);
-        boundaries.insert(run.end);
-    }
-    let boundaries: Vec<u32> = boundaries.into_iter().collect();
-    let mut result: Vec<MarkRun> = Vec::new();
-    for window in boundaries.windows(2) {
-        let (segment_start, segment_end) = (window[0], window[1]);
-        let mut attrs = marks
-            .iter()
-            .find(|run| run.start <= segment_start && segment_end <= run.end)
-            .map(|run| run.marks.clone())
-            .unwrap_or_default();
-        if start <= segment_start && segment_end <= end {
-            change(&mut attrs);
-        }
-        if attrs.is_empty() {
-            continue;
-        }
-        if let Some(last) = result.last_mut()
-            && last.end == segment_start
-            && last.marks == attrs
-        {
-            last.end = segment_end;
-            continue;
-        }
-        result.push(MarkRun {
-            start: segment_start,
-            end: segment_end,
-            marks: attrs,
-        });
-    }
-    result
-}
-
-// ---------------------------------------------------------------------------
-// Route handlers
-// ---------------------------------------------------------------------------
-
-const COMMIT_RETRY_LIMIT: usize = 3;
-
 pub(crate) async fn document_blocks(
     state: &AppState,
     library: &str,
@@ -2763,50 +1025,25 @@ async fn document_blocks_for_scope(
     scope: &DocumentScopeRef,
     path: &str,
 ) -> Result<Response, GatewayFailure> {
-    let document = state.store.get_document_for_scope(scope, path).await?;
-    require_block_document(&document.path, &document.version.content_type)?;
-    let mut document_clock = document.version.id.clone();
-    let mut rows = state.store.load_block_tree(&document.id).await?;
-    if rows.is_empty() {
-        // Materialize the projection from the head Markdown so the returned
-        // block ids are durable and addressable by later transactions. This
-        // publishes the one-time normalized version (Phase 1 import path).
-        let markdown = String::from_utf8(document.content.clone()).map_err(|_| {
-            GatewayFailure::Api(
-                QuarryError::InvalidInput(format!(
-                    "document {} is not valid UTF-8 Markdown",
-                    document.path
-                ))
-                .into(),
+    let saved = state
+        .store
+        .durable_document_for_scope(scope, path)
+        .await?
+        .ok_or_else(|| {
+            GatewayError::new(
+                GatewayErrorCode::UnsupportedBlockDocument,
+                "Document has no native state",
             )
         })?;
-        let outcome = state
-            .store
-            .import_block_document_for_scope(
-                scope,
-                path,
-                &markdown,
-                document.version.metadata.clone(),
-                &document.version.content_type,
-                DocumentSource::Rest,
-                WritePrecondition::IfMatch(document.version.id.to_string()),
-                None,
-                quarry_storage::TransactionMetadata::default(),
-            )
-            .await?;
-        document_clock = outcome.version.id;
-        rows = state.store.load_block_tree(&document.id).await?;
-    }
+    let document = quarry_document::Document::load(&saved.bytes)
+        .map_err(crate::document_engine::document_error)?;
+    let rows = quarry_storage::document_projection(&document)?;
     let payload = BlockTreeResponse {
-        document_id: document.id.to_string(),
-        document_clock: document_clock.to_string(),
+        document_id: saved.document_id,
+        document_clock: saved.version_id.clone(),
         blocks: rows.into_iter().map(block_payload).collect(),
     };
-    Ok(json_with_etag(
-        StatusCode::OK,
-        &payload,
-        document_clock.as_str(),
-    )?)
+    Ok(json_with_etag(StatusCode::OK, &payload, &saved.version_id)?)
 }
 
 fn block_payload(row: BlockRow) -> BlockNodePayload {
@@ -2889,6 +1126,9 @@ pub(crate) struct TransactionContext {
 /// from the snapshot (the diff3 reconcile) never go stale.
 pub(crate) struct TransactionPlan {
     pub ops: Vec<BlockOp>,
+    /// Reconciliation has already translated these offsets to this snapshot.
+    /// Fixed agent requests still address the caller's base clock.
+    pub uses_current_snapshot: bool,
     /// Recorded verbatim in `block_transactions.ops` history.
     pub ops_json: JsonValue,
 }
@@ -2945,12 +1185,13 @@ async fn document_block_transactions_for_scope(
     let request = parse_transaction(payload)?;
     let ctx = TransactionContext {
         client_tx_id: request.client_tx_id,
-        base_clock: request.base_clock,
+        base_clock: Some(request.base_clock),
         actor: request.actor,
     };
     let (ops, ops_json) = (request.ops, request.ops_json);
     let mut plan = move |_snapshot: &BlockMutationState| {
         Ok(TransactionPlan {
+            uses_current_snapshot: false,
             ops: ops.clone(),
             ops_json: ops_json.clone(),
         })
@@ -2982,10 +1223,8 @@ fn transaction_reply_response(reply: TransactionReply) -> Result<Response, Gatew
     }
 }
 
-/// The mode switch: resolve the document, take its per-document mutex
-/// (serializing against session seed/checkpoint/discard), and dispatch on
-/// whether a live session exists. A transaction racing a transition waits
-/// here; it is never rejected because a session exists.
+/// Serialize writers by document identity, translate public operations into
+/// native commands, and atomically publish their state and projections.
 pub(crate) async fn execute_block_transaction(
     state: &AppState,
     scope: &DocumentScopeRef,
@@ -2994,226 +1233,17 @@ pub(crate) async fn execute_block_transaction(
     settings: &TransactionSettings,
     plan: PlanProvider<'_>,
 ) -> Result<TransactionReply, GatewayFailure> {
-    let document = state.store.head_document_for_scope(scope, path).await?;
-    let guard = state.sessions.lock_document(&document.id).await;
-    match guard.session() {
-        Some(session) => {
-            apply_session_transaction(state, &session, scope, path, ctx, settings, plan).await
-        }
-        None => apply_rows_transaction(state, scope, path, ctx, settings, plan).await,
-    }
-}
-
-/// Rows-authoritative mode: ops apply directly to block rows in one SQL
-/// transaction. The caller holds the per-document mutex.
-async fn apply_rows_transaction(
-    state: &AppState,
-    scope: &DocumentScopeRef,
-    path: &str,
-    ctx: &TransactionContext,
-    settings: &TransactionSettings,
-    plan: PlanProvider<'_>,
-) -> Result<TransactionReply, GatewayFailure> {
-    for _attempt in 0..COMMIT_RETRY_LIMIT {
-        let snapshot = state
-            .store
-            .block_mutation_state_for_scope(scope, path, &ctx.client_tx_id)
-            .await?;
-        if let Some(record) = &snapshot.replay {
-            return Ok(TransactionReply::Replayed(record.clone()));
-        }
-        require_block_document(&snapshot.path, &snapshot.content_type)?;
-        let status = transaction_status(&ctx.base_clock, &snapshot)?;
-        let planned = plan(&snapshot)?;
-        let applied = apply_ops(&snapshot, &planned.ops, &ctx.actor, &ctx.client_tx_id)?;
-        let commit = build_block_mutation_commit(
-            &snapshot,
-            ctx,
-            settings,
-            &planned,
-            &applied,
-            status,
-            settings.origin_id.clone(),
-        )?;
-        match state
-            .store
-            .commit_block_mutation_for_scope(scope, commit)
-            .await
-        {
-            Ok(outcome) => {
-                return Ok(block_mutation_reply(
-                    outcome,
-                    status,
-                    applied.changed_block_ids,
-                    applied.created_conflict_ids,
-                ));
-            }
-            // Another write moved the head between load and commit: reload
-            // the state and recompute against the new rows.
-            Err(QuarryError::PreconditionFailed(_)) => continue,
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Err(GatewayFailure::Api(
-        QuarryError::Busy("document head kept moving during the block transaction".to_string())
-            .into(),
-    ))
-}
-
-/// Session-authoritative mode (the Gate B mechanics): the transaction
-/// applies into the live Yjs doc as another collaborator and forces a
-/// checkpoint before acking, so an acked write is durable in rows.
-///
-/// Under the per-document mutex and the doc's write lock:
-///
-/// 1. flush pending browser typing as a coalesced `browser_session`
-///    checkpoint (so the ops validate against — and history attributes —
-///    exactly what the agent's transaction saw);
-/// 2. run the same pure apply engine as rows mode against the freshly
-///    checkpointed rows;
-/// 3. validate that the applied rows can be serialized and build the commit
-///    without mutating the live doc;
-/// 4. reconcile the live doc in place to the applied result (untouched
-///    blocks keep their element identity, so peer cursors survive; review
-///    ops become mark/meta edits);
-/// 5. commit the applied rows/items as the transaction's version and ack.
-///
-/// Browser updates queue on the doc write lock for the duration and merge
-/// right after — they land in the NEXT checkpoint. No op needs the
-/// reseed/state-replacement fallback: every gateway op is expressible as an
-/// in-place doc reconciliation.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "row transactions carry loaded state and request metadata"
-)]
-async fn apply_session_transaction(
-    state: &AppState,
-    session: &crate::session::LiveSession,
-    scope: &DocumentScopeRef,
-    path: &str,
-    ctx: &TransactionContext,
-    settings: &TransactionSettings,
-    plan: PlanProvider<'_>,
-) -> Result<TransactionReply, GatewayFailure> {
-    let mut awareness = session.awareness().clone().write_owned().await;
-    // 1. Force-checkpoint pending typing (no-op when clean). Head races are
-    //    handled inside commit_doc_state (it retries and surfaces Busy).
-    if session.is_dirty() {
-        session
-            .commit_doc_state(&state.store, &mut awareness)
-            .await
-            .map_err(GatewayFailure::from)?;
-    }
-    let snapshot = state
+    state
         .store
-        .block_mutation_state_for_scope(scope, path, &ctx.client_tx_id)
-        .await?;
-    if let Some(record) = &snapshot.replay {
-        return Ok(TransactionReply::Replayed(record.clone()));
-    }
-    require_block_document(&snapshot.path, &snapshot.content_type)?;
-    let status = transaction_status(&ctx.base_clock, &snapshot)?;
-
-    // 2. Apply against the session's authoritative state. After the
-    //    flush, stored rows equal the session projection; review items
-    //    come from the session (the store snapshot agrees, but the
-    //    session is the source of truth while it lives).
-    let mut session_snapshot = snapshot.clone();
-    session_snapshot.review_items = session.items_snapshot();
-    let planned = plan(&session_snapshot)?;
-    let applied = apply_ops(
-        &session_snapshot,
-        &planned.ops,
-        &ctx.actor,
-        &ctx.client_tx_id,
-    )?;
-
-    // 3. Validate the complete desired state before touching the live doc.
-    // `build_block_mutation_commit` renders normalized Markdown and can
-    // reject an otherwise well-formed operation sequence whose resulting
-    // tree is not representable. Keeping that validation ahead of the Yjs
-    // reconciliation makes those request failures genuinely atomic.
-    let origin_id = Some(format!("agent-injected:tx:{}", ctx.client_tx_id));
-    let commit = build_block_mutation_commit(
-        &session_snapshot,
-        ctx,
-        settings,
-        &planned,
-        &applied,
-        status,
-        origin_id,
-    )?;
-
-    // 4. Write the validated change into the live doc as a collaborator.
-    let pre = crate::session::doc_image(&session_snapshot.rows, &session_snapshot.review_items)
-        .map_err(GatewayFailure::from)?;
-    let desired = crate::session::doc_image(&applied.rows, &applied.review_items)
-        .map_err(GatewayFailure::from)?;
-    session
-        .apply_desired_state(&awareness, &pre, &desired, &applied.review_items)
-        .map_err(GatewayFailure::from)?;
-
-    // 5. Checkpoint-before-ack: commit the applied state as this
-    //    transaction's version.
-    // In-session browsers classify this as a benign refresh
-    // (`session-events.ts`), exactly like checkpoint commits — for
-    // whole-file writes too, since the session doc already carries the
-    // merged state when the event fires.
-    match state
-        .store
-        .commit_block_mutation_for_scope(scope, commit)
+        .run_global_operation(async {
+            let document = state.store.head_document_for_scope(scope, path).await?;
+            let _guard = state.documents.lock(&document.id).await;
+            Box::pin(native::apply_transaction(
+                state, scope, path, ctx, settings, plan,
+            ))
+            .await
+        })
         .await
-    {
-        Ok(outcome) => {
-            let reply = block_mutation_reply(
-                outcome,
-                status,
-                applied.changed_block_ids,
-                applied.created_conflict_ids,
-            );
-            if let TransactionReply::Committed(committed) = &reply {
-                session.mark_committed(&mut awareness, &committed.outcome, &applied.review_items);
-            }
-            Ok(reply)
-        }
-        // An external legacy write raced the session between the step-1
-        // flush and this commit. The live doc already carries this
-        // transaction's edits but nothing was committed (so there is no
-        // replay record yet). Surface Busy: a client retry re-runs the
-        // ops against the flushed state — idempotent for replaces, and
-        // safe for inserts because minted ids are deterministic per
-        // (document_id, client_tx_id, op): a re-insert collides with the first
-        // application's block and fails typed instead of duplicating.
-        //
-        // HONEST WINDOW (any commit failure below, not just this arm): the
-        // live doc was mutated in step 3 BEFORE the commit, so on failure
-        // the merged CONTENT survives in the session and lands via the next
-        // checkpoint — but the transaction's review-item side effects do
-        // not ride in the doc and are dropped with the failed commit. In
-        // particular, Phase 4 conflict artifacts (`conflict.add` is not
-        // doc-represented) can be lost while the merged content still
-        // arrives: content-without-its-conflicts if the caller does not
-        // retry. The remaining writers that bypass this mutex are
-        // staged-transaction commits and direct store callers (every
-        // Markdown PUT / Git / FUSE / CLI / metadata write / version
-        // restore now routes through the gateway).
-        //
-        // Phase 5 assessed the two candidate fixes and re-scoped the window
-        // to a recorded limitation (Phase 7) instead of fixing it here:
-        // committing BEFORE the doc mutation trades this window for a worse
-        // one (a commit whose doc apply then fails is silently REVERTED by
-        // the next checkpoint — an acked transaction lost, instead of a
-        // retryable error), and the real fix — persisting non-doc side
-        // effects in a pending queue keyed by client_tx_id, replayed on the
-        // next successful commit — is new durable machinery that none of
-        // the in-tree callers need: every gateway caller (markdown_write,
-        // Git, FUSE, CLI, REST agents) surfaces or retries the typed
-        // retryable Busy error.
-        Err(QuarryError::PreconditionFailed(detail)) => {
-            Err(GatewayFailure::Api(QuarryError::Busy(detail).into()))
-        }
-        Err(error) => Err(error.into()),
-    }
 }
 
 fn block_mutation_reply(
@@ -3234,64 +1264,6 @@ fn block_mutation_reply(
         }
         BlockMutationOutcome::Replayed(record) => TransactionReply::Replayed(record),
     }
-}
-
-fn build_block_mutation_commit(
-    snapshot: &BlockMutationState,
-    ctx: &TransactionContext,
-    settings: &TransactionSettings,
-    planned: &TransactionPlan,
-    applied: &ApplyResult,
-    status: &str,
-    origin_id: Option<String>,
-) -> Result<BlockMutationCommit, GatewayFailure> {
-    let metadata = settings
-        .metadata
-        .clone()
-        .unwrap_or_else(|| snapshot.metadata.clone());
-    Ok(BlockMutationCommit {
-        document_id: snapshot.document_id.clone(),
-        expected_head_version_id: snapshot.head_version_id.clone(),
-        client_tx_id: ctx.client_tx_id.clone(),
-        actor_kind: ctx.actor.kind.clone(),
-        actor_id: ctx.actor.id.clone(),
-        transaction_actor: settings
-            .transaction
-            .actor
-            .clone()
-            .or_else(|| Some(ctx.actor.display())),
-        transaction_message: settings.transaction.message.clone(),
-        transaction_provenance: commit_provenance(settings),
-        origin_id,
-        source: settings.source.clone(),
-        recorded_ops: recorded_ops(
-            &planned.ops_json,
-            &ctx.actor,
-            status,
-            &applied.changed_block_ids,
-        ),
-        metadata: metadata.clone(),
-        content_type: snapshot.content_type.clone(),
-        rows: applied.rows.clone(),
-        review_items: applied.review_items.clone(),
-        normalized_markdown: normalized_markdown(&applied.rows, &metadata)?,
-    })
-}
-
-fn recorded_ops(
-    ops_json: &JsonValue,
-    actor: &BlockTransactionActor,
-    status: &str,
-    changed_block_ids: &[String],
-) -> JsonValue {
-    json!({
-        "ops": ops_json,
-        "actor": actor,
-        "ack": {
-            "status": status,
-            "changed_block_ids": changed_block_ids,
-        },
-    })
 }
 
 fn normalized_markdown(rows: &[BlockRow], metadata: &JsonValue) -> Result<String, GatewayFailure> {
@@ -3399,8 +1371,7 @@ pub(crate) fn review_response_from_rows(
         .map(|row| (row.block_id.as_str(), row.text.as_str()))
         .collect();
     let block_ref = |item: &BlockReviewItem| AgentBlockRef {
-        ordinal: ordinals.get(item.block_id.as_str()).copied().unwrap_or(0),
-        content_hash: None,
+        block_id: (!item.block_id.is_empty()).then(|| item.block_id.clone()),
     };
     let anchor = |item: &BlockReviewItem| {
         ordinals
@@ -3440,6 +1411,7 @@ pub(crate) fn review_response_from_rows(
             .entry(parent_id.to_string())
             .or_default()
             .push(AgentReviewReply {
+                target: None,
                 id: reply.id.clone(),
                 status: reply.state.as_str().to_string(),
                 by: by(reply),
@@ -3454,6 +1426,7 @@ pub(crate) fn review_response_from_rows(
         .filter(|item| item.kind == BlockReviewKind::Comment && item.parent_item_id.is_none())
         .filter(|item| include_resolved || item.state != BlockReviewState::Resolved)
         .map(|item| AgentReviewComment {
+            target: None,
             id: item.id.clone(),
             status: item.state.as_str().to_string(),
             by: by(item),
@@ -3476,6 +1449,9 @@ pub(crate) fn review_response_from_rows(
             let markdown_insert = item.is_markdown_insert_suggestion();
             let replacement = item.replacement.clone().unwrap_or_default();
             AgentReviewSuggestion {
+                action: None,
+                acceptance_error: None,
+                target: None,
                 id: item.id.clone(),
                 status: item.state.as_str().to_string(),
                 kind: if markdown_insert {
@@ -3521,6 +1497,7 @@ pub(crate) fn review_response_from_rows(
         .filter(|item| item.kind == BlockReviewKind::Conflict)
         .filter(|item| include_resolved || item.state != BlockReviewState::Resolved)
         .map(|item| crate::AgentReviewConflict {
+            replies: replies_by_parent.remove(&item.id).unwrap_or_default(),
             id: item.id.clone(),
             status: item.state.as_str().to_string(),
             by: by(item),
@@ -3548,8 +1525,8 @@ mod tests {
         reason = "tests use unwrap for transaction fixtures"
     )]
 
+    use super::native::apply_test_ops as apply_ops;
     use super::*;
-    use quarry_collab_codec::utf16_text_diff;
 
     fn paragraph(block_id: &str, position: u32, text: &str) -> BlockRow {
         BlockRow {
@@ -3572,7 +1549,6 @@ mod tests {
             content_type: "text/markdown".to_string(),
             metadata: serde_json::json!({}),
             rows,
-            projection_missing: false,
             review_items: Vec::new(),
             version_ids: std::collections::HashSet::from(["v1".to_string()]),
             replay: None,
@@ -3963,104 +1939,6 @@ mod tests {
     }
 
     #[test]
-    fn anchor_in_preserved_prefix_keeps_offsets() {
-        let diff = utf16_text_diff("keep THIS tail", "keep THAT tail");
-        assert_eq!(adjust_anchor(diff, 0, 4), AnchorFate::Keep(0, 4));
-    }
-
-    #[test]
-    fn anchor_in_preserved_suffix_shifts_by_the_delta() {
-        let diff = utf16_text_diff("short middle tail", "shorter-now middle tail");
-        // "tail" sits at [13, 17) in the old text and shifts right by 6.
-        assert_eq!(adjust_anchor(diff, 13, 17), AnchorFate::Keep(19, 23));
-    }
-
-    #[test]
-    fn anchor_overlapping_the_changed_middle_dies_at_the_change_site() {
-        let diff = utf16_text_diff("aaa MIDDLE zzz", "aaa OTHER zzz");
-        assert_eq!(adjust_anchor(diff, 2, 8), AnchorFate::Dead(diff.prefix));
-    }
-
-    #[test]
-    fn insertion_at_anchor_start_boundary_is_excluded() {
-        // Insert at offset 4 == anchor start: the anchor never grows leftward,
-        // so it shifts right past the inserted text.
-        let diff = utf16_text_diff("pre ANCHOR", "pre XXANCHOR");
-        assert_eq!(adjust_anchor(diff, 4, 10), AnchorFate::Keep(6, 12));
-    }
-
-    #[test]
-    fn insertion_at_anchor_end_boundary_is_excluded() {
-        // Insert at offset 6 == anchor end: the anchor never grows rightward.
-        let diff = utf16_text_diff("ANCHOR post", "ANCHORXX post");
-        assert_eq!(adjust_anchor(diff, 0, 6), AnchorFate::Keep(0, 6));
-    }
-
-    #[test]
-    fn interior_insertion_grows_the_anchor() {
-        let diff = utf16_text_diff("ANCHOR", "ANCXXHOR");
-        assert_eq!(adjust_anchor(diff, 0, 6), AnchorFate::Keep(0, 8));
-    }
-
-    #[test]
-    fn range_spanning_the_whole_middle_stretches_over_the_replacement() {
-        let diff = utf16_text_diff("ab MIDDLE yz", "ab LONGER-MIDDLE yz");
-        assert_eq!(adjust_range(diff, 0, 12), Some((0, 19)));
-    }
-
-    #[test]
-    fn range_partially_overlapping_the_middle_clamps_to_the_preserved_prefix() {
-        let diff = utf16_text_diff("aaa MIDDLE zzz", "aaa OTHER zzz");
-        // Range [0, 8) keeps its prefix part [0, 4).
-        assert_eq!(adjust_range(diff, 0, 8), Some((0, diff.prefix)));
-    }
-
-    #[test]
-    fn range_entirely_inside_the_middle_vanishes() {
-        let diff = utf16_text_diff("aaa MIDDLE zzz", "aaa OTHER zzz");
-        assert_eq!(adjust_range(diff, 5, 9), None);
-    }
-
-    #[test]
-    fn interior_anchor_survives_edits_at_both_ends() {
-        // "middle" sits at [4, 10); both ends change with different deltas.
-        let hunks = utf16_text_diff_hunks("AAA middle ZZZ", "BBBB middle YY");
-        assert_eq!(adjust_anchor_multi(&hunks, 4, 10), AnchorFate::Keep(5, 11));
-    }
-
-    #[test]
-    fn interior_range_survives_edits_at_both_ends() {
-        let hunks = utf16_text_diff_hunks("AAA middle ZZZ", "BBBB middle YY");
-        assert_eq!(adjust_range_multi(&hunks, 4, 10), Some((5, 11)));
-    }
-
-    #[test]
-    fn end_boundary_insertion_in_a_later_hunk_stays_excluded() {
-        // The anchor never grows rightward, even when the boundary insert is
-        // the second hunk of a multi-hunk edit.
-        let hunks = utf16_text_diff_hunks("AAA anchor", "BBB anchorXX");
-        assert_eq!(adjust_anchor_multi(&hunks, 4, 10), AnchorFate::Keep(4, 10));
-    }
-
-    #[test]
-    fn multi_hunk_offsets_measure_utf16_units_for_surrogate_pairs() {
-        // 😀 is two UTF-16 units; "mid" sits at [3, 6) between two edits.
-        let hunks = utf16_text_diff_hunks("😀 mid a", "🎉🎉 mid b");
-        assert_eq!(adjust_anchor_multi(&hunks, 3, 6), AnchorFate::Keep(5, 8));
-    }
-
-    #[test]
-    fn anchor_overlapping_one_of_several_hunks_still_dies() {
-        // "ZZZ" at [11, 14) overlaps the second hunk; the anchor collapses
-        // there even though the first hunk left it intact.
-        let hunks = utf16_text_diff_hunks("AAA middle ZZZ", "BBBB middle YY");
-        assert!(matches!(
-            adjust_anchor_multi(&hunks, 11, 14),
-            AnchorFate::Dead(_)
-        ));
-    }
-
-    #[test]
     fn replace_block_content_keeps_an_interior_comment_when_both_ends_change() {
         let state = state_with_rows(vec![paragraph("p1", 0, "AAA middle ZZZ")]);
         let commented = apply_ops(
@@ -4088,35 +1966,6 @@ mod tests {
         let item = &applied.review_items[0];
         assert_eq!(item.state, BlockReviewState::Open);
         assert_eq!((item.start_offset, item.end_offset), (5, 11));
-    }
-
-    #[test]
-    fn rewrite_marks_adds_a_run_and_coalesces_neighbours() {
-        let existing = vec![MarkRun {
-            start: 0,
-            end: 4,
-            marks: bold(),
-        }];
-        let result = rewrite_marks(&existing, "abcdefgh", 4, 8, |attrs| {
-            attrs.insert("bold".to_string(), json!(true));
-        });
-        assert_eq!(result.len(), 1);
-        assert_eq!((result[0].start, result[0].end), (0, 8));
-        assert_eq!(result[0].marks, bold());
-    }
-
-    #[test]
-    fn rewrite_marks_removes_a_key_from_the_span_only() {
-        let existing = vec![MarkRun {
-            start: 0,
-            end: 8,
-            marks: bold(),
-        }];
-        let result = rewrite_marks(&existing, "abcdefgh", 2, 4, |attrs| {
-            attrs.shift_remove("bold");
-        });
-        let shape: Vec<(u32, u32)> = result.iter().map(|run| (run.start, run.end)).collect();
-        assert_eq!(shape, vec![(0, 2), (4, 8)]);
     }
 
     fn bold() -> Attrs {
@@ -4165,22 +2014,17 @@ mod tests {
     }
 
     #[test]
-    fn deleting_the_last_block_remints_the_empty_paragraph_shape() {
-        let state = state_with_rows(vec![paragraph("only", 0, "Text")]);
-        let applied = apply_ops(
+    fn deleting_the_last_block_leaves_an_empty_native_document() {
+        let state = state_with_rows(vec![paragraph("p1", 0, "Last")]);
+        let result = apply_ops(
             &state,
-            &[op(json!({"op": "delete_block", "block_id": "only"}))],
+            &[op(json!({"op":"delete_block", "block_id":"p1"}))],
             &actor(),
-            "test-tx",
+            "delete-last",
         )
         .unwrap();
-        assert_eq!(applied.rows.len(), 1);
-        assert_eq!(applied.rows[0].block_type, "p");
-        assert_eq!(applied.rows[0].text, "");
-        assert_ne!(applied.rows[0].block_id, "only");
-        // Both the deleted block and the minted replacement are "touched".
-        assert_eq!(applied.changed_block_ids.len(), 2);
-        assert!(applied.changed_block_ids.contains(&"only".to_string()));
+        assert!(result.rows.is_empty());
+        assert!(result.review_items.is_empty());
     }
 
     #[test]
@@ -4219,7 +2063,7 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.code, GatewayErrorCode::InvalidTransaction);
-        assert!(error.message.contains("hr blocks carry no flat text"));
+        assert!(error.message.contains("hr cannot contain inline text"));
     }
 
     #[test]
@@ -4240,11 +2084,7 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.code, GatewayErrorCode::InvalidTransaction);
-        assert!(
-            error
-                .message
-                .contains("block hr1 of type hr carries no flat text")
-        );
+        assert!(error.message.contains("hr cannot contain inline text"));
     }
 
     #[test]
@@ -4263,7 +2103,7 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.code, GatewayErrorCode::InvalidTransaction);
-        assert!(error.message.contains("with flat content to hr"));
+        assert!(error.message.contains("hr cannot contain inline text"));
     }
 
     #[test]
@@ -4305,6 +2145,7 @@ mod tests {
     fn unknown_op_kind_is_an_invalid_transaction() {
         let error = parse_transaction(json!({
             "client_tx_id": "tx-1",
+            "base_clock": "v1",
             "actor": {"kind": "agent"},
             "ops": [{"op": "explode_block", "block_id": "p1"}]
         }))
@@ -4316,6 +2157,7 @@ mod tests {
     fn empty_ops_array_is_an_invalid_transaction() {
         let error = parse_transaction(json!({
             "client_tx_id": "tx-1",
+            "base_clock": "v1",
             "actor": {"kind": "agent"},
             "ops": []
         }))
@@ -4330,26 +2172,6 @@ mod tests {
         assert_eq!(unquote_clock("v1"), Some("v1".to_string()));
         assert_eq!(unquote_clock("\"unbalanced"), None);
         assert_eq!(unquote_clock(""), None);
-    }
-
-    #[test]
-    fn collapsed_anchor_stays_a_point_under_insertion_at_its_offset() {
-        // "prefix " is 7 units; the insertion lands exactly at offset 7 where
-        // a dead anchor collapsed. The point must move as one (never invert).
-        let diff = utf16_text_diff("prefix tail", "prefix X tail");
-        assert!(diff.is_pure_insertion());
-        assert_eq!(adjust_anchor(diff, 7, 7), AnchorFate::Keep(7, 7));
-        // A collapsed point strictly after the insertion shifts as one.
-        assert_eq!(adjust_anchor(diff, 9, 9), AnchorFate::Keep(11, 11));
-    }
-
-    #[test]
-    fn collapsed_anchor_inside_a_replaced_middle_moves_to_the_change_site() {
-        let diff = utf16_text_diff("aaa MIDDLE zzz", "aaa OTHER zzz");
-        assert_eq!(
-            adjust_anchor(diff, 6, 6),
-            AnchorFate::Keep(diff.prefix, diff.prefix)
-        );
     }
 
     #[test]

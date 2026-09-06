@@ -5,6 +5,7 @@ import {
 } from '@platejs/toc/react';
 
 import { cn } from '../../lib/utils';
+import { useState } from 'react';
 
 // Sticky table-of-contents rail, ported from the Plate "toc-pro" component
 // (via fabro-sh/potion) and restyled to quarry tokens. It floats in the
@@ -22,6 +23,7 @@ export function TocSidebar({
   const state = useTocSideBarState(props);
   const { activeContentId, headingList, open } = state;
   const { navProps, onContentClick } = useTocSideBar(state);
+  const [expanded, setExpanded] = useState(false);
 
   if (headingList.length < 2) return null;
 
@@ -29,7 +31,10 @@ export function TocSidebar({
     <div className={cn('sticky top-0 left-0 z-10', className)}>
       {/* top-12 mirrors PlateContent's pt-12 so the rail top-aligns with the
           first line of document content rather than the scroller's top edge. */}
-      <div className="group absolute top-12 left-0 z-10 max-h-[400px]">
+      <div className="absolute top-12 left-0 z-10 max-h-[400px]"
+        onMouseEnter={() => setExpanded(true)} onMouseLeave={() => setExpanded(false)}
+        onFocusCapture={() => setExpanded(true)}
+        onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setExpanded(false); }}>
         <div className="relative z-10 ml-2.5 flex flex-col justify-center pl-2 pb-3">
           {/* Collapsed tick-marks — always visible. */}
           <div className="flex flex-col gap-3 pb-3 pr-5">
@@ -53,8 +58,7 @@ export function TocSidebar({
             aria-label="Table of contents"
             className={cn(
               'absolute -top-2.5 left-0 px-2.5 transition-all duration-300',
-              'pointer-events-none -translate-x-[10px] opacity-0',
-              'group-hover:pointer-events-auto group-hover:translate-x-0 group-hover:opacity-100'
+              expanded ? 'pointer-events-auto translate-x-0 opacity-100' : 'pointer-events-none -translate-x-[10px] opacity-0'
             )}
             {...navProps}
           >

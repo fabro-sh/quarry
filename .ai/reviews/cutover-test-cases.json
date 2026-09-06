@@ -1,0 +1,1086 @@
+[
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "round-trips the supported markdown surface through Plate"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "round-trips GFM strikethrough"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "serializes raw_markdown blocks verbatim instead of dropping them"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "round-trips headings from h1 through h6"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "round-trips GFM task lists"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "round-trips underline as <u> HTML"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "round-trips subscript and superscript as <sub>/<sup> HTML"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "round-trips wiki-links without escaping the brackets"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "round-trips image references"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "round-trips a mermaid block as a ```mermaid code fence"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "round-trips a GFM table with inline marks in cells"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "round-trips GFM column alignment (left/center/right)"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "drops table colSizes when serializing (resize is editor-only)"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "repairs malformed table values before serializing"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "drops upload placeholders when serializing"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "keeps [[..]] literal inside code"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "leaves stray angle brackets and braces untouched"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "joins soft-wrapped paragraph lines with spaces"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "joins soft-wrapped lines inside emphasis keeping the mark"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "serializes embedded newlines as backslash hard breaks"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "round-trips a backslash hard break"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "normalizes a two-space hard break to a backslash break"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "round-trips a hard break inside a list item"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-codec.test.ts",
+    "case": "round-trips a hard break inside a blockquote"
+  },
+  {
+    "file": "ui/src/features/editor/table.test.ts",
+    "case": "preserves object identity when there are no tables to normalize"
+  },
+  {
+    "file": "ui/src/features/editor/table.test.ts",
+    "case": "repairs ragged rows to the widest physical row without losing bottom-right content"
+  },
+  {
+    "file": "ui/src/features/editor/table.test.ts",
+    "case": "returns an unchanged tree for valid rectangular tables"
+  },
+  {
+    "file": "ui/src/features/editor/table.test.ts",
+    "case": "strips spans, fixes header/body cell types, and pads shorter rows"
+  },
+  {
+    "file": "ui/src/features/editor/table.test.ts",
+    "case": "pads or trims alignment and drops mismatched column sizes"
+  },
+  {
+    "file": "ui/src/features/editor/raw-markdown.test.tsx",
+    "case": "renders the markdown source of a degraded block instead of empty space"
+  },
+  {
+    "file": "ui/src/features/editor/raw-markdown.test.tsx",
+    "case": "serializes back to its verbatim source for the local mirror"
+  },
+  {
+    "file": "ui/src/features/editor/review-leaves.test.tsx",
+    "case": "renders a commented leaf with its id and reflects the active comment"
+  },
+  {
+    "file": "ui/src/features/editor/review-leaves.test.tsx",
+    "case": "renders a resolved comment as plain text with no highlight"
+  },
+  {
+    "file": "ui/src/features/editor/review-leaves.test.tsx",
+    "case": "restores the highlight when a resolved comment is reopened"
+  },
+  {
+    "file": "ui/src/features/editor/review-leaves.test.tsx",
+    "case": "keeps the highlight keyed to the open comment when it overlaps a resolved one"
+  },
+  {
+    "file": "ui/src/features/editor/review-leaves.test.tsx",
+    "case": "reflects the hovered comment"
+  },
+  {
+    "file": "ui/src/features/editor/review-leaves.test.tsx",
+    "case": "reflects the hovered suggestion"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.performance.test.tsx",
+    "case": "does not serialize the full document when rerendering unchanged content"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.performance.test.tsx",
+    "case": "debounces the markdown mirror instead of serializing on every keystroke"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.performance.test.tsx",
+    "case": "does not serialize when only hover/active review state changes"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.performance.test.tsx",
+    "case": "parses and serializes a collab document once at mount, not twice"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-mirror-publisher.test.ts",
+    "case": "coalesces a typing burst into one serialization"
+  },
+  {
+    "file": "ui/src/features/editor/markdown-mirror-publisher.test.ts",
+    "case": "drops an in-flight receipt after disposal"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.review.test.tsx",
+    "case": "renders a markdown link as an anchor carrying its href"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.review.test.tsx",
+    "case": "renders a wiki-link as a chip showing its display text"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.review.test.tsx",
+    "case": "renders a markdown image reference as an <img>"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.review.test.tsx",
+    "case": "renders a commented range as a comment mark"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.review.test.tsx",
+    "case": "does not fire onChange when the document is swapped out (pure load)"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.review.test.tsx",
+    "case": "does not fire onChange when swapping between two docs that both carry review marks"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.review.test.tsx",
+    "case": "syncs the provider before applying the initial markdown seed"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.review.test.tsx",
+    "case": "documents why seed-before-sync duplicates existing Yjs room content"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.review.test.tsx",
+    "case": "does not rebuild the Yjs plugin when equivalent collab props are recreated"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.review.test.tsx",
+    "case": "publishes a blank awareness cursor name when no author is stored"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.review.test.tsx",
+    "case": "publishes the explicitly stored author as the awareness cursor name"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.review.test.tsx",
+    "case": "skips transient blank fallback snapshots while a collab value hydrates"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.review.test.tsx",
+    "case": "does not mirror local Yjs transactions through the external update bridge"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.review.test.tsx",
+    "case": "flips isSuggesting via the SuggestionPlugin option"
+  },
+  {
+    "file": "ui/src/features/editor/PlateMarkdownEditor.review.test.tsx",
+    "case": "turns typed text into an insertion suggestion that round-trips to CriticMarkup"
+  },
+  {
+    "file": "ui/src/features/editor/toc-sidebar.test.tsx",
+    "case": "lists every heading and stamps a DOM id on each rendered heading"
+  },
+  {
+    "file": "ui/src/features/editor/toc-sidebar.test.tsx",
+    "case": "renders nothing with fewer than two headings"
+  },
+  {
+    "file": "ui/src/features/editor/review-kit.test.ts",
+    "case": "registers comment and suggestion plugins"
+  },
+  {
+    "file": "ui/src/features/editor/MarkdownEditor.test.tsx",
+    "case": "uses a Plate editor as the editing surface"
+  },
+  {
+    "file": "ui/src/features/editor/MarkdownEditor.test.tsx",
+    "case": "shows no formatting toolbar until text is selected"
+  },
+  {
+    "file": "ui/src/features/editor/image.test.ts",
+    "case": "converts a browser File to a data URL"
+  },
+  {
+    "file": "ui/src/features/editor/collab-reconnect.test.tsx",
+    "case": "creates no new sockets and closes every old one after unmount"
+  },
+  {
+    "file": "ui/src/features/editor/collab-reconnect.test.tsx",
+    "case": "stops chasing the old document after switching to another"
+  },
+  {
+    "file": "ui/src/features/editor/mirror-serializer.test.ts",
+    "case": "serializes synchronously when no worker is available"
+  },
+  {
+    "file": "ui/src/features/editor/mirror-serializer.test.ts",
+    "case": "resolves superseded requests with null (latest wins)"
+  },
+  {
+    "file": "ui/src/features/editor/mirror-serializer.test.ts",
+    "case": "falls back to synchronous serialization when the worker dies before responding"
+  },
+  {
+    "file": "ui/src/features/editor/mirror-serializer.test.ts",
+    "case": "falls back to synchronous serialization when the remote fails"
+  },
+  {
+    "file": "ui/src/features/review/rfm-conformance.test.ts",
+    "case": "keeps a threaded reply (re:) in metadata and round-trips its parent anchor"
+  },
+  {
+    "file": "ui/src/features/review/rfm-conformance.test.ts",
+    "case": "treats CriticMarkup inside inline code and fenced blocks as literal text"
+  },
+  {
+    "file": "ui/src/features/review/rfm-conformance.test.ts",
+    "case": "treats an unclosed marker as literal text (no crash)"
+  },
+  {
+    "file": "ui/src/features/review/rfm-conformance.test.ts",
+    "case": "leaves a substitution inside a code block literal (no id injected)"
+  },
+  {
+    "file": "ui/src/features/review/suggestion-mark.test.ts",
+    "case": "reads the suggestion data object off a leaf"
+  },
+  {
+    "file": "ui/src/features/review/suggestion-mark.test.ts",
+    "case": "returns null when there is no suggestion key"
+  },
+  {
+    "file": "ui/src/features/review/suggestion-mark.test.ts",
+    "case": "ignores a malformed suggestion value"
+  },
+  {
+    "file": "ui/src/features/review/review-doc.test.ts",
+    "case": "writes mutations through the shared review map and mirrors them into the store"
+  },
+  {
+    "file": "ui/src/features/review/review-doc.test.ts",
+    "case": "round-trips editedAt through the shared review map"
+  },
+  {
+    "file": "ui/src/features/review/review-doc.test.ts",
+    "case": "round-trips block-delete semantics through the shared review map"
+  },
+  {
+    "file": "ui/src/features/review/review-doc.test.ts",
+    "case": "converges review metadata between synced Yjs documents"
+  },
+  {
+    "file": "ui/src/features/review/review-doc.test.ts",
+    "case": "treats an empty synced map as authoritative (the server seeds it from rows)"
+  },
+  {
+    "file": "ui/src/features/review/review-doc.test.ts",
+    "case": "does not emit unchanged shared metadata echoes"
+  },
+  {
+    "file": "ui/src/features/review/review-doc.test.ts",
+    "case": "does not rewrite map entries that only differ by object key order"
+  },
+  {
+    "file": "ui/src/features/review/accept-reject.test.ts",
+    "case": "accept on an insert keeps the inserted text and drops the mark"
+  },
+  {
+    "file": "ui/src/features/review/accept-reject.test.ts",
+    "case": "reject on an insert removes the inserted text and drops the mark"
+  },
+  {
+    "file": "ui/src/features/review/accept-reject.test.ts",
+    "case": "accept on a remove deletes the removed text and drops the mark"
+  },
+  {
+    "file": "ui/src/features/review/accept-reject.test.ts",
+    "case": "accepting several full-block removals leaves no empty structural blocks"
+  },
+  {
+    "file": "ui/src/features/review/accept-reject.test.ts",
+    "case": "accepts an explicit deletion of an empty void block"
+  },
+  {
+    "file": "ui/src/features/review/accept-reject.test.ts",
+    "case": "reject on a remove keeps the text and drops the mark"
+  },
+  {
+    "file": "ui/src/features/review/accept-reject.test.ts",
+    "case": "is a no-op for an unknown suggestion id"
+  },
+  {
+    "file": "ui/src/features/review/accept-reject.test.ts",
+    "case": "accept on a replacement keeps new text and drops both marks"
+  },
+  {
+    "file": "ui/src/features/review/accept-reject.test.ts",
+    "case": "accepts a replacement parsed from CriticMarkup"
+  },
+  {
+    "file": "ui/src/features/review/accept-reject.test.ts",
+    "case": "reject on a replacement keeps old text and drops both marks"
+  },
+  {
+    "file": "ui/src/features/review/accept-reject.test.ts",
+    "case": "accepts a substitution in serialized Markdown and drops its metadata"
+  },
+  {
+    "file": "ui/src/features/review/accept-reject.test.ts",
+    "case": "rejects an insertion in serialized Markdown"
+  },
+  {
+    "file": "ui/src/features/review/accept-reject.test.ts",
+    "case": "rejects a deletion in serialized Markdown"
+  },
+  {
+    "file": "ui/src/features/review/accept-reject.test.ts",
+    "case": "uses the structural editor path for a block-delete suggestion"
+  },
+  {
+    "file": "ui/src/features/review/resolve-suggestions.test.ts",
+    "case": "returns one descriptor per suggestion id with keyId + suggestionId + type"
+  },
+  {
+    "file": "ui/src/features/review/resolve-suggestions.test.ts",
+    "case": "derives replace when an id has both insert and remove text"
+  },
+  {
+    "file": "ui/src/features/review/resolve-suggestions.test.ts",
+    "case": "resolves an element-level block deletion without inline marks"
+  },
+  {
+    "file": "ui/src/features/review/resolve-suggestions.test.ts",
+    "case": "resolves an empty void block deletion"
+  },
+  {
+    "file": "ui/src/features/review/endmatter.test.ts",
+    "case": "returns null meta when there is no trailing endmatter"
+  },
+  {
+    "file": "ui/src/features/review/endmatter.test.ts",
+    "case": "splits a trailing review endmatter block with a comments map"
+  },
+  {
+    "file": "ui/src/features/review/endmatter.test.ts",
+    "case": "does NOT treat an ordinary trailing --- + YAML as review endmatter"
+  },
+  {
+    "file": "ui/src/features/review/endmatter.test.ts",
+    "case": "uses only the final --- block as endmatter"
+  },
+  {
+    "file": "ui/src/features/review/endmatter.test.ts",
+    "case": "preserves block-delete suggestion semantics"
+  },
+  {
+    "file": "ui/src/features/review/endmatter.test.ts",
+    "case": "returns an empty string when there is no review data"
+  },
+  {
+    "file": "ui/src/features/review/endmatter.test.ts",
+    "case": "emits comments and suggestions with deterministic, sorted keys"
+  },
+  {
+    "file": "ui/src/features/review/endmatter.test.ts",
+    "case": "is idempotent: serialize is stable across repeated calls"
+  },
+  {
+    "file": "ui/src/features/review/remove-comment.test.ts",
+    "case": "removes the comment_<id> mark from every leaf in the document"
+  },
+  {
+    "file": "ui/src/features/review/collapse-substitutions.test.ts",
+    "case": "collapses an adjacent remove+insert sharing an id"
+  },
+  {
+    "file": "ui/src/features/review/collapse-substitutions.test.ts",
+    "case": "also collapses insert-before-remove order"
+  },
+  {
+    "file": "ui/src/features/review/collapse-substitutions.test.ts",
+    "case": "leaves standalone insert/delete untouched"
+  },
+  {
+    "file": "ui/src/features/review/collapse-substitutions.test.ts",
+    "case": "does not merge a remove+insert with different ids"
+  },
+  {
+    "file": "ui/src/features/review/collapse-substitutions.test.ts",
+    "case": "does not merge an insert+remove with different ids"
+  },
+  {
+    "file": "ui/src/features/review/collapse-substitutions.test.ts",
+    "case": "does not expand or collapse substitution syntax inside code spans"
+  },
+  {
+    "file": "ui/src/features/review/collapse-substitutions.test.ts",
+    "case": "expands a substitution into the id-paired remove+insert form"
+  },
+  {
+    "file": "ui/src/features/review/collapse-substitutions.test.ts",
+    "case": "round-trips back to the substitution via collapse"
+  },
+  {
+    "file": "ui/src/features/review/collapse-substitutions.test.ts",
+    "case": "synthesizes a shared id when the token has none"
+  },
+  {
+    "file": "ui/src/features/review/collapse-substitutions.test.ts",
+    "case": "leaves text without substitutions untouched"
+  },
+  {
+    "file": "ui/src/features/review/comment-draft.test.ts",
+    "case": "tracks the selection as a draft without touching the document"
+  },
+  {
+    "file": "ui/src/features/review/comment-draft.test.ts",
+    "case": "keeps the draft anchored to its words as the document changes around them"
+  },
+  {
+    "file": "ui/src/features/review/comment-draft.test.ts",
+    "case": "promotes the draft to a real comment carrying the typed body"
+  },
+  {
+    "file": "ui/src/features/review/comment-draft.test.ts",
+    "case": "is a no-op when the body is empty"
+  },
+  {
+    "file": "ui/src/features/review/comment-draft.test.ts",
+    "case": "discards the draft without committing anything"
+  },
+  {
+    "file": "ui/src/features/review/review-store.test.ts",
+    "case": "addComment inserts a root comment entry"
+  },
+  {
+    "file": "ui/src/features/review/review-store.test.ts",
+    "case": "addReply inserts a reply with re + body"
+  },
+  {
+    "file": "ui/src/features/review/review-store.test.ts",
+    "case": "resolveComment sets status"
+  },
+  {
+    "file": "ui/src/features/review/review-store.test.ts",
+    "case": "editComment updates the body and editedAt without mutating the input meta"
+  },
+  {
+    "file": "ui/src/features/review/review-store.test.ts",
+    "case": "deleteComment removes a comment and its replies"
+  },
+  {
+    "file": "ui/src/features/review/review-store.test.ts",
+    "case": "does not mutate the input meta"
+  },
+  {
+    "file": "ui/src/features/review/review-store.test.ts",
+    "case": "buildThreads groups replies under their root, sorted"
+  },
+  {
+    "file": "ui/src/features/review/review-store.test.ts",
+    "case": "syncSuggestionsFromValue adds entries for marks missing from meta"
+  },
+  {
+    "file": "ui/src/features/review/review-store.test.ts",
+    "case": "syncSuggestionsFromValue does not override an existing entry"
+  },
+  {
+    "file": "ui/src/features/review/review-store.test.ts",
+    "case": "syncSuggestionsFromValue records block-delete semantics from an element"
+  },
+  {
+    "file": "ui/src/features/review/review-store.test.ts",
+    "case": "mergeReviewMetaPatch preserves an injected root comment body for markdown serialization"
+  },
+  {
+    "file": "ui/src/features/review/review-store.test.ts",
+    "case": "mergeReviewMetaPatch applies upserts and removals"
+  },
+  {
+    "file": "ui/src/features/review/review-store.test.ts",
+    "case": "removeSuggestion deletes one suggestion entry and its replies without touching the rest"
+  },
+  {
+    "file": "ui/src/features/review/review-store.test.ts",
+    "case": "sets and clears activeId / hoverId"
+  },
+  {
+    "file": "ui/src/features/review/rfm-codec.test.ts",
+    "case": "round-trips a comment with endmatter"
+  },
+  {
+    "file": "ui/src/features/review/rfm-codec.test.ts",
+    "case": "round-trips a substitution suggestion"
+  },
+  {
+    "file": "ui/src/features/review/rfm-codec.test.ts",
+    "case": "round-trips a suggestion reply while the suggestion marker exists"
+  },
+  {
+    "file": "ui/src/features/review/rfm-codec.test.ts",
+    "case": "prunes suggestion replies when the suggestion marker is gone"
+  },
+  {
+    "file": "ui/src/features/review/rfm-codec.test.ts",
+    "case": "is idempotent: parse\u2192serialize\u2192parse\u2192serialize is stable"
+  },
+  {
+    "file": "ui/src/features/review/rfm-codec.test.ts",
+    "case": "only emits endmatter entries for ids still present as marks (orphan prune)"
+  },
+  {
+    "file": "ui/src/features/review/rfm-codec.test.ts",
+    "case": "does not duplicate a root comment body in both inline and endmatter"
+  },
+  {
+    "file": "ui/src/features/review/rfm-codec.test.ts",
+    "case": "normalizes explicit orphan ids without random metadata"
+  },
+  {
+    "file": "ui/src/features/review/rfm-codec.test.ts",
+    "case": "does not create metadata for anonymous review markers"
+  },
+  {
+    "file": "ui/src/features/review/rfm-codec.test.ts",
+    "case": "round-trips a GFM table with alignment through the review save path"
+  },
+  {
+    "file": "ui/src/features/review/rfm-codec.test.ts",
+    "case": "repairs malformed table values through the review save path"
+  },
+  {
+    "file": "ui/src/features/review/review-md-rules.test.ts",
+    "case": "emits an insert suggestion as {++text++}{#id}"
+  },
+  {
+    "file": "ui/src/features/review/review-md-rules.test.ts",
+    "case": "emits a remove suggestion as {--text--}{#id}"
+  },
+  {
+    "file": "ui/src/features/review/review-md-rules.test.ts",
+    "case": "emits an update suggestion as plain text (no CriticMarkup)"
+  },
+  {
+    "file": "ui/src/features/review/review-md-rules.test.ts",
+    "case": "emits a comment as {==anchor==}{>>body<<}{#id} using the body from meta"
+  },
+  {
+    "file": "ui/src/features/review/review-md-rules.test.ts",
+    "case": "reuses the serializer editor for equivalent review metadata"
+  },
+  {
+    "file": "ui/src/features/review/comment-draft.collab.test.ts",
+    "case": "starting a draft on one editor does not become a draft on the peer editor"
+  },
+  {
+    "file": "ui/src/features/review/block-delete-conformance.test.ts",
+    "case": "requires a fixture for every registered block type"
+  },
+  {
+    "file": "ui/src/features/review/rfm-types.test.ts",
+    "case": "emptyReviewMeta has empty comment and suggestion maps"
+  },
+  {
+    "file": "ui/src/features/review/rfm-types.test.ts",
+    "case": "isEmptyReviewMeta is true only when both maps are empty"
+  },
+  {
+    "file": "ui/src/features/review/apply-critic-markup.test.ts",
+    "case": "parses an insert suggestion and reads metadata from meta"
+  },
+  {
+    "file": "ui/src/features/review/apply-critic-markup.test.ts",
+    "case": "parses a remove suggestion"
+  },
+  {
+    "file": "ui/src/features/review/apply-critic-markup.test.ts",
+    "case": "promotes a legacy full-block removal to Plate block-delete semantics"
+  },
+  {
+    "file": "ui/src/features/review/apply-critic-markup.test.ts",
+    "case": "does not promote a partial text removal to a block deletion"
+  },
+  {
+    "file": "ui/src/features/review/apply-critic-markup.test.ts",
+    "case": "still parses review markup inside inline elements not in the block registry"
+  },
+  {
+    "file": "ui/src/features/review/apply-critic-markup.test.ts",
+    "case": "splits a substitution into a remove leaf and an insert leaf sharing the id"
+  },
+  {
+    "file": "ui/src/features/review/apply-critic-markup.test.ts",
+    "case": "parses a comment anchor and lifts the inline body into meta"
+  },
+  {
+    "file": "ui/src/features/review/apply-critic-markup.test.ts",
+    "case": "unwraps a bare {==..==} (no comment) to plain text"
+  },
+  {
+    "file": "ui/src/features/review/apply-critic-markup.test.ts",
+    "case": "does not synthesize an id when a marker has none"
+  },
+  {
+    "file": "ui/src/features/review/apply-critic-markup.test.ts",
+    "case": "normalizes an explicit comment id without endmatter deterministically"
+  },
+  {
+    "file": "ui/src/features/review/apply-critic-markup.test.ts",
+    "case": "normalizes an explicit suggestion id without endmatter deterministically"
+  },
+  {
+    "file": "ui/src/features/review/apply-critic-markup.test.ts",
+    "case": "derives suggestion createdAt (epoch ms) from the endmatter at timestamp"
+  },
+  {
+    "file": "ui/src/features/review/apply-critic-markup.test.ts",
+    "case": "falls back to createdAt 0 when at is missing or unparseable"
+  },
+  {
+    "file": "ui/src/features/review/apply-critic-markup.test.ts",
+    "case": "leaves CriticMarkup inside a code leaf literal"
+  },
+  {
+    "file": "ui/src/features/review/ui/SuggestionCard.test.tsx",
+    "case": "renders an insert summary and fires accept/reject with the suggestion id"
+  },
+  {
+    "file": "ui/src/features/review/ui/SuggestionCard.test.tsx",
+    "case": "renders both the old and new text for a replace suggestion"
+  },
+  {
+    "file": "ui/src/features/review/ui/SuggestionCard.test.tsx",
+    "case": "renders the suggestion rationale from review metadata"
+  },
+  {
+    "file": "ui/src/features/review/ui/SuggestionCard.test.tsx",
+    "case": "renders existing replies and adds a new reply through the composer"
+  },
+  {
+    "file": "ui/src/features/review/ui/SuggestionCard.test.tsx",
+    "case": "reflects the active id with data-active and the active ring"
+  },
+  {
+    "file": "ui/src/features/review/ui/SuggestionCard.test.tsx",
+    "case": "reflects the hover id with data-hover"
+  },
+  {
+    "file": "ui/src/features/review/ui/SuggestionCard.test.tsx",
+    "case": "sets the hover id on card mouse enter and clears it on leave"
+  },
+  {
+    "file": "ui/src/features/review/ui/SuggestionCard.test.tsx",
+    "case": "scrolls into view when it becomes active"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentsPanel.test.tsx",
+    "case": "shows both open and resolved comments under the default All filter"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentsPanel.test.tsx",
+    "case": "filters to only open comments"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentsPanel.test.tsx",
+    "case": "filters to only resolved comments"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentsPanel.test.tsx",
+    "case": "reopening a resolved comment flips it in the shared review state"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentsPanel.test.tsx",
+    "case": "badges orphaned comments whose anchored text disappeared"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentsPanel.test.tsx",
+    "case": "shows edited indicators for edited comments and replies"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentsPanel.test.tsx",
+    "case": "badges invalidated suggestions and shows their replacement preview"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentsPanel.test.tsx",
+    "case": "shows and resolves an open block-deletion suggestion"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentsPanel.test.tsx",
+    "case": "shows and resolves an open Markdown-insertion suggestion"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentsPanel.test.tsx",
+    "case": "shows diff3 conflict review items with kept and incoming text"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentsPanel.test.tsx",
+    "case": "resolves an open conflict with either saved side"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentsPanel.test.tsx",
+    "case": "hides conflict actions once the conflict is resolved"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentsPanel.test.tsx",
+    "case": "does not offer to re-apply conflict-marker content that already landed"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentsPanel.test.tsx",
+    "case": "copying an open conflict puts the incoming markdown on the clipboard"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentsPanel.test.tsx",
+    "case": "shows an empty message when there is nothing to review"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "renders the root author and body and the reply body"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "shows the agent brand logo for a comment authored by an agent"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "shows only the first word of the author and the full name on hover"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "adds a reply through the composer"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "fills the empty root body on first submit instead of adding a reply"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "adds a reply once the root already has a body"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "discards an empty new comment from the store and clears its leaf mark"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "submits a reply on Enter"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "disables submit when the composer is empty"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "hides the reply composer until the card is active"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "cancels a reply, clearing the draft and deselecting the card"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "reveals the reply button only once the input is focused"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "marks the comment active on card click"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "reflects the active id with data-active and the active ring"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "reflects the hover id with data-hover"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "sets the hover id on card mouse enter and clears it on leave"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "scrolls into view when it becomes active"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "resolves the comment from the resolve checkbox"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "deletes the comment from the store and clears its leaf mark from the editor"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "edits the root comment body inline"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "cancels a root comment edit without changing the body"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "blocks empty and unchanged root comment edits"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "edits a reply body inline"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "deletes a reply while leaving the root comment and its mark intact"
+  },
+  {
+    "file": "ui/src/features/review/ui/CommentThreadCard.test.tsx",
+    "case": "shows a Resolved badge and hides the resolve checkbox when resolved"
+  },
+  {
+    "file": "ui/src/features/review/ui/ReviewRail.test.tsx",
+    "case": "lists a comment card and a suggestion card from the editor and store"
+  },
+  {
+    "file": "ui/src/features/review/ui/ReviewRail.test.tsx",
+    "case": "hides resolved comment threads"
+  },
+  {
+    "file": "ui/src/features/review/ui/ReviewRail.test.tsx",
+    "case": "renders nothing when there are no comments or suggestions"
+  },
+  {
+    "file": "ui/src/features/collab/save-state.test.ts",
+    "case": "is false until any ack arrives, even for an empty doc"
+  },
+  {
+    "file": "ui/src/features/collab/save-state.test.ts",
+    "case": "covers a doc whose state equals the acked snapshot"
+  },
+  {
+    "file": "ui/src/features/collab/save-state.test.ts",
+    "case": "stops covering after a local insert beyond the ack"
+  },
+  {
+    "file": "ui/src/features/collab/save-state.test.ts",
+    "case": "stops covering after a pure deletion (no clock advances)"
+  },
+  {
+    "file": "ui/src/features/collab/save-state.test.ts",
+    "case": "covers a replica that received the acked state over the wire"
+  },
+  {
+    "file": "ui/src/features/collab/save-state.test.ts",
+    "case": "covers across replicas after deletions sync both ways"
+  },
+  {
+    "file": "ui/src/features/collab/save-state.test.ts",
+    "case": "rejects garbage ack payloads instead of throwing"
+  },
+  {
+    "file": "ui/src/features/collab/save-state.test.ts",
+    "case": "reports reconnecting whenever the socket is down or unsynced"
+  },
+  {
+    "file": "ui/src/features/collab/save-state.test.ts",
+    "case": "reports saving until the checkpoint covers the doc, then saved"
+  },
+  {
+    "file": "ui/src/features/collab/save-state.test.ts",
+    "case": "reports save_failed when the last checkpoint attempt failed"
+  },
+  {
+    "file": "ui/src/features/collab/save-state.test.ts",
+    "case": "lets a covering ack win over a stale failure flag"
+  },
+  {
+    "file": "ui/src/features/collab/save-state.test.ts",
+    "case": "lets reconnecting win over a failure flag"
+  },
+  {
+    "file": "ui/src/features/collab/save-state.test.ts",
+    "case": "maps the five states to their UI labels"
+  },
+  {
+    "file": "ui/src/features/collab/collab-editor-session.test.ts",
+    "case": "starts one probe after initialization and disposes it exactly once"
+  },
+  {
+    "file": "ui/src/features/collab/collab-editor-session.test.ts",
+    "case": "creates a fresh epoch only after a successful reachability probe"
+  },
+  {
+    "file": "ui/src/features/collab/collab-editor-session.test.ts",
+    "case": "ignores a late probe open after suspension"
+  },
+  {
+    "file": "ui/src/features/collab/collab-editor-session.test.ts",
+    "case": "ignores a late probe open after the provider becomes live"
+  },
+  {
+    "file": "ui/src/features/collab/collab-editor-session.test.ts",
+    "case": "retries a failed probe but stops retrying after the session becomes live"
+  },
+  {
+    "file": "ui/src/features/collab/collab-editor-session.test.ts",
+    "case": "treats refusal as terminal for the document identity"
+  },
+  {
+    "file": "ui/src/features/collab/rust-ws-provider.test.ts",
+    "case": "derives the collab websocket base URL from the current page protocol"
+  },
+  {
+    "file": "ui/src/features/collab/rust-ws-provider.test.ts",
+    "case": "wraps y-websocket with document-id rooms and Plate lifecycle callbacks"
+  },
+  {
+    "file": "ui/src/features/collab/rust-ws-provider.test.ts",
+    "case": "forwards tmp collab base URLs and room names to y-websocket"
+  },
+  {
+    "file": "ui/src/features/collab/rust-ws-provider.test.ts",
+    "case": "decodes checkpoint-ack frames and notifies subscribers"
+  },
+  {
+    "file": "ui/src/features/collab/rust-ws-provider.test.ts",
+    "case": "flags save failure on a checkpoint-failed frame and clears it on the next ack"
+  },
+  {
+    "file": "ui/src/features/collab/rust-ws-provider.test.ts",
+    "case": "stops the underlying provider on disconnect instead of letting it rejoin with a stale doc"
+  },
+  {
+    "file": "ui/src/features/collab/rust-ws-provider.test.ts",
+    "case": "halts retries for a connection attempt that never opened"
+  },
+  {
+    "file": "ui/src/features/collab/rust-ws-provider.test.ts",
+    "case": "surfaces a session-refused close with its reason and still halts"
+  },
+  {
+    "file": "ui/src/features/collab/rust-ws-provider.test.ts",
+    "case": "does not report refusal for an ordinary close"
+  },
+  {
+    "file": "ui/src/features/collab/rust-ws-provider.test.ts",
+    "case": "status"
+  },
+  {
+    "file": "ui/src/features/collab/rust-ws-provider.test.ts",
+    "case": "connection-close"
+  },
+  {
+    "file": "ui/src/features/collab/rust-ws-provider.test.ts",
+    "case": "sync"
+  },
+  {
+    "file": "ui/src/features/collab/unload-guard.test.ts",
+    "case": "prompts when closing while edits are not yet durable"
+  },
+  {
+    "file": "ui/src/features/collab/unload-guard.test.ts",
+    "case": "stays silent when everything is durable"
+  },
+  {
+    "file": "ui/src/features/collab/unload-guard.test.ts",
+    "case": "stops prompting after unregistering"
+  },
+  {
+    "file": "ui/src/features/collab/collab-debug.test.ts",
+    "case": "enables when the collabDebug query param is present (no value)"
+  },
+  {
+    "file": "ui/src/features/collab/collab-debug.test.ts",
+    "case": "enables for truthy query values and disables for explicit off values"
+  },
+  {
+    "file": "ui/src/features/collab/collab-debug.test.ts",
+    "case": "falls back to the stored flag when the query param is absent"
+  },
+  {
+    "file": "ui/src/features/collab/collab-debug.test.ts",
+    "case": "lets an explicit query value override the stored flag"
+  },
+  {
+    "file": "ui/src/features/collab/session-events.test.ts",
+    "case": "passes unrelated document events through"
+  },
+  {
+    "file": "ui/src/features/collab/session-events.test.ts",
+    "case": "does not use path fallback when the event carries a different document id"
+  },
+  {
+    "file": "ui/src/features/collab/session-events.test.ts",
+    "case": "passes everything through without a live session"
+  },
+  {
+    "file": "ui/src/features/collab/session-events.test.ts",
+    "case": "classifies every change to the session document as a benign refresh"
+  },
+  {
+    "file": "ui/src/features/collab/session-events.test.ts",
+    "case": "retargets live sessions on document moves"
+  },
+  {
+    "file": "ui/src/features/collab/session-events.test.ts",
+    "case": "leaves deletes to the generic handling (no draft to protect)"
+  },
+  {
+    "file": "ui/src/features/collab/RemoteCursorOverlay.test.ts",
+    "case": "adds clamped alpha to hex cursor colors"
+  },
+  {
+    "file": "ui/src/features/collab/RemoteCursorOverlay.test.ts",
+    "case": "preserves functional color formats with alpha"
+  }
+]

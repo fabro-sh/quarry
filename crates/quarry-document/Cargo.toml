@@ -1,0 +1,21 @@
+[package]
+name = "quarry-document"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+browser = ["automerge/wasm", "uuid/js"]
+schema = ["dep:utoipa"]
+
+[dependencies]
+automerge.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+utoipa = { workspace = true, optional = true }

@@ -14,17 +14,6 @@ export default defineConfig({
     // inlined as data: URIs.
     assetsInlineLimit: 0,
   },
-  resolve: {
-    alias: {
-      // Vite resolves the `browser` export condition even for worker bundles,
-      // and this package's browser build touches `document` at module scope —
-      // crashing the mirror-serializer worker on load. Its default build works
-      // in both window and worker contexts.
-      'decode-named-character-reference': fileURLToPath(
-        new URL('./node_modules/decode-named-character-reference/index.js', import.meta.url)
-      ),
-    },
-  },
   server: {
     port: 5173,
     // The browser and Rust codec consume the same block capability manifest.
@@ -39,7 +28,6 @@ export default defineConfig({
     proxy: {
       '/v1': {
         target: quarryApiOrigin,
-        ws: true,
       },
       '/quarry.SKILL.md': {
         target: quarryApiOrigin,

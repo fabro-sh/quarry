@@ -1,0 +1,12 @@
+diff --git a/dist/constants-B6Sm9BNa.js b/dist/constants-B6Sm9BNa.js
+--- a/dist/constants-B6Sm9BNa.js
++++ b/dist/constants-B6Sm9BNa.js
+@@ -1861,7 +1861,7 @@
+ 			...editor.selection,
+ 			...op.newProperties
+ 		};
+-		if (RangeApi.isRange(newSelection) && editor.api.isAt({
++		if (!getOptions().disableSelectionExpansion && RangeApi.isRange(newSelection) && editor.api.isAt({
+ 			at: newSelection,
+ 			blocks: true,
+ 			match: (n) => n.type === tableType

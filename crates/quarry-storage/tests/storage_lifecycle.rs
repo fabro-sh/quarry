@@ -8,9 +8,9 @@ use quarry_core::{
     DocumentSource, DocumentVersion, INLINE_CONTENT_THRESHOLD, QuarryError, WritePrecondition,
 };
 use quarry_storage::{
-    BlockMutationCommit, BlockMutationOutcome, BlockReviewItem, BlockReviewKind, BlockReviewState,
-    DocumentScopeRef, NewBlockReviewItem, QuarryStore, StoreConfig, StoreEventKind, TmpTtl,
-    TransactionMetadata, group_version_history,
+    BlockMutationCommit, BlockMutationOutcome, BlockReviewKind, BlockReviewState, DocumentScopeRef,
+    NewBlockReviewItem, QuarryStore, StoreConfig, StoreEventKind, TmpTtl, TransactionMetadata,
+    group_version_history,
 };
 use std::{io, net::IpAddr, path::Path, time::Duration};
 
@@ -360,11 +360,12 @@ async fn stores_multiple_libraries_versions_cas_restart_and_gc() -> TestResult {
 }
 
 #[tokio::test]
-async fn legacy_database_with_collab_recovery_states_reopens_cleanly() -> TestResult {
+async fn upgrade_preserves_unpublished_drafts_and_removes_only_saved_recovery_state() -> TestResult
+{
     let root = tempfile::tempdir().context("create legacy schema tempdir")?;
     let db_path = root.path().join("quarry.db");
 
-    // A database from before Phase 7 carries the recovery-state table.
+    // A database from the previous engine carries binary recovery drafts.
     let db = turso::Builder::new_local(
         db_path
             .to_str()
@@ -395,7 +396,38 @@ async fn legacy_database_with_collab_recovery_states_reopens_cleanly() -> TestRe
     drop(conn);
     drop(db);
 
-    // Opening the store drops the table and the store works normally.
+    let rejected = QuarryStore::open(StoreConfig {
+        db_path: db_path.clone(),
+        cas_path: root.path().join("cas"),
+        lock_path: None,
+    })
+    .await
+    .err()
+    .context("unpublished drafts must stop upgrade")?;
+    assert!(rejected.to_string().contains("unpublished drafts"));
+    let old = turso::Builder::new_local(db_path.to_str().unwrap())
+        .build()
+        .await?;
+    let conn = old.connect()?;
+    let mut rows = conn
+        .query(
+            "SELECT dirty, hex(update_v1) FROM collab_recovery_states",
+            (),
+        )
+        .await?;
+    let row = rows
+        .next()
+        .await?
+        .context("the recovery draft must remain intact")?;
+    assert_eq!(row.get::<i64>(0)?, 1);
+    assert_eq!(row.get::<String>(1)?, "01");
+    drop(rows);
+    conn.execute("UPDATE collab_recovery_states SET dirty=0", ())
+        .await?;
+    drop(conn);
+    drop(old);
+
+    // Once the older version has saved the draft, upgrade removes its cache.
     let store = QuarryStore::open(StoreConfig {
         db_path: db_path.clone(),
         cas_path: root.path().join("cas"),
@@ -1966,16 +1998,15 @@ async fn global_operation_lock_blocks_normal_writes_until_released() -> TestResu
 
     let guard = store.acquire_global_operation_lock().await;
     let tx_store = store.clone();
-    let tx_document_id = block_document.document.id.clone();
+    let tx_library = library.slug.clone();
     let mut block_tx = tokio::spawn(async move {
+        let batch =
+            native_insert_batch(&tx_store, &tx_library, "notes/blocks.md", "lock-test").await;
         tx_store
-            .record_block_transaction(
-                &tx_document_id,
-                "lock-test",
-                "agent",
-                None,
-                serde_json::json!([]),
-                None,
+            .apply_document_commands(
+                &DocumentScopeRef::library(tx_library),
+                "notes/blocks.md",
+                &batch,
             )
             .await
     });
@@ -2977,7 +3008,10 @@ async fn tmp_document_creation_ip_is_canonical_private_and_immutable() -> TestRe
         )
         .await?;
     store
-        .set_tmp_document_ttl(&ipv4_secret, Some("2026-08-14T00:00:00Z".to_string()))
+        .set_tmp_document_ttl(
+            &ipv4_secret,
+            Some((chrono::Utc::now() + chrono::Duration::days(2)).to_rfc3339()),
+        )
         .await?;
     let library = store.create_library("ip-preservation").await?;
     store
@@ -3503,9 +3537,11 @@ async fn tmp_block_mutation_rejects_oversized_normalized_markdown_without_moving
         .context("load tmp block mutation state before oversized commit")?;
     let oversized = "a".repeat(quarry_storage::TMP_DOCUMENT_MARKDOWN_MAX_BYTES + 1);
 
+    let scope = DocumentScopeRef::Tmp;
+    let durable = native_commit(&native_fixture(&store, &scope, &secret).await);
     let error = store
-        .commit_block_mutation_for_scope(
-            &DocumentScopeRef::Tmp,
+        .commit_durable_document_for_scope(
+            &scope,
             BlockMutationCommit {
                 document_id: state.document_id.clone(),
                 expected_head_version_id: state.head_version_id.clone(),
@@ -3524,6 +3560,7 @@ async fn tmp_block_mutation_rejects_oversized_normalized_markdown_without_moving
                 review_items: state.review_items.clone(),
                 normalized_markdown: oversized,
             },
+            durable,
         )
         .await
         .expect_err("oversized normalized tmp block mutation should be rejected");
@@ -3729,16 +3766,13 @@ async fn tmp_block_import_rejects_path_like_identifiers() -> TestResult {
 }
 
 #[tokio::test]
-async fn replace_block_tree_swaps_the_whole_row_set_transactionally() -> TestResult {
-    let root = tempfile::tempdir().context("create replace block tree tempdir")?;
+async fn native_batch_replaces_blocks_and_publishes_all_projections_atomically() -> TestResult {
+    let root = tempfile::tempdir()?;
     let store = open_block_store(root.path()).await;
-    let library = store
-        .create_library("blocks")
-        .await
-        .context("create replace block tree library")?;
-    let outcome = store
+    store.create_library("blocks").await?;
+    store
         .import_block_document(
-            &library.slug,
+            "blocks",
             "swap.md",
             "Original paragraph.\n",
             serde_json::json!({}),
@@ -3746,38 +3780,58 @@ async fn replace_block_tree_swaps_the_whole_row_set_transactionally() -> TestRes
             DocumentSource::Rest,
             WritePrecondition::None,
         )
-        .await
-        .context("import document before replacing block tree")?;
-
-    let mut next = 0u32;
-    let replacement = quarry_collab_codec::markdown_to_block_rows("# New\n\nReplaced.\n", || {
-        next += 1;
-        format!("swap-{next}")
-    })
-    .context("parse replacement Markdown to block rows")?;
+        .await?;
+    let scope = DocumentScopeRef::library("blocks");
+    let mut native = native_fixture(&store, &scope, "swap.md").await;
+    let old_id = native.blocks()?.first().unwrap().id.clone();
+    native.delete_block(&old_id)?;
+    for (id, kind, text, position) in [("heading", "h1", "New", 0), ("body", "p", "Replaced.", 1)] {
+        native.insert_block(quarry_document::SeedBlock {
+            id: id.into(),
+            kind: kind.into(),
+            text: text.into(),
+            parent: None,
+            position,
+            attrs: Default::default(),
+        })?;
+    }
+    let snapshot = store
+        .block_mutation_state("blocks", "swap.md", "replace")
+        .await?;
+    let commit = quarry_storage::build_document_commit(
+        &snapshot,
+        &native,
+        "replace",
+        &quarry_document::DocumentActor {
+            kind: "test".into(),
+            id: None,
+            label: None,
+        },
+        serde_json::json!({}),
+    )?;
     store
-        .replace_block_tree(&outcome.document.id, &replacement)
-        .await
-        .context("replace block tree with parsed rows")?;
-
-    let tree = store
-        .load_block_tree(&outcome.document.id)
-        .await
-        .context("load block tree after replacement")?;
-    assert_eq!(tree, replacement);
+        .commit_durable_document_for_scope(&scope, commit, native_commit(&native))
+        .await?;
     assert_eq!(
-        store
-            .export_block_document(&outcome.document.id)
-            .await
-            .context("export block document after replacement")?,
+        store.load_block_tree(&snapshot.document_id).await?,
+        quarry_storage::document_projection(&native)?
+    );
+    assert_eq!(
+        store.export_block_document(&snapshot.document_id).await?,
         "# New\n\nReplaced.\n"
     );
-
-    let missing = store
-        .replace_block_tree("not-a-document", &replacement)
-        .await
-        .expect_err("replacing a missing block tree should fail");
-    assert!(matches!(missing, QuarryError::NotFound(_)));
+    assert!(
+        native_fixture(&store, &scope, "swap.md")
+            .await
+            .block(&old_id)?
+            .deleted
+    );
+    assert!(
+        store
+            .durable_document_for_scope(&scope, "missing.md")
+            .await
+            .is_err()
+    );
     Ok(())
 }
 
@@ -3850,17 +3904,13 @@ async fn block_review_anchors_validate_utf16_boundaries_and_survive_restart() ->
         .await
         .expect_err("inverted anchor range should fail");
     assert!(matches!(inverted, QuarryError::InvalidInput(_)));
-    // A collapsed range means orphaned at the row layer: open is rejected,
-    // orphaned is stored.
-    let collapsed_open = store
-        .put_block_review_item(item(5, 5, BlockReviewState::Open))
-        .await
-        .expect_err("open collapsed anchor should fail");
-    assert!(matches!(collapsed_open, QuarryError::InvalidInput(_)));
-    let collapsed_orphaned = store
-        .put_block_review_item(item(5, 5, BlockReviewState::Orphaned))
-        .await
-        .context("store orphaned collapsed review anchor")?;
+    for state in [BlockReviewState::Open, BlockReviewState::Orphaned] {
+        let error = store
+            .put_block_review_item(item(5, 5, state))
+            .await
+            .expect_err("New comments must have a current target");
+        assert!(matches!(error, QuarryError::InvalidInput(_)));
+    }
     let unknown_block = store
         .put_block_review_item(NewBlockReviewItem {
             block_id: "missing-block".to_string(),
@@ -3868,7 +3918,7 @@ async fn block_review_anchors_validate_utf16_boundaries_and_survive_restart() ->
         })
         .await
         .expect_err("anchor on unknown block should fail");
-    assert!(matches!(unknown_block, QuarryError::NotFound(_)));
+    assert!(matches!(unknown_block, QuarryError::PreconditionFailed(_)));
 
     drop(store);
 
@@ -3877,10 +3927,9 @@ async fn block_review_anchors_validate_utf16_boundaries_and_survive_restart() ->
         .list_block_review_items(&outcome.document.id)
         .await
         .context("list block review items after reopening store")?;
-    assert_eq!(items.len(), 3);
+    assert_eq!(items.len(), 2);
     assert!(items.contains(&full));
     assert!(items.contains(&emoji));
-    assert!(items.contains(&collapsed_orphaned));
     Ok(())
 }
 
@@ -3970,17 +4019,13 @@ async fn raw_documents_keep_the_byte_path_untouched() -> TestResult {
 }
 
 #[tokio::test]
-async fn import_surfaces_the_codecs_typed_unsupported_error() -> TestResult {
-    let root = tempfile::tempdir().context("create typed unsupported import tempdir")?;
+async fn import_preserves_review_markup_as_native_targets() -> TestResult {
+    let root = tempfile::tempdir()?;
     let store = open_block_store(root.path()).await;
-    let library = store
-        .create_library("typed")
-        .await
-        .context("create typed unsupported import library")?;
-
-    let error = store
+    store.create_library("review-import").await?;
+    store
         .import_block_document(
-            &library.slug,
+            "review-import",
             "critic.md",
             "Edited {==this==}{>>why<<} text.\n",
             serde_json::json!({}),
@@ -3988,22 +4033,26 @@ async fn import_surfaces_the_codecs_typed_unsupported_error() -> TestResult {
             DocumentSource::Rest,
             WritePrecondition::None,
         )
-        .await
-        .expect_err("critic markup import should fail with typed unsupported error");
-
-    let QuarryError::UnsupportedMarkdown(inner) = error else {
-        panic!("expected the codec's typed Unsupported error, got {error:?}");
-    };
+        .await?;
+    let scope = DocumentScopeRef::library("review-import");
+    let saved = store
+        .durable_document_for_scope(&scope, "critic.md")
+        .await?
+        .unwrap();
+    let native = quarry_document::Document::load(&saved.bytes)?;
+    let view = native.view()?;
+    assert_eq!(view.blocks[0].text, "Edited this text.");
+    assert_eq!(view.comments[0].comment.body, "why");
+    assert_eq!(view.comments[0].target.attachments[0].quote, "this");
+    drop(store);
+    let reopened = open_block_store(root.path()).await;
     assert_eq!(
-        inner,
-        quarry_collab_codec::Unsupported::new("critic markup")
-    );
-    // The rejected import left no document behind.
-    assert!(
-        store
-            .get_document(&library.slug, "critic.md")
-            .await
-            .is_err()
+        reopened
+            .durable_document_for_scope(&scope, "critic.md")
+            .await?
+            .unwrap()
+            .bytes,
+        saved.bytes
     );
     Ok(())
 }
@@ -4067,30 +4116,27 @@ async fn block_shadow_bases_and_block_transactions_roundtrip() -> TestResult {
         None
     );
 
-    let ops = serde_json::json!([{"op": "replace_block_content", "block_id": "b1"}]);
+    let batch = native_insert_batch(&store, &library.slug, "doc.md", "ctx-1").await;
+    let scope = DocumentScopeRef::library(&library.slug);
     let recorded = store
-        .record_block_transaction(&document_id, "ctx-1", "agent", None, ops.clone(), None)
-        .await
-        .context("record block transaction")?;
+        .apply_document_commands(&scope, "doc.md", &batch)
+        .await?;
+    assert_eq!(
+        store.block_transaction(&document_id, "ctx-1").await?,
+        Some(recorded.clone())
+    );
+    // Exact retry reads the receipt without creating another version.
     assert_eq!(
         store
-            .block_transaction(&document_id, "ctx-1")
-            .await
-            .context("load block transaction")?,
-        Some(recorded)
+            .apply_document_commands(&scope, "doc.md", &batch)
+            .await?,
+        recorded
     );
-    // client_tx_id is unique per document: duplicates conflict (idempotent
-    // replay answers from the stored record in Phase 2).
-    let duplicate = store
-        .record_block_transaction(&document_id, "ctx-1", "agent", None, ops, None)
-        .await
-        .expect_err("duplicate block transaction id should conflict");
-    assert!(matches!(duplicate, QuarryError::Conflict(_)));
     Ok(())
 }
 
 #[tokio::test]
-async fn legacy_put_clears_the_block_projection_fail_closed() -> TestResult {
+async fn direct_put_updates_native_content_and_retains_review_history() -> TestResult {
     let root = tempfile::tempdir().context("create legacy projection tempdir")?;
     let store = open_block_store(root.path()).await;
     let library = store
@@ -4135,7 +4181,7 @@ async fn legacy_put_clears_the_block_projection_fail_closed() -> TestResult {
         .await
         .context("put review item before legacy write")?;
 
-    // A legacy put bypasses the import path...
+    // Direct publication uses the same native document.
     store
         .put_document(quarry_storage::PutDocumentRequest {
             library: library.slug.to_string(),
@@ -4151,27 +4197,15 @@ async fn legacy_put_clears_the_block_projection_fail_closed() -> TestResult {
         .await
         .context("put legacy document")?;
 
-    // ...so the block projection is dropped rather than serving stale rows.
-    assert!(
-        store
-            .load_block_tree(&document_id)
-            .await
-            .context("load dropped block projection")?
-            .is_empty()
+    let rows = store.load_block_tree(&document_id).await?;
+    assert_eq!(rows[0].text, "Rewritten outside the block path.");
+    let reviews = store.list_block_review_items(&document_id).await?;
+    assert_eq!(reviews.len(), 1);
+    assert_eq!(reviews[0].body.as_deref(), Some("note"));
+    assert_eq!(
+        store.export_block_document(&document_id).await?,
+        "Rewritten outside the block path.\n"
     );
-    assert!(
-        store
-            .list_block_review_items(&document_id)
-            .await
-            .context("list review items after dropped projection")?
-            .is_empty()
-    );
-    let stale = store
-        .export_block_document(&document_id)
-        .await
-        .expect_err("dropped block projection should not export");
-    assert!(matches!(stale, QuarryError::NotFound(_)));
-    // The byte path still serves the legacy write.
     assert_eq!(
         store
             .get_document(&library.slug, "doc.md")
@@ -4181,7 +4215,7 @@ async fn legacy_put_clears_the_block_projection_fail_closed() -> TestResult {
         b"Rewritten outside the block path.\n"
     );
 
-    // Re-importing restores the projection.
+    // A second publication also retains that discussion.
     store
         .import_block_document(
             &library.slug,
@@ -4201,11 +4235,12 @@ async fn legacy_put_clears_the_block_projection_fail_closed() -> TestResult {
             .context("export re-imported block document")?,
         "Imported again.\n"
     );
+    assert_eq!(store.list_block_review_items(&document_id).await?.len(), 1);
     Ok(())
 }
 
 #[tokio::test]
-async fn delete_document_removes_the_block_projection() -> TestResult {
+async fn deleted_documents_keep_history_but_refuse_active_reads() -> TestResult {
     let root = tempfile::tempdir().context("create delete projection tempdir")?;
     let store = open_block_store(root.path()).await;
     let library = store
@@ -4255,19 +4290,13 @@ async fn delete_document_removes_the_block_projection() -> TestResult {
         .await
         .context("delete document")?;
 
+    assert!(!store.load_block_tree(&document_id).await?.is_empty());
+    assert_eq!(store.list_block_review_items(&document_id).await?.len(), 1);
     assert!(
         store
-            .load_block_tree(&document_id)
+            .durable_document_for_scope(&DocumentScopeRef::library(&library.slug), "gone.md")
             .await
-            .context("load deleted block projection")?
-            .is_empty()
-    );
-    assert!(
-        store
-            .list_block_review_items(&document_id)
-            .await
-            .context("list review items after delete")?
-            .is_empty()
+            .is_err()
     );
     let exported = store
         .export_block_document(&document_id)
@@ -4278,7 +4307,7 @@ async fn delete_document_removes_the_block_projection() -> TestResult {
 }
 
 #[tokio::test]
-async fn empty_body_import_canonicalizes_to_one_empty_paragraph_row() -> TestResult {
+async fn empty_native_document_exports_its_metadata_without_an_editor_placeholder() -> TestResult {
     let root = tempfile::tempdir().context("create empty import tempdir")?;
     let store = open_block_store(root.path()).await;
     let library = store
@@ -4302,9 +4331,7 @@ async fn empty_body_import_canonicalizes_to_one_empty_paragraph_row() -> TestRes
         .load_block_tree(&outcome.document.id)
         .await
         .context("load frontmatter-only block tree")?;
-    assert_eq!(tree.len(), 1);
-    assert_eq!(tree[0].block_type, "p");
-    assert_eq!(tree[0].text, "");
+    assert!(tree.is_empty());
     assert_eq!(
         store
             .export_block_document(&outcome.document.id)
@@ -4342,7 +4369,6 @@ async fn block_mutation_commit_applies_rows_version_history_and_replays_duplicat
         .context("load block mutation state")?;
     assert_eq!(state.document_id, imported.document.id);
     assert_eq!(state.head_version_id, imported.version.id);
-    assert!(!state.projection_missing);
     assert!(state.replay.is_none());
     assert!(state.version_ids.contains(imported.version.id.as_str()));
 
@@ -4366,8 +4392,19 @@ async fn block_mutation_commit_applies_rows_version_history_and_replays_duplicat
         review_items: state.review_items.clone(),
         normalized_markdown: "Rewritten paragraph.\n".to_string(),
     };
+    let scope = DocumentScopeRef::library(&library.slug);
+    let mut native = native_fixture(&store, &scope, "doc.md").await;
+    let block = &state.rows[0].block_id;
+    let at = native.point(block, 0)?;
+    native.delete_text(&native.selection(
+        block,
+        0,
+        state.rows[0].text.encode_utf16().count(),
+    )?)?;
+    native.insert_text(&at, "Rewritten paragraph.")?;
+    let durable = native_commit(&native);
     let BlockMutationOutcome::Applied { outcome, record } = store
-        .commit_block_mutation(&library.slug, commit.clone())
+        .commit_durable_document_for_scope(&scope, commit.clone(), durable.clone())
         .await
         .context("commit block mutation")?
     else {
@@ -4396,7 +4433,7 @@ async fn block_mutation_commit_applies_rows_version_history_and_replays_duplicat
 
     // Duplicate client_tx_id replays the stored record without re-applying.
     let BlockMutationOutcome::Replayed(replayed) = store
-        .commit_block_mutation(&library.slug, commit)
+        .commit_durable_document_for_scope(&scope, commit, durable)
         .await
         .context("replay duplicate block mutation")?
     else {
@@ -4435,6 +4472,8 @@ async fn block_mutation_commit_rejects_a_moved_head() -> TestResult {
         .block_mutation_state(&library.slug, "doc.md", "ctx-1")
         .await
         .context("load stale mutation state")?;
+    let scope = DocumentScopeRef::library(&library.slug);
+    let durable = native_commit(&native_fixture(&store, &scope, "doc.md").await);
     // Another write moves the head between load and commit.
     store
         .import_block_document(
@@ -4450,8 +4489,8 @@ async fn block_mutation_commit_rejects_a_moved_head() -> TestResult {
         .context("move document head")?;
 
     let error = store
-        .commit_block_mutation(
-            &library.slug,
+        .commit_durable_document_for_scope(
+            &scope,
             BlockMutationCommit {
                 document_id: state.document_id.clone(),
                 expected_head_version_id: state.head_version_id.clone(),
@@ -4470,6 +4509,7 @@ async fn block_mutation_commit_rejects_a_moved_head() -> TestResult {
                 review_items: vec![],
                 normalized_markdown: "Original.\n".to_string(),
             },
+            durable,
         )
         .await
         .expect_err("stale block mutation commit should fail precondition");
@@ -4479,49 +4519,38 @@ async fn block_mutation_commit_rejects_a_moved_head() -> TestResult {
 }
 
 #[tokio::test]
-async fn block_mutation_state_materializes_rows_for_legacy_written_documents() -> TestResult {
-    let root = tempfile::tempdir().context("create legacy state tempdir")?;
+async fn direct_markdown_publication_already_has_native_state_before_the_first_read() -> TestResult
+{
+    let root = tempfile::tempdir()?;
     let store = open_block_store(root.path()).await;
-    let library = store
-        .create_library("legacy-state")
-        .await
-        .context("create legacy state library")?;
-    // A legacy put creates a markdown document with no block projection.
-    store
+    store.create_library("direct-state").await?;
+    let result = store
         .put_document(quarry_storage::PutDocumentRequest {
-            library: library.slug.to_string(),
-            path: ("legacy.md").to_string(),
+            library: "direct-state".into(),
+            path: "direct.md".into(),
             content: b"# Title\n\nBody text.\n".to_vec(),
             metadata: serde_json::json!({}),
-            content_type: ("text/markdown").to_string(),
+            content_type: "text/markdown".into(),
             source: DocumentSource::Rest,
             precondition: WritePrecondition::None,
             origin_id: None,
-            transaction: quarry_storage::TransactionMetadata::default(),
+            transaction: Default::default(),
         })
-        .await
-        .context("put legacy markdown document")?;
-
+        .await?;
+    let before = store.load_block_tree(&result.document.id).await?;
+    assert_eq!(before.len(), 2);
     let state = store
-        .block_mutation_state(&library.slug, "legacy.md", "ctx-1")
-        .await
-        .context("materialize legacy document mutation state")?;
-    assert!(state.projection_missing);
-    let shape: Vec<&str> = state
-        .rows
-        .iter()
-        .map(|row| row.block_type.as_str())
-        .collect();
-    assert_eq!(shape, vec!["h1", "p"]);
+        .block_mutation_state("direct-state", "direct.md", "read")
+        .await?;
+    assert_eq!(state.rows, before);
+    let native = native_fixture(
+        &store,
+        &DocumentScopeRef::library("direct-state"),
+        "direct.md",
+    )
+    .await;
+    assert_eq!(state.rows, quarry_storage::document_projection(&native)?);
     assert_eq!(state.rows[1].text, "Body text.");
-    // Nothing was persisted by the read.
-    assert!(
-        store
-            .load_block_tree(&state.document_id)
-            .await
-            .context("load legacy document block projection")?
-            .is_empty()
-    );
     Ok(())
 }
 
@@ -4576,9 +4605,11 @@ async fn block_mutation_commit_rejects_open_review_items_with_dead_anchors() -> 
     // must be rejected: the commit validates the final review set.
     let mut rows = state.rows.clone();
     rows[0].text = "Tiny".to_string();
+    let scope = DocumentScopeRef::library(&library.slug);
+    let durable = native_commit(&native_fixture(&store, &scope, "doc.md").await);
     let error = store
-        .commit_block_mutation(
-            &library.slug,
+        .commit_durable_document_for_scope(
+            &scope,
             BlockMutationCommit {
                 document_id: state.document_id.clone(),
                 expected_head_version_id: state.head_version_id.clone(),
@@ -4597,6 +4628,7 @@ async fn block_mutation_commit_rejects_open_review_items_with_dead_anchors() -> 
                 review_items: state.review_items.clone(),
                 normalized_markdown: "Tiny\n".to_string(),
             },
+            durable,
         )
         .await
         .expect_err("dead review anchor commit should fail validation");
@@ -4605,16 +4637,13 @@ async fn block_mutation_commit_rejects_open_review_items_with_dead_anchors() -> 
 }
 
 #[tokio::test]
-async fn block_mutation_commit_accepts_replies_to_collapsed_insertion_suggestions() -> TestResult {
-    let root = tempfile::tempdir().context("create collapsed insertion tempdir")?;
+async fn native_commit_keeps_replies_to_collapsed_insertion_suggestions() -> TestResult {
+    let root = tempfile::tempdir()?;
     let store = open_block_store(root.path()).await;
-    let library = store
-        .create_library("insertion-reply-anchor")
-        .await
-        .context("create collapsed insertion library")?;
+    store.create_library("insertion-reply").await?;
     store
         .import_block_document(
-            &library.slug,
+            "insertion-reply",
             "doc.md",
             "Type here.\n",
             serde_json::json!({}),
@@ -4622,88 +4651,48 @@ async fn block_mutation_commit_accepts_replies_to_collapsed_insertion_suggestion
             DocumentSource::Rest,
             WritePrecondition::None,
         )
-        .await
-        .context("import collapsed insertion document")?;
+        .await?;
+    let scope = DocumentScopeRef::library("insertion-reply");
+    let mut native = native_fixture(&store, &scope, "doc.md").await;
+    let block = native.blocks()?[0].id.clone();
+    native.propose_insertion(
+        "s1",
+        "Agent",
+        &block,
+        &native.point(&block, 4)?,
+        " inserted",
+    )?;
+    native.reply_comment("r1", "s1", "Reviewer", "Why this insertion?")?;
     let state = store
-        .block_mutation_state(&library.slug, "doc.md", "ctx-1")
-        .await
-        .context("load collapsed insertion mutation state")?;
-    let block_id = state.rows[0].block_id.clone();
-    let now = "2026-06-16T00:00:00.000Z".to_string();
-    let insertion_suggestion = BlockReviewItem {
-        id: "s1".to_string(),
-        document_id: state.document_id.clone(),
-        block_id: block_id.clone(),
-        kind: BlockReviewKind::Suggestion,
-        start_offset: 4,
-        end_offset: 4,
-        body: None,
-        replacement: Some(" inserted".to_string()),
-        author: Some("agent".to_string()),
-        state: BlockReviewState::Open,
-        quote: Some(String::new()),
-        context_before: None,
-        context_after: None,
-        parent_item_id: None,
-        created_at: now.clone(),
-        updated_at: now.clone(),
-    };
-    let reply = BlockReviewItem {
-        id: "r1".to_string(),
-        document_id: state.document_id.clone(),
-        block_id,
-        kind: BlockReviewKind::Comment,
-        start_offset: 4,
-        end_offset: 4,
-        body: Some("Why this insertion?".to_string()),
-        replacement: None,
-        author: Some("reviewer".to_string()),
-        state: BlockReviewState::Open,
-        quote: Some(String::new()),
-        context_before: None,
-        context_after: None,
-        parent_item_id: Some("s1".to_string()),
-        created_at: now.clone(),
-        updated_at: now,
-    };
-
-    let outcome = store
-        .commit_block_mutation(
-            &library.slug,
-            BlockMutationCommit {
-                document_id: state.document_id.clone(),
-                expected_head_version_id: state.head_version_id.clone(),
-                client_tx_id: "ctx-2".to_string(),
-                actor_kind: "browser_session".to_string(),
-                actor_id: None,
-                transaction_actor: Some("browser".to_string()),
-                transaction_message: Some("Live session edits".to_string()),
-                transaction_provenance: None,
-                origin_id: None,
-                source: DocumentSource::Rest,
-                recorded_ops: serde_json::json!({}),
-                metadata: state.metadata.clone(),
-                content_type: state.content_type.clone(),
-                rows: state.rows.clone(),
-                review_items: vec![insertion_suggestion, reply],
-                normalized_markdown: "Type here.\n".to_string(),
-            },
-        )
-        .await
-        .context("commit collapsed insertion reply mutation")?;
-    assert!(matches!(outcome, BlockMutationOutcome::Applied { .. }));
-
-    let items = store
-        .list_block_review_items(&state.document_id)
-        .await
-        .context("list collapsed insertion review items")?;
-    assert!(items.iter().any(|item| item.id == "r1"));
+        .block_mutation_state("insertion-reply", "doc.md", "reply")
+        .await?;
+    let commit = quarry_storage::build_document_commit(
+        &state,
+        &native,
+        "reply",
+        &quarry_document::DocumentActor {
+            kind: "browser".into(),
+            id: None,
+            label: None,
+        },
+        serde_json::json!({}),
+    )?;
+    store
+        .commit_durable_document_for_scope(&scope, commit, native_commit(&native))
+        .await?;
+    let restored = native_fixture(&store, &scope, "doc.md").await;
+    assert_eq!(restored.comment("r1")?.parent_id.as_deref(), Some("s1"));
+    assert_eq!(restored.comment_target("r1")?.attachments[0].start, 4);
+    assert!(
+        store
+            .list_block_review_items(&state.document_id)
+            .await?
+            .iter()
+            .any(|item| item.id == "r1")
+    );
     Ok(())
 }
 
-/// `put_block_review_item` accepts the gateway's conflict shape (Phase 4):
-/// `block_id` holds the attachment point ("" = document start), the range is
-/// a collapsed open placement, and no text anchor exists to validate.
 #[tokio::test]
 async fn put_block_review_item_accepts_the_conflict_shape() -> TestResult {
     let root = tempfile::tempdir().context("create conflict shape tempdir")?;
@@ -4757,4 +4746,55 @@ async fn put_block_review_item_accepts_the_conflict_shape() -> TestResult {
     assert_eq!(kept.state, BlockReviewState::Open);
     assert_eq!(kept.body.as_deref(), Some("Incoming hunk.\n"));
     Ok(())
+}
+
+async fn native_fixture(
+    store: &QuarryStore,
+    scope: &DocumentScopeRef,
+    path: &str,
+) -> quarry_document::Document {
+    let saved = store
+        .durable_document_for_scope(scope, path)
+        .await
+        .unwrap()
+        .unwrap();
+    quarry_document::Document::load(&saved.bytes).unwrap()
+}
+fn native_commit(document: &quarry_document::Document) -> quarry_storage::DurableDocumentCommit {
+    quarry_storage::DurableDocumentCommit {
+        bytes: document.save(),
+        request_hash: "fixture".into(),
+    }
+}
+
+async fn native_insert_batch(
+    store: &QuarryStore,
+    library: &str,
+    path: &str,
+    id: &str,
+) -> quarry_document::CommandBatch {
+    let saved = store
+        .durable_document_for_scope(&DocumentScopeRef::library(library), path)
+        .await
+        .unwrap()
+        .unwrap();
+    let document = quarry_document::Document::load(&saved.bytes).unwrap();
+    let block = document.view().unwrap().blocks[0].block.id.clone();
+    quarry_document::CommandBatch {
+        request_id: id.into(),
+        actor: quarry_document::DocumentActor {
+            kind: "test".into(),
+            id: None,
+            label: None,
+        },
+        requests: vec![quarry_document::CommandRequest {
+            request_id: id.into(),
+            base: document.heads().iter().map(ToString::to_string).collect(),
+            commands: vec![quarry_document::Command::InsertText {
+                at: document.point(&block, 0).unwrap(),
+                text: "Native ".into(),
+            }],
+            at: String::new(),
+        }],
+    }
 }

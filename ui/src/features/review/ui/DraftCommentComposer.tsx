@@ -1,13 +1,11 @@
-import type { PlateEditor } from 'platejs/react';
 import { useEffect, useRef, useState } from 'react';
 
-import { cancelCommentDraft, commitCommentDraft } from '../comment-draft';
 
 // The draft composer lives at the top of the review rail while a comment draft
 // is active. Submitting promotes the draft to a real comment with the typed
 // body; Cancel discards the draft. Nothing is persisted until Submit, so a
 // bare draft never reaches the saved Markdown.
-export function DraftCommentComposer({ editor, anchorText }: { editor: PlateEditor; anchorText: string }) {
+export function DraftCommentComposer({ anchorText, onSubmit, onCancel }: { anchorText: string; onSubmit: (body: string) => boolean; onCancel: () => void }) {
   const [body, setBody] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -30,12 +28,12 @@ export function DraftCommentComposer({ editor, anchorText }: { editor: PlateEdit
   function submit() {
     const text = body.trim();
     if (!text) return;
-    commitCommentDraft(editor, text);
+    if (!onSubmit(text)) return;
     setBody('');
   }
 
   function cancel() {
-    cancelCommentDraft(editor);
+    onCancel();
     setBody('');
   }
 
@@ -54,6 +52,7 @@ export function DraftCommentComposer({ editor, anchorText }: { editor: PlateEdit
           data-testid="draft-input"
           onChange={(event) => setBody(event.target.value)}
           onKeyDown={(event) => {
+            if (event.key === 'Escape') { event.preventDefault(); cancel(); return; }
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
               submit();

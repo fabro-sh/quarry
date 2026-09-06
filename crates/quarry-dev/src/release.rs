@@ -297,7 +297,9 @@ fn verify_release(root: &Path) -> Result<()> {
         PlannedCommand::new("bun")
             .arg("install")
             .arg("--frozen-lockfile"),
-        PlannedCommand::new("bun").arg("run").arg("fixtures:check"),
+        PlannedCommand::new("bun")
+            .arg("run")
+            .arg("check:architecture"),
         PlannedCommand::new("bun").arg("run").arg("typecheck"),
         PlannedCommand::new("bun").arg("run").arg("test"),
         PlannedCommand::new("bun").arg("run").arg("build"),

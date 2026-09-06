@@ -466,8 +466,8 @@ fn run_quarry_with_root<const N: usize>(root: &str, args: [&str; N]) {
 
 /// The lost-update window: a concurrent editor commits between the CLI's
 /// read and its put. With `--base-version` naming the version the CLI read,
-/// the write is a true three-way merge and both edits survive; without it,
-/// the two-way merge would silently revert the concurrent edit.
+/// the write is a true three-way merge and both edits survive. Without a
+/// read version, reject the write and retain the incoming file.
 #[cfg(feature = "lib-documents")]
 #[test]
 fn put_with_base_version_merges_instead_of_reverting_concurrent_edits() -> anyhow::Result<()> {
@@ -485,6 +485,7 @@ fn put_with_base_version_merges_instead_of_reverting_concurrent_edits() -> anyho
         temp.path(),
         "notes/doc.md",
         "Alpha.\n\nSeparator.\n\nBravo.\n",
+        None,
     )?;
     // The concurrent editor commits a Bravo edit after the CLI's read.
     put_markdown(
@@ -492,6 +493,7 @@ fn put_with_base_version_merges_instead_of_reverting_concurrent_edits() -> anyho
         temp.path(),
         "notes/doc.md",
         "Alpha.\n\nSeparator.\n\nBravo, edited elsewhere.\n",
+        Some(&base_version),
     )?;
 
     // The CLI writes its Alpha edit against the version it actually read.
@@ -499,6 +501,24 @@ fn put_with_base_version_merges_instead_of_reverting_concurrent_edits() -> anyho
     let source_str = source.to_str().context("source path should be UTF-8")?;
     std::fs::write(&source, "Alpha, from cli.\n\nSeparator.\n\nBravo.\n")
         .context("write CLI source markdown")?;
+    let refused = quarry_command()
+        .env("QUARRY_ROOT", root_str)
+        .args(["put", "notes", "notes/doc.md", source_str])
+        .output()?;
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("original read version"));
+    let unchanged = quarry_command()
+        .env("QUARRY_ROOT", root_str)
+        .args(["get", "notes", "notes/doc.md"])
+        .output()?;
+    assert_eq!(
+        String::from_utf8_lossy(&unchanged.stdout),
+        "Alpha.\n\nSeparator.\n\nBravo, edited elsewhere.\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&source)?,
+        "Alpha, from cli.\n\nSeparator.\n\nBravo.\n"
+    );
     let output = quarry_command()
         .env("QUARRY_ROOT", root_str)
         .args([
@@ -540,7 +560,7 @@ fn put_with_an_unknown_base_version_fails_clearly() -> anyhow::Result<()> {
         .output()
         .context("run quarry init")?;
     assert!(init.status.success());
-    put_markdown(&root, temp.path(), "notes/doc.md", "Alpha.\n")?;
+    put_markdown(&root, temp.path(), "notes/doc.md", "Alpha.\n", None)?;
 
     let source = temp.path().join("edited.md");
     let source_str = source.to_str().context("source path should be UTF-8")?;
@@ -573,7 +593,7 @@ fn get_show_version_prints_the_head_version_id_on_stderr() -> anyhow::Result<()>
         .output()
         .context("run quarry init")?;
     assert!(init.status.success());
-    let version = put_markdown(&root, temp.path(), "notes/doc.md", "hello\n")?;
+    let version = put_markdown(&root, temp.path(), "notes/doc.md", "hello\n", None)?;
 
     let output = quarry_command()
         .env("QUARRY_ROOT", root_str)
@@ -597,16 +617,20 @@ fn put_markdown(
     scratch: &std::path::Path,
     doc_path: &str,
     content: &str,
+    base: Option<&str>,
 ) -> anyhow::Result<String> {
     let source = scratch.join("source.md");
     let root_str = root.to_str().context("root path should be UTF-8")?;
     let source_str = source.to_str().context("source path should be UTF-8")?;
     std::fs::write(&source, content).context("write markdown source")?;
-    let output = quarry_command()
+    let mut command = quarry_command();
+    command
         .env("QUARRY_ROOT", root_str)
-        .args(["put", "notes", doc_path, source_str])
-        .output()
-        .context("run quarry put markdown")?;
+        .args(["put", "notes", doc_path, source_str]);
+    if let Some(base) = base {
+        command.args(["--base-version", base]);
+    }
+    let output = command.output().context("run quarry put markdown")?;
     assert!(
         output.status.success(),
         "{}",
@@ -671,7 +695,7 @@ fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() -> anyhow::Result<()> 
     run_quarry_with_root(root_str, ["put", "notes", "notes/doc.md", markdown_str]);
     let output = quarry_command()
         .env("QUARRY_ROOT", root_str)
-        .args(["get", "notes", "notes/doc.md"])
+        .args(["get", "notes", "notes/doc.md", "--show-version"])
         .output()
         .context("run quarry get for initial markdown")?;
     assert!(output.status.success());
@@ -680,8 +704,8 @@ fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() -> anyhow::Result<()> 
         "# Title\n\nAlpha.\n"
     );
 
-    // A second put merges the edit (two-way) instead of replacing the
-    // projection: sibling block ids survive the whole-file write.
+    let base_version = String::from_utf8(output.stderr)?.trim().to_string();
+    // A versioned second put retains sibling block identities.
     let runtime = tokio::runtime::Runtime::new().context("create tokio runtime")?;
     let block_ids = |runtime: &tokio::runtime::Runtime| -> anyhow::Result<Vec<String>> {
         runtime.block_on(async {
@@ -709,7 +733,17 @@ fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() -> anyhow::Result<()> 
     let ids_before = block_ids(&runtime)?;
     assert!(!ids_before.is_empty());
     std::fs::write(&markdown, "# Title\n\nAlpha, edited.\n").context("write edited markdown")?;
-    run_quarry_with_root(root_str, ["put", "notes", "notes/doc.md", markdown_str]);
+    run_quarry_with_root(
+        root_str,
+        [
+            "put",
+            "notes",
+            "notes/doc.md",
+            markdown_str,
+            "--base-version",
+            &base_version,
+        ],
+    );
     let output = quarry_command()
         .env("QUARRY_ROOT", root_str)
         .args(["get", "notes", "notes/doc.md"])

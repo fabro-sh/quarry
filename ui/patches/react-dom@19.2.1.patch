@@ -1,0 +1,80 @@
+diff --git a/cjs/react-dom-client.development.js b/cjs/react-dom-client.development.js
+index bbdf71d719e012861af4f45c2f28da274fdbc60c..a096b1aca15484d392160eab5663ab31b751db33 100644
+--- a/cjs/react-dom-client.development.js
++++ b/cjs/react-dom-client.development.js
+@@ -13829,6 +13829,7 @@
+                   node !== focusNode ||
+                     (0 !== selection && 3 !== node.nodeType) ||
+                     (end = length + selection);
++                  if (-1 !== start && -1 !== end) break b;
+                   3 === node.nodeType && (length += node.nodeValue.length);
+                   if (null === (next = node.firstChild)) break;
+                   parentNode = node;
+@@ -13842,6 +13843,7 @@
+                   parentNode === focusNode &&
+                     ++indexWithinFocus === selection &&
+                     (end = length);
++                  if (-1 !== start && -1 !== end) break b;
+                   if (null !== (next = node.nextSibling)) break;
+                   node = parentNode;
+                   parentNode = node.parentNode;
+diff --git a/cjs/react-dom-client.production.js b/cjs/react-dom-client.production.js
+index 4c66217f35f1bddec77c24d1647d37be990ad12f..96d7823f29dad82b102b1f2a9db1a97d3f1a04f5 100644
+--- a/cjs/react-dom-client.production.js
++++ b/cjs/react-dom-client.production.js
+@@ -8883,6 +8883,7 @@ function commitBeforeMutationEffects(root, firstChild) {
+               node !== focusNode ||
+                 (0 !== selection && 3 !== node.nodeType) ||
+                 (end = length + selection);
++              if (-1 !== start && -1 !== end) break b;
+               3 === node.nodeType && (length += node.nodeValue.length);
+               if (null === (next = node.firstChild)) break;
+               parentNode = node;
+@@ -8896,6 +8897,7 @@ function commitBeforeMutationEffects(root, firstChild) {
+               parentNode === focusNode &&
+                 ++indexWithinFocus === selection &&
+                 (end = length);
++              if (-1 !== start && -1 !== end) break b;
+               if (null !== (next = node.nextSibling)) break;
+               node = parentNode;
+               parentNode = node.parentNode;
+diff --git a/cjs/react-dom-profiling.development.js b/cjs/react-dom-profiling.development.js
+index 72bd2088158a33aae472b377afae41470d8bfbb0..cc6fb20b05a96b142e15345628e908c1fb46f50e 100644
+--- a/cjs/react-dom-profiling.development.js
++++ b/cjs/react-dom-profiling.development.js
+@@ -13837,6 +13837,7 @@
+                   node !== focusNode ||
+                     (0 !== selection && 3 !== node.nodeType) ||
+                     (end = length + selection);
++                  if (-1 !== start && -1 !== end) break b;
+                   3 === node.nodeType && (length += node.nodeValue.length);
+                   if (null === (next = node.firstChild)) break;
+                   parentNode = node;
+@@ -13850,6 +13851,7 @@
+                   parentNode === focusNode &&
+                     ++indexWithinFocus === selection &&
+                     (end = length);
++                  if (-1 !== start && -1 !== end) break b;
+                   if (null !== (next = node.nextSibling)) break;
+                   node = parentNode;
+                   parentNode = node.parentNode;
+diff --git a/cjs/react-dom-profiling.profiling.js b/cjs/react-dom-profiling.profiling.js
+index 1f0ad7a0c7884a8fcbb3a143842115a6419031b2..d255e442343b2f1424879b387396a6c7697c2985 100644
+--- a/cjs/react-dom-profiling.profiling.js
++++ b/cjs/react-dom-profiling.profiling.js
+@@ -9577,6 +9577,7 @@ function commitBeforeMutationEffects(root, firstChild) {
+               node !== focusNode ||
+                 (0 !== selection && 3 !== node.nodeType) ||
+                 (end = length + selection);
++              if (-1 !== start && -1 !== end) break b;
+               3 === node.nodeType && (length += node.nodeValue.length);
+               if (null === (next = node.firstChild)) break;
+               parentNode = node;
+@@ -9590,6 +9591,7 @@ function commitBeforeMutationEffects(root, firstChild) {
+               parentNode === focusNode &&
+                 ++indexWithinFocus === selection &&
+                 (end = length);
++              if (-1 !== start && -1 !== end) break b;
+               if (null !== (next = node.nextSibling)) break;
+               node = parentNode;
+               parentNode = node.parentNode;

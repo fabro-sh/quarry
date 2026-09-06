@@ -1,3 +1,4 @@
+import { acceptAllDocumentSuggestions, currentDocumentMarkdown } from "../features/editor/document-actions";
 import { Dialog } from '@radix-ui/react-dialog';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Tooltip from '@radix-ui/react-tooltip';
@@ -93,7 +94,6 @@ import {
   listLibraries,
   moveDocument,
   outgoingLinks,
-  postBlockTransaction,
   promoteTmpDocument,
   putBinaryDocument,
   putDocument,
@@ -113,7 +113,6 @@ import {
 } from '../api/document-ref';
 import type {
   AgentReviewResponse,
-  BlockTransactionRequest,
   ConflictRecord,
   DocumentHistoryEntry,
   DocumentLink,
@@ -133,12 +132,10 @@ import type {
   GitSyncResult,
 } from '../api/client';
 import {
-  classifyLiveDocumentEvent,
-  type LiveCollabSession,
-} from '../features/collab/session-events';
-import { collabDebug } from '../features/collab/collab-debug';
-import { saveStateLabel, type CollabSaveState } from '../features/collab/save-state';
-import { tmpCollabWebSocketBaseUrl } from '../features/collab/rust-ws-provider';
+  classifyDocumentEvent,
+  type OpenDocument,
+} from '../features/editor/document-events';
+import { saveStateLabel, type DocumentSaveState } from '../features/editor/document-status';
 import {
   type EditorMode,
   type ImageApi,
@@ -248,10 +245,10 @@ function Workspace() {
   );
   const [rightPaneTab, setRightPaneTab] = useState<RightPaneTab>(() => loadRightPaneTab(activeLibrary));
   const [searchQuery, setSearchQuery] = useState('');
-  // The Phase 5 save state: derived inside the collab editor from
-  // connection state + checkpoint-ack coverage; null = no session-backed
+  // Native save status tracks durable local requests and server receipts.
+  // Null means there is no Markdown document editor.
   // document open (nothing to save from the browser).
-  const [saveState, setSaveState] = useState<CollabSaveState | null>(null);
+  const [saveState, setSaveState] = useState<DocumentSaveState | null>(null);
   const [editorMode, setEditorMode] = useState<EditorMode>('editing');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState('');
@@ -286,8 +283,9 @@ function Workspace() {
   const [resizingPanels, setResizingPanels] = useState(false);
   const selectedPathRef = useRef(selectedPath);
   const openDocumentRef = useRef<(path: string) => void>(() => {});
-  const liveCollabSessionRef = useRef<LiveCollabSession | null>(null);
-  const collabSessionIdRef = useRef(makeCollabSessionId());
+  const activeDocumentRef = useRef<OpenDocument | null>(null);
+  const nativeTitle = useRef<{ documentId: string; title: string | null } | null>(null);
+  const editorSessionIdRef = useRef(makeEditorSessionId());
   const searchQueryRef = useRef(searchQuery);
 
   useEffect(() => {
@@ -344,7 +342,7 @@ function Workspace() {
 
   function browserMutationOptions() {
     return {
-      originId: collabSessionIdRef.current,
+      originId: editorSessionIdRef.current,
       transactionActor: storedAuthor(),
     };
   }
@@ -400,7 +398,7 @@ function Workspace() {
   );
 
   // The document-scoped caches a write invalidates in ANY scope: content
-  // arrives through the live collab doc, so only the metadata projections
+  // arrives through native document commands, so only the metadata projections
   // (version history, review record) need a refetch.
   const invalidateDocumentScopedState = useCallback(
     (ref: DocumentRef) => {
@@ -480,17 +478,8 @@ function Workspace() {
         return;
       }
 
-      const liveDecision = classifyLiveDocumentEvent(payload, liveCollabSessionRef.current);
-      if (liveDecision.action !== 'pass') {
-        collabDebug('event.classify', {
-          action: liveDecision.action,
-          type: payload.type,
-          originId: payload.origin_id,
-          versionId: payload.version_id,
-          etag: payload.etag,
-        });
-      }
-      if (liveDecision.action === 'session_refresh') {
+      const liveDecision = classifyDocumentEvent(payload, activeDocumentRef.current);
+      if (liveDecision.action === 'document_refresh') {
         if (currentPath) {
           invalidateDocumentScopedState(libraryDocumentRef(activeLibrary, currentPath));
           void mutate(['/v1/outgoing', activeLibrary, currentPath]);
@@ -499,9 +488,9 @@ function Workspace() {
         return;
       }
       if (liveDecision.action === 'retarget_move') {
-        if (liveCollabSessionRef.current) {
-          liveCollabSessionRef.current = {
-            ...liveCollabSessionRef.current,
+        if (activeDocumentRef.current) {
+          activeDocumentRef.current = {
+            ...activeDocumentRef.current,
             path: liveDecision.path,
           };
         }
@@ -570,7 +559,7 @@ function Workspace() {
       : libraryDocumentRef(activeLibrary, selectedPath)
     : null;
 
-  // Tmp content arrives over the live session; document events refresh only
+  // Tmp content arrives through native synchronization; document events refresh only
   // metadata projections and diff3 review records.
   const tmpEventRef = isTmpDocument && selectedPath ? tmpDocumentRef(selectedPath) : null;
   const handleTmpEvent = useCallback(
@@ -759,26 +748,21 @@ function Workspace() {
   const selectedDocumentBodyReady = Boolean(
     loadedDocumentForSelection && activeLoadedDocument
   );
-  // Title from the live editor mirror once the body is mounted: collab
-  // writes (the only write path for tmp documents) never touch the SWR
-  // snapshot, which can stay at its seeded "# Untitled" forever. Before the
-  // body is ready `content` may still hold the previous document, so fall
-  // back to the snapshot.
+  // Native headings update the title directly without serializing Markdown.
   const titleContent = selectedDocumentBodyReady ? content : document?.content;
   useEffect(() => {
     if (!selectedPath) {
       window.document.title = 'Quarry';
       return;
     }
-    const h1 = selectedIsMarkdown && titleContent ? extractFirstH1(titleContent) : null;
+    const h1 = nativeTitle.current && nativeTitle.current.documentId === activeLoadedDocument?.documentId
+      ? nativeTitle.current!.title : selectedIsMarkdown && titleContent ? extractFirstH1(titleContent) : null;
     window.document.title = `${h1 ?? documentBasename(selectedPath)} · Quarry`;
   }, [selectedIsMarkdown, selectedPath, titleContent]);
-  const collabDocumentId = selectedDocumentBodyReady
+  const editableDocumentId = selectedDocumentBodyReady
     ? activeLoadedDocument?.documentId || loadedDocumentForSelection?.documentId || ''
     : '';
-  const collabBaseUrl =
-    isTmpDocument && selectedPath ? tmpCollabWebSocketBaseUrl(selectedPath) : undefined;
-  const collabRoomName = isTmpDocument ? 'content' : undefined;
+
   const layoutStorageKey = activeLibrary ? `quarry:layout:${activeLibrary}` : 'quarry:layout:workspace';
   // Tmp markdown documents carry the details pane too (the review record —
   // diff3 conflicts especially — must stay visible to the human); the editor
@@ -808,25 +792,25 @@ function Workspace() {
   useEffect(() => {
     if (
       selectedPath &&
-      collabDocumentId &&
+      editableDocumentId &&
       isMarkdownDocument(selectedPath, selectedContentType)
     ) {
-      liveCollabSessionRef.current = {
-        documentId: collabDocumentId,
+      activeDocumentRef.current = {
+        documentId: editableDocumentId,
         path: selectedPath,
       };
     } else {
-      liveCollabSessionRef.current = null;
+      activeDocumentRef.current = null;
       setSaveState(null);
     }
-  }, [collabDocumentId, selectedContentType, selectedPath]);
+  }, [editableDocumentId, selectedContentType, selectedPath]);
 
-  const changeSaveState = useCallback((state: CollabSaveState) => {
+  const changeSaveState = useCallback((state: DocumentSaveState) => {
     setSaveState(state);
   }, []);
 
-  // The editor's serialized mirror: feeds downloads and the current-editor
-  // diff. Durability belongs to the session checkpoint, never to this state.
+  // The current-editor diff requests a Markdown preview from native state.
+  // Durability belongs to native command publication.
   const changeContent = useCallback(
     (next: string) => openDocumentState.changeContent(next),
     [openDocumentState.changeContent]
@@ -993,11 +977,7 @@ function Workspace() {
     }
   }
 
-  // Downloads serve the canonical export (frontmatter included) — the same
-  // bytes Git, FUSE, CLI, and agents see — not the editor's local serializer
-  // mirror, which is a second Markdown writer that can drift from canonical.
-  // Canonical reflects the last checkpoint; the save indicator already tells
-  // the user whether their latest keystrokes are covered.
+  // Download the committed Markdown projection, including frontmatter.
   async function downloadCurrentMarkdown() {
     if (!selectedPath || (isLibraryDocument && !activeLibrary)) return;
     const response = await fetch(
@@ -1172,74 +1152,10 @@ function Workspace() {
 
   // Diff3 review conflicts resolve through one atomic gateway operation. The
   // incoming choice verifies the retained hunk before replacing it.
-  async function resolveReviewConflict(
-    conflictId: string,
-    resolution: 'keep_canonical' | 'accept_incoming'
-  ) {
-    if (!documentRef) return;
-    const request: BlockTransactionRequest = {
-      client_tx_id: crypto.randomUUID(),
-      actor: { kind: 'user', id: storedAuthor() },
-      ops: [{ op: `conflict.${resolution}`, item_id: conflictId }],
-    };
-    try {
-      await postBlockTransaction(documentRef, request);
-      await Promise.all([
-        mutate(documentRefKey('document', documentRef)),
-        mutate(documentRefKey('blocks', documentRef)),
-        mutate(documentRefKey('review', documentRef)),
-        mutate(documentRefKey('versions', documentRef)),
-      ]);
-    } catch (error) {
-      window.alert(
-        `Resolve conflict failed: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  }
-
-  async function resolveReviewSuggestion(
-    suggestionId: string,
-    resolution: 'accept' | 'reject'
-  ) {
-    if (!documentRef) return;
-    const request: BlockTransactionRequest = {
-      client_tx_id: crypto.randomUUID(),
-      actor: { kind: 'user', id: storedAuthor() },
-      ops: [{ op: `suggestion.${resolution}`, item_id: suggestionId }],
-    };
-    try {
-      await postBlockTransaction(documentRef, request);
-      await Promise.all([
-        mutate(documentRefKey('review', documentRef)),
-        mutate(documentRefKey('versions', documentRef)),
-      ]);
-    } catch (error) {
-      window.alert(
-        `${resolution === 'accept' ? 'Accept' : 'Reject'} suggestion failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-  }
-
-  async function acceptAllReviewSuggestions() {
-    if (!documentRef || openReviewSuggestionIds.length === 0) return;
-    const request: BlockTransactionRequest = {
-      client_tx_id: crypto.randomUUID(),
-      actor: { kind: 'user', id: storedAuthor() },
-      ops: openReviewSuggestionIds.map((item_id) => ({ op: 'suggestion.accept', item_id })),
-    };
-    try {
-      await postBlockTransaction(documentRef, request);
-      await Promise.all([
-        mutate(documentRefKey('review', documentRef)),
-        mutate(documentRefKey('versions', documentRef)),
-      ]);
-    } catch (error) {
-      window.alert(
-        `Accept all suggestions failed: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
+  function acceptAllReviewSuggestions() {
+    if (!editableDocumentId) return;
+    try { acceptAllDocumentSuggestions(editableDocumentId); }
+    catch (error) { window.alert(`Accept all suggestions failed: ${error instanceof Error ? error.message : String(error)}`); }
   }
 
   function openDocument(path: string) {
@@ -1329,6 +1245,8 @@ function Workspace() {
   }
 
   function diffCurrentEditor() {
+    const markdown = currentDocumentMarkdown(editableDocumentId);
+    if (markdown !== undefined) openDocumentState.changeContent(markdown);
     openDocumentState.diffCurrent();
   }
 
@@ -1457,21 +1375,23 @@ function Workspace() {
                 <DocumentBody
                   author={author}
                   byteSize={selectedEntry?.byte_size}
-                  collabEnabled={Boolean(collabDocumentId)}
-                  collabBaseUrl={collabBaseUrl}
-                  collabRoomName={collabRoomName}
-                  collabSessionId={collabSessionIdRef.current}
-                  collabToken={isTmpDocument ? undefined : routeCollabToken}
+                  editorSessionId={editorSessionIdRef.current}
+                  documentToken={isTmpDocument ? undefined : routeCollabToken}
                   contentHash={selectedEntry?.content_hash}
                   content={content}
                   contentType={selectedContentType}
-                  documentId={collabDocumentId}
+                  documentId={editableDocumentId}
                   href={isTmpDocument ? tmpDocumentHref(selectedPath) : documentHref(activeLibrary, selectedPath)}
                   image={isTmpDocument ? tmpImageApi : isLibraryDocument ? imageApi : undefined}
                   mode={editorMode}
                   path={selectedPath}
                   wikiLink={wikiLink}
+                  onReviewOpen={() => { setRightPaneTab("comments"); setRightCollapsed(false); }}
                   onChange={changeContent}
+                  onTitleChange={(title) => {
+                    nativeTitle.current = { documentId: editableDocumentId, title };
+                    window.document.title = `${title ?? documentBasename(selectedPath)} · Quarry`;
+                  }}
                   onSaveStateChange={changeSaveState}
                 />
               ) : (
@@ -1516,8 +1436,6 @@ function Workspace() {
                 onOpenDocument={openDocument}
                 onOpenConflict={setMergeConflictId}
                 onResolveConflict={resolveOpenConflict}
-                onResolveReviewConflict={resolveReviewConflict}
-                onResolveSuggestion={resolveReviewSuggestion}
                 onRestoreVersion={restoreSelectedVersion}
                 onViewVersion={viewSelectedVersion}
                 outgoing={outgoing.links}
@@ -2623,23 +2541,7 @@ function LeftPane({
   onToggleCollapsed: () => void;
   onTreeToggle: (id: string) => void;
 }) {
-  if (collapsed) {
-    return (
-      <aside
-        aria-label="Document tree"
-        className="flex h-full flex-col items-center border-r border-line bg-surface py-2"
-      >
-        <button
-          aria-label="Expand sidebar"
-          className={cn(ghostIconButton, 'size-8')}
-          onClick={onToggleCollapsed}
-          type="button"
-        >
-          <PanelLeftOpen size={16} />
-        </button>
-      </aside>
-    );
-  }
+  const [treeRoot, setTreeRoot] = useState<HTMLDivElement | null>(null);
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -2657,6 +2559,24 @@ function LeftPane({
   useEffect(() => {
     setActiveSearchIndex(0);
   }, [searchResults]);
+
+  if (collapsed) {
+    return (
+      <aside
+        aria-label="Document tree"
+        className="flex h-full flex-col items-center border-r border-line bg-surface py-2"
+      >
+        <button
+          aria-label="Expand sidebar"
+          className={cn(ghostIconButton, 'size-8')}
+          onClick={onToggleCollapsed}
+          type="button"
+        >
+          <PanelLeftOpen size={16} />
+        </button>
+      </aside>
+    );
+  }
 
   function selectSearchResult(index: number) {
     if (!searchResults.length) return;
@@ -2839,8 +2759,9 @@ function LeftPane({
           ) : null}
         </section>
       ) : null}
-      <div className="min-h-0 flex-1 px-1.5 pt-1" onKeyDown={handleTreeKeyDown}>
-        <Tree<TreeNode>
+      <div ref={setTreeRoot} className="min-h-0 flex-1 px-1.5 pt-1" onKeyDown={handleTreeKeyDown}>
+        {treeRoot && <Tree<TreeNode>
+          dndRootElement={treeRoot}
           data={tree}
           height={800}
           indent={16}
@@ -2887,7 +2808,7 @@ function LeftPane({
               </button>
             </div>
           )}
-        </Tree>
+        </Tree>}
       </div>
     </aside>
   );
@@ -2949,12 +2870,9 @@ const editorModes: ReadonlyArray<{ value: EditorMode; label: string; icon: typeo
   { value: 'viewing', label: 'Viewing', icon: Eye },
 ];
 
-// Header save status (Phase 5 model): `Saved` means connected with the last
-// checkpoint covering everything on screen; `Saving…` means a commit is
-// owed; `Reconnecting (read-only)` means no live session. The settled
-// "Saved" fades out after a beat; the element stays mounted so it remains a
-// stable query target and the layout never jumps.
-function SaveStatusIndicator({ saveState }: { saveState: CollabSaveState }) {
+// Saved means all queued document requests have durable server receipts.
+// Keep the indicator mounted so fading does not shift the header.
+function SaveStatusIndicator({ saveState }: { saveState: DocumentSaveState }) {
   const settled = saveState === 'saved';
   const [faded, setFaded] = useState(false);
   useEffect(() => {
@@ -3087,6 +3005,12 @@ function DocumentModeSelect({
           align="end"
           className="z-50 min-w-44 rounded-md border border-line bg-raised p-1 shadow-lg"
           sideOffset={6}
+          onCloseAutoFocus={(event) => {
+            // Radix restores focus in a later task. Preserve a selection the
+            // user has already made in the document while the menu closes.
+            const active = document.activeElement;
+            if (active && active !== document.body && !(event.currentTarget as HTMLElement).contains(active)) event.preventDefault();
+          }}
         >
           {editorModes.map((option) => (
             <DropdownMenu.Item
@@ -3137,7 +3061,7 @@ function DocumentToolbar({
   mode: EditorMode;
   onModeChange: (mode: EditorMode) => void;
   path: string;
-  saveState: CollabSaveState | null;
+  saveState: DocumentSaveState | null;
   onAddAgent: () => void;
   onAcceptAllSuggestions: () => void;
   onDelete: () => void;
@@ -3269,8 +3193,6 @@ function RightPane({
   onOpenDocument,
   onOpenConflict,
   onResolveConflict,
-  onResolveReviewConflict,
-  onResolveSuggestion,
   onRestoreVersion,
   onToggleCollapsed,
   onViewVersion,
@@ -3298,14 +3220,6 @@ function RightPane({
   onOpenDocument: (path: string) => void;
   onOpenConflict: (conflict: string) => void;
   onResolveConflict: (conflict: string) => void;
-  onResolveReviewConflict: (
-    conflictId: string,
-    resolution: 'keep_canonical' | 'accept_incoming'
-  ) => Promise<void>;
-  onResolveSuggestion: (
-    suggestionId: string,
-    resolution: 'accept' | 'reject'
-  ) => Promise<void>;
   onRestoreVersion: (version: string) => void;
   onToggleCollapsed: () => void;
   onViewVersion: (version: string) => void;
@@ -3454,11 +3368,7 @@ function RightPane({
         {selectedTab === 'comments' ? (
           <>
             <h2 className={rightHeading}>{selectedTabLabel}</h2>
-            <CommentsPanel
-              onResolveConflict={onResolveReviewConflict}
-              onResolveSuggestion={onResolveSuggestion}
-              review={review}
-            />
+            <CommentsPanel />
           </>
         ) : null}
       </section>
@@ -4274,7 +4184,7 @@ function gitExportSummary(result: GitExportResult) {
   return `Exported ${result.exported_paths.length}${result.commit_id ? ` · Commit ${result.commit_id}` : ''}`;
 }
 
-function makeCollabSessionId() {
+function makeEditorSessionId() {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
     return `browser:${crypto.randomUUID()}`;
   }

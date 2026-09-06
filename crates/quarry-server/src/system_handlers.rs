@@ -61,14 +61,6 @@ fn openapi_path_enabled(path: &str) -> bool {
         return cfg!(feature = "tmp-documents")
             && (path != "/v1/tmp/documents/{secret}/promote" || cfg!(feature = "lib-documents"));
     }
-    if path.starts_with("/v1/tmp/collab") {
-        return cfg!(feature = "tmp-documents");
-    }
-    if path.starts_with("/v1/collab") {
-        // The raw-id collab route serves library documents only; the tmp-only
-        // build reaches tmp documents through /v1/tmp/collab instead.
-        return cfg!(feature = "lib-documents");
-    }
     if path == "/v1/events" || path.starts_with("/v1/libraries") {
         return cfg!(feature = "lib-documents");
     }

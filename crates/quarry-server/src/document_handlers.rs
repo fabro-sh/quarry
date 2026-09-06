@@ -36,6 +36,7 @@ pub(crate) struct ListQuery {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct DocumentGetQuery {
+    since: Option<String>,
     against: Option<String>,
     token: Option<String>,
     #[serde(default, flatten)]
@@ -313,6 +314,44 @@ pub(crate) async fn get_document(
 ) -> Result<Response, ApiError> {
     let (document_path, subresource) = parse_document_subresource(&path);
     match subresource {
+        DocumentSubResource::DocumentState => {
+            let writable = crate::document_engine::library_path_access(
+                &state,
+                &library,
+                document_path,
+                query.token,
+                false,
+            )
+            .await?;
+            return crate::document_engine::read_with_access(
+                &state,
+                &quarry_storage::DocumentScopeRef::library(&library),
+                document_path,
+                writable,
+                query.since.as_deref(),
+            )
+            .await;
+        }
+        DocumentSubResource::Archive => {
+            crate::document_engine::library_path_access(
+                &state,
+                &library,
+                document_path,
+                query.token,
+                false,
+            )
+            .await?;
+            return crate::document_engine::archive(
+                &state,
+                &quarry_storage::DocumentScopeRef::library(&library),
+                document_path,
+                None,
+            )
+            .await;
+        }
+        DocumentSubResource::DocumentCommands | DocumentSubResource::Selection => {
+            return Err(QuarryError::NotFound("This resource requires POST".into()).into());
+        }
         DocumentSubResource::Backlinks => {
             return json_response(
                 StatusCode::OK,
@@ -474,12 +513,12 @@ pub(crate) async fn get_document(
         (
             "If-Match" = Option<String>,
             Header,
-            description = "Optional strict ETag precondition; must match the current document head"
+            description = "Strict save using the ETag of the version read; must match the current document head"
         ),
         (
             "X-Quarry-Merge-Base" = Option<String>,
             Header,
-            description = "Optional known version used as the three-way merge base for Markdown writes"
+            description = "Merge using the known version read as the three-way merge base for Markdown writes"
         ),
         (
             "If-None-Match" = Option<String>,
@@ -502,6 +541,7 @@ pub(crate) async fn get_document(
     ),
     responses(
         (status = 200, body = markdown_write::PutDocumentOutcome),
+        (status = 428, description = "Updating Markdown requires If-Match or X-Quarry-Merge-Base from the original read; unversioned writes create only", body = ApiErrorResponse),
         (status = 409, description = "Existing Markdown document would be changed into a raw document without X-Quarry-Allow-Document-Kind-Change: true", body = ApiErrorResponse),
         (status = 412, body = ApiErrorResponse)
     )
@@ -584,6 +624,7 @@ pub(crate) async fn put_document(
 )]
 pub(crate) async fn post_document_action(
     State(state): State<AppState>,
+    Query(query): Query<crate::document_engine::AccessQuery>,
     headers: HeaderMap,
     Path((library, path)): Path<(String, String)>,
     Json(request): Json<JsonValue>,
@@ -591,6 +632,42 @@ pub(crate) async fn post_document_action(
     let origin_id = optional_header(&headers, "x-quarry-origin-id")?;
     let actor = transaction_metadata_from_headers(&headers)?.actor;
     let (document_path, subresource) = parse_document_subresource(&path);
+    crate::document_engine::library_path_access(
+        &state,
+        &library,
+        document_path,
+        query.token,
+        subresource != DocumentSubResource::Selection,
+    )
+    .await?;
+    if subresource == DocumentSubResource::Selection {
+        return crate::document_engine::selection_for_scope(
+            &state,
+            &quarry_storage::DocumentScopeRef::library(&library),
+            document_path,
+            request,
+        )
+        .await;
+    }
+    if subresource == DocumentSubResource::Archive {
+        return crate::document_engine::archive(
+            &state,
+            &quarry_storage::DocumentScopeRef::library(&library),
+            document_path,
+            Some(request),
+        )
+        .await;
+    }
+    if subresource == DocumentSubResource::DocumentCommands {
+        return crate::document_engine::commands(
+            &state,
+            &quarry_storage::DocumentScopeRef::library(&library),
+            document_path,
+            request,
+        )
+        .await;
+    }
+
     if let DocumentSubResource::VersionRestore(version) = subresource {
         touch_agent_presence(&state, &headers, Some(&library), document_path).await?;
         let target = state
@@ -816,3 +893,34 @@ pub(crate) async fn delete_document(
             .await?,
     ))
 }
+
+#[utoipa::path(
+    get,
+    path = "/v1/libraries/{library}/documents/{path}/document-state",
+    params(("library" = String, Path), ("path" = String, Path), ("token" = Option<String>, Query), ("since" = Option<String>, Query, description = "Comma-separated native heads already held by the client")),
+    responses(
+        (status = 200, body = crate::document_engine::DocumentStateResponse),
+        (status = 400, body = ApiErrorResponse),
+        (status = 404, body = ApiErrorResponse),
+        (status = 412, body = ApiErrorResponse),
+        (status = 503, body = ApiErrorResponse)
+    )
+)]
+#[expect(dead_code, reason = "OpenAPI documentation stub")]
+pub(crate) async fn library_document_state_openapi() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/libraries/{library}/documents/{path}/document-commands",
+    params(("library" = String, Path), ("path" = String, Path)),
+    request_body = crate::document_engine::DocumentBatchRequest,
+    responses(
+        (status = 200, body = crate::document_engine::DocumentCommandAck),
+        (status = 400, body = ApiErrorResponse),
+        (status = 404, body = ApiErrorResponse),
+        (status = 412, body = ApiErrorResponse),
+        (status = 503, body = ApiErrorResponse)
+    )
+)]
+#[expect(dead_code, reason = "OpenAPI documentation stub")]
+pub(crate) async fn library_document_commands_openapi() {}

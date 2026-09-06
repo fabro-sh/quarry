@@ -1,31 +1,7 @@
-//! Whole-file Markdown writes — Phase 4 of the session-scoped collab
-//! rewrite: the ONE reconciliation implementation behind Git, FUSE, the CLI,
-//! and the REST Markdown `PUT`.
-//!
-//! A write is `diff3(base, incoming file, current canonical rows)` via
-//! [`quarry_collab_codec::reconcile`], translated into gateway ops and
-//! submitted through [`gateway::execute_block_transaction`] — so it takes the
-//! per-document mutex and rides the mode switch: rows mode commits straight
-//! to SQL; an active browser session receives the merge as a collaborator
-//! edit and checkpoints before the ack (no errno, no LWW overwrite). Adapters
-//! differ only in base bookkeeping:
-//!
-//! - **Git** stores per-peer shadow bases (`block_shadow_bases`, surface
-//!   `git`, scope = peer id) at export/import and passes them here.
-//! - **FUSE** captures the base per open handle at `open()` (in-memory; a
-//!   handle's base advances to whatever it last wrote).
-//! - **CLI** and missing-base cases use [`BlockWriteBase::CurrentCanonical`]
-//!   — the two-way degenerate merge that can never conflict.
-//! - **REST `PUT`** treats `If-Match` as a strict head precondition and uses
-//!   `X-Quarry-Merge-Base` to select historical content for diff3 (falling
-//!   back to two-way without one).
-//!
-//! True conflicts never fail the write: each [`ReconcileConflict`] becomes a
-//! `conflict.add` op in the SAME transaction, so artifacts commit atomically
-//! with the merge and surface via `GET /review`. The only write failures are
-//! content errors (CriticMarkup → typed `UNSUPPORTED_MARKDOWN`, invalid
-//! frontmatter YAML, non-UTF-8 bytes) and ordinary storage failures — never
-//! reconciliation outcomes.
+//! Whole-file Markdown writes use the shared three-way reconciler and native
+//! command authority. Git and FUSE carry explicit merge bases. REST uses an
+//! explicit merge bases or strict ETag preconditions for updates. Conflicting hunks become
+//! review records in the same transaction as all nonconflicting edits.
 //!
 //! Byte-identical writes (vs the head content) short-circuit without a
 //! commit, so repeated `git import`/no-op saves do not churn versions.
@@ -53,10 +29,10 @@ use crate::gateway::{
 use crate::log_redaction;
 use crate::{ApiError, ApiErrorCode, ApiErrorDetails, AppState};
 use axum::http::StatusCode;
-use quarry_collab_codec::{
+use quarry_core::{DocumentSource, QuarryError, WriteOutcome, WritePrecondition};
+use quarry_markdown::{
     BlockRow, ReconcileBase, ReconcileConflict, ReconcileOp, block_rows_to_markdown, reconcile,
 };
-use quarry_core::{DocumentSource, QuarryError, WriteOutcome, WritePrecondition};
 use quarry_storage::{
     BlockMarkdownConflict, BlockMarkdownWrite, BlockMarkdownWriteOutcome, BlockMarkdownWriter,
     BlockReviewItem, BlockReviewKind, BlockReviewState, BlockWriteBase, DocumentKind,
@@ -72,8 +48,8 @@ use uuid::Uuid;
 
 /// The Markdown `PUT` body for a BlockDocument: `If-Match` is strict
 /// compare-and-swap, `If-None-Match` is a create, and `merge_base` selects a
-/// known historical version for three-way reconciliation. Without an explicit
-/// merge base, reconciliation degenerates to two-way against the current head.
+/// known historical version for three-way reconciliation. An unversioned
+/// request can only create a document; updating one requires its read version.
 pub(crate) struct PutBlockDocumentRequest {
     pub body: Vec<u8>,
     pub metadata: JsonValue,
@@ -209,6 +185,9 @@ async fn put_scoped_block_document(
     path: &str,
     request: PutBlockDocumentRequest,
 ) -> Result<axum::response::Response, GatewayFailure> {
+    // Keep path lookup, preconditions, and publication in one write operation.
+    // Every writer acquires this gate before taking a document mutex.
+    state.store.run_global_operation(Box::pin(async {
     let PutBlockDocumentRequest {
         body,
         metadata,
@@ -279,7 +258,22 @@ async fn put_scoped_block_document(
                 Err(error) => return Err(error.into()),
             }
         }
-        WritePrecondition::None => None,
+        WritePrecondition::None => {
+            if merge_base.is_none() {
+                match state.store.head_document_for_scope(&scope, path).await {
+                    Ok(_) => return Err(GatewayFailure::Api(ApiError::new(
+                        ApiErrorCode::PreconditionRequired,
+                        "Updating Markdown requires If-Match or X-Quarry-Merge-Base from the version you read; read the document and rebuild the edit",
+                    ).with_details(ApiErrorDetails {
+                        field: Some("If-Match or X-Quarry-Merge-Base".into()),
+                        ..ApiErrorDetails::default()
+                    }))),
+                    Err(QuarryError::NotFound(_)) => {},
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            None
+        },
     };
     let base = match merge_base {
         Some(version_id) => {
@@ -313,6 +307,7 @@ async fn put_scoped_block_document(
     let result = write_markdown_with(
         state,
         BlockMarkdownWrite {
+            document_id: None,
             scope,
             path: path.to_string(),
             markdown,
@@ -342,6 +337,7 @@ async fn put_scoped_block_document(
         &reply,
         &reply.outcome.version.id,
     )?)
+    })).await
 }
 
 /// A version restore on a BlockDocument: restore IS a whole-file write of
@@ -351,7 +347,7 @@ async fn put_scoped_block_document(
 /// and live review anchors, and the write rides the mode switch (an active
 /// browser session receives the restore as a collaborator edit instead of
 /// having its projection cleared underneath it). RawDocument restores keep
-/// the legacy byte path in storage.
+/// the raw document write path in storage.
 pub(crate) async fn restore_block_document_version(
     state: &AppState,
     scope: DocumentScopeRef,
@@ -364,6 +360,7 @@ pub(crate) async fn restore_block_document_version(
     let result = write_markdown_with(
         state,
         BlockMarkdownWrite {
+            document_id: None,
             scope,
             path: path.to_string(),
             markdown: version.content.clone(),
@@ -392,19 +389,8 @@ pub(crate) async fn restore_block_document_version(
     )?)
 }
 
-/// A metadata patch on a BlockDocument (metadata IS the frontmatter): a
-/// zero-op gateway transaction with a metadata override. The block rows and
-/// review items are untouched (the body did not change — rows stay valid by
-/// construction); only the rendered frontmatter in the normalized content
-/// moves. Dispatching through [`gateway::execute_block_transaction`] takes
-/// the per-document mutex and composes with a live session for free: the
-/// session doc carries body content only, so session mode flushes pending
-/// typing, applies the empty op set (a no-op on the doc), and commits the
-/// flushed rows under the new metadata — typing and frontmatter both land.
-///
-/// A projection-less BlockDocument (legacy write cleared its rows)
-/// materializes here exactly like `GET /blocks` does, publishing the
-/// one-time normalized content alongside the new metadata.
+/// Applies metadata through the native publication transaction. The body and
+/// native character identity stay in the same version as the new metadata.
 pub(crate) async fn patch_block_document_metadata(
     state: &AppState,
     library: &str,
@@ -413,10 +399,7 @@ pub(crate) async fn patch_block_document_metadata(
     precondition: WritePrecondition,
 ) -> Result<axum::response::Response, GatewayFailure> {
     let document = state.store.get_document(library, path).await?;
-    // The legacy patch enforced preconditions against the head via
-    // put_document; mirror that strictness (a metadata patch is not a
-    // content merge, so If-Match is a true precondition here, not a base
-    // selector).
+    // A metadata patch checks the current version; it does not choose a merge base.
     match &precondition {
         WritePrecondition::IfMatch(version) if *version != document.version.id => {
             return Err(version_input_error(
@@ -440,7 +423,7 @@ pub(crate) async fn patch_block_document_metadata(
     }
     // Read-merge-write against the head we just loaded; a concurrent
     // metadata write between this read and the commit loses, exactly like
-    // the legacy read-merge-put path.
+    // the conditional read-merge-put path.
     let mut metadata = document.metadata;
     merge_json(&mut metadata, patch);
     let ctx = TransactionContext {
@@ -460,6 +443,7 @@ pub(crate) async fn patch_block_document_metadata(
     };
     let mut plan = |_snapshot: &quarry_storage::BlockMutationState| {
         Ok(TransactionPlan {
+            uses_current_snapshot: true,
             ops: Vec::new(),
             ops_json: JsonValue::Array(Vec::new()),
         })
@@ -510,322 +494,323 @@ pub(crate) async fn write_markdown_reconciled(
 
 async fn write_markdown_with(
     state: &AppState,
-    write: BlockMarkdownWrite,
+    mut write: BlockMarkdownWrite,
     origin_id: Option<String>,
     transaction: quarry_storage::TransactionMetadata,
     strict_head: Option<String>,
 ) -> Result<BlockMarkdownWriteOutcome, GatewayFailure> {
-    let content_type = write
-        .metadata
-        .get("content_type")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("text/markdown")
-        .to_string();
-    gateway::require_block_document(&write.path, &content_type)?;
-    let marker_hunk = first_conflict_marker_hunk(&write.markdown);
-
-    // First import: the document does not exist yet — every block takes a
-    // fresh id through the Phase 1 import path.
-    let document = match state
+    // Keep path lookup, preconditions, and publication in one write operation.
+    // Every writer acquires this gate before taking a document mutex.
+    state
         .store
-        .get_document_for_scope(&write.scope, &write.path)
-        .await
-    {
-        Ok(document) => {
-            log_block_write_started(&write, Some(&document.id));
-            document
-        }
-        Err(QuarryError::NotFound(_)) => {
-            if let Some(expected) = &strict_head {
+        .run_global_operation(Box::pin(async {
+            if let Some(id) = &write.document_id {
+                write.path = state
+                    .store
+                    .document_path_for_scope_id(&write.scope, id)
+                    .await?;
+            }
+            let content_type = write
+                .metadata
+                .get("content_type")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("text/markdown")
+                .to_string();
+            gateway::require_block_document(&write.path, &content_type)?;
+            let marker_hunk = first_conflict_marker_hunk(&write.markdown);
+
+            // First import: the document does not exist yet — every block takes a
+            // fresh id through native import.
+            let document = match state
+                .store
+                .get_document_for_scope(&write.scope, &write.path)
+                .await
+            {
+                Ok(document) => {
+                    log_block_write_started(&write, Some(&document.id));
+                    document
+                }
+                Err(QuarryError::NotFound(_)) => {
+                    if let Some(expected) = &strict_head {
+                        return Err(version_input_error(
+                            ApiErrorCode::PreconditionFailed,
+                            format!(
+                                "If-Match {expected} cannot match missing document {}",
+                                write.path
+                            ),
+                            "If-Match",
+                            expected,
+                            None,
+                        ));
+                    }
+                    log_block_write_started(&write, None);
+                    let mut outcome = state
+                        .store
+                        .import_block_document_for_scope(
+                            &write.scope,
+                            &write.path,
+                            &write.markdown,
+                            write.metadata.clone(),
+                            &content_type,
+                            write.source.clone(),
+                            WritePrecondition::IfNoneMatch,
+                            origin_id,
+                            transaction,
+                        )
+                        .await?;
+                    let conflict_items = match &marker_hunk {
+                        Some(hunk) => {
+                            match flag_imported_conflict_markers(state, &write, hunk).await {
+                                Some((flag_outcome, conflict)) => {
+                                    outcome = flag_outcome;
+                                    vec![conflict]
+                                }
+                                None => Vec::new(),
+                            }
+                        }
+                        None => Vec::new(),
+                    };
+                    let conflicts = conflict_items.len();
+                    let canonical_body = canonical_body(state, &outcome.document.id).await?;
+                    return Ok(BlockMarkdownWriteOutcome {
+                        outcome,
+                        changed: true,
+                        canonical_body,
+                        conflicts,
+                        conflict_items,
+                    });
+                }
+                Err(error) => return Err(error.into()),
+            };
+
+            if let Some(expected) = &strict_head
+                && *expected != document.version.id
+            {
                 return Err(version_input_error(
                     ApiErrorCode::PreconditionFailed,
                     format!(
-                        "If-Match {expected} cannot match missing document {}",
-                        write.path
+                        "If-Match {expected} does not match the current head {} of {}",
+                        document.version.id, write.path
                     ),
                     "If-Match",
                     expected,
-                    None,
+                    Some(document.version.id.to_string()),
                 ));
             }
-            log_block_write_started(&write, None);
-            let mut outcome = state
-                .store
-                .import_block_document_for_scope(
-                    &write.scope,
-                    &write.path,
-                    &write.markdown,
-                    write.metadata.clone(),
-                    &content_type,
-                    write.source.clone(),
-                    WritePrecondition::IfNoneMatch,
-                    origin_id,
-                    transaction,
-                )
-                .await?;
-            let conflict_items = match &marker_hunk {
-                Some(hunk) => match flag_imported_conflict_markers(state, &write, hunk).await {
-                    Some((flag_outcome, conflict)) => {
-                        outcome = flag_outcome;
-                        vec![conflict]
-                    }
-                    None => Vec::new(),
-                },
-                None => Vec::new(),
+
+            // Byte-identical no-op: nothing to merge, nothing to commit. This check
+            // runs OUTSIDE the document mutex (taken later by the dispatch), which
+            // is benign: if a racing write changes the content between this read
+            // and the lock, answering "no change against the version we observed"
+            // is a legal serialization — identical to this write committing first
+            // and the racing write winning afterwards.
+            if document.content == write.markdown.as_bytes() {
+                let entry = state
+                    .store
+                    .head_document_for_scope(&write.scope, &write.path)
+                    .await?;
+                if entry.head_version_id == document.version.id {
+                    let transaction = state.store.get_transaction(&document.version.tx_id).await?;
+                    let canonical_body = canonical_body(state, &document.id).await?;
+                    return Ok(BlockMarkdownWriteOutcome {
+                        outcome: WriteOutcome {
+                            document: entry,
+                            version: document.version,
+                            transaction,
+                        },
+                        changed: false,
+                        canonical_body,
+                        conflicts: 0,
+                        conflict_items: Vec::new(),
+                    });
+                }
+            }
+
+            if matches!(write.base, BlockWriteBase::Unversioned) {
+                return Err(QuarryError::PreconditionFailed(
+                    "Whole-file updates require the original read version. The incoming file was not applied. Use a versioned HTTP save, CLI --base-version, Git peer sync, or an open FUSE file handle".into(),
+                ).into());
+            }
+
+            let (incoming_frontmatter, incoming_body) =
+                split_frontmatter_owned(&write.markdown).map_err(GatewayFailure::from)?;
+            let mut merged_metadata = incoming_frontmatter;
+            merge_json(&mut merged_metadata, write.metadata.clone());
+
+            let base_body = match &write.base {
+                BlockWriteBase::CurrentCanonical | BlockWriteBase::Unversioned => None,
+                BlockWriteBase::Markdown { markdown, .. } => Some(
+                    split_frontmatter_owned(markdown)
+                        .map_err(GatewayFailure::from)?
+                        .1,
+                ),
             };
+            let base_version = match &write.base {
+                BlockWriteBase::Markdown {
+                    version_id: Some(version_id),
+                    ..
+                } => Some(version_id.clone()),
+                _ => None,
+            };
+
+            let actor = BlockTransactionActor {
+                kind: write.surface.clone(),
+                id: None,
+                label: write.actor_label.clone(),
+            };
+            let settings = TransactionSettings {
+                source: write.source.clone(),
+                origin_id,
+                metadata: Some(merged_metadata),
+                transaction,
+            };
+
+            let mut planned_conflicts: Vec<(ConflictHunk, Option<String>)> = Vec::new();
+            let mut op_count = 0usize;
+            let mut degraded = false;
+            let mut plan = |snapshot: &quarry_storage::BlockMutationState| {
+                if let Some(expected) = &strict_head
+                    && *expected != snapshot.head_version_id
+                {
+                    return Err(version_input_error(
+                        ApiErrorCode::PreconditionFailed,
+                        format!(
+                            "If-Match {expected} does not match the current head {} of {}",
+                            snapshot.head_version_id, write.path
+                        ),
+                        "If-Match",
+                        expected,
+                        Some(snapshot.head_version_id.clone()),
+                    ));
+                }
+                planned_conflicts.clear();
+                let base = match &base_body {
+                    Some(body) => ReconcileBase::Markdown(body),
+                    None => ReconcileBase::CurrentCanonical,
+                };
+                let reconciled = reconcile(base, &incoming_body, &snapshot.rows, || {
+                    Uuid::new_v4().to_string()
+                })
+                .map_err(|unsupported| {
+                    GatewayError::new(
+                        GatewayErrorCode::UnsupportedMarkdown,
+                        unsupported.to_string(),
+                    )
+                })?;
+                degraded = reconciled.degraded;
+                let top_ids: Vec<String> = snapshot
+                    .rows
+                    .iter()
+                    .filter(|row| row.parent_block_id.is_none())
+                    .map(|row| row.block_id.clone())
+                    .collect();
+                let mut ops = sequential_ops(&top_ids, &reconciled.ops);
+                op_count = ops.len();
+                for conflict in reconciled.conflicts {
+                    let hunk = ConflictHunk::from(conflict);
+                    let existing_id = snapshot
+                        .review_items
+                        .iter()
+                        .find(|item| item.state == BlockReviewState::Open && hunk.matches(item))
+                        .map(|item| item.id.clone());
+                    if existing_id.is_none() {
+                        ops.push(BlockOp::ConflictAdd {
+                            after_block_id: hunk.after_block_id.clone(),
+                            base_markdown: hunk.base_markdown.clone(),
+                            incoming_markdown: hunk.incoming_markdown.clone(),
+                            canonical_markdown: hunk.canonical_markdown.clone(),
+                        });
+                    }
+                    planned_conflicts.push((hunk, existing_id));
+                }
+                // Incoming conflict-marker soup (a half-resolved git merge) commits
+                // as content — writes never fail — but flags a review item in the
+                // same transaction. Skipping hunks a conflict item already carries
+                // keeps repeated saves from stacking flags and honors dismissals.
+                if let Some(hunk) = &marker_hunk {
+                    let already_flagged = snapshot.review_items.iter().find(|item| {
+                        item.kind == BlockReviewKind::Conflict
+                            && item.body.as_deref() == Some(hunk.as_str())
+                    });
+                    if already_flagged.is_none() {
+                        planned_conflicts.push((ConflictHunk::marker(hunk), None));
+                        ops.push(conflict_marker_flag_op(hunk));
+                    } else if let Some(item) = already_flagged
+                        && item.state == BlockReviewState::Open
+                    {
+                        planned_conflicts.push((ConflictHunk::marker(hunk), Some(item.id.clone())));
+                    }
+                }
+                let ops_json = serde_json::to_value(&ops)
+                    .map_err(|error| GatewayFailure::Api(QuarryError::Json(error).into()))?;
+                Ok(TransactionPlan {
+                    ops,
+                    ops_json,
+                    uses_current_snapshot: true,
+                })
+            };
+
+            // Keep the original version throughout publication. A missing or
+            // invalid version must never be retried without its precondition.
+            let ctx = TransactionContext {
+                client_tx_id: Uuid::new_v4().to_string(),
+                base_clock: base_version,
+                actor,
+            };
+            let reply = gateway::execute_block_transaction(
+                state, &write.scope, &write.path, &ctx, &settings, &mut plan,
+            ).await?;
+            let committed = match reply {
+                TransactionReply::Committed(committed) => committed,
+                // Unreachable with a fresh UUID client_tx_id; surface honestly.
+                TransactionReply::Replayed(record) => {
+                    return Err(GatewayFailure::Api(
+                        QuarryError::Invariant(format!(
+                            "fresh client_tx_id {} unexpectedly replayed",
+                            record.client_tx_id
+                        ))
+                        .into(),
+                    ));
+                }
+            };
+            let mut created_conflict_ids = committed.created_conflict_ids.into_iter();
+            let conflict_items: Vec<BlockMarkdownConflict> = planned_conflicts
+                .into_iter()
+                .filter_map(|(hunk, existing_id)| {
+                    existing_id
+                        .or_else(|| created_conflict_ids.next())
+                        .map(|id| hunk.with_id(id))
+                })
+                .collect();
             let conflicts = conflict_items.len();
-            let canonical_body = canonical_body(state, &outcome.document.id).await?;
-            return Ok(BlockMarkdownWriteOutcome {
-                outcome,
+            if degraded {
+                tracing::warn!(
+                    event = "document.block_write.lcs_degraded",
+                    path = %loggable_path(&write),
+                    surface = %write.surface,
+                    "reconcile exceeded the LCS budget and fell back to bounded \
+                     positional pairing; move detection was lost for this write"
+                );
+            }
+            tracing::info!(
+                event = "document.block_write.reconciled",
+                path = %loggable_path(&write),
+                surface = %write.surface,
+                result = %reconcile_result(op_count, conflicts),
+                op_count,
+                conflict_count = conflicts,
+                "whole-file write reconciled"
+            );
+            let canonical_body = canonical_body(state, &committed.outcome.document.id).await?;
+            Ok(BlockMarkdownWriteOutcome {
+                outcome: *committed.outcome,
                 changed: true,
                 canonical_body,
                 conflicts,
                 conflict_items,
-            });
-        }
-        Err(error) => return Err(error.into()),
-    };
-
-    if let Some(expected) = &strict_head
-        && *expected != document.version.id
-    {
-        return Err(version_input_error(
-            ApiErrorCode::PreconditionFailed,
-            format!(
-                "If-Match {expected} does not match the current head {} of {}",
-                document.version.id, write.path
-            ),
-            "If-Match",
-            expected,
-            Some(document.version.id.to_string()),
-        ));
-    }
-
-    // Byte-identical no-op: nothing to merge, nothing to commit. This check
-    // runs OUTSIDE the document mutex (taken later by the dispatch), which
-    // is benign: if a racing write changes the content between this read
-    // and the lock, answering "no change against the version we observed"
-    // is a legal serialization — identical to this write committing first
-    // and the racing write winning afterwards.
-    if document.content == write.markdown.as_bytes() {
-        let entry = state
-            .store
-            .head_document_for_scope(&write.scope, &write.path)
-            .await?;
-        if entry.head_version_id == document.version.id {
-            let transaction = state.store.get_transaction(&document.version.tx_id).await?;
-            let canonical_body = canonical_body(state, &document.id).await?;
-            return Ok(BlockMarkdownWriteOutcome {
-                outcome: WriteOutcome {
-                    document: entry,
-                    version: document.version,
-                    transaction,
-                },
-                changed: false,
-                canonical_body,
-                conflicts: 0,
-                conflict_items: Vec::new(),
-            });
-        }
-    }
-
-    let (incoming_frontmatter, incoming_body) =
-        split_frontmatter_owned(&write.markdown).map_err(GatewayFailure::from)?;
-    let mut merged_metadata = incoming_frontmatter;
-    merge_json(&mut merged_metadata, write.metadata.clone());
-
-    let base_body = match &write.base {
-        BlockWriteBase::CurrentCanonical => None,
-        BlockWriteBase::Markdown { markdown, .. } => Some(
-            split_frontmatter_owned(markdown)
-                .map_err(GatewayFailure::from)?
-                .1,
-        ),
-    };
-    let base_version = match &write.base {
-        BlockWriteBase::Markdown {
-            version_id: Some(version_id),
-            ..
-        } => Some(version_id.clone()),
-        _ => None,
-    };
-
-    let actor = BlockTransactionActor {
-        kind: write.surface.clone(),
-        id: None,
-        label: write.actor_label.clone(),
-    };
-    let settings = TransactionSettings {
-        source: write.source.clone(),
-        origin_id,
-        metadata: Some(merged_metadata),
-        transaction,
-    };
-
-    let mut planned_conflicts: Vec<(ConflictHunk, Option<String>)> = Vec::new();
-    let mut op_count = 0usize;
-    let mut degraded = false;
-    let mut plan = |snapshot: &quarry_storage::BlockMutationState| {
-        if let Some(expected) = &strict_head
-            && *expected != snapshot.head_version_id
-        {
-            return Err(version_input_error(
-                ApiErrorCode::PreconditionFailed,
-                format!(
-                    "If-Match {expected} does not match the current head {} of {}",
-                    snapshot.head_version_id, write.path
-                ),
-                "If-Match",
-                expected,
-                Some(snapshot.head_version_id.clone()),
-            ));
-        }
-        planned_conflicts.clear();
-        let base = match &base_body {
-            Some(body) => ReconcileBase::Markdown(body),
-            None => ReconcileBase::CurrentCanonical,
-        };
-        let reconciled = reconcile(base, &incoming_body, &snapshot.rows, || {
-            Uuid::new_v4().to_string()
-        })
-        .map_err(|unsupported| {
-            GatewayError::new(
-                GatewayErrorCode::UnsupportedMarkdown,
-                unsupported.to_string(),
-            )
-        })?;
-        degraded = reconciled.degraded;
-        let top_ids: Vec<String> = snapshot
-            .rows
-            .iter()
-            .filter(|row| row.parent_block_id.is_none())
-            .map(|row| row.block_id.clone())
-            .collect();
-        let mut ops = sequential_ops(&top_ids, &reconciled.ops);
-        op_count = ops.len();
-        for conflict in reconciled.conflicts {
-            let hunk = ConflictHunk::from(conflict);
-            let existing_id = snapshot
-                .review_items
-                .iter()
-                .find(|item| item.state == BlockReviewState::Open && hunk.matches(item))
-                .map(|item| item.id.clone());
-            if existing_id.is_none() {
-                ops.push(BlockOp::ConflictAdd {
-                    after_block_id: hunk.after_block_id.clone(),
-                    base_markdown: hunk.base_markdown.clone(),
-                    incoming_markdown: hunk.incoming_markdown.clone(),
-                    canonical_markdown: hunk.canonical_markdown.clone(),
-                });
-            }
-            planned_conflicts.push((hunk, existing_id));
-        }
-        // Incoming conflict-marker soup (a half-resolved git merge) commits
-        // as content — writes never fail — but flags a review item in the
-        // same transaction. Skipping hunks a conflict item already carries
-        // keeps repeated saves from stacking flags and honors dismissals.
-        if let Some(hunk) = &marker_hunk {
-            let already_flagged = snapshot.review_items.iter().find(|item| {
-                item.kind == BlockReviewKind::Conflict
-                    && item.body.as_deref() == Some(hunk.as_str())
-            });
-            if already_flagged.is_none() {
-                planned_conflicts.push((ConflictHunk::marker(hunk), None));
-                ops.push(conflict_marker_flag_op(hunk));
-            } else if let Some(item) = already_flagged
-                && item.state == BlockReviewState::Open
-            {
-                planned_conflicts.push((ConflictHunk::marker(hunk), Some(item.id.clone())));
-            }
-        }
-        let ops_json = serde_json::to_value(&ops)
-            .map_err(|error| GatewayFailure::Api(QuarryError::Json(error).into()))?;
-        Ok(TransactionPlan { ops, ops_json })
-    };
-
-    // The shadow base's version engages the gateway's rebase ack when it
-    // still names a known version; an unknown/garbage clock must NOT fail a
-    // file write, so retry once clockless.
-    let mut ctx = TransactionContext {
-        client_tx_id: Uuid::new_v4().to_string(),
-        base_clock: base_version,
-        actor,
-    };
-    let reply = match gateway::execute_block_transaction(
-        state,
-        &write.scope,
-        &write.path,
-        &ctx,
-        &settings,
-        &mut plan,
-    )
-    .await
-    {
-        Err(GatewayFailure::Typed(error))
-            if error.code() == GatewayErrorCode::StaleBase && ctx.base_clock.is_some() =>
-        {
-            ctx.base_clock = None;
-            gateway::execute_block_transaction(
-                state,
-                &write.scope,
-                &write.path,
-                &ctx,
-                &settings,
-                &mut plan,
-            )
-            .await?
-        }
-        other => other?,
-    };
-    let committed = match reply {
-        TransactionReply::Committed(committed) => committed,
-        // Unreachable with a fresh UUID client_tx_id; surface honestly.
-        TransactionReply::Replayed(record) => {
-            return Err(GatewayFailure::Api(
-                QuarryError::Invariant(format!(
-                    "fresh client_tx_id {} unexpectedly replayed",
-                    record.client_tx_id
-                ))
-                .into(),
-            ));
-        }
-    };
-    let mut created_conflict_ids = committed.created_conflict_ids.into_iter();
-    let conflict_items: Vec<BlockMarkdownConflict> = planned_conflicts
-        .into_iter()
-        .filter_map(|(hunk, existing_id)| {
-            existing_id
-                .or_else(|| created_conflict_ids.next())
-                .map(|id| hunk.with_id(id))
-        })
-        .collect();
-    let conflicts = conflict_items.len();
-    if degraded {
-        tracing::warn!(
-            event = "document.block_write.lcs_degraded",
-            path = %loggable_path(&write),
-            surface = %write.surface,
-            "reconcile exceeded the LCS budget and fell back to bounded \
-             positional pairing; move detection was lost for this write"
-        );
-    }
-    tracing::info!(
-        event = "document.block_write.reconciled",
-        path = %loggable_path(&write),
-        surface = %write.surface,
-        result = %reconcile_result(op_count, conflicts),
-        op_count,
-        conflict_count = conflicts,
-        "whole-file write reconciled"
-    );
-    let canonical_body = canonical_body(state, &committed.outcome.document.id).await?;
-    Ok(BlockMarkdownWriteOutcome {
-        outcome: *committed.outcome,
-        changed: true,
-        canonical_body,
-        conflicts,
-        conflict_items,
-    })
+            })
+        }))
+        .await
 }
 
 /// The outcome vocabulary of the per-reconcile log: `conflicts` when review
@@ -959,7 +944,11 @@ async fn flag_imported_conflict_markers(
         let ops = vec![conflict_marker_flag_op(hunk)];
         let ops_json = serde_json::to_value(&ops)
             .map_err(|error| GatewayFailure::Api(QuarryError::Json(error).into()))?;
-        Ok(TransactionPlan { ops, ops_json })
+        Ok(TransactionPlan {
+            ops,
+            ops_json,
+            uses_current_snapshot: true,
+        })
     };
     let result = gateway::execute_block_transaction(
         state,
@@ -1193,7 +1182,7 @@ fn failure_to_quarry(failure: GatewayFailure) -> QuarryError {
     match failure {
         GatewayFailure::Typed(error) => match error.code() {
             GatewayErrorCode::UnsupportedMarkdown => QuarryError::UnsupportedMarkdown(
-                quarry_collab_codec::Unsupported::new(error.message().to_string()),
+                quarry_markdown::Unsupported::new(error.message().to_string()),
             ),
             GatewayErrorCode::PayloadTooLarge => {
                 QuarryError::PayloadTooLarge(error.message().to_string())
@@ -1222,7 +1211,7 @@ fn failure_to_quarry(failure: GatewayFailure) -> QuarryError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quarry_collab_codec::Attrs;
+    use quarry_markdown::Attrs;
 
     fn ids(items: &[&str]) -> Vec<String> {
         items.iter().map(|id| id.to_string()).collect()

@@ -10,6 +10,15 @@
 # Runtime state lives under /storage, and the container binds to $PORT when
 # provided by a PaaS, falling back to Quarry's default 7831.
 
+FROM rust:1-bookworm AS document-builder
+WORKDIR /app
+RUN rustup target add wasm32-unknown-unknown \
+ && cargo install wasm-bindgen-cli --version 0.2.127 --locked
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
+RUN cargo build --locked --release -p quarry-document-wasm --target wasm32-unknown-unknown \
+ && wasm-bindgen target/wasm32-unknown-unknown/release/quarry_document_wasm.wasm --target web --out-dir /document --out-name quarry_document
+
 FROM oven/bun:1 AS ui-builder
 WORKDIR /app/ui
 
@@ -17,8 +26,10 @@ COPY ui/package.json ui/bun.lock ./
 RUN bun install --frozen-lockfile
 
 COPY ui/ ./
-COPY crates/quarry-collab-codec/block-capabilities.json /app/crates/quarry-collab-codec/block-capabilities.json
-RUN bun run build
+COPY --from=document-builder /document ./src/generated/document
+COPY crates/quarry-markdown/block-capabilities.json /app/crates/quarry-markdown/block-capabilities.json
+# The preceding Rust stage built the exact same pinned WASM artifact.
+RUN bunx --no-install tsc -b && bunx --no-install vite build
 
 FROM rust:1-bookworm AS builder
 WORKDIR /app

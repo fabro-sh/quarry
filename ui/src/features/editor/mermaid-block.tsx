@@ -1,6 +1,7 @@
+import { useSourceDraft } from './source-draft-editor';
 import { useEffect, useState } from 'react';
 import { Code, Eye } from 'lucide-react';
-import { PlateElement, useEditorRef, type PlateElementProps } from 'platejs/react';
+import { PlateElement, useEditorRef, useReadOnly, type PlateElementProps } from 'platejs/react';
 
 import { cn } from '../../lib/utils';
 import { BaseMermaidPlugin, type TMermaidElement } from './mermaid';
@@ -83,12 +84,18 @@ function MermaidDiagram({ source }: { source: string }) {
 }
 
 // An atomic (void) Mermaid block. Preview renders the diagram; Code shows a
-// textarea bound to the node's `code`. Being void, the block is a single unit to
+// textarea with a private source draft. Being void, the block is a single unit to
 // Slate, so neighbouring edits and cursor moves can't reach the source.
 export function MermaidBlock(props: PlateElementProps<TMermaidElement>) {
   const editor = useEditorRef();
   const code = props.element.code ?? '';
-  const [editing, setEditing] = useState(() => code.trim().length === 0);
+  const readOnly = useReadOnly();
+  const edit = useSourceDraft(editor, String(props.element.id), 'code', code);
+  const editing = !!edit.draft;
+  useEffect(() => {
+    // Open an initially empty diagram once. Cancel leaves it in preview.
+    if (!code.trim()) edit.begin();
+  }, [editor, props.element.id]);
   return (
     <PlateElement {...props} className="group relative my-1">
       {/* The void element's content is non-editable; only the textarea (a form
@@ -98,13 +105,16 @@ export function MermaidBlock(props: PlateElementProps<TMermaidElement>) {
           aria-label={editing ? 'Preview Mermaid diagram' : 'Edit Mermaid source'}
           className="absolute right-1.5 top-1.5 z-10 inline-flex items-center gap-1 rounded border border-line bg-raised px-1.5 py-1 text-xs text-muted opacity-0 transition-opacity hover:text-body group-hover:opacity-100 focus-visible:opacity-100"
           data-testid="mermaid-toggle"
-          onClick={() => setEditing((value) => !value)}
+          onClick={() => {
+            if (editing) { if (readOnly) edit.cancel(); else edit.save(); }
+            else edit.begin();
+          }}
           type="button"
         >
           {editing ? <Eye size={13} /> : <Code size={13} />}
           {editing ? 'Preview' : 'Code'}
         </button>
-        {editing ? (
+        {editing ? (<>
           <textarea
             aria-label="Mermaid source"
             className={cn(
@@ -112,15 +122,15 @@ export function MermaidBlock(props: PlateElementProps<TMermaidElement>) {
               'focus:border-accent'
             )}
             data-testid="mermaid-source"
-            defaultValue={code}
-            onChange={(event) => {
-              const path = editor.api.findPath(props.element);
-              if (path) editor.tf.setNodes({ code: event.target.value }, { at: path });
-            }}
-            rows={Math.max(3, code.split('\n').length + 1)}
+            readOnly={readOnly}
+            value={edit.draft!.value}
+            onChange={(event) => edit.update(event.target.value)}
+            rows={Math.max(3, edit.draft!.value.split('\n').length + 1)}
             spellCheck={false}
           />
-        ) : (
+          {edit.draft!.error && <p role="alert" className="text-sm text-danger">{edit.draft!.error}</p>}
+          {!readOnly && <div className="flex gap-3 py-1 text-xs text-muted"><button type="button" onClick={edit.save}>Save source</button><button type="button" onClick={edit.cancel}>Cancel</button></div>}
+        </>) : (
           <MermaidDiagram source={code} />
         )}
       </div>

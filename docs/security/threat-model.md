@@ -1,6 +1,6 @@
 # Quarry Lightweight Threat Model
 
-Status: **Draft for review** · 2026-07-14
+Status: **Draft for review** · Document architecture updated 2026-09-05
 
 This document is a lightweight threat model of the Quarry platform, following
 Trail of Bits' TRAIL methodology (drawing from Mozilla's Rapid Risk Assessment
@@ -53,8 +53,7 @@ revisitable.
 In priority order:
 
 1. **Confirm the 2026-07-02 deployment blockers are fixed before exposure.**
-   This model's scenarios assume TLS at the edge, a locked-down admin GC, removal
-   of the unauthenticated `/v1/collab/{document_id}` route, edge rate
+   This model's scenarios assume TLS at the edge, a locked-down admin GC, scope validation on every native document endpoint, edge rate
    controls, `no-store` on secret-bearing responses, generic 5xx bodies,
    security headers/CSP, and a TTL reaper. Verify each control against the
    deployed build. AWS WAF and edge rate limiting are not part of the current
@@ -181,8 +180,7 @@ than repeating its findings.
 
 **Baseline assumption for the threat scenarios below:** the findings of the
 2026-07-02 review are assumed **already remediated** (TLS enforced at the edge;
-`/v1/admin/gc` locked down; the unauthenticated `/v1/collab/{document_id}` route
-removed; `Cache-Control: no-store` on secret-bearing responses; generic 5xx
+`/v1/admin/gc` locked down; temporary document access requires its capability; `Cache-Control: no-store` on secret-bearing responses; generic 5xx
 bodies; standard security headers including a restrictive CSP; a shortened
 anonymous TTL with a background reaper). AWS WAF, edge rate limiting, and
 application rate limiting are explicitly **not** assumed. The scenarios
@@ -209,16 +207,18 @@ ultimately against this data (its confidentiality, integrity, or availability).
   pointer. Never hard-deleted in the normal path — deletion is soft (a
   `deleted_at` flag); version rows and inlined content persist in the database
   even after garbage collection.
-- **Comments and suggestions.** Block-anchored review items (one table,
-  discriminated by kind), including suggested text edits an actor can accept.
+- **Comments and suggestions.** Native review records with retained character
+  targets, proposal content, decisions and discussion history. SQL rows are indexes.
 - **Presence and identity data.** Self-asserted collaborator names, cursors,
   colors, and agent IDs/labels. None of it is server-verified.
 - **Creation IP addresses.** The canonical full IPv4 or IPv6 address CloudFront
   reports for a newly created anonymous tmp document. Stored only in SQL for
   operator abuse investigations, never returned by the public API, and copied
   into database backups and snapshots.
-- **Collaboration session state.** In-memory Yjs/CRDT documents and awareness
-  data, relayed among connected clients over WebSockets.
+- **Native document state and local drafts.** Durable Automerge histories in SQL,
+  native caches and pending requests in browser IndexedDB, and downloadable
+  archives. Deleted characters can remain in this history. Remote selections
+  are temporary and separate from document state.
 - **Agent event journal.** A stream of per-document activity events. The journal
   is ingested regardless of build, but in the in-scope `tmp-documents` build the
   only HTTP egress is the per-document SSE stream (`…/events/stream`); the agent
@@ -251,7 +251,7 @@ flowchart TB
     subgraph CORE["🖥️ Server Core zone — one shared process"]
         router["axum router<br/>+ tracing middleware"]
         tmp["tmp-document handlers<br/>(secret-gated)"]
-        collab["Collab SessionHub<br/>(Yjs/CRDT)"]
+        collab["Native document authority<br/>(Automerge commands)"]
         presence["Presence registry"]
         journal["Agent-event journal<br/>(per-doc SSE egress)"]
         writer["Markdown gateway writer"]
@@ -277,8 +277,8 @@ flowchart TB
     router --> tmp
     router --> adminui
     tmp --> writer
-    tmp -.->|"WS upgrade"| collab
-    browser -.->|"wss: Yjs sync"| proxy
+    tmp -->|"native commands"| collab
+    browser -.->|"HTTPS: commands and state"| proxy
     collab --> presence
     collab --> journal
     writer --> db
@@ -311,7 +311,7 @@ document's capability URL.
 | CloudFront + ALB | Edge | Operator-run. Terminates TLS and applies forwarding, header, and cache rules. The exact creation behavior adds the trusted viewer-address header; no WAF is attached. |
 | axum router + tracing | Server Core | Single entry point; only global middleware is request tracing (redacts secrets from logged paths). No auth/CORS/rate-limit layer. |
 | tmp-document handlers | Server Core | The secret-gated CRUD + sub-resource surface (`/blocks`, `/review`, `/versions`, `/presence`, `/transactions`, `/ttl`, `/promote`, events). The only genuinely access-controlled component. |
-| Collab SessionHub (Yjs) | Server Core | Relays CRDT sync + awareness over WebSockets. `/v1/tmp/collab/{secret}/{room}` is secret-gated (the `{room}` segment is ignored); `/v1/collab/{document_id}` is **not** — it trusts a bare internal UUID. Both routes converge on one session hub keyed by the internal document UUID, which the server echoes back to clients (`x-quarry-document-id`) — the concrete mechanism behind T8. |
+| Native document authority | Server Core | Validates native commands, serializes by document ID and publishes state and projections atomically. Temporary routes require a capability. Library routes verify document scope and supplied invitations. |
 | Presence registry | Server Core | Stores self-declared agent presence; no verification of `X-Agent-Id` or display name. |
 | Agent-event journal | Server Core | Background ingest of document activity events for agent polling/streaming. |
 | Markdown gateway writer | Server Core | Reconciles Markdown writes into the block tree (diff3). Path inputs pass a central traversal guard. |
@@ -337,8 +337,7 @@ the exposure explicit.
 |---|---|---|---|---|
 | External | Server Core (via Edge) | Create a tmp document; server mints and returns the capability secret | HTTPS → HTTP | **None** — anonymous creation by design |
 | External | Server Core (via Edge) | Read / write a tmp document and all sub-resources (blocks, review, versions, presence, transactions, fork, TTL, events) | HTTPS → HTTP | **Capability secret** in URL (shape check + DB lookup) |
-| External | Server Core (via Edge) | Real-time collaboration on a tmp document (Yjs sync + awareness) | WSS → WS | **Capability secret** (`/v1/tmp/collab/{secret}/{room}`; the `{room}` segment is ignored) |
-| External | Server Core (via Edge) | Real-time collaboration addressed by internal document UUID | WSS → WS | **None** — `/v1/collab/{document_id}` trusts a bare UUID that the server echoes to clients in headers/bodies; a second, weaker bearer capability parallel to the secret |
+| External | Server Core (via Edge) | Native document reads, commands, archives, events and selections | HTTPS | **Capability secret** for temporary documents; library scope and invitation checks for library documents |
 | External | Server Core (via Edge) | Self-declared presence / identity (agent ID, display name, cursor, color) | HTTPS → HTTP + WS awareness | **None beyond the document secret** — identity itself is unverified and freely spoofable |
 | External | Server Core (via Edge) | Trigger global garbage collection (`POST /v1/admin/gc`) | HTTPS → HTTP | **None** — anonymous; holds the global write lock while running |
 | External | Server Core (via Edge) | Discovery / health / capabilities / OpenAPI / agent-docs / skill file | HTTPS → HTTP | **None** — intentionally public. Note: `/.well-known/agent.json` reflects the client `Host` / `X-Forwarded-Proto` into the `api_base` and every advertised endpoint URL, so this is an agent-*actionable* channel, not just passive disclosure (see T12) |
@@ -355,7 +354,7 @@ the exposure explicit.
   boundary between one tenant's data and another's; every row that isn't
   "capability secret" is a way to reach data without one.
 - **Three connections cross into Server Core with no credential at all**: the
-  `/v1/collab/{document_id}` websocket, `POST /v1/admin/gc`, and the discovery
+  public document creation, `POST /v1/admin/gc`, and the discovery
   surface. The first two are the highest-value structural fixes.
 - **The secret's confidentiality depends on components outside the server** —
   TLS at the proxy, no path logging, no CDN caching of `/tmp/*`, and (per T12)
@@ -425,7 +424,7 @@ CloudFront, tmp-document handlers, Storage, UI assets._
 ### Identity and social engineering
 
 **T4 — Identity spoofing to socially engineer acceptance.**
-Both collaborator presence (Yjs awareness name/color) and agent identity
+Both collaborator presence (native cursor author labels) and agent identity
 (`X-Agent-Id`, label, provider brand badge) are entirely self-asserted and
 unverified. A malicious collaborator can appear as a trusted teammate, or a
 malicious agent can wear a trusted vendor's brand badge, to induce a human or
@@ -481,14 +480,13 @@ data. The blast radius of any single defect is the whole system. _Actors:
 anonymous internet user, malicious collaborator. Components: all Server Core
 handlers, Storage._
 
-**T8 — Residual unauthenticated collaboration surface.**
-Even assuming `/v1/collab/{document_id}` is removed (2026-07-02 BLOCKER 3), the
-internal document UUID is still echoed to clients in the `x-quarry-document-id`
-header and JSON bodies. Any future re-introduction of a UUID-addressed route, or
-any component that trusts that UUID as a credential, silently becomes a
-secret-bypass. The model should treat the internal UUID as non-secret and never
-authorize on it. _Actor: capability holder, malicious collaborator. Component:
-collab SessionHub._
+**T8 — Confusing document identity with authorization.**
+The internal document UUID is not secret. Library clients use ID routes so edits
+follow renames. Those handlers must check library scope and supplied invitations;
+they must never expose a temporary document by UUID. Temporary state, command,
+archive, event and selection endpoints require the capability secret. New endpoints
+must preserve this boundary. _Actor: capability holder, malicious collaborator.
+Component: native document handlers and scope resolution._
 
 **T9 — Data remanence contradicts a "delete" expectation.**
 Deletion is soft and versions are immutable: `document_versions` rows and
@@ -520,13 +518,14 @@ can mint access to any document by reading its secret. There is no
 defense-in-depth (no encryption at rest, no per-tenant key) behind the host
 boundary. _Actors: Fabro operator, hosting provider. Component: Storage._
 
-**T11 — Availability of the shared collaboration plane.**
-Even with connection and message caps, a malicious collaborator inside a document
-can degrade the real-time experience for co-editors by flooding CRDT updates or
-awareness churn within that document, and the in-memory Yjs document for any open
-session remains resident. The shared-process design means pathological usage in
-one document consumes resources shared with all others. _Actor: malicious
-collaborator. Component: collab SessionHub._
+**T11 — Availability of the shared document service.**
+A collaborator can submit expensive commands, large imports or archive histories,
+or high volumes of selection updates. Validation, native projection, compression
+and SQL publication consume shared CPU and memory. Request size, operation counts,
+work limits and deployment rate controls require testing against the actual
+native engine. Temporary selections expire; persistent document histories and
+browser drafts have different retention rules. _Actor: malicious collaborator.
+Components: document handlers, native engine, storage and browser outbox._
 
 ## A. Threat Model Maintenance
 

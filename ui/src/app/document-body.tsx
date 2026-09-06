@@ -2,10 +2,10 @@ import { Download, FileArchive, FileText, Image as ImageIcon } from 'lucide-reac
 import type { ReactNode } from 'react';
 
 import { isTextContentType } from '../api/client';
-import { type CollabSaveState } from '../features/collab/save-state';
+import { type DocumentSaveState } from '../features/editor/document-status';
 import {
   MarkdownEditor,
-  type CollabEditorConfig,
+  type DocumentEditorConfig,
   type EditorMode,
   type ImageApi,
   type WikiLinkApi,
@@ -16,11 +16,8 @@ export interface DocumentBodyProps {
   readonly author: string;
   readonly byteSize?: number;
   readonly className?: string;
-  readonly collabBaseUrl?: string;
-  readonly collabEnabled: boolean;
-  readonly collabRoomName?: string;
-  readonly collabSessionId: string;
-  readonly collabToken?: string;
+  readonly editorSessionId: string;
+  readonly documentToken?: string;
   readonly content: string;
   readonly contentHash?: string | null;
   readonly contentType: string;
@@ -28,8 +25,10 @@ export interface DocumentBodyProps {
   readonly href: string;
   readonly image?: ImageApi;
   readonly mode: EditorMode;
+  readonly onReviewOpen?: () => void;
+  readonly onTitleChange?: (title: string | null) => void;
   readonly onChange: (content: string) => void;
-  readonly onSaveStateChange: (state: CollabSaveState) => void;
+  readonly onSaveStateChange: (state: DocumentSaveState) => void;
   readonly path: string;
   readonly wikiLink: WikiLinkApi;
 }
@@ -38,11 +37,8 @@ export function DocumentBody({
   author,
   byteSize,
   className,
-  collabBaseUrl,
-  collabEnabled,
-  collabRoomName,
-  collabSessionId,
-  collabToken,
+  editorSessionId,
+  documentToken,
   content,
   contentHash,
   contentType,
@@ -51,30 +47,22 @@ export function DocumentBody({
   image,
   mode,
   onChange,
+  onReviewOpen,
+  onTitleChange,
   onSaveStateChange,
   path,
   wikiLink,
 }: DocumentBodyProps): ReactNode {
   if (isMarkdownDocument(path, contentType)) {
-    const collab: CollabEditorConfig | undefined = collabEnabled && documentId
-      ? {
-          documentId,
-          baseUrl: collabBaseUrl,
-          onSaveStateChange,
-          roomName: collabRoomName,
-          sessionId: collabSessionId,
-          token: collabToken,
-        }
-      : undefined;
+    const document: DocumentEditorConfig = { documentId, sessionId: editorSessionId, token: documentToken, onSaveStateChange, onReviewOpen, onTitleChange };
     return (
       <MarkdownEditor
         author={author}
         className={className}
-        collab={collab}
-        content={content}
+        document={document}
+        documentUrl={href}
         image={image}
         mode={mode}
-        onChange={onChange}
         wikiLink={wikiLink}
       />
     );

@@ -1,0 +1,18 @@
+[package]
+name = "quarry-document-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+quarry-document = { workspace = true, features = ["browser"] }
+quarry-markdown.workspace = true
+wasm-bindgen.workspace = true
+serde_json.workspace = true

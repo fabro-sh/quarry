@@ -1,4 +1,4 @@
-use crate::{ALLOW_DOCUMENT_KIND_CHANGE_HEADER, ApiError, ApiErrorCode};
+use crate::{ApiError, ApiErrorCode};
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Response;
@@ -51,14 +51,12 @@ pub(crate) fn tmp_metadata_from_headers(
 
 pub(crate) async fn reject_block_document_downgrade_for_library(
     store: &QuarryStore,
-    headers: &HeaderMap,
+    _headers: &HeaderMap,
     library: &str,
     path: &str,
     incoming_kind: quarry_storage::DocumentKind,
 ) -> Result<(), ApiError> {
-    if incoming_kind != quarry_storage::DocumentKind::RawDocument
-        || document_kind_change_allowed(headers)
-    {
+    if incoming_kind != quarry_storage::DocumentKind::RawDocument {
         return Ok(());
     }
     match store.head_document(library, path).await {
@@ -84,18 +82,11 @@ fn reject_block_document_downgrade(
         && incoming_kind == quarry_storage::DocumentKind::RawDocument
     {
         return Err(QuarryError::Conflict(format!(
-            "refusing to change {request_path} from a Markdown block document to a raw document; send {ALLOW_DOCUMENT_KIND_CHANGE_HEADER}: true to opt in"
+            "Cannot change {request_path} from a Markdown block document to a raw document because it has native history; create a separate file"
         ))
         .into());
     }
     Ok(())
-}
-
-fn document_kind_change_allowed(headers: &HeaderMap) -> bool {
-    headers
-        .get(ALLOW_DOCUMENT_KIND_CHANGE_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
 }
 
 pub(crate) fn metadata_from_headers(
@@ -123,9 +114,15 @@ pub(crate) fn metadata_from_headers(
 pub(crate) fn precondition_from_headers(
     headers: &HeaderMap,
 ) -> Result<WritePrecondition, ApiError> {
-    if let Some(value) = headers.get(header::IF_NONE_MATCH)
-        && value.to_str().unwrap_or_default().trim() == "*"
-    {
+    if let Some(value) = headers.get(header::IF_NONE_MATCH) {
+        if headers.contains_key(header::IF_MATCH)
+            || value.to_str().unwrap_or_default().trim() != "*"
+        {
+            return Err(ApiError::new(
+                ApiErrorCode::InvalidRequest,
+                "If-None-Match must be * and cannot be combined with If-Match",
+            ));
+        }
         return Ok(WritePrecondition::IfNoneMatch);
     }
     if let Some(value) = headers.get(header::IF_MATCH) {

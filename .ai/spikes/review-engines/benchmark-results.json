@@ -1,0 +1,86 @@
+{
+  "runtime": "v26.0.0",
+  "cpu": "Apple M5 Max",
+  "workload": "500 deterministic single-character insertions at scattered positions, one warmup then five measured runs. Core operations only.",
+  "storageCaveat": "Automerge retains change history. Yjs full state does not provide equivalent historical snapshots. ProseMirror includes initial/current JSON snapshots and serialized steps. Bytes are not equivalent retention guarantees.",
+  "results": [
+    {
+      "engine": "Automerge",
+      "characters": 10000,
+      "edits": 500,
+      "repeats": 5,
+      "initMedianMs": 3.8286659999999983,
+      "editP50Ms": 0.028042000000027656,
+      "editP95Ms": 0.05587500000001455,
+      "totalEditsMedianMs": 16.738534999999928,
+      "saveMedianMs": 0.33087500000002024,
+      "loadMedianMs": 4.149084000000016,
+      "bytes": 4847
+    },
+    {
+      "engine": "Yjs",
+      "characters": 10000,
+      "edits": 500,
+      "repeats": 5,
+      "initMedianMs": 0.04650000000003729,
+      "editP50Ms": 0.0020420000000171967,
+      "editP95Ms": 0.005499999999983629,
+      "totalEditsMedianMs": 1.0517229999989581,
+      "saveMedianMs": 0.2776670000000081,
+      "loadMedianMs": 0.4572499999999877,
+      "bytes": 22739
+    },
+    {
+      "engine": "Central ProseMirror",
+      "characters": 10000,
+      "edits": 500,
+      "repeats": 5,
+      "initMedianMs": 0.008290999999985615,
+      "editP50Ms": 0.0013749999999959073,
+      "editP95Ms": 0.004042000000026746,
+      "totalEditsMedianMs": 0.8216310000004796,
+      "saveMedianMs": 0.14658400000001848,
+      "loadMedianMs": 0.17191700000000765,
+      "bytes": 67615
+    },
+    {
+      "engine": "Automerge",
+      "characters": 100000,
+      "edits": 500,
+      "repeats": 5,
+      "initMedianMs": 38.375999999999976,
+      "editP50Ms": 0.027416000000016538,
+      "editP95Ms": 0.04383299999994961,
+      "totalEditsMedianMs": 14.577420000000643,
+      "saveMedianMs": 0.6857499999999845,
+      "loadMedianMs": 29.22404199999994,
+      "bytes": 6691
+    },
+    {
+      "engine": "Yjs",
+      "characters": 100000,
+      "edits": 500,
+      "repeats": 5,
+      "initMedianMs": 0.0482920000000604,
+      "editP50Ms": 0.0019999999999527063,
+      "editP95Ms": 0.0025000000000545697,
+      "totalEditsMedianMs": 1.1164929999994229,
+      "saveMedianMs": 0.6299579999999878,
+      "loadMedianMs": 0.34474999999997635,
+      "bytes": 114499
+    },
+    {
+      "engine": "Central ProseMirror",
+      "characters": 100000,
+      "edits": 500,
+      "repeats": 5,
+      "initMedianMs": 0.007582999999954154,
+      "editP50Ms": 0.0027910000000019863,
+      "editP95Ms": 0.004417000000103144,
+      "totalEditsMedianMs": 2.6363329999995813,
+      "saveMedianMs": 0.22995900000000802,
+      "loadMedianMs": 0.22045800000000781,
+      "bytes": 248579
+    }
+  ]
+}

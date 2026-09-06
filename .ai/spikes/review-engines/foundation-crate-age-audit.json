@@ -1,0 +1,143 @@
+{
+  "cutoff": "2026-09-04T03:18:04.880789+00:00",
+  "packages": [
+    {
+      "name": "automerge",
+      "version": "0.11.0",
+      "published": "2026-08-12T00:01:55.507259Z",
+      "eligible": true
+    },
+    {
+      "name": "block-buffer",
+      "version": "0.12.1",
+      "published": "2026-06-11T15:40:05.682576Z",
+      "eligible": true
+    },
+    {
+      "name": "borsh",
+      "version": "1.8.1",
+      "published": "2026-08-26T20:58:11.161301Z",
+      "eligible": true
+    },
+    {
+      "name": "const-oid",
+      "version": "0.10.2",
+      "published": "2026-01-07T23:11:57.242553Z",
+      "eligible": true
+    },
+    {
+      "name": "crypto-common",
+      "version": "0.2.2",
+      "published": "2026-05-19T16:01:22.304187Z",
+      "eligible": true
+    },
+    {
+      "name": "digest",
+      "version": "0.11.3",
+      "published": "2026-05-03T12:54:48.023505Z",
+      "eligible": true
+    },
+    {
+      "name": "flate2",
+      "version": "1.1.10",
+      "published": "2026-08-28T04:35:22.192325Z",
+      "eligible": true
+    },
+    {
+      "name": "hexane",
+      "version": "1.0.0-alpha.5",
+      "published": "2026-08-11T23:25:18.096556Z",
+      "eligible": true
+    },
+    {
+      "name": "hybrid-array",
+      "version": "0.4.14",
+      "published": "2026-07-30T16:40:03.901575Z",
+      "eligible": true
+    },
+    {
+      "name": "itertools",
+      "version": "0.15.0",
+      "published": "2026-06-16T15:09:28.880416Z",
+      "eligible": true
+    },
+    {
+      "name": "js-sys",
+      "version": "0.3.104",
+      "published": "2026-08-08T00:57:01.489848Z",
+      "eligible": true
+    },
+    {
+      "name": "leb128",
+      "version": "0.2.7",
+      "published": "2026-06-15T18:58:07.087966Z",
+      "eligible": true
+    },
+    {
+      "name": "sha2",
+      "version": "0.11.0",
+      "published": "2026-03-25T15:05:27.949444Z",
+      "eligible": true
+    },
+    {
+      "name": "smol_str",
+      "version": "0.3.6",
+      "published": "2026-03-04T06:27:06.114096Z",
+      "eligible": true
+    },
+    {
+      "name": "unicode-segmentation",
+      "version": "1.13.3",
+      "published": "2026-06-01T15:58:43.979474Z",
+      "eligible": true
+    },
+    {
+      "name": "wasip2",
+      "version": "1.0.4+wasi-0.2.12",
+      "published": "2026-06-12T17:42:43.116313Z",
+      "eligible": true
+    },
+    {
+      "name": "wasm-bindgen",
+      "version": "0.2.127",
+      "published": "2026-08-08T00:56:59.500214Z",
+      "eligible": true
+    },
+    {
+      "name": "wasm-bindgen-futures",
+      "version": "0.4.77",
+      "published": "2026-08-08T00:57:06.975258Z",
+      "eligible": true
+    },
+    {
+      "name": "wasm-bindgen-macro",
+      "version": "0.2.127",
+      "published": "2026-08-08T00:56:57.526148Z",
+      "eligible": true
+    },
+    {
+      "name": "wasm-bindgen-macro-support",
+      "version": "0.2.127",
+      "published": "2026-08-08T00:56:55.670334Z",
+      "eligible": true
+    },
+    {
+      "name": "wasm-bindgen-shared",
+      "version": "0.2.127",
+      "published": "2026-08-08T00:56:52.445936Z",
+      "eligible": true
+    },
+    {
+      "name": "web-sys",
+      "version": "0.3.104",
+      "published": "2026-08-08T00:57:03.760573Z",
+      "eligible": true
+    },
+    {
+      "name": "zlib-rs",
+      "version": "0.6.7",
+      "published": "2026-08-03T13:07:20.445034Z",
+      "eligible": true
+    }
+  ]
+}

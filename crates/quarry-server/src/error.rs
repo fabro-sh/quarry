@@ -11,9 +11,11 @@ use utoipa::ToSchema;
 #[non_exhaustive]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ApiErrorCode {
+    Forbidden,
     InvalidRequest,
     NotFound,
     Gone,
+    PreconditionRequired,
     PreconditionFailed,
     Conflict,
     MethodNotAllowed,
@@ -37,9 +39,11 @@ pub enum ApiErrorCode {
 impl ApiErrorCode {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            Self::Forbidden => "FORBIDDEN",
             Self::InvalidRequest => "INVALID_REQUEST",
             Self::NotFound => "NOT_FOUND",
             Self::Gone => "GONE",
+            Self::PreconditionRequired => "PRECONDITION_REQUIRED",
             Self::PreconditionFailed => "PRECONDITION_FAILED",
             Self::Conflict => "CONFLICT",
             Self::MethodNotAllowed => "METHOD_NOT_ALLOWED",
@@ -73,11 +77,13 @@ impl ApiErrorCode {
 
     pub(crate) const fn status(self) -> StatusCode {
         match self {
+            Self::Forbidden => StatusCode::FORBIDDEN,
             Self::InvalidRequest | Self::InvalidTransaction | Self::UnknownBlockType => {
                 StatusCode::BAD_REQUEST
             }
             Self::NotFound | Self::BlockDeleted | Self::AnchorNotFound => StatusCode::NOT_FOUND,
             Self::Gone => StatusCode::GONE,
+            Self::PreconditionRequired => StatusCode::PRECONDITION_REQUIRED,
             Self::PreconditionFailed | Self::StaleBase | Self::BlockMoveConflict => {
                 StatusCode::PRECONDITION_FAILED
             }
@@ -197,6 +203,7 @@ impl ApiError {
 impl From<QuarryError> for ApiError {
     fn from(value: QuarryError) -> Self {
         let code = match &value {
+            QuarryError::ReadOnly(_) => ApiErrorCode::Forbidden,
             QuarryError::NotFound(_) => ApiErrorCode::NotFound,
             QuarryError::Gone(_) => ApiErrorCode::Gone,
             QuarryError::PreconditionFailed(_) => ApiErrorCode::PreconditionFailed,
@@ -276,6 +283,7 @@ pub(crate) fn fallback_error_for_status(status: StatusCode) -> ApiError {
         StatusCode::BAD_REQUEST => ApiErrorCode::InvalidRequest,
         StatusCode::NOT_FOUND => ApiErrorCode::NotFound,
         StatusCode::GONE => ApiErrorCode::Gone,
+        StatusCode::PRECONDITION_REQUIRED => ApiErrorCode::PreconditionRequired,
         StatusCode::PRECONDITION_FAILED => ApiErrorCode::PreconditionFailed,
         StatusCode::CONFLICT => ApiErrorCode::Conflict,
         StatusCode::METHOD_NOT_ALLOWED => ApiErrorCode::MethodNotAllowed,
@@ -290,6 +298,7 @@ pub(crate) fn fallback_error_for_status(status: StatusCode) -> ApiError {
         ApiErrorCode::InvalidRequest => "invalid request",
         ApiErrorCode::NotFound => "not found",
         ApiErrorCode::Gone => "gone",
+        ApiErrorCode::PreconditionRequired => "precondition required",
         ApiErrorCode::PreconditionFailed => "precondition failed",
         ApiErrorCode::Conflict => "conflict",
         ApiErrorCode::MethodNotAllowed => "method not allowed",

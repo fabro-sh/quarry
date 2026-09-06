@@ -71,6 +71,7 @@ jobs:
           cache-on-failure: true
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       # quarry-server embeds ui/dist at compile time (rust_embed)
+      - uses: ./.github/actions/setup-document
       - name: Build browser bundle
         working-directory: ui
         run: |
@@ -81,6 +82,8 @@ jobs:
       # puts) is feature-gated; run all package features so it cannot compile
       # to a silent zero-test path.
       - run: cargo clippy --locked -p quarry-server -p quarry-cli -p quarry --all-features --all-targets -- -D warnings
+      - run: cargo clippy --locked -p quarry-server -p quarry-cli -p quarry --no-default-features --features lib-documents --all-targets -- -D warnings
+      - run: cargo clippy --locked -p quarry-server -p quarry-cli -p quarry --no-default-features --all-targets -- -D warnings
 
   test:
     name: Test (Linux)
@@ -104,16 +107,24 @@ jobs:
           cache-on-failure: true
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       # quarry-server embeds ui/dist at compile time (rust_embed)
+      - uses: ./.github/actions/setup-document
       - name: Build browser bundle
         working-directory: ui
         run: |
           bun install --frozen-lockfile
           bun run build
       - run: cargo test --locked --workspace
+      - name: Test mounted FUSE with concurrent Git and HTTP writes
+        run: |
+          test -c /dev/fuse
+          cargo test --locked -p quarry-fuse --test mixed_interfaces kernel_mounted -- --ignored
       # The lib-documents suites (rest_api.rs, the CLI library commands)
       # compile to ZERO tests without the feature — the workspace run above
       # never executes them.
       - run: cargo test --locked -p quarry-server -p quarry-cli -p quarry --all-features
+      - run: cargo test --locked -p quarry-server --no-default-features --features tmp-documents
+      - run: cargo test --locked -p quarry-server --no-default-features --features lib-documents
+      - run: cargo test --locked -p quarry-server --no-default-features --test feature_surface
 
   test-macos:
     name: Test (macOS)
@@ -134,6 +145,7 @@ jobs:
           cache-on-failure: true
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       # quarry-server embeds ui/dist at compile time (rust_embed)
+      - uses: ./.github/actions/setup-document
       - name: Build browser bundle
         working-directory: ui
         run: |

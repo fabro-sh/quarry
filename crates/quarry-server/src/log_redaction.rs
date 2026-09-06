@@ -4,13 +4,17 @@ use std::borrow::Cow;
 pub(crate) const TMP_SECRET_PLACEHOLDER: &str = "<tmp-secret>";
 
 const TMP_BROWSER_PREFIX: &str = "/tmp/";
-const TMP_COLLAB_PREFIX: &str = "/v1/tmp/collab/";
+const TMP_REST_PREFIX: &str = "/v1/tmp/";
 const TMP_DOCUMENT_PREFIX: &str = "/v1/tmp/documents/";
 
 pub(crate) fn redact_path(path: &str) -> Cow<'_, str> {
-    [TMP_DOCUMENT_PREFIX, TMP_COLLAB_PREFIX, TMP_BROWSER_PREFIX]
+    [TMP_DOCUMENT_PREFIX, TMP_BROWSER_PREFIX]
         .into_iter()
         .find_map(|prefix| redact_segment_after_prefix(path, prefix))
+        .or_else(|| {
+            let (resource, _) = path.strip_prefix(TMP_REST_PREFIX)?.split_once('/')?;
+            redact_segment_after_prefix(path, &format!("{TMP_REST_PREFIX}{resource}/"))
+        })
         .map_or(Cow::Borrowed(path), Cow::Owned)
 }
 
@@ -100,10 +104,10 @@ mod tests {
     }
 
     #[test]
-    fn redacts_tmp_collab_routes() {
+    fn redacts_secrets_even_on_unknown_tmp_resources() {
         assert_eq!(
-            redact_path(&format!("/v1/tmp/collab/{SECRET}/content")),
-            "/v1/tmp/collab/<tmp-secret>/content"
+            redact_path(&format!("/v1/tmp/unknown/{SECRET}/content")),
+            "/v1/tmp/unknown/<tmp-secret>/content"
         );
     }
 

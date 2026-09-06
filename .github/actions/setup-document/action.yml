@@ -1,0 +1,16 @@
+name: Set up the document engine
+description: Install the pinned Rust/WASM bridge used by the browser document engine.
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+      with:
+        targets: wasm32-unknown-unknown
+    - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+      with:
+        shared-key: document-wasm
+    - shell: bash
+      run: |
+        if ! wasm-bindgen --version 2>/dev/null | grep -qx 'wasm-bindgen 0.2.127'; then
+          cargo install wasm-bindgen-cli --version 0.2.127 --locked --force
+        fi

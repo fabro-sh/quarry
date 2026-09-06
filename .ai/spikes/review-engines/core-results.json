@@ -1,0 +1,152 @@
+{
+  "runtime": "v26.0.0",
+  "results": [
+    {
+      "engine": "Automerge",
+      "case": "cursor-pair boundary start",
+      "pass": true,
+      "evidence": {
+        "quote": "TARGET",
+        "desired": "TARGET",
+        "meetsExclusiveBoundary": true,
+        "note": "Cursor move option concerns deletion, not insertion affinity."
+      }
+    },
+    {
+      "engine": "Automerge",
+      "case": "native non-expanding mark boundary start",
+      "pass": true,
+      "evidence": {
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Yjs",
+      "case": "relative-position boundary start",
+      "pass": true,
+      "evidence": {
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Automerge",
+      "case": "cursor-pair boundary end",
+      "pass": true,
+      "evidence": {
+        "quote": "TARGET+",
+        "desired": "TARGET",
+        "meetsExclusiveBoundary": false,
+        "note": "Cursor move option concerns deletion, not insertion affinity."
+      }
+    },
+    {
+      "engine": "Automerge",
+      "case": "native non-expanding mark boundary end",
+      "pass": true,
+      "evidence": {
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Yjs",
+      "case": "relative-position boundary end",
+      "pass": true,
+      "evidence": {
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Automerge",
+      "case": "stable block object: move races edit and comment",
+      "pass": true,
+      "evidence": {
+        "quote": "TAR!GET",
+        "order": [
+          "b",
+          "a"
+        ],
+        "scope": "One mover; no editor binding or general concurrent tree moves."
+      }
+    },
+    {
+      "engine": "Yjs",
+      "case": "stable block object: move races edit and comment",
+      "pass": true,
+      "evidence": {
+        "quote": "TAR!GET",
+        "order": [
+          "b",
+          "a"
+        ],
+        "scope": "One mover; requires a different document model and editor integration."
+      }
+    },
+    {
+      "engine": "Automerge",
+      "case": "two offline accept commands duplicate proposal text",
+      "pass": true,
+      "evidence": {
+        "text": "APPROVEDAPPROVED",
+        "status": "accepted",
+        "meetsExactlyOnce": false
+      }
+    },
+    {
+      "engine": "Yjs",
+      "case": "two offline accept commands duplicate proposal text",
+      "pass": true,
+      "evidence": {
+        "text": "APPROVEDAPPROVED",
+        "status": "accepted",
+        "meetsExactlyOnce": false
+      }
+    },
+    {
+      "engine": "Authority (usable with all three)",
+      "case": "serialized decision and request deduplication",
+      "pass": true,
+      "evidence": {
+        "text": "APPROVED",
+        "responses": [
+          "accepted",
+          "already-decided",
+          "accepted"
+        ],
+        "scope": "Single authority transaction; durable storage/crash recovery not implemented."
+      }
+    },
+    {
+      "engine": "Automerge",
+      "case": "binary restart accepts delayed comment created before restart",
+      "pass": true,
+      "evidence": {
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Yjs",
+      "case": "binary restart accepts delayed comment created before restart",
+      "pass": true,
+      "evidence": {
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Automerge",
+      "case": "JSON reconstruction does not retain cursor identity",
+      "pass": true,
+      "evidence": {
+        "quote": null,
+        "error": "Cannot getCursorPosition: RangeError: cursor 10@3056438543af1a309b963c1c0bc47a96 is invalid"
+      }
+    },
+    {
+      "engine": "Yjs",
+      "case": "JSON reconstruction does not retain cursor identity",
+      "pass": true,
+      "evidence": {
+        "quote": null
+      }
+    }
+  ]
+}

@@ -9,3 +9,4 @@ ui/dist/*
 ui/test-results/
 logs
 mnt
+ui/src/generated/document/

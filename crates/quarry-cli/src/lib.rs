@@ -29,7 +29,7 @@ mod detect_agent;
 mod logging {
     use tracing_subscriber::EnvFilter;
 
-    pub const DEVELOPMENT_FILTER: &str = "warn,quarry=debug,quarry_cli=debug,quarry_server=debug,quarry_storage=debug,quarry_git=debug,quarry_fuse=debug,quarry_cas=debug,quarry_collab_codec=debug";
+    pub const DEVELOPMENT_FILTER: &str = "warn,quarry=debug,quarry_cli=debug,quarry_server=debug,quarry_storage=debug,quarry_git=debug,quarry_fuse=debug,quarry_cas=debug,quarry_markdown=debug";
     pub const QUIET_FILTER: &str = "warn";
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -312,8 +312,8 @@ struct PutCommand {
     file: PathBuf,
 
     /// Merge against this version's content (from `get --show-version` or an
-    /// earlier put) instead of the current canonical state, so concurrent
-    /// edits survive or surface as conflict review items.
+    /// earlier put). Required to update existing Markdown. Concurrent edits
+    /// survive or surface as conflict review items; unversioned puts create only.
     #[arg(long)]
     base_version: Option<String>,
 }
@@ -566,15 +566,9 @@ pub async fn run() -> Result<()> {
             let outcome = if quarry_storage::document_kind(&command.path, &content_type)
                 == DocumentKind::BlockDocument
             {
-                // Phase 4: markdown puts reconcile via diff3. Without
-                // --base-version the base IS the current canonical state —
-                // the two-way degenerate merge that applies the file
-                // wholesale and can neither conflict nor DETECT a conflict,
-                // silently reverting anything committed since the CLI's
-                // read. With --base-version the write is a true three-way
-                // merge against that version's content. The CLI process
-                // owns the database exclusively, so no live session can
-                // exist; the writer trivially runs rows-mode.
+                // Existing Markdown requires the version used to prepare the
+                // input file. A missing base may create or repeat identical
+                // bytes, but must never overwrite edits made since that read.
                 let base = match &command.base_version {
                     Some(version_id) => {
                         let version = store
@@ -592,7 +586,7 @@ pub async fn run() -> Result<()> {
                             version_id: Some(version_id.clone()),
                         }
                     }
-                    None => BlockWriteBase::CurrentCanonical,
+                    None => BlockWriteBase::Unversioned,
                 };
                 let state = quarry_server::app_state(store.clone());
                 let _markdown_writer = quarry_server::install_markdown_writer(&state);
@@ -604,6 +598,7 @@ pub async fn run() -> Result<()> {
                 })?;
                 store
                     .write_block_markdown(BlockMarkdownWrite {
+                        document_id: None,
                         scope: DocumentScopeRef::library(&command.library),
                         path: command.path.clone(),
                         markdown,
@@ -1071,7 +1066,7 @@ mod tests {
         assert_default_filter_enables_crate(&config, "quarry_git");
         assert_default_filter_enables_crate(&config, "quarry_fuse");
         assert_default_filter_enables_crate(&config, "quarry_cas");
-        assert_default_filter_enables_crate(&config, "quarry_collab_codec");
+        assert_default_filter_enables_crate(&config, "quarry_markdown");
     }
 
     #[test]

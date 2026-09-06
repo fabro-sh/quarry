@@ -1,0 +1,34 @@
+diff --git i/ui/playwright.config.ts w/ui/playwright.config.ts
+index 0573939..a01e0dd 100644
+--- i/ui/playwright.config.ts
++++ w/ui/playwright.config.ts
+@@ -17,13 +17,13 @@ export default defineConfig({
+   // live-*.spec.ts run against a real quarry server via playwright.live.config.ts.
+   testIgnore: /live-.*\.spec\.ts/,
+   use: {
+-    baseURL: 'http://127.0.0.1:5173',
++    baseURL: 'http://127.0.0.1:5193',
+     trace: 'retain-on-failure',
+   },
+   webServer: {
+-    command: 'bun run dev -- --host 127.0.0.1 --port 5173',
++    command: 'bun run dev -- --host 127.0.0.1 --port 5193',
+     reuseExistingServer: !process.env.CI,
+     timeout: 30_000,
+-    url: 'http://127.0.0.1:5173',
++    url: 'http://127.0.0.1:5193',
+   },
+ });
+diff --git i/ui/tests/workspace.spec.ts w/ui/tests/workspace.spec.ts
+index 96b0413..2db4477 100644
+--- i/ui/tests/workspace.spec.ts
++++ w/ui/tests/workspace.spec.ts
+@@ -227,6 +227,8 @@ test.describe('Quarry Browser smoke flows', () => {
+     const p95KeyToFrame = sortedLatency[percentileIndex] ?? Number.POSITIVE_INFINITY;
+     const maxFrameGap = Math.max(...metrics.frameGaps);
+ 
++    console.info('QUARRY_CHROME_BASELINE', JSON.stringify({ markdown_bytes: Buffer.byteLength(content), keys: typed.length,
++      p50_key_to_frame_ms: sortedLatency[Math.floor(sortedLatency.length * 0.5)], p95_key_to_frame_ms: p95KeyToFrame, max_frame_gap_ms: maxFrameGap }));
+     expect(metrics.keyToFrame).toHaveLength(typed.length);
+     expect(p95KeyToFrame).toBeLessThanOrEqual(100);
+     expect(maxFrameGap).toBeLessThanOrEqual(250);

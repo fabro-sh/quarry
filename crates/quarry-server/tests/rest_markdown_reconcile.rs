@@ -31,13 +31,16 @@ async fn block_test_app() -> (tempfile::TempDir, axum::Router, QuarryStore) {
 }
 
 async fn put_block_markdown(app: &axum::Router, path: &str, body: &str) {
+    let uri = format!("/v1/libraries/blocks/documents/{path}");
+    let (name, value) = common::markdown_precondition(app, &uri).await;
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method(Method::PUT)
-                .uri(format!("/v1/libraries/blocks/documents/{path}"))
+                .uri(uri)
                 .header(header::CONTENT_TYPE, "text/markdown")
+                .header(name, value)
                 .body(Body::from(body.to_string()))
                 .unwrap(),
         )
@@ -86,9 +89,13 @@ async fn commit_block_transaction(app: &axum::Router, path: &str, body: Value) -
     ack
 }
 
-fn block_tx(client_tx_id: &str, ops: Value) -> Value {
+// Sequential fixture operations use the clock read when the request is built.
+// Concurrency tests supply their saved clock explicitly; retries reuse the built body.
+async fn current_block_tx(app: &axum::Router, path: &str, client_tx_id: &str, ops: Value) -> Value {
+    let base = get_block_tree(app, path).await;
     serde_json::json!({
         "client_tx_id": client_tx_id,
+        "base_clock": base["document_clock"],
         "actor": {"kind": "agent", "id": "agent-1", "label": "Agent One"},
         "ops": ops
     })
@@ -171,7 +178,8 @@ async fn raw_versions(app: &axum::Router, path: &str) -> Value {
 }
 
 #[tokio::test]
-async fn markdown_put_rejects_raw_downgrade_without_opt_in() -> anyhow::Result<()> {
+async fn markdown_put_cannot_discard_native_history_by_changing_content_type() -> anyhow::Result<()>
+{
     let (_root, app, store) = block_test_app().await;
     put_block_markdown(&app, "guide", "# Guide\n\nBody.\n").await;
 
@@ -218,20 +226,11 @@ async fn markdown_put_rejects_raw_downgrade_without_opt_in() -> anyhow::Result<(
         .oneshot(request)
         .await
         .context("send explicit raw downgrade request")?;
-    assert_eq!(response.status(), StatusCode::OK);
-    let document = store
-        .get_document("blocks", "guide")
-        .await
-        .context("load document after explicit raw downgrade")?;
-    assert_eq!(document.version.content_type, "text/plain");
-    assert_eq!(document.content, b"raw body".to_vec());
-    assert_eq!(
-        store
-            .load_block_tree(&document.id)
-            .await
-            .context("load block tree after explicit raw downgrade")?,
-        Vec::<quarry_collab_codec::BlockRow>::new()
-    );
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let document = store.get_document("blocks", "guide").await?;
+    assert_eq!(document.version.content_type, "text/markdown");
+    assert_eq!(document.content, b"# Guide\n\nBody.\n");
+    assert_eq!(store.load_block_tree(&document.id).await?.len(), 2);
     Ok(())
 }
 
@@ -266,23 +265,26 @@ async fn version_restore_merges_through_the_gateway_preserving_ids_and_anchors()
     commit_block_transaction(
         &app,
         "undo.md",
-        block_tx(
+        current_block_tx(&app, "undo.md",
             "tx-anchor-title",
             serde_json::json!([{
                 "op": "comment.add", "block_id": ids[0], "start": 0, "end": 5, "body": "survive the restore"
             }]),
-        ),
+        ).await,
     )
     .await;
     commit_block_transaction(
         &app,
         "undo.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "undo.md",
             "tx-edit-alpha",
             serde_json::json!([{
                 "op": "replace_block_content", "block_id": ids[1], "text": "Alpha, edited."
             }]),
-        ),
+        )
+        .await,
     )
     .await;
 
@@ -338,7 +340,9 @@ async fn conflict_items_persist_project_and_resolve_without_mutating_the_documen
     let ack = commit_block_transaction(
         &app,
         "conf.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "conf.md",
             "tx-conflict",
             serde_json::json!([{
                 "op": "conflict.add",
@@ -347,7 +351,8 @@ async fn conflict_items_persist_project_and_resolve_without_mutating_the_documen
                 "incoming_markdown": "Bravo, incoming edit.\n",
                 "canonical_markdown": "Bravo.\n"
             }]),
-        ),
+        )
+        .await,
     )
     .await;
     // The op never mutates the document: no changed blocks, content intact
@@ -380,12 +385,15 @@ async fn conflict_items_persist_project_and_resolve_without_mutating_the_documen
     commit_block_transaction(
         &app,
         "conf.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "conf.md",
             "tx-resolve-conflict",
             serde_json::json!([{
                 "op": "conflict.keep_canonical", "item_id": conflict_id
             }]),
-        ),
+        )
+        .await,
     )
     .await;
     let open_review = get_block_review(&app, "conf.md", false).await;
@@ -413,7 +421,9 @@ async fn comment_edit_on_conflict_id_returns_anchor_not_found() -> anyhow::Resul
     commit_block_transaction(
         &app,
         "conf-edit.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "conf-edit.md",
             "tx-conflict",
             serde_json::json!([{
                 "op": "conflict.add",
@@ -421,7 +431,8 @@ async fn comment_edit_on_conflict_id_returns_anchor_not_found() -> anyhow::Resul
                 "incoming_markdown": "Incoming.\n",
                 "canonical_markdown": "Alpha.\n"
             }]),
-        ),
+        )
+        .await,
     )
     .await;
     let review = get_block_review(&app, "conf-edit.md", false).await;
@@ -433,14 +444,17 @@ async fn comment_edit_on_conflict_id_returns_anchor_not_found() -> anyhow::Resul
     let (status, body) = post_block_transaction(
         &app,
         "conf-edit.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "conf-edit.md",
             "tx-edit-conflict",
             serde_json::json!([{
                 "op": "comment.edit",
                 "item_id": conflict_id,
                 "body": "not a comment"
             }]),
-        ),
+        )
+        .await,
     )
     .await;
     assert_typed_error(status, &body, "ANCHOR_NOT_FOUND", false);
@@ -466,7 +480,9 @@ async fn accepting_a_conflict_rejects_a_changed_canonical_hunk_atomically() -> a
     commit_block_transaction(
         &app,
         "conf-stale.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "conf-stale.md",
             "tx-conflict-stale",
             serde_json::json!([{
                 "op": "conflict.add",
@@ -475,7 +491,8 @@ async fn accepting_a_conflict_rejects_a_changed_canonical_hunk_atomically() -> a
                 "incoming_markdown": "Bravo, incoming.\n",
                 "canonical_markdown": "Bravo.\n"
             }]),
-        ),
+        )
+        .await,
     )
     .await;
     let conflict_id = get_block_review(&app, "conf-stale.md", false).await["conflicts"][0]["id"]
@@ -485,24 +502,30 @@ async fn accepting_a_conflict_rejects_a_changed_canonical_hunk_atomically() -> a
     commit_block_transaction(
         &app,
         "conf-stale.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "conf-stale.md",
             "tx-newer-bravo",
             serde_json::json!([{
                 "op": "replace_block_content", "block_id": bravo_id, "text": "Bravo, newer."
             }]),
-        ),
+        )
+        .await,
     )
     .await;
 
     let (status, error) = post_block_transaction(
         &app,
         "conf-stale.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "conf-stale.md",
             "tx-stale-accept",
             serde_json::json!([{
                 "op": "conflict.accept_incoming", "item_id": conflict_id
             }]),
-        ),
+        )
+        .await,
     )
     .await;
     assert_typed_error(status, &error, "CONFLICT", false);
@@ -517,24 +540,25 @@ async fn accepting_a_conflict_rejects_a_changed_canonical_hunk_atomically() -> a
     Ok(())
 }
 
-/// Replies stay comment-only: `comment.reply` on a conflict item is
-/// `ANCHOR_NOT_FOUND` (conflicts resolve/delete with the comment vocabulary
-/// but cannot host threads).
+/// Conflicts own native discussion threads.
 #[tokio::test]
-async fn comment_reply_on_a_conflict_item_is_anchor_not_found() -> anyhow::Result<()> {
+async fn comment_reply_on_a_conflict_item_preserves_its_discussion() -> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "conf-reply.md", "Alpha.\n").await;
     let _ = get_block_tree(&app, "conf-reply.md").await;
     commit_block_transaction(
         &app,
         "conf-reply.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "conf-reply.md",
             "tx-conflict-for-reply",
             serde_json::json!([{
                 "op": "conflict.add",
                 "incoming_markdown": "Hunk.\n"
             }]),
-        ),
+        )
+        .await,
     )
     .await;
     let review = get_block_review(&app, "conf-reply.md", false).await;
@@ -546,20 +570,26 @@ async fn comment_reply_on_a_conflict_item_is_anchor_not_found() -> anyhow::Resul
     let (status, body) = post_block_transaction(
         &app,
         "conf-reply.md",
-        block_tx(
+        current_block_tx(&app, "conf-reply.md",
             "tx-reply-to-conflict",
             serde_json::json!([{
-                "op": "comment.reply", "item_id": conflict_id, "body": "no threads here"
+                "op": "comment.reply", "item_id": conflict_id, "body": "Please explain this conflict"
             }]),
-        ),
+        ).await,
     )
     .await;
-    assert_typed_error(status, &body, "ANCHOR_NOT_FOUND", false);
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let review = get_block_review(&app, "conf-reply.md", false).await;
+    assert_eq!(
+        review["conflicts"][0]["replies"].as_array().unwrap().len(),
+        1
+    );
     Ok(())
 }
 
 #[tokio::test]
-async fn document_start_conflicts_anchor_null_and_delete_dismisses_them() -> anyhow::Result<()> {
+async fn document_start_conflicts_remain_at_document_start_and_can_be_dismissed()
+-> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     put_block_markdown(&app, "conf-start.md", "Alpha.\n").await;
     let _ = get_block_tree(&app, "conf-start.md").await;
@@ -567,7 +597,9 @@ async fn document_start_conflicts_anchor_null_and_delete_dismisses_them() -> any
     commit_block_transaction(
         &app,
         "conf-start.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "conf-start.md",
             "tx-start-conflict",
             serde_json::json!([{
                 "op": "conflict.add",
@@ -575,7 +607,8 @@ async fn document_start_conflicts_anchor_null_and_delete_dismisses_them() -> any
                 "incoming_markdown": "New heading.\n",
                 "canonical_markdown": ""
             }]),
-        ),
+        )
+        .await,
     )
     .await;
     let review = get_block_review(&app, "conf-start.md", false).await;
@@ -587,14 +620,17 @@ async fn document_start_conflicts_anchor_null_and_delete_dismisses_them() -> any
         .context("conflict should include id")?
         .to_string();
 
-    // comment.delete removes the conflict row outright.
+    // Dismissal preserves the resolved native record for history.
     commit_block_transaction(
         &app,
         "conf-start.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "conf-start.md",
             "tx-delete-conflict",
-            serde_json::json!([{ "op": "comment.delete", "item_id": conflict_id }]),
-        ),
+            serde_json::json!([{ "op": "conflict.keep_canonical", "item_id": conflict_id }]),
+        )
+        .await,
     )
     .await;
     let review = get_block_review(&app, "conf-start.md", true).await;
@@ -603,7 +639,14 @@ async fn document_start_conflicts_anchor_null_and_delete_dismisses_them() -> any
             .as_array()
             .context("review should include conflicts array")?
             .len(),
-        0
+        1
+    );
+    assert_eq!(review["conflicts"][0]["status"], "resolved");
+    assert!(
+        get_block_review(&app, "conf-start.md", false).await["conflicts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
     );
     Ok(())
 }
@@ -617,14 +660,17 @@ async fn conflict_add_requires_an_existing_attachment_block() -> anyhow::Result<
     let (status, body) = post_block_transaction(
         &app,
         "conf-missing.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "conf-missing.md",
             "tx-bad-conflict",
             serde_json::json!([{
                 "op": "conflict.add",
                 "after_block_id": "no-such-block",
                 "incoming_markdown": "Hunk.\n"
             }]),
-        ),
+        )
+        .await,
     )
     .await;
     assert_typed_error(status, &body, "BLOCK_DELETED", false);
@@ -665,24 +711,30 @@ async fn markdown_put_merges_against_the_explicit_base_preserving_ids_and_anchor
     commit_block_transaction(
         &app,
         "merge.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "merge.md",
             "tx-anchor-title",
             serde_json::json!([{
                 "op": "comment.add", "block_id": ids[0], "start": 0, "end": 5, "body": "keep me"
             }]),
-        ),
+        )
+        .await,
     )
     .await;
     // Canonical edit to Alpha (a browser/agent write after the export).
     commit_block_transaction(
         &app,
         "merge.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "merge.md",
             "tx-canonical-alpha",
             serde_json::json!([{
                 "op": "replace_block_content", "block_id": ids[1], "text": "Alpha, canonical."
             }]),
-        ),
+        )
+        .await,
     )
     .await;
     let current_clock = get_block_tree(&app, "merge.md").await["document_clock"]
@@ -770,12 +822,15 @@ async fn markdown_put_overlapping_edits_become_conflict_review_items() -> anyhow
     commit_block_transaction(
         &app,
         "clash.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "clash.md",
             "tx-canonical-bravo",
             serde_json::json!([{
                 "op": "replace_block_content", "block_id": ids[2], "text": "Bravo, canonical."
             }]),
-        ),
+        )
+        .await,
     )
     .await;
 
@@ -863,12 +918,15 @@ async fn markdown_put_overlapping_edits_become_conflict_review_items() -> anyhow
     commit_block_transaction(
         &app,
         "clash.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "clash.md",
             "tx-accept-incoming-conflict",
             serde_json::json!([{
                 "op": "conflict.accept_incoming", "item_id": conflict_id
             }]),
-        ),
+        )
+        .await,
     )
     .await;
     assert_eq!(
@@ -1001,15 +1059,18 @@ async fn markdown_put_with_conflict_markers_flags_a_review_item() -> anyhow::Res
     let (status, error) = post_block_transaction(
         &app,
         "soup.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "soup.md",
             "tx-reapply-marker-warning",
             serde_json::json!([{
                 "op": "conflict.accept_incoming", "item_id": conflict_id
             }]),
-        ),
+        )
+        .await,
     )
     .await;
-    assert_typed_error(status, &error, "CONFLICT", false);
+    assert_typed_error(status, &error, "INVALID_TRANSACTION", false);
     assert_eq!(get_document_markdown(&app, "soup.md").await, markdown);
     Ok(())
 }
@@ -1102,10 +1163,13 @@ async fn dismissed_conflict_marker_flags_stay_dismissed() -> anyhow::Result<()> 
     commit_block_transaction(
         &app,
         "soup-dismissed.md",
-        block_tx(
+        current_block_tx(
+            &app,
+            "soup-dismissed.md",
             "tx-dismiss-soup",
-            serde_json::json!([{ "op": "comment.resolve", "item_id": conflict_id }]),
-        ),
+            serde_json::json!([{ "op": "conflict.keep_canonical", "item_id": conflict_id }]),
+        )
+        .await,
     )
     .await;
 
@@ -1151,6 +1215,12 @@ async fn byte_identical_markdown_put_commits_no_new_version() -> anyhow::Result<
                 .method(Method::PUT)
                 .uri("/v1/libraries/blocks/documents/noop.md")
                 .header(header::CONTENT_TYPE, "text/markdown")
+                .header(
+                    header::IF_MATCH,
+                    common::markdown_precondition(&app, "/v1/libraries/blocks/documents/noop.md")
+                        .await
+                        .1,
+                )
                 .body(Body::from(content.clone()))
                 .context("build byte-identical markdown put request")?,
         )
@@ -1167,7 +1237,8 @@ async fn byte_identical_markdown_put_commits_no_new_version() -> anyhow::Result<
 }
 
 #[tokio::test]
-async fn markdown_put_with_critic_markup_fails_typed_unsupported() -> anyhow::Result<()> {
+async fn markdown_first_import_preserves_review_and_whole_file_review_replacement_fails_atomically()
+-> anyhow::Result<()> {
     let (_root, app, _store) = block_test_app().await;
     let response = app
         .clone()
@@ -1183,6 +1254,23 @@ async fn markdown_put_with_critic_markup_fails_typed_unsupported() -> anyhow::Re
         .context("send critic markup markdown put request")?;
     let status = response.status();
     let body = response_json(response).await;
+    assert!(status.is_success(), "{body}");
+    let review = get_block_review(&app, "critic.md", false).await;
+    assert_eq!(review["suggestions"][0]["content"], "inserted", "{review}");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/v1/libraries/blocks/documents/critic.md")
+                .header(header::CONTENT_TYPE, "text/markdown")
+                .header(header::IF_MATCH, review["baseToken"].as_str().unwrap())
+                .body(Body::from("Some {++changed++} text.\n"))?,
+        )
+        .await?;
+    let status = response.status();
+    let body = response_json(response).await;
     assert_typed_error(status, &body, "UNSUPPORTED_MARKDOWN", false);
+    assert_eq!(get_block_review(&app, "critic.md", false).await, review);
     Ok(())
 }

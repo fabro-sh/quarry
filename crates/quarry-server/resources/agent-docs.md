@@ -85,7 +85,7 @@ canonical UTF-8 Markdown larger than 1 MiB is rejected with 413.
 
 Library REST endpoints in the current full/local Quarry build are
 trusted-localhost. For library document invite URLs, the `?token=` value
-identifies the shared document for browser/collab joins, but library REST agent
+identifies the shared document for browser document access, but library REST agent
 endpoints do not currently enforce bearer-token auth.
 
 For tmp documents on local or hosted origins, the `/tmp/{secret}` URL segment is
@@ -190,10 +190,21 @@ Every mutation is one envelope to `POST $DOC/transactions`:
 - `client_tx_id`: any unique string per document. Duplicates replay the
   original ack without re-applying — safe to retry a timed-out request with
   the SAME id, but use a NEW id for a rebuilt request.
-- `base_clock` (optional): the `document_clock` you read. Matching or omitted
-  acks `committed`; an older-but-known clock applies against the current rows
-  and acks `committed_rebased`; an unknown clock fails with retryable
-  `STALE_BASE`.
+- `base_clock` (required): the `document_clock` of the read used to construct
+  these operations (`/review` exposes its read clock as `baseToken`). If you
+  combine data from `/blocks` and `/review`, require their clocks to match;
+  otherwise read again. A matching clock acks `committed`. With an older known
+  clock, the server resolves offsets against that saved version, then merges
+  the native commands and acks `committed_rebased`. An unknown clock fails with
+  retryable `STALE_BASE`. Missing, null, or blank clocks fail with
+  `INVALID_TRANSACTION` before any operation applies.
+- Keep the read content and its clock together. Never attach a newer clock to
+  operations computed from an older read. An exact quote cannot disambiguate
+  repeated text. After a conflict, read again and rebuild the operations.
+- A delayed block deletion fails with `PRECONDITION_FAILED` if its subtree
+  has unseen text or formatting changes. Delayed typing into a removed block
+  also fails explicitly. Late comments can still refer to the removed text;
+  their target is reported as `hidden`.
 - `ops` apply sequentially and commit atomically as ONE new version — one bad
   op fails the whole transaction with no partial write.
 
@@ -208,11 +219,10 @@ The ack:
 }
 ```
 
-The ack means the change is durable in canonical storage. If browsers have the
-document open in a live session, the transaction is applied into that session
-as another collaborator and checkpointed before the ack. After a successful
-ack, no additional wait or retry is needed for live delivery; failures before
-the ack still use the recovery rules below.
+The ack means Automerge state, review records, derived block indexes, Markdown,
+and the command receipt committed atomically. Browsers receive document events
+and merge the committed native state. A lost response can be retried with the
+same request ID and payload; it does not publish a second version.
 
 ### Edit Operations
 
@@ -387,15 +397,18 @@ Semantics:
   writes. Do not rely on client defaults. Tmp document URLs require a Markdown
   media type, reject missing or non-Markdown `Content-Type` with 415, and
   reject canonical UTF-8 Markdown larger than 1 MiB with 413.
-- `If-Match` is strict compare-and-swap: it must name the current head or the
-  write fails 412 without changing the document. `If-None-Match: *` creates a
-  new document.
-- `X-Quarry-Merge-Base` independently selects a known historical version for
-  diff3 (`base`, your file, current canonical). This is what preserves edits
-  that landed after your original read. Omitting it degenerates to a two-way
-  merge against the current document; an unknown merge base fails 412. For a
-  safe retry after stale `If-Match`, re-read the current clock, use it for the
-  new `If-Match`, and keep the original `X-Quarry-Merge-Base`.
+- Updating an existing Markdown document requires `If-Match` or
+  `X-Quarry-Merge-Base` from the version you read. Missing both returns 428
+  `PRECONDITION_REQUIRED` without changing the document. Unversioned writes
+  create only; use `If-None-Match: *` to make creation explicit.
+- `If-Match` is strict compare-and-swap: a changed head fails 412. After that
+  failure, read the document and rebuild the edit. Never attach a fresh clock
+  to an old file unless you also retain its original merge base.
+- `X-Quarry-Merge-Base` selects the original known version for a three-way
+  merge. Later changes are preserved or retained as conflicts. An unknown
+  version fails 412. It may be used alone, or with `If-Match` to also require
+  an unchanged head. If both are used, a strict retry can update `If-Match`
+  while keeping the original merge base.
 - `block_id`s and review anchors survive the rewrite — unchanged blocks keep
   their ids, so existing comments and suggestions stay anchored.
 - True merge conflicts never fail the write: each one commits atomically as
@@ -512,7 +525,7 @@ it as `after` on the next poll.
 
 `doc.changed` events are sparse wake signals. They include revision metadata
 such as `version_id`/`etag` and may include `origin_id`. Every write path —
-browser checkpoints, agent transactions, Git/FUSE/CLI file writes — emits the
+browser commands, agent transactions, Git/FUSE/CLI file writes — emits the
 same event shape.
 
 Library document streams include document paths. Tmp document-scoped streams
@@ -595,7 +608,7 @@ supported `transaction_operations`, and known limitations.
 
 - Library REST agent endpoints in the current full/local build trust localhost
   and do not enforce bearer-token auth. Library invite URL tokens are document
-  locators for browser/collab joins, not REST auth tokens.
+  locators for browser document access, not REST auth tokens.
 - Tmp URL secrets are bearer capabilities on local and hosted origins.
 - Block APIs apply to Markdown documents only; other content types are raw
   bytes (`UNSUPPORTED_BLOCK_DOCUMENT`).
@@ -641,3 +654,36 @@ Then report the evidence to the user. Do not keep retrying destructive writes.
   byline.
 - Fetch `/.well-known/agent.json` and `/v1/openapi.json` when you need current
   route metadata or schemas.
+
+
+## Native document transport and archives
+
+`GET .../document-state` returns Automerge bytes, a native projection, document
+metadata and the current version. Browser commands use `POST .../document-commands`.
+A command request records the native heads from which its positions were captured.
+The shared Rust/WASM engine validates and applies the same commands in both places.
+For subsequent reads, `GET .../document-state?since=<comma-separated-native-heads>`
+returns only missing Automerge changes in `bytes`, with those heads in `base`.
+Apply these changes to existing native state; they are not a standalone archive.
+The resulting heads remain in `document.heads`. Without `since`, `base` is null
+and `bytes` is a complete archive. An unknown base returns 412; malformed hashes
+return 400. Reading state never publishes a document version.
+Library browsers address `/v1/libraries/{library}/documents-by-id/{document_id}`
+and include their invitation token on each request. Temporary documents use their
+capability URL. Viewer invitations cannot publish document commands.
+
+`GET .../archive` exports a `.quarry` JSON archive with `format: "quarry-document"`,
+`version: 1`, `metadata`, and native `bytes`. It includes retained characters,
+review targets, decisions and native history. `POST .../archive` imports that
+archive at a **new** document path or temporary secret. It retains internal text
+and block identity under a new document identity. An existing destination returns
+412. Archive import cannot replace existing native history.
+
+Plain Markdown exports contain body text and frontmatter. Use an archive to move
+review records and their history without loss. Initial Markdown import accepts
+CriticMarkup and review endmatter. To modify review on an existing document, use
+review operations; whole-file reconciliation accepts body Markdown and preserves
+existing native discussions.
+
+Selections use temporary native cursors through `POST .../selection`. They expire
+without activity and do not create document versions. They are never review anchors.

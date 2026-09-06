@@ -1,8 +1,10 @@
 [workspace]
 members = [
+    "crates/quarry-document",
+    "crates/quarry-document-wasm",
     "crates/quarry-core",
     "crates/quarry-cas",
-    "crates/quarry-collab-codec",
+    "crates/quarry-markdown",
     "crates/quarry-storage",
     "crates/quarry-git",
     "crates/quarry-fuse",
@@ -16,7 +18,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.7-nightly.20260731"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.90"
 license = "MIT"
 
 [workspace.lints.rust]
@@ -68,8 +70,9 @@ unused_self = "allow"
 wildcard_imports = "allow"
 
 [workspace.dependencies]
+automerge = { version = "=0.11.0", features = ["utf16-indexing"] }
 anyhow = "1.0"
-axum = { version = "0.8", features = ["json", "macros", "ws"] }
+axum = { version = "0.8", features = ["json", "macros"] }
 blake3 = "1.8"
 bytes = "1.6"
 chrono = { version = "0.4", features = ["serde"] }
@@ -96,19 +99,19 @@ thiserror = "2.0"
 tokio = { version = "1.40", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = "0.7"
 tower = { version = "0.5", features = ["util"] }
-tokio-tungstenite = "0.29"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 turso = { version = "0.7.0-pre.4", default-features = false }
 utoipa = { version = "5.5", features = ["chrono", "uuid"] }
 utoipa-axum = "0.2"
 uuid = { version = "1.10", features = ["v4", "serde"] }
+wasm-bindgen = "=0.2.127"
 walkdir = "2.5"
-yrs = { version = "0.27", features = ["sync"] }
 
 quarry-core = { path = "crates/quarry-core" }
+quarry-document = { path = "crates/quarry-document" }
 quarry-cas = { path = "crates/quarry-cas" }
-quarry-collab-codec = { path = "crates/quarry-collab-codec" }
+quarry-markdown = { path = "crates/quarry-markdown" }
 quarry-storage = { path = "crates/quarry-storage" }
 quarry-git = { path = "crates/quarry-git" }
 quarry-fuse = { path = "crates/quarry-fuse" }

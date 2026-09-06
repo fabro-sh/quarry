@@ -73,7 +73,7 @@ Beyond the shared-canvas workflow, Quarry can act as a full document substrate f
 - **FUSE mounts (Linux)** — browse a library with `ls`, `rg`, and `vim` like any other directory. ([docs](docs/operations/fuse.md))
 - **REST API + OpenAPI** — everything above is scriptable over HTTP. ([docs](docs/operations/rest-api.md))
 
-External edits don't trample live sessions: whole-file writes from Git, FUSE, or the CLI are merged three-way into open documents, and genuine conflicts surface as review items — never lost writes.
+External edits preserve document identity: whole-file writes from Git, FUSE, or the CLI are merged three-way into open documents, and genuine conflicts surface as review items — never lost writes.
 
 ## Status
 
@@ -81,7 +81,7 @@ Quarry is young and moving fast. It is currently single-user and local-only: the
 
 ## Learn more
 
-- [Architecture](docs/architecture.md) — how live sessions, block storage, and reconciliation work
+- [Architecture](docs/architecture.md) — how native documents, atomic storage, and reconciliation work
 - [Development guide](docs/development.md) — workspace layout, building, and running the tests
 - [Operations](docs/operations/) — install, Git sync, FUSE, conflicts, backup/restore
 - Agent-facing docs — served at `/agent-docs` by every Quarry server

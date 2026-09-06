@@ -1,0 +1,370 @@
+{
+  "status": "in_progress",
+  "checkpoint": "Concurrent HTTP, Git and FUSE writes verified; Plate restoration remains in progress",
+  "created_at": "2026-09-06T01:54:49.623520+00:00",
+  "evidence": {
+    "rust_macos": {
+      "path": "target/restore-plate-versioned-workspace-final.log",
+      "sha256": "0e723db8ca826624f2f198875c81cec65fcca3ff7f8ff8a21bb3b7b9b66bd354",
+      "counts": {
+        "passed": 606,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    "rust_linux_with_kernel_fuse": {
+      "path": "target/restore-plate-versioned-linux-final.log",
+      "sha256": "7b69a474ef0a1655e4b602dc95acb03fc3baa411055261ce84f3e7e6fc5938d6",
+      "counts": {
+        "passed": 606,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    "clippy": {
+      "path": "target/restore-plate-versioned-clippy.log",
+      "sha256": "908bea91db5726099c9f7e8169195cdf9a1a4de248524a637c357b8d94547d34"
+    },
+    "ui": {
+      "path": "target/restore-plate-mixed-ui.log",
+      "sha256": "e6289a2b59a6ebcb8da35040c91b086a388a3dc6e2241e682a38b855f3621cd4"
+    },
+    "build": {
+      "path": "target/restore-plate-mixed-build.log",
+      "sha256": "ad29fb99d813ec24171ba0eb4eaa5bc3de693b3394f7a1dddc6f5061fb31c0c4"
+    },
+    "release": {
+      "path": "target/restore-plate-versioned-release.log",
+      "sha256": "57b56df9340ee5399f16d581aeb310b89cf945efa0108b771847b9bee9376d2c"
+    },
+    "typecheck": {
+      "path": "target/restore-plate-versioned-typecheck.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "schema": {
+      "path": "target/restore-plate-versioned-schema.log",
+      "sha256": "40c8c54eb636903b5b6e7797a37cf802a118655b885c017359d153e49b601057"
+    },
+    "kernel_repeated_before_unversioned_guard": {
+      "path": "target/restore-plate-kernel-fuse-repeat.log",
+      "sha256": "bbc253c786da64b2fbaade4611ef78ebdb67abbd642caabc261f150e6d04531c",
+      "counts": {
+        "passed": 20,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    "rust_linux_clippy_and_final_mixed": {
+      "path": "target/restore-plate-versioned-linux-clippy-resume.log",
+      "sha256": "72ad7af1d4db7791f356c5dd062e918271c7dd2f6720e2d528ad3ae9fa97ad9c",
+      "clippy": "passed",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "note": "Rechecks the final Linux-only test future allocation after the 606-test workspace pass; runtime sources are unchanged."
+    },
+    "browsers": {
+      "path": "target/restore-plate-versioned-browsers.log",
+      "sha256": "30130a815c7db7065176f69b105da5b023a8b37f4e223db75e075fb21bc5ce26",
+      "passed": 155,
+      "skipped": 4,
+      "failed": 0,
+      "skips": [
+        "Two WebKit native-drag cases unavailable in the harness",
+        "Two non-WebKit cases for the WebKit-specific diagnostic negative control"
+      ]
+    },
+    "chrome_latency": {
+      "path": "target/restore-plate-versioned-chrome-performance.log",
+      "sha256": "36d1ef6e1e87072ba44a22a8a32240296676a9fb7571df4023abe14dda6eba56",
+      "passed": 15,
+      "failed": 0,
+      "headed": true,
+      "browser": "Chrome 152.0.7977.77"
+    },
+    "qa_smoke": {
+      "path": "target/restore-plate-versioned-qa-smoke.json",
+      "sha256": "20735d707b2d3049c77a65d591ea2775406327dc7e0e46e8cfb28fdf8b21f649"
+    }
+  },
+  "source_sha256": {
+    "crates/quarry-server/src/gateway.rs": "e1e4e8f548c8a74cd3b8cc557039c9392a82386961a560bced9f5e277eed411e",
+    "crates/quarry-server/src/markdown_write.rs": "4d61518373c308890cbad9343a9983a6d6d84d2775152f4ceae7bc79a0b3254f",
+    "crates/quarry-server/src/document_engine.rs": "9bdbc607a0f7bc88afd8d12c90a78ffdf2f40f485c45b7c55a3933929b47b13d",
+    "crates/quarry-server/src/error.rs": "eceb43e546013fe3fae3c991e7e54a1e8ed3a37cbdb83b5628c1b490a5baafc5",
+    "crates/quarry-server/src/headers.rs": "afbdcbb12d608bf570a29d7ea539323e8b19ae9da7a9c8a4306141fcfe3b9f16",
+    "crates/quarry-storage/src/store.rs": "dc72f865544b765e789e6e42b6ba26222d3acb9da40047f5aa8195bf29cfa0e4",
+    "crates/quarry-storage/src/blocks.rs": "cf39cf1ab4e6383109d088dd5d2624f1205d7ba30af04389ec2f54a634d775b7",
+    "crates/quarry-fuse/src/lib.rs": "fd07fb81b54967d5cd98f43a2adc8e29aab117636cebff54b9dec69765525101",
+    "crates/quarry-fuse/tests/mixed_interfaces.rs": "533231d1f7fbe418e3e7bc4bcc3f5ac06eddbf77e3adbd4c4a5ce9a8a460e47d",
+    "crates/quarry-fuse/tests/projection.rs": "b50d9ccb5c5f04c48a26254cf234afee74d58f35ac0304a4448942a1c381d694",
+    "crates/quarry-git/src/lib.rs": "a415515aaada630b2453f97c69024eda80ee3cb574d8db6ccab0edecfa972819",
+    "crates/quarry-cli/src/lib.rs": "eed709e311d0e00b7bd96d1c78365cf963c0ca6f85d10b7949a7e49591cd5b04",
+    "crates/quarry/tests/cli_smoke.rs": "0359e4aa465b2e468455e204f6c9c35b202bb0210bc24e7c8db0b8bf1fa92a77",
+    "ui/src/features/editor/plate-document-adapter.ts": "838d728d4ed36acf8a6e9588bdf0464ca95b936690004622a454242d1efd5f5a",
+    "ui/src/features/editor/document-session.ts": "0d6183dd3ede34ef4debc0a5a6a2c251dc3dcea7e01586aef5848e8a9a42e8ff",
+    "ui/src/api/generated/openapi.json": "079628751bcebbcfa42d6c287ceecf208f9efebf5374218bdeb9230abff40432",
+    "ui/tests/live-performance.spec.ts": "aa8b0457ae55151bf03aa8d7dd34ae55e9d214c4668c1a22646c78015f015e70"
+  },
+  "release_sha256": "6054ca8ea91abcf5028d0e9f0dda36d5f8e255e675d8613f6615b1cf3b0d2a1d",
+  "qa_server_updated": true,
+  "remaining": [
+    "Clipboard cut/paste identity",
+    "Canonical structural operations in Suggesting mode",
+    "Explain historical installed-Chrome stalls",
+    "Explicit version provenance for changed FUSE temp-file replacements; currently rejected safely",
+    "Durable recovery for failed FUSE buffers; currently retained in memory"
+  ],
+  "verification_status": "passed",
+  "updated_at": "2026-09-06T02:05:49.968480+00:00",
+  "metrics": {
+    "rapid": {
+      "runs": 9,
+      "p95_min_ms": 9.899999618530273,
+      "p95_max_ms": 14.199999809265137,
+      "max_frame_gap_ms": 16.5,
+      "samples": [
+        {
+          "browser_version": "152.0.7977.77",
+          "markdown_bytes": 114814,
+          "block_index": 0,
+          "keys": 100,
+          "p50_key_to_frame_ms": 7.299999713897705,
+          "p95_key_to_frame_ms": 14.199999809265137,
+          "max_frame_gap_ms": 9.400000000000091
+        },
+        {
+          "browser_version": "152.0.7977.77",
+          "markdown_bytes": 114814,
+          "block_index": 700,
+          "keys": 100,
+          "p50_key_to_frame_ms": 8.299999713897705,
+          "p95_key_to_frame_ms": 11.400000095367432,
+          "max_frame_gap_ms": 9.400000000000091
+        },
+        {
+          "browser_version": "152.0.7977.77",
+          "markdown_bytes": 114814,
+          "block_index": 1400,
+          "keys": 100,
+          "p50_key_to_frame_ms": 8.599999904632568,
+          "p95_key_to_frame_ms": 10.800000190734863,
+          "max_frame_gap_ms": 9.399999999999977
+        },
+        {
+          "browser_version": "152.0.7977.77",
+          "markdown_bytes": 114814,
+          "block_index": 0,
+          "keys": 100,
+          "p50_key_to_frame_ms": 7.200000286102295,
+          "p95_key_to_frame_ms": 13.300000190734863,
+          "max_frame_gap_ms": 16.5
+        },
+        {
+          "browser_version": "152.0.7977.77",
+          "markdown_bytes": 114814,
+          "block_index": 700,
+          "keys": 100,
+          "p50_key_to_frame_ms": 8.199999809265137,
+          "p95_key_to_frame_ms": 10.799999713897705,
+          "max_frame_gap_ms": 9.299999999999955
+        },
+        {
+          "browser_version": "152.0.7977.77",
+          "markdown_bytes": 114814,
+          "block_index": 1400,
+          "keys": 100,
+          "p50_key_to_frame_ms": 8.599999904632568,
+          "p95_key_to_frame_ms": 11.800000190734863,
+          "max_frame_gap_ms": 9.299999999999955
+        },
+        {
+          "browser_version": "152.0.7977.77",
+          "markdown_bytes": 114814,
+          "block_index": 0,
+          "keys": 100,
+          "p50_key_to_frame_ms": 7.5,
+          "p95_key_to_frame_ms": 9.899999618530273,
+          "max_frame_gap_ms": 10.266000095367417
+        },
+        {
+          "browser_version": "152.0.7977.77",
+          "markdown_bytes": 114814,
+          "block_index": 700,
+          "keys": 100,
+          "p50_key_to_frame_ms": 8.300000190734863,
+          "p95_key_to_frame_ms": 11.399999618530273,
+          "max_frame_gap_ms": 10.265999999999963
+        },
+        {
+          "browser_version": "152.0.7977.77",
+          "markdown_bytes": 114814,
+          "block_index": 1400,
+          "keys": 100,
+          "p50_key_to_frame_ms": 8.400000095367432,
+          "p95_key_to_frame_ms": 11.200000286102295,
+          "max_frame_gap_ms": 9.399999999999977
+        }
+      ]
+    },
+    "concurrent": {
+      "runs": 6,
+      "p95_min_ms": 9,
+      "p95_max_ms": 10.599999904632568,
+      "max_frame_gap_ms": 17.5,
+      "samples": [
+        {
+          "browser_version": "152.0.7977.77",
+          "block_index": 0,
+          "p95_key_to_frame_ms": 9,
+          "max_frame_gap_ms": 16.600000000000364,
+          "keys": 400,
+          "remote_at_key": 55,
+          "max_frame_index": 545
+        },
+        {
+          "browser_version": "152.0.7977.77",
+          "block_index": 1400,
+          "p95_key_to_frame_ms": 10.599999904632568,
+          "max_frame_gap_ms": 16.699999999999818,
+          "keys": 400,
+          "remote_at_key": 48,
+          "max_frame_index": 864
+        },
+        {
+          "browser_version": "152.0.7977.77",
+          "block_index": 0,
+          "p95_key_to_frame_ms": 9.100000381469727,
+          "max_frame_gap_ms": 9.400000000000546,
+          "keys": 400,
+          "remote_at_key": 52,
+          "max_frame_index": 701
+        },
+        {
+          "browser_version": "152.0.7977.77",
+          "block_index": 1400,
+          "p95_key_to_frame_ms": 10.599999904632568,
+          "max_frame_gap_ms": 16.699999999999818,
+          "keys": 400,
+          "remote_at_key": 49,
+          "max_frame_index": 851
+        },
+        {
+          "browser_version": "152.0.7977.77",
+          "block_index": 0,
+          "p95_key_to_frame_ms": 9.200000286102295,
+          "max_frame_gap_ms": 11.465999904632554,
+          "keys": 400,
+          "remote_at_key": 53,
+          "max_frame_index": 0
+        },
+        {
+          "browser_version": "152.0.7977.77",
+          "block_index": 1400,
+          "p95_key_to_frame_ms": 10.599999904632568,
+          "max_frame_gap_ms": 17.5,
+          "keys": 400,
+          "remote_at_key": 49,
+          "max_frame_index": 863
+        }
+      ]
+    }
+  },
+  "latency_limits": {
+    "p95_key_to_frame_ms": 20,
+    "max_frame_gap_ms": 50
+  },
+  "render_profiles": [
+    {
+      "path": "target/restore-plate-versioned-chrome.d56b218ae152659f2e01-d91457ec988eb777f440.repeat-0.frames.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "long_frames": 0
+    },
+    {
+      "path": "target/restore-plate-versioned-chrome.d56b218ae152659f2e01-6854c8982bce24f745b5.repeat-0.frames.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "long_frames": 0
+    },
+    {
+      "path": "target/restore-plate-versioned-chrome.d56b218ae152659f2e01-86d92afad381f5730105.repeat-0.frames.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "long_frames": 0
+    },
+    {
+      "path": "target/restore-plate-versioned-chrome.d56b218ae152659f2e01-e05f74d5d3d6a2da572e.repeat-0.frames.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "long_frames": 0
+    },
+    {
+      "path": "target/restore-plate-versioned-chrome.d56b218ae152659f2e01-04fe9e422c7e48705193.repeat-0.frames.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "long_frames": 0
+    },
+    {
+      "path": "target/restore-plate-versioned-chrome.d56b218ae152659f2e01-97601e14597ce074f3fd.repeat-1.frames.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "long_frames": 0
+    },
+    {
+      "path": "target/restore-plate-versioned-chrome.d56b218ae152659f2e01-55b32b37e71b58701d8a.repeat-1.frames.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "long_frames": 0
+    },
+    {
+      "path": "target/restore-plate-versioned-chrome.d56b218ae152659f2e01-25ee7767c70f0743b26f.repeat-1.frames.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "long_frames": 0
+    },
+    {
+      "path": "target/restore-plate-versioned-chrome.d56b218ae152659f2e01-c4afc7cdd40694ee7ced.repeat-1.frames.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "long_frames": 0
+    },
+    {
+      "path": "target/restore-plate-versioned-chrome.d56b218ae152659f2e01-e452ebf36a90c5425270.repeat-1.frames.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "long_frames": 0
+    },
+    {
+      "path": "target/restore-plate-versioned-chrome.d56b218ae152659f2e01-cedc939bb12b750528df.repeat-2.frames.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "long_frames": 0
+    },
+    {
+      "path": "target/restore-plate-versioned-chrome.d56b218ae152659f2e01-913a7422e491376096ed.repeat-2.frames.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "long_frames": 0
+    },
+    {
+      "path": "target/restore-plate-versioned-chrome.d56b218ae152659f2e01-51defc0552348d0302bc.repeat-2.frames.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "long_frames": 0
+    },
+    {
+      "path": "target/restore-plate-versioned-chrome.d56b218ae152659f2e01-a1aefc33abea137a734d.repeat-2.frames.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "long_frames": 0
+    },
+    {
+      "path": "target/restore-plate-versioned-chrome.d56b218ae152659f2e01-4396e36e7657873b2242.repeat-2.frames.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "long_frames": 0
+    }
+  ],
+  "qa_smoke": {
+    "browser": "152.0.7977.77",
+    "editor_count": 1,
+    "save_status": "Saved",
+    "page_errors": [],
+    "blocks_preserved": true,
+    "review_preserved": true,
+    "blocks": 41,
+    "comments": 1,
+    "suggestions": 1,
+    "screenshot": "target/restore-plate-versioned-qa.png"
+  },
+  "limitations": [
+    "The mounted concurrency test prepares content from the same open writable handle. Read-close-reopen editor workflows are not covered by that guarantee.",
+    "Earlier installed-Chrome outliers remain unexplained; successful runs do not erase them."
+  ]
+}

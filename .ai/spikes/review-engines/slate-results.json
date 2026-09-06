@@ -1,0 +1,3525 @@
+{
+  "runtime": "v26.0.0",
+  "versions": {
+    "slate": "0.120.0",
+    "yjs": "13.6.31",
+    "slateYjs": "1.0.2"
+  },
+  "environment": "Quarry installed Slate and slate-yjs core; no React/Plate UI or Rust reconciliation",
+  "results": [
+    {
+      "engine": "Yjs + Slate core",
+      "case": "comment-only has no content effects",
+      "fixture": "ASCII",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TARGET",
+      "expectedText": "See docs and TARGET here.Second paragraph.",
+      "left": {
+        "text": "See docs and TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      },
+      "right": {
+        "text": "See docs and TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "comment-only has no content effects",
+      "fixture": "ASCII",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TARGET",
+      "expectedText": "See docs and TARGET here.Second paragraph.",
+      "left": {
+        "text": "See docs and TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      },
+      "right": {
+        "text": "See docs and TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "link formatting races typing and comment",
+      "fixture": "ASCII",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TAR!GET here.Second paragraph.",
+      "left": {
+        "text": "See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See "
+              },
+              {
+                "type": "a",
+                "url": "https://example.test",
+                "children": [
+                  {
+                    "text": "docs"
+                  }
+                ]
+              },
+              {
+                "text": " and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See "
+              },
+              {
+                "type": "a",
+                "url": "https://example.test",
+                "children": [
+                  {
+                    "text": "docs"
+                  }
+                ]
+              },
+              {
+                "text": " and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "link formatting races typing and comment",
+      "fixture": "ASCII",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TAR!GET here.Second paragraph.",
+      "left": {
+        "text": "See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See "
+              },
+              {
+                "type": "a",
+                "url": "https://example.test",
+                "children": [
+                  {
+                    "text": "docs"
+                  }
+                ]
+              },
+              {
+                "text": " and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See "
+              },
+              {
+                "type": "a",
+                "url": "https://example.test",
+                "children": [
+                  {
+                    "text": "docs"
+                  }
+                ]
+              },
+              {
+                "text": " and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "Quarry-style list attributes race typing and comment",
+      "fixture": "ASCII",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TAR!GET here.Second paragraph.",
+      "left": {
+        "text": "See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TAR!GET here."
+              }
+            ],
+            "listStyleType": "disc",
+            "indent": 1
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TAR!GET here."
+              }
+            ],
+            "listStyleType": "disc",
+            "indent": 1
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "Quarry-style list attributes race typing and comment",
+      "fixture": "ASCII",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TAR!GET here.Second paragraph.",
+      "left": {
+        "text": "See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TAR!GET here."
+              }
+            ],
+            "listStyleType": "disc",
+            "indent": 1
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TAR!GET here."
+              }
+            ],
+            "listStyleType": "disc",
+            "indent": 1
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "heading conversion races typing and comment",
+      "fixture": "ASCII",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TAR!GET here.Second paragraph.",
+      "left": {
+        "text": "See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "h2",
+            "children": [
+              {
+                "text": "See docs and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "h2",
+            "children": [
+              {
+                "text": "See docs and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "heading conversion races typing and comment",
+      "fixture": "ASCII",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TAR!GET here.Second paragraph.",
+      "left": {
+        "text": "See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "h2",
+            "children": [
+              {
+                "text": "See docs and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "h2",
+            "children": [
+              {
+                "text": "See docs and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "paragraph split races typing and comment",
+      "fixture": "ASCII",
+      "delivery": "forward",
+      "pass": false,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TAR!GET here.Second paragraph.",
+      "left": {
+        "text": "See docs and !TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and !"
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "!"
+      },
+      "right": {
+        "text": "See docs and !TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and !"
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "!"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "paragraph split races typing and comment",
+      "fixture": "ASCII",
+      "delivery": "reverse",
+      "pass": false,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TAR!GET here.Second paragraph.",
+      "left": {
+        "text": "See docs and !TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and !"
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "!"
+      },
+      "right": {
+        "text": "See docs and !TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and !"
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "!"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "Slate move_node races typing and comment",
+      "fixture": "ASCII",
+      "delivery": "forward",
+      "pass": false,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "Second paragraph.See docs and TAR!GET here.",
+      "left": {
+        "text": "Second paragraph.See docs and TARGET here.",
+        "tree": [
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          }
+        ],
+        "quote": null
+      },
+      "right": {
+        "text": "Second paragraph.See docs and TARGET here.",
+        "tree": [
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          }
+        ],
+        "quote": null
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "Slate move_node races typing and comment",
+      "fixture": "ASCII",
+      "delivery": "reverse",
+      "pass": false,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "Second paragraph.See docs and TAR!GET here.",
+      "left": {
+        "text": "Second paragraph.See docs and TARGET here.",
+        "tree": [
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          }
+        ],
+        "quote": null
+      },
+      "right": {
+        "text": "Second paragraph.See docs and TARGET here.",
+        "tree": [
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          }
+        ],
+        "quote": null
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "partial target deletion preserves surviving text",
+      "fixture": "ASCII",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "GET",
+      "expectedText": "See docs and GET here.Second paragraph.",
+      "left": {
+        "text": "See docs and GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "GET"
+      },
+      "right": {
+        "text": "See docs and GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "partial target deletion preserves surviving text",
+      "fixture": "ASCII",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "GET",
+      "expectedText": "See docs and GET here.Second paragraph.",
+      "left": {
+        "text": "See docs and GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "GET"
+      },
+      "right": {
+        "text": "See docs and GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "whole target deletion retains thread with empty target",
+      "fixture": "ASCII",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "",
+      "expectedText": "See docs and  here.Second paragraph.",
+      "left": {
+        "text": "See docs and  here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and  here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": ""
+      },
+      "right": {
+        "text": "See docs and  here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and  here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": ""
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "whole target deletion retains thread with empty target",
+      "fixture": "ASCII",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "",
+      "expectedText": "See docs and  here.Second paragraph.",
+      "left": {
+        "text": "See docs and  here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and  here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": ""
+      },
+      "right": {
+        "text": "See docs and  here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and  here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": ""
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "save and restore existing cursor targets",
+      "fixture": "ASCII",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TARGET",
+      "expectedText": "See docs and TARGET here.Second paragraph.",
+      "left": {
+        "text": "See docs and TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      },
+      "right": {
+        "text": "See docs and TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "save and restore existing cursor targets",
+      "fixture": "ASCII",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TARGET",
+      "expectedText": "See docs and TARGET here.Second paragraph.",
+      "left": {
+        "text": "See docs and TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      },
+      "right": {
+        "text": "See docs and TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "comment-only has no content effects",
+      "fixture": "Unicode",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TARGET",
+      "expectedText": "😀 é See docs and TARGET here.Second paragraph.",
+      "left": {
+        "text": "😀 é See docs and TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      },
+      "right": {
+        "text": "😀 é See docs and TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "comment-only has no content effects",
+      "fixture": "Unicode",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TARGET",
+      "expectedText": "😀 é See docs and TARGET here.Second paragraph.",
+      "left": {
+        "text": "😀 é See docs and TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      },
+      "right": {
+        "text": "😀 é See docs and TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "link formatting races typing and comment",
+      "fixture": "Unicode",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "😀 é See docs and TAR!GET here.Second paragraph.",
+      "left": {
+        "text": "😀 é See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See "
+              },
+              {
+                "type": "a",
+                "url": "https://example.test",
+                "children": [
+                  {
+                    "text": "docs"
+                  }
+                ]
+              },
+              {
+                "text": " and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "😀 é See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See "
+              },
+              {
+                "type": "a",
+                "url": "https://example.test",
+                "children": [
+                  {
+                    "text": "docs"
+                  }
+                ]
+              },
+              {
+                "text": " and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "link formatting races typing and comment",
+      "fixture": "Unicode",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "😀 é See docs and TAR!GET here.Second paragraph.",
+      "left": {
+        "text": "😀 é See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See "
+              },
+              {
+                "type": "a",
+                "url": "https://example.test",
+                "children": [
+                  {
+                    "text": "docs"
+                  }
+                ]
+              },
+              {
+                "text": " and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "😀 é See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See "
+              },
+              {
+                "type": "a",
+                "url": "https://example.test",
+                "children": [
+                  {
+                    "text": "docs"
+                  }
+                ]
+              },
+              {
+                "text": " and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "Quarry-style list attributes race typing and comment",
+      "fixture": "Unicode",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "😀 é See docs and TAR!GET here.Second paragraph.",
+      "left": {
+        "text": "😀 é See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and TAR!GET here."
+              }
+            ],
+            "listStyleType": "disc",
+            "indent": 1
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "😀 é See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and TAR!GET here."
+              }
+            ],
+            "listStyleType": "disc",
+            "indent": 1
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "Quarry-style list attributes race typing and comment",
+      "fixture": "Unicode",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "😀 é See docs and TAR!GET here.Second paragraph.",
+      "left": {
+        "text": "😀 é See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and TAR!GET here."
+              }
+            ],
+            "listStyleType": "disc",
+            "indent": 1
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "😀 é See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and TAR!GET here."
+              }
+            ],
+            "listStyleType": "disc",
+            "indent": 1
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "heading conversion races typing and comment",
+      "fixture": "Unicode",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "😀 é See docs and TAR!GET here.Second paragraph.",
+      "left": {
+        "text": "😀 é See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "h2",
+            "children": [
+              {
+                "text": "😀 é See docs and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "😀 é See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "h2",
+            "children": [
+              {
+                "text": "😀 é See docs and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "heading conversion races typing and comment",
+      "fixture": "Unicode",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "😀 é See docs and TAR!GET here.Second paragraph.",
+      "left": {
+        "text": "😀 é See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "h2",
+            "children": [
+              {
+                "text": "😀 é See docs and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "😀 é See docs and TAR!GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "h2",
+            "children": [
+              {
+                "text": "😀 é See docs and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "paragraph split races typing and comment",
+      "fixture": "Unicode",
+      "delivery": "forward",
+      "pass": false,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "😀 é See docs and TAR!GET here.Second paragraph.",
+      "left": {
+        "text": "😀 é See docs and !TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and !"
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "!"
+      },
+      "right": {
+        "text": "😀 é See docs and !TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and !"
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "!"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "paragraph split races typing and comment",
+      "fixture": "Unicode",
+      "delivery": "reverse",
+      "pass": false,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "😀 é See docs and TAR!GET here.Second paragraph.",
+      "left": {
+        "text": "😀 é See docs and !TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and !"
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "!"
+      },
+      "right": {
+        "text": "😀 é See docs and !TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and !"
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "!"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "Slate move_node races typing and comment",
+      "fixture": "Unicode",
+      "delivery": "forward",
+      "pass": false,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "Second paragraph.😀 é See docs and TAR!GET here.",
+      "left": {
+        "text": "Second paragraph.😀 é See docs and TARGET here.",
+        "tree": [
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and TARGET here."
+              }
+            ]
+          }
+        ],
+        "quote": null
+      },
+      "right": {
+        "text": "Second paragraph.😀 é See docs and TARGET here.",
+        "tree": [
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and TARGET here."
+              }
+            ]
+          }
+        ],
+        "quote": null
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "Slate move_node races typing and comment",
+      "fixture": "Unicode",
+      "delivery": "reverse",
+      "pass": false,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "Second paragraph.😀 é See docs and TAR!GET here.",
+      "left": {
+        "text": "Second paragraph.😀 é See docs and TARGET here.",
+        "tree": [
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and TARGET here."
+              }
+            ]
+          }
+        ],
+        "quote": null
+      },
+      "right": {
+        "text": "Second paragraph.😀 é See docs and TARGET here.",
+        "tree": [
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and TARGET here."
+              }
+            ]
+          }
+        ],
+        "quote": null
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "partial target deletion preserves surviving text",
+      "fixture": "Unicode",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "GET",
+      "expectedText": "😀 é See docs and GET here.Second paragraph.",
+      "left": {
+        "text": "😀 é See docs and GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "GET"
+      },
+      "right": {
+        "text": "😀 é See docs and GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "partial target deletion preserves surviving text",
+      "fixture": "Unicode",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "GET",
+      "expectedText": "😀 é See docs and GET here.Second paragraph.",
+      "left": {
+        "text": "😀 é See docs and GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "GET"
+      },
+      "right": {
+        "text": "😀 é See docs and GET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "whole target deletion retains thread with empty target",
+      "fixture": "Unicode",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "",
+      "expectedText": "😀 é See docs and  here.Second paragraph.",
+      "left": {
+        "text": "😀 é See docs and  here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and  here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": ""
+      },
+      "right": {
+        "text": "😀 é See docs and  here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and  here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": ""
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "whole target deletion retains thread with empty target",
+      "fixture": "Unicode",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "",
+      "expectedText": "😀 é See docs and  here.Second paragraph.",
+      "left": {
+        "text": "😀 é See docs and  here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and  here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": ""
+      },
+      "right": {
+        "text": "😀 é See docs and  here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and  here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": ""
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "save and restore existing cursor targets",
+      "fixture": "Unicode",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TARGET",
+      "expectedText": "😀 é See docs and TARGET here.Second paragraph.",
+      "left": {
+        "text": "😀 é See docs and TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      },
+      "right": {
+        "text": "😀 é See docs and TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "save and restore existing cursor targets",
+      "fixture": "Unicode",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TARGET",
+      "expectedText": "😀 é See docs and TARGET here.Second paragraph.",
+      "left": {
+        "text": "😀 é See docs and TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      },
+      "right": {
+        "text": "😀 é See docs and TARGET here.Second paragraph.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "😀 é See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "comment-only has no content effects",
+      "fixture": "Repeated text",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TARGET",
+      "expectedText": "See docs and TARGET here.See docs and TARGET elsewhere.",
+      "left": {
+        "text": "See docs and TARGET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      },
+      "right": {
+        "text": "See docs and TARGET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "comment-only has no content effects",
+      "fixture": "Repeated text",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TARGET",
+      "expectedText": "See docs and TARGET here.See docs and TARGET elsewhere.",
+      "left": {
+        "text": "See docs and TARGET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      },
+      "right": {
+        "text": "See docs and TARGET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "link formatting races typing and comment",
+      "fixture": "Repeated text",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+      "left": {
+        "text": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See "
+              },
+              {
+                "type": "a",
+                "url": "https://example.test",
+                "children": [
+                  {
+                    "text": "docs"
+                  }
+                ]
+              },
+              {
+                "text": " and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See "
+              },
+              {
+                "type": "a",
+                "url": "https://example.test",
+                "children": [
+                  {
+                    "text": "docs"
+                  }
+                ]
+              },
+              {
+                "text": " and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "link formatting races typing and comment",
+      "fixture": "Repeated text",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+      "left": {
+        "text": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See "
+              },
+              {
+                "type": "a",
+                "url": "https://example.test",
+                "children": [
+                  {
+                    "text": "docs"
+                  }
+                ]
+              },
+              {
+                "text": " and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See "
+              },
+              {
+                "type": "a",
+                "url": "https://example.test",
+                "children": [
+                  {
+                    "text": "docs"
+                  }
+                ]
+              },
+              {
+                "text": " and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "Quarry-style list attributes race typing and comment",
+      "fixture": "Repeated text",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+      "left": {
+        "text": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TAR!GET here."
+              }
+            ],
+            "listStyleType": "disc",
+            "indent": 1
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TAR!GET here."
+              }
+            ],
+            "listStyleType": "disc",
+            "indent": 1
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "Quarry-style list attributes race typing and comment",
+      "fixture": "Repeated text",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+      "left": {
+        "text": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TAR!GET here."
+              }
+            ],
+            "listStyleType": "disc",
+            "indent": 1
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TAR!GET here."
+              }
+            ],
+            "listStyleType": "disc",
+            "indent": 1
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "heading conversion races typing and comment",
+      "fixture": "Repeated text",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+      "left": {
+        "text": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "h2",
+            "children": [
+              {
+                "text": "See docs and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "h2",
+            "children": [
+              {
+                "text": "See docs and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "heading conversion races typing and comment",
+      "fixture": "Repeated text",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+      "left": {
+        "text": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "h2",
+            "children": [
+              {
+                "text": "See docs and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      },
+      "right": {
+        "text": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "h2",
+            "children": [
+              {
+                "text": "See docs and TAR!GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TAR!GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "paragraph split races typing and comment",
+      "fixture": "Repeated text",
+      "delivery": "forward",
+      "pass": false,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+      "left": {
+        "text": "See docs and !TARGET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and !"
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "!"
+      },
+      "right": {
+        "text": "See docs and !TARGET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and !"
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "!"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "paragraph split races typing and comment",
+      "fixture": "Repeated text",
+      "delivery": "reverse",
+      "pass": false,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TAR!GET here.See docs and TARGET elsewhere.",
+      "left": {
+        "text": "See docs and !TARGET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and !"
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "!"
+      },
+      "right": {
+        "text": "See docs and !TARGET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and !"
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "!"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "Slate move_node races typing and comment",
+      "fixture": "Repeated text",
+      "delivery": "forward",
+      "pass": false,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TARGET elsewhere.See docs and TAR!GET here.",
+      "left": {
+        "text": "See docs and TARGET elsewhere.See docs and TARGET here.",
+        "tree": [
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          }
+        ],
+        "quote": null
+      },
+      "right": {
+        "text": "See docs and TARGET elsewhere.See docs and TARGET here.",
+        "tree": [
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          }
+        ],
+        "quote": null
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "Slate move_node races typing and comment",
+      "fixture": "Repeated text",
+      "delivery": "reverse",
+      "pass": false,
+      "treeConverged": true,
+      "expectedQuote": "TAR!GET",
+      "expectedText": "See docs and TARGET elsewhere.See docs and TAR!GET here.",
+      "left": {
+        "text": "See docs and TARGET elsewhere.See docs and TARGET here.",
+        "tree": [
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          }
+        ],
+        "quote": null
+      },
+      "right": {
+        "text": "See docs and TARGET elsewhere.See docs and TARGET here.",
+        "tree": [
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          }
+        ],
+        "quote": null
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "partial target deletion preserves surviving text",
+      "fixture": "Repeated text",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "GET",
+      "expectedText": "See docs and GET here.See docs and TARGET elsewhere.",
+      "left": {
+        "text": "See docs and GET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "GET"
+      },
+      "right": {
+        "text": "See docs and GET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "partial target deletion preserves surviving text",
+      "fixture": "Repeated text",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "GET",
+      "expectedText": "See docs and GET here.See docs and TARGET elsewhere.",
+      "left": {
+        "text": "See docs and GET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "GET"
+      },
+      "right": {
+        "text": "See docs and GET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and GET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "GET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "whole target deletion retains thread with empty target",
+      "fixture": "Repeated text",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "",
+      "expectedText": "See docs and  here.See docs and TARGET elsewhere.",
+      "left": {
+        "text": "See docs and  here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and  here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": ""
+      },
+      "right": {
+        "text": "See docs and  here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and  here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": ""
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "whole target deletion retains thread with empty target",
+      "fixture": "Repeated text",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "",
+      "expectedText": "See docs and  here.See docs and TARGET elsewhere.",
+      "left": {
+        "text": "See docs and  here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and  here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": ""
+      },
+      "right": {
+        "text": "See docs and  here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and  here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": ""
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "save and restore existing cursor targets",
+      "fixture": "Repeated text",
+      "delivery": "forward",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TARGET",
+      "expectedText": "See docs and TARGET here.See docs and TARGET elsewhere.",
+      "left": {
+        "text": "See docs and TARGET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      },
+      "right": {
+        "text": "See docs and TARGET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate core",
+      "case": "save and restore existing cursor targets",
+      "fixture": "Repeated text",
+      "delivery": "reverse",
+      "pass": true,
+      "treeConverged": true,
+      "expectedQuote": "TARGET",
+      "expectedText": "See docs and TARGET here.See docs and TARGET elsewhere.",
+      "left": {
+        "text": "See docs and TARGET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      },
+      "right": {
+        "text": "See docs and TARGET here.See docs and TARGET elsewhere.",
+        "tree": [
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          },
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET elsewhere."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate stored positions",
+      "case": "move sees existing target",
+      "pass": true,
+      "left": {
+        "text": "Second paragraph.See docs and TARGET here.",
+        "tree": [
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      },
+      "right": {
+        "text": "Second paragraph.See docs and TARGET here.",
+        "tree": [
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          }
+        ],
+        "quote": "TARGET"
+      }
+    },
+    {
+      "engine": "Yjs + Slate stored positions",
+      "case": "move cannot see in-flight target",
+      "pass": false,
+      "left": {
+        "text": "Second paragraph.See docs and TARGET here.",
+        "tree": [
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          }
+        ],
+        "quote": null
+      },
+      "right": {
+        "text": "Second paragraph.See docs and TARGET here.",
+        "tree": [
+          {
+            "id": "b1",
+            "type": "p",
+            "children": [
+              {
+                "text": "Second paragraph."
+              }
+            ]
+          },
+          {
+            "id": "b0",
+            "type": "p",
+            "children": [
+              {
+                "text": "See docs and TARGET here."
+              }
+            ]
+          }
+        ],
+        "quote": null
+      }
+    }
+  ]
+}

@@ -52,6 +52,7 @@ jobs:
         with:
           no-cache: true
 
+      - uses: ./.github/actions/setup-document
       - name: Build browser bundle
         working-directory: ui
         run: |

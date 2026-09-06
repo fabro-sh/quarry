@@ -5,13 +5,23 @@ on:
     branches: [main]
     paths:
       - "ui/**"
-      - "crates/quarry-collab-codec/block-capabilities.json"
+      - "crates/quarry-document/**"
+      - "crates/quarry-document-wasm/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/actions/setup-document/**"
+      - "crates/quarry-markdown/**"
       - "fixtures/**"
       - ".github/workflows/typescript.yml"
   pull_request:
     paths:
       - "ui/**"
-      - "crates/quarry-collab-codec/block-capabilities.json"
+      - "crates/quarry-document/**"
+      - "crates/quarry-document-wasm/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/actions/setup-document/**"
+      - "crates/quarry-markdown/**"
       - "fixtures/**"
       - ".github/workflows/typescript.yml"
   workflow_dispatch:
@@ -37,11 +47,12 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: ./.github/actions/setup-document
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
 
-  fixtures:
-    name: Fixtures
+  architecture:
+    name: Architecture
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -50,8 +61,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: ./.github/actions/setup-document
       - run: bun install --frozen-lockfile
-      - run: bun run fixtures:check
+      - run: bun run check:architecture
 
   test:
     name: Test (Linux)
@@ -63,6 +75,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: ./.github/actions/setup-document
       - run: bun install --frozen-lockfile
       - run: bun run test
 
@@ -76,22 +89,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: ./.github/actions/setup-document
       - run: bun install --frozen-lockfile
       - run: bun run build
-
-  e2e:
-    name: E2E (mock API)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      - run: bun install --frozen-lockfile
-      - run: bunx playwright install --with-deps chromium
-      - run: bun run test:e2e
 
   test-macos:
     name: Test (macOS)
@@ -104,5 +104,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: ./.github/actions/setup-document
       - run: bun install --frozen-lockfile
       - run: bun run test

@@ -58,6 +58,7 @@ jobs:
         working-directory: ui
         run: bun install --frozen-lockfile
       # quarry-server embeds ui/dist at compile time (rust_embed)
+      - uses: ./.github/actions/setup-document
       - name: Build browser bundle
         working-directory: ui
         run: bun run build
@@ -67,7 +68,10 @@ jobs:
         run: cargo build --locked -p quarry --features lib-documents
       - name: Install Playwright browsers
         working-directory: ui
-        run: bunx playwright install --with-deps chromium
+        run: bunx playwright install --with-deps chromium firefox webkit
       - name: Run live suite
         working-directory: ui
         run: bun run test:e2e:live
+      - name: Check large-document responsiveness
+        working-directory: ui
+        run: bun run test:performance

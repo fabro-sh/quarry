@@ -4,36 +4,22 @@
 )]
 
 use anyhow::Context as _;
-use axum::body::{Body, to_bytes};
+use axum::body::Body;
+#[cfg(feature = "tmp-documents")]
+use axum::body::to_bytes;
 #[cfg(feature = "tmp-documents")]
 use axum::http::header;
 use axum::http::{Method, Request, StatusCode};
 #[cfg(feature = "tmp-documents")]
-use futures_util::{SinkExt, StreamExt};
-#[cfg(feature = "tmp-documents")]
-use quarry_server::{app_state, router_with_state, serve_state_with_shutdown};
+use futures_util::StreamExt;
 use serde_json::Value;
 #[cfg(feature = "tmp-documents")]
 use tokio::time::{Duration, timeout};
-#[cfg(feature = "tmp-documents")]
-use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
 use tower::ServiceExt;
-#[cfg(feature = "tmp-documents")]
-use yrs::sync::{Message as YMessage, SyncMessage};
-#[cfg(feature = "tmp-documents")]
-use yrs::updates::encoder::Encode;
-#[cfg(feature = "tmp-documents")]
-use yrs::{Doc, Out, ReadTxn, Text, Transact, WriteTxn, XmlTextRef};
-
 mod common;
-
-use common::{
-    WsSocket, document_test_app, empty_yjs_doc, json_request, open_test_store, response_json,
-    sync_yjs_doc_from_socket, wait_for_server, wait_for_yjs_sync_update, yjs_plain_text,
-};
-
 #[cfg(feature = "tmp-documents")]
-const COLLAB_ROOT: &str = "content";
+use common::json_request;
+use common::{document_test_app, response_json};
 
 #[cfg(feature = "tmp-documents")]
 fn assert_json_timestamp(value: &Value) {
@@ -85,14 +71,14 @@ async fn document_feature_surface_matches_compiled_features() -> anyhow::Result<
         assert!(openapi["paths"]["/v1/tmp/documents"]["get"].is_null());
         assert!(openapi["paths"]["/v1/tmp/documents/{secret}/share"].is_null());
         assert!(openapi["paths"]["/v1/tmp/documents/{secret}/share/{token}/revoke"].is_null());
-        assert!(openapi["paths"]["/v1/tmp/collab/{secret}/{room}"].is_object());
+        assert!(openapi["paths"]["/v1/tmp/documents/{secret}/document-state"].is_object());
     }
     assert_eq!(
         openapi["paths"]["/v1/tmp/documents/{secret}/promote"].is_object(),
         tmp_documents && lib_documents
     );
     assert_eq!(
-        openapi["paths"]["/v1/collab/{document_id}"].is_object(),
+        openapi["paths"]["/v1/libraries/{library}/documents/{path}/document-state"].is_object(),
         lib_documents
     );
     assert_eq!(
@@ -245,23 +231,13 @@ async fn document_feature_surface_matches_compiled_features() -> anyhow::Result<
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/v1/collab/missing")
+                .uri("/v1/libraries/missing/documents/missing.md/document-state")
                 .body(Body::empty())
-                .context("build missing collab request")?,
+                .context("build missing native document request")?,
         )
         .await
-        .context("send missing collab request")?;
-    assert_eq!(
-        response.status(),
-        if lib_documents {
-            // The raw collab route exists and rejects a non-upgrade GET.
-            StatusCode::BAD_REQUEST
-        } else {
-            // Tmp-only build: the raw collab route is absent, so the request
-            // falls through to the asset fallback and 404s.
-            StatusCode::NOT_FOUND
-        }
-    );
+        .context("send missing native document request")?;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
     Ok(())
 }
 
@@ -403,7 +379,7 @@ async fn tmp_not_found_error_body_redacts_the_secret() -> anyhow::Result<()> {
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_events_routes()
+async fn tmp_markdown_documents_support_native_block_review_presence_and_events_routes()
 -> anyhow::Result<()> {
     let (_root, app, _store) = document_test_app().await;
 
@@ -584,159 +560,39 @@ async fn tmp_markdown_documents_support_collab_block_review_presence_share_and_e
 
 #[cfg(feature = "tmp-documents")]
 #[tokio::test]
-async fn tmp_collab_websocket_final_checkpoint_persists_typing() -> anyhow::Result<()> {
-    let (_root, store) = open_test_store().await;
-    let state = app_state(store.clone());
-    let app = router_with_state(state.clone());
-
-    let response = app
-        .clone()
-        .oneshot(json_request(
-            Method::POST,
-            "/v1/tmp/documents",
-            serde_json::json!({
-                "content": "Hello tmp.\n",
-                "content_type": "text/markdown"
-            }),
-        ))
-        .await
-        .context("create tmp document for collab checkpoint")?;
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let created: Value = response_json(response).await;
-    let secret = created["document"]["path"]
-        .as_str()
-        .context("tmp create response should include document path")?
-        .to_string();
-
-    let probe = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .context("bind temporary server probe")?;
-    let addr = probe.local_addr().context("read probe local address")?;
-    drop(probe);
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-    let server = tokio::spawn(serve_state_with_shutdown(state, addr, async {
-        let _ = shutdown_rx.await;
-    }));
-    wait_for_server(addr).await;
-
-    let (mut socket, doc) = connect_tmp_session(addr, &secret).await?;
-    assert_eq!(yjs_plain_text(&doc), "Hello tmp.");
-    send_local_edit(&mut socket, &doc, |txn, _root| {
-        let block = nth_block_text_in(txn, 0);
-        block.insert(txn, 9, " edited");
-    })
-    .await?;
-    socket
-        .close(None)
-        .await
-        .context("close tmp collab socket")?;
-
-    let markdown = wait_for_tmp_markdown_containing(&app, &secret, "edited").await?;
-    assert_eq!(markdown, "Hello tmp edited.\n");
-    shutdown_tx
-        .send(())
-        .map_err(|()| anyhow::anyhow!("tmp collab server shutdown receiver dropped"))?;
-    server.await.context("join tmp collab server task")??;
-    Ok(())
-}
-
-/// The raw `/v1/collab/{document_id}` route carries no secret, so it must never
-/// seed a tmp document even when handed the correct internal id — otherwise the
-/// exposed `x-quarry-document-id` would become a second, secret-free capability.
-/// The secret-authenticated `/v1/tmp/collab` route must still seed. Requires
-/// both features: the raw route exists only under `lib-documents`, and tmp
-/// documents are creatable only under `tmp-documents`.
-#[cfg(all(feature = "tmp-documents", feature = "lib-documents"))]
-#[tokio::test]
-async fn raw_collab_route_refuses_tmp_document_without_secret() -> anyhow::Result<()> {
-    let (_root, store) = open_test_store().await;
-    let state = app_state(store.clone());
-
-    let outcome = store
+async fn native_document_requires_its_tmp_capability() -> anyhow::Result<()> {
+    let (_root, app, store) = document_test_app().await;
+    let created = store
         .create_tmp_document(
             b"Hello tmp.\n".to_vec(),
-            serde_json::json!({"content_type": "text/markdown"}),
+            serde_json::json!({}),
             "text/markdown",
             quarry_storage::TmpTtl::Default,
         )
-        .await
-        .context("create tmp document")?;
-    let secret = outcome.document.path.clone();
-    let document_id = store
-        .head_tmp_document(&secret)
-        .await
-        .context("resolve tmp document head")?
-        .id
-        .to_string();
-
-    let probe = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .context("bind temporary server probe")?;
-    let addr = probe.local_addr().context("read probe local address")?;
-    drop(probe);
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-    let server = tokio::spawn(serve_state_with_shutdown(state, addr, async {
-        let _ = shutdown_rx.await;
-    }));
-    wait_for_server(addr).await;
-
-    assert!(
-        !raw_collab_route_seeds(addr, &document_id).await?,
-        "the raw id route must refuse a tmp document without the secret"
-    );
-
-    let (_socket, doc) = connect_tmp_session(addr, &secret).await?;
-    assert_eq!(
-        yjs_plain_text(&doc),
-        "Hello tmp.",
-        "the secret-authenticated route must still seed the tmp document"
-    );
-
-    shutdown_tx
-        .send(())
-        .map_err(|()| anyhow::anyhow!("collab server shutdown receiver dropped"))?;
-    server.await.context("join collab server task")??;
+        .await?;
+    let secret = &created.document.path;
+    let internal_id = &created.document.id;
+    for suffix in ["document-state", "blocks", "review"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/tmp/documents/{internal_id}/{suffix}"))
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert!(!response.status().is_success());
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/tmp/documents/{secret}/{suffix}"))
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
     Ok(())
-}
-
-/// Connects to the raw collab route, sends the initial sync request, and
-/// reports whether the server seeded the session (answered with a non-empty
-/// Yjs update) before closing the socket. A refused session drops the socket
-/// without seeding.
-#[cfg(all(feature = "tmp-documents", feature = "lib-documents"))]
-async fn raw_collab_route_seeds(
-    addr: std::net::SocketAddr,
-    document_id: &str,
-) -> anyhow::Result<bool> {
-    let (mut socket, _) =
-        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/{document_id}"))
-            .await
-            .context("connect raw collab websocket")?;
-    let doc = empty_yjs_doc();
-    socket
-        .send(TungsteniteMessage::Binary(
-            YMessage::Sync(SyncMessage::SyncStep1(doc.transact().state_vector()))
-                .encode_v1()
-                .into(),
-        ))
-        .await
-        .context("send raw collab sync request")?;
-
-    let seeded = timeout(Duration::from_secs(2), async {
-        while let Some(message) = socket.next().await {
-            if let Ok(TungsteniteMessage::Binary(bytes)) = message {
-                if common::apply_yjs_message(&doc, bytes.as_ref()) {
-                    return true;
-                }
-            } else if matches!(message, Ok(TungsteniteMessage::Close(_)) | Err(_)) {
-                return false;
-            }
-        }
-        false
-    })
-    .await
-    .unwrap_or(false);
-    Ok(seeded)
 }
 
 #[cfg(feature = "tmp-documents")]
@@ -862,102 +718,6 @@ async fn tmp_documents_support_create_read_update_ttl_versions_and_delete() -> a
     let response = app.oneshot(request).await.context("delete tmp document")?;
     assert_eq!(response.status(), StatusCode::OK);
     Ok(())
-}
-
-#[cfg(feature = "tmp-documents")]
-async fn connect_tmp_session(
-    addr: std::net::SocketAddr,
-    secret: &str,
-) -> anyhow::Result<(WsSocket, Doc)> {
-    let (mut socket, _) =
-        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/tmp/collab/{secret}/content"))
-            .await
-            .context("connect tmp collab websocket")?;
-    let doc = empty_yjs_doc();
-    sync_yjs_doc_from_socket(&mut socket, &doc).await;
-    Ok((socket, doc))
-}
-
-#[cfg(feature = "tmp-documents")]
-async fn send_local_edit(
-    socket: &mut WsSocket,
-    doc: &Doc,
-    edit: impl FnOnce(&mut yrs::TransactionMut<'_>, &XmlTextRef),
-) -> anyhow::Result<()> {
-    let before = doc.transact().state_vector();
-    {
-        let mut txn = doc.transact_mut();
-        let text = txn.get_or_insert_text(COLLAB_ROOT);
-        let root: &XmlTextRef = text.as_ref();
-        let root = root.clone();
-        edit(&mut txn, &root);
-    }
-    let update = doc.transact().encode_state_as_update_v1(&before);
-    socket
-        .send(TungsteniteMessage::Binary(
-            YMessage::Sync(SyncMessage::Update(update))
-                .encode_v1()
-                .into(),
-        ))
-        .await
-        .context("send local Yjs update")?;
-    wait_for_yjs_sync_update(socket, doc).await;
-    Ok(())
-}
-
-#[cfg(feature = "tmp-documents")]
-fn nth_block_text_in(txn: &mut yrs::TransactionMut<'_>, index: usize) -> XmlTextRef {
-    use yrs::types::text::YChange;
-    let text = txn.get_or_insert_text(COLLAB_ROOT);
-    let root: &XmlTextRef = text.as_ref();
-    let root = root.clone();
-    let embeds: Vec<XmlTextRef> = root
-        .diff(txn, YChange::identity)
-        .into_iter()
-        .filter_map(|diff| match diff.insert {
-            Out::YXmlText(child) => Some(child),
-            Out::YText(child) => {
-                let child: &XmlTextRef = child.as_ref();
-                Some(child.clone())
-            }
-            _ => None,
-        })
-        .collect();
-    embeds[index].clone()
-}
-
-#[cfg(feature = "tmp-documents")]
-async fn wait_for_tmp_markdown_containing(
-    app: &axum::Router,
-    secret: &str,
-    needle: &str,
-) -> anyhow::Result<String> {
-    let markdown = timeout(Duration::from_secs(5), async {
-        loop {
-            let request = Request::builder()
-                .method(Method::GET)
-                .uri(format!("/v1/tmp/documents/{secret}"))
-                .body(Body::empty())
-                .context("build tmp markdown polling request")?;
-            let response = app
-                .clone()
-                .oneshot(request)
-                .await
-                .context("poll tmp markdown")?;
-            assert_eq!(response.status(), StatusCode::OK);
-            let body = to_bytes(response.into_body(), usize::MAX)
-                .await
-                .context("read tmp markdown poll body")?;
-            let markdown = String::from_utf8(body.to_vec()).context("decode tmp markdown body")?;
-            if markdown.contains(needle) {
-                break Ok::<String, anyhow::Error>(markdown);
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .with_context(|| format!("persisted tmp markdown never contained {needle:?}"))??;
-    Ok(markdown)
 }
 
 #[cfg(feature = "tmp-documents")]

@@ -1,0 +1,123 @@
+[
+  {
+    "file": "ui/tests/review-round-trip.spec.ts",
+    "cases": [
+      "renders the commented range with the comment mark on load",
+      "suggests inserted text that persists as {++\u2026++}{#id} with a suggestions endmatter",
+      "accepts a suggestion: applies the text and drops the markup"
+    ]
+  },
+  {
+    "file": "ui/tests/workspace.spec.ts",
+    "cases": [
+      "creates, edits, saves, and reloads a markdown document",
+      "publishes the markdown mirror after an edit (tab title, via the worker)",
+      "keeps rapid typing responsive in a 100 KiB live document",
+      "inserts and removes a hyperlink from the floating toolbar",
+      "renders a wiki-link chip and navigates to its target on click",
+      "converts a typed [[..]] into a wiki-link and round-trips it",
+      "drops an image, stores it as an asset, and references it as markdown",
+      "drops an image into a tmp document as an inline data URL and round-trips it",
+      "retitles a tmp document page when a remote collaborator rewrites the H1",
+      "renders a mermaid code block as a diagram with a Code/Preview toggle",
+      "turns a block into a mermaid diagram from the toolbar",
+      "deletes a mermaid diagram as one block on backspace from the next line",
+      "can type a new block after a trailing mermaid diagram",
+      "renders a GFM table with editable cells",
+      "turns a block into a table from the toolbar",
+      "typing in a table cell reaches the session and acks Saved",
+      "setting a column alignment persists to markdown",
+      "column alignment follows its column when a column is inserted",
+      "inserting a table column to the right keeps every row rectangular",
+      "the table add-column control keeps every row rectangular",
+      "deletes a table column",
+      "deletes a table row",
+      "resizing a table column does not trigger a save",
+      "opens the browser and selects a library",
+      "supports the main workflow without pointer input",
+      "runs create, move, search, sync, settings, and delete from the command palette",
+      "passes automated accessibility checks for shell and conflict workflows",
+      "searches and opens a server result from the keyboard",
+      "renames a focused tree document from the keyboard",
+      "deletes a document from the tree context menu",
+      "preserves edits across a reload",
+      "keeps a ten-thousand document tree virtualized and usable",
+      "previews image and binary documents without opening the editor",
+      "navigates through wiki-links and backlinks",
+      "shows a floating formatting toolbar when text is selected",
+      "keeps an expanded selection through checkpoint acks and remote session updates",
+      "turns a block into a heading from the floating toolbar",
+      "auto-formats markdown shortcuts into blocks while typing",
+      "toggles bullet and numbered lists from the floating toolbar",
+      "creates a to-do list with a checkbox via markdown autoformat",
+      "creates a checked to-do via [x] autoformat",
+      "shows a drag handle for editor blocks",
+      "reorders blocks by dragging the block handle",
+      "reorders when dragging straight down the handle gutter",
+      "applies underline from the floating toolbar",
+      "applies superscript and subscript from the floating toolbar",
+      "turns a paragraph into a to-do from the floating toolbar",
+      "opens a block menu from the handle with turn-into, duplicate, delete",
+      "turns a block into a code block from the Turn into dropdown",
+      "diffs selected historical versions from the version pane",
+      "restores an older version from the version pane",
+      "refreshes the open document from SSE change events",
+      "resolves a Git conflict record from the conflict workflow",
+      "resolves a Git conflict using keyboard-only navigation",
+      "\\n",
+      "\\n"
+    ]
+  },
+  {
+    "file": "ui/tests/live-collab-comment-draft.spec.ts",
+    "cases": [
+      "a comment draft stays invisible to the other human until posted"
+    ]
+  },
+  {
+    "file": "ui/tests/review-rail.spec.ts",
+    "cases": [
+      "shows a comment card for the document thread",
+      "shows loaded suggestions before editor interaction",
+      "reply persists the new comment with a `re:` parent and body",
+      "resolve persists `status: resolved` for the thread",
+      "delete removes the in-text mark and drops the comment from saved Markdown",
+      "commenting opens a draft composer that only persists on submit",
+      "cancelling a draft discards it and persists no comment",
+      "accept from the rail applies the suggestion and drops the markup",
+      "hovering a comment card highlights the matching in-text mark"
+    ]
+  },
+  {
+    "file": "ui/tests/live-collab-agent-smoke.spec.ts",
+    "cases": [
+      "humans and an agent collaborate on one live document without conflicts"
+    ]
+  },
+  {
+    "file": "ui/tests/live-block-delete-conformance.spec.ts",
+    "cases": [
+      "accepting registered block deletions removes exact subtrees without leftovers",
+      "rejecting registered block deletions preserves every target and its serialization"
+    ]
+  },
+  {
+    "file": "ui/tests/live-reconnect-reseed.spec.ts",
+    "cases": [
+      "disconnect goes read-only; reconnect reseeds a fresh doc from canonical state",
+      "Reconnect target paragraph.",
+      "a connect-time outage never merges a stale bootstrap doc into the recovered session",
+      "Recovery target paragraph.",
+      "raw_markdown blocks render their source and survive checkpoints"
+    ]
+  },
+  {
+    "file": "ui/tests/live-session-collaborator-spike.spec.ts",
+    "cases": [
+      "agent collaborator edits a different block while two humans type; undo stays isolated",
+      "agent collaborator rewrites the block a human is typing in, without rejection",
+      "remote cursor stays anchored to its character across an agent edit above it",
+      "remote cursor stays anchored to its character across an agent edit in the same block"
+    ]
+  }
+]

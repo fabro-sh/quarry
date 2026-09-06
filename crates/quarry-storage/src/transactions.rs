@@ -287,9 +287,8 @@ impl QuarryStore {
                                 })?;
                                 let doc_id =
                                     Self::document_id_for_version_conn(conn, &version_id).await?;
-                                publish_put_conn(conn, &doc_id, &version_id).await?;
-                                blocks::clear_block_state_conn(conn, &doc_id).await?;
-                                ensure_path_inodes_conn(conn, &tx.library_id, &change.path)
+                                store.publish_document_version_conn(conn, &doc_id, &version_id).await?;
+                                            ensure_path_inodes_conn(conn, &tx.library_id, &change.path)
                                     .await?;
                                 events.push(StoreEvent::document_put(
                                     tx.library_id.clone(),
@@ -316,8 +315,7 @@ impl QuarryStore {
                                     )
                                     .await
                                     .map_err(map_turso_error)?;
-                                    blocks::clear_block_state_conn(conn, &doc_id).await?;
-                                    delete_path_inode_conn(conn, &tx.library_id, &change.path)
+                                                    delete_path_inode_conn(conn, &tx.library_id, &change.path)
                                         .await?;
                                 }
                                 events.push(StoreEvent::document_delete(

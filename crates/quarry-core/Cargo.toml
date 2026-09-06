@@ -14,7 +14,7 @@ openapi = ["dep:utoipa"]
 
 [dependencies]
 chrono.workspace = true
-quarry-collab-codec.workspace = true
+quarry-markdown.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

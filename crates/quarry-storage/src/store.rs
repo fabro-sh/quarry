@@ -61,9 +61,9 @@ pub struct QuarryStore {
     write_lock: Arc<Mutex<()>>,
     operation_lock: Arc<Mutex<()>>,
     event_tx: broadcast::Sender<StoreEvent>,
-    /// Phase 4: the whole-file Markdown write path for BlockDocuments,
+    /// The whole-file Markdown adapter for native documents,
     /// installed by the serving process (quarry-server owns the single
-    /// reconciliation implementation and the session mode switch). Shared
+    /// reconciliation and native command implementation). Shared
     /// across store clones. Weak: the writer itself holds store clones, so a
     /// strong ref here would cycle and keep the store (and its lock file)
     /// alive past shutdown — the installer keeps the strong handle for the
@@ -176,9 +176,12 @@ impl QuarryStore {
         guard
     }
 
-    pub async fn run_global_operation<F, T>(&self, future: F) -> Result<T>
+    /// Acquire this gate before document locks. Git operations can call the
+    /// document gateway while holding it; acquiring the locks in the opposite
+    /// order would deadlock a concurrent HTTP or FUSE writer.
+    pub async fn run_global_operation<F>(&self, future: F) -> F::Output
     where
-        F: Future<Output = Result<T>>,
+        F: Future,
     {
         if GLOBAL_OPERATION_ACTIVE.try_with(|_| ()).is_ok() {
             return future.await;

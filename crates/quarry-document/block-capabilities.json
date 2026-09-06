@@ -1,0 +1,157 @@
+[
+  {
+    "type": "p",
+    "content": "text",
+    "inlineSyntax": "parsed",
+    "promoteFullTextDelete": true,
+    "children": [],
+    "root": true
+  },
+  {
+    "type": "h1",
+    "content": "text",
+    "inlineSyntax": "parsed",
+    "promoteFullTextDelete": true,
+    "children": [],
+    "root": true
+  },
+  {
+    "type": "h2",
+    "content": "text",
+    "inlineSyntax": "parsed",
+    "promoteFullTextDelete": true,
+    "children": [],
+    "root": true
+  },
+  {
+    "type": "h3",
+    "content": "text",
+    "inlineSyntax": "parsed",
+    "promoteFullTextDelete": true,
+    "children": [],
+    "root": true
+  },
+  {
+    "type": "h4",
+    "content": "text",
+    "inlineSyntax": "parsed",
+    "promoteFullTextDelete": true,
+    "children": [],
+    "root": true
+  },
+  {
+    "type": "h5",
+    "content": "text",
+    "inlineSyntax": "parsed",
+    "promoteFullTextDelete": true,
+    "children": [],
+    "root": true
+  },
+  {
+    "type": "h6",
+    "content": "text",
+    "inlineSyntax": "parsed",
+    "promoteFullTextDelete": true,
+    "children": [],
+    "root": true
+  },
+  {
+    "type": "blockquote",
+    "content": "text",
+    "inlineSyntax": "parsed",
+    "promoteFullTextDelete": true,
+    "children": [],
+    "root": true
+  },
+  {
+    "type": "code_block",
+    "content": "container",
+    "inlineSyntax": "literal",
+    "promoteFullTextDelete": false,
+    "children": [
+      "code_line"
+    ],
+    "root": true
+  },
+  {
+    "type": "code_line",
+    "content": "text",
+    "inlineSyntax": "literal",
+    "promoteFullTextDelete": false,
+    "children": [],
+    "root": false
+  },
+  {
+    "type": "mermaid",
+    "content": "void",
+    "inlineSyntax": "literal",
+    "promoteFullTextDelete": false,
+    "children": [],
+    "root": true
+  },
+  {
+    "type": "table",
+    "content": "container",
+    "inlineSyntax": "parsed",
+    "promoteFullTextDelete": false,
+    "children": [
+      "tr"
+    ],
+    "root": true
+  },
+  {
+    "type": "tr",
+    "content": "container",
+    "inlineSyntax": "parsed",
+    "promoteFullTextDelete": false,
+    "children": [
+      "th",
+      "td"
+    ],
+    "root": false
+  },
+  {
+    "type": "th",
+    "content": "container",
+    "inlineSyntax": "parsed",
+    "promoteFullTextDelete": false,
+    "children": [
+      "p"
+    ],
+    "root": false
+  },
+  {
+    "type": "td",
+    "content": "container",
+    "inlineSyntax": "parsed",
+    "promoteFullTextDelete": false,
+    "children": [
+      "p"
+    ],
+    "root": false
+  },
+  {
+    "type": "img",
+    "content": "void",
+    "inlineSyntax": "literal",
+    "promoteFullTextDelete": false,
+    "children": [],
+    "root": true
+  },
+  {
+    "type": "hr",
+    "content": "void",
+    "inlineSyntax": "literal",
+    "promoteFullTextDelete": false,
+    "children": [],
+    "root": true
+  },
+  {
+    "type": "raw_markdown",
+    "content": "raw",
+    "inlineSyntax": "literal",
+    "promoteFullTextDelete": false,
+    "children": [],
+    "root": true
+  }
+]

@@ -2,16 +2,16 @@
 
 ## Workspace layout
 
-- `crates/quarry-core`: domain types, errors, metadata, path normalization.
-- `crates/quarry-cas`: BLAKE3 disk CAS with atomic writes and reachability GC.
-- `crates/quarry-storage`: Turso schema, migrations, transaction wrapper, libraries, documents, versions, conflicts, GC; canonical block rows, review-item rows, and diff3 shadow bases (`src/blocks.rs`).
-- `crates/quarry-collab-codec`: Markdown ↔ block rows codec, rows ↔ Yjs session projections (seed/checkpoint), and the diff3 `reconcile` engine.
-- `crates/quarry-git`: Git working tree import/export/sync with marker safety, frontmatter, sidecars, commits, optional remote transport, and per-peer shadow-base bookkeeping for reconciled Markdown sync.
-- `crates/quarry-server`: Axum REST API and generated OpenAPI; the semantic mutation gateway (`gateway.rs`), ephemeral session lifecycle (`session.rs`), collab websocket transport (`collab.rs`), and the shared whole-file reconciled writer (`markdown_write.rs`).
-- `crates/quarry-cli`: CLI command parsing and local UX (Markdown puts reconcile through the same writer).
-- `crates/quarry-fuse`: Linux-only FUSE projection over committed Library state with read-only and auto-commit writable modes; Markdown writes reconcile per open handle.
-- `crates/quarry`: binary crate.
-- `ui/`: the browser workspace (React + Plate + slate-yjs) — live sessions over the collab websocket, the rows-backed review rail, and the Playwright suites.
+- `quarry-document`: Automerge schema, identity, review targets and commands.
+- `quarry-document-wasm`: the shared engine's browser boundary.
+- `quarry-markdown`: Markdown parsing, export, review import and reconciliation.
+- `quarry-core`: domain types, errors, metadata and paths.
+- `quarry-cas`: content-addressed blobs and reachability GC.
+- `quarry-storage`: atomic native publication, indexes, versions, receipts, archives and upgrades.
+- `quarry-server`: HTTP, events, scope checks, command authority and agent operation translation.
+- `quarry-git`, `quarry-cli`, `quarry-fuse`: external writers and adapters.
+- `quarry`: the application binary.
+- `ui/`: React workspace, Plate/Slate input adapter and durable browser outbox.
 
 ## Feature flags
 
@@ -53,21 +53,72 @@ generate the trusted header.
 
 ## Verification
 
+Install the Rust target `wasm32-unknown-unknown` and the pinned
+`wasm-bindgen-cli` version from `.github/actions/setup-document/action.yml`.
+Use `bun install --frozen-lockfile` in `ui/`. The UI build scripts compile the
+same Rust engine used by the server; generated WASM is not committed.
+
+From the repository root:
+
 ```sh
-cargo test --workspace
-cargo clippy --workspace --all-targets
-cargo check -p quarry-fuse --target x86_64-unknown-linux-gnu
-cd ui && bun run fixtures:check
-cd ui && bun run typecheck
-cd ui && bun run test
-cd ui && bun run test:e2e        # mock-API Playwright suite
-cd ui && bun run test:e2e:live   # real-server live-collaboration suite
+cargo fmt --all --check
+cargo test --locked --workspace --all-features
+cargo test --locked -p quarry-server --no-default-features --features tmp-documents
+cargo test --locked -p quarry-server --no-default-features --features lib-documents
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 ```
 
-If the Slate/Yjs compatibility fixture check reports stale fixtures, regenerate them with
-`cd ui && bun run fixtures:generate`, then rerun `cd ui && bun run fixtures:check`.
+From `ui/`:
 
-Current tests cover storage/CAS lifecycle, concurrent auto-commit writes, explicit transaction commit/rollback behavior, commit-time stale-head rejection, restart safety for open staged CAS writes, REST ETag/precondition/busy handling, OpenAPI exposure, and library scoping; block-model coverage includes rows ↔ session round-trip exactness with review anchors (the Gate A property tests), the gateway's per-op REST matrix with typed errors/idempotency/rebase acks, session lifecycle races (transaction vs seed/checkpoint/discard, checkpoint-before-ack), diff3 reconciliation hunk taxonomy and conflict-as-review-item persistence, and adapter round-trips proving sibling `block_id`s and live anchors survive Git/FUSE/CLI/PUT whole-file writes while RawDocument bytes bypass the block model exactly. Git sync coverage includes marker and reserved-sidecar safety, import rollback, one-sided changes/conflicts/deletes, large-delete safety, and local bare-remote transport. FUSE coverage includes invalidation events, stable inodes, handle-scoped truncate/write publication, and persisted directory metadata. The browser suites pin the save-state model, reconnect-reseed behavior, multi-browser convergence with a live agent collaborator, and the review rail against the rows projection.
+```sh
+bun run check:architecture
+bun run typecheck
+bun run test
+bun run build
+bunx playwright install chromium firefox webkit
+bun run test:e2e:live
+bun run test:performance
+```
+
+The native tests cover exact character targets, concurrent edits, Unicode,
+review decisions, ownership transfer, undo, schema rejection, rollback, receipts
+and restart. The Markdown corpus lives in `fixtures/markdown`. Storage and HTTP
+tests exercise creation, upgrade, all writers, scope, permissions and archives.
+Browser tests run against a real server. WASM editor tests also replay their
+requests in a native Rust process and compare the resulting state.
+
+Performance tests build the production UI, release server and release WASM. The Chrome gate
+types 100 keys at the start, middle and end of a 114,814-byte document with
+1,401 blocks. It requires p95
+keydown-to-next-frame time at or below 20 ms, no frame gap above 50 ms, and
+exact text after saving and reload. A second 100 KiB formatted fixture runs
+in all three browser engines. Run these tests without competing builds or
+benchmarks. They use Playwright's pinned browsers and the embedded production
+UI; they do not measure a physical display or every Chrome version. Trace
+snapshots are disabled in performance tests because their full DOM scans can
+block frames during typing. Functional browser tests retain failure traces.
+The concurrent Chrome cases type 400 characters at the start or end while an
+agent edits and comments on the large document. They use the same input and
+frame-gap gates.
+
+Set `QUARRY_SYSTEM_CHROME=1` to run the Chromium project with the installed
+Google Chrome instead of Playwright's pinned Chromium. No browser is installed
+by that option. Record the browser version with the benchmark results.
+
+Set `QUARRY_PRODUCTION_UI=1` when running the live browser suite to use the
+embedded production UI. Build `ui/` first. Without this flag, the live suite
+uses Vite and React development mode. Use that mode for native call profiling
+with `QUARRY_PROFILE=1`; `QUARRY_CPU_PROFILE=/absolute/path/profile.json` can
+capture a Chrome CPU profile in either mode. Set
+`QUARRY_RENDER_PROFILE=/absolute/path/frames` to collect long animation frames
+without CPU profiling. Profile filenames include the test ID and repetition
+so a benchmark matrix keeps every recording. JSON attachments retain frame
+gaps and key latency samples in their original order.
+
+Set `CARGO_TARGET_DIR` to use an isolated build directory. The UI scripts honor
+it. Run native feature builds sequentially when they share a target directory.
+The API description is served at `/v1/openapi.json`; `bun run generate:api`
+updates the browser's checked-in API description from a running server.
 
 ## Releases
 

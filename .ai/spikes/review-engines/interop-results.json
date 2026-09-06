@@ -1,0 +1,33 @@
+{
+  "automerge": {
+    "pass": true,
+    "quote": "TAR!GET",
+    "marks": [
+      {
+        "name": "bold",
+        "value": true,
+        "start": 13,
+        "end": 20
+      }
+    ]
+  },
+  "yjs_yrs": {
+    "pass": true,
+    "quote": "TAR!GET",
+    "delta": [
+      {
+        "insert": "😀 é prefix "
+      },
+      {
+        "insert": "TAR!GET",
+        "attributes": {
+          "bold": true
+        }
+      },
+      {
+        "insert": " suffix"
+      }
+    ]
+  },
+  "scope": "JavaScript -> native Rust mutation -> JavaScript reload; emoji, combining character, cursor ranges, formatting. Not full editor schema interoperability."
+}

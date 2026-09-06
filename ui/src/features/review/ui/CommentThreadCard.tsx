@@ -1,20 +1,15 @@
+import { useNativeReview, type ReviewThread } from '../native-review-context';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { Check, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
-import { nanoid } from 'nanoid';
-import type { PlateEditor } from 'platejs/react';
 import { useEffect, useRef, useState } from 'react';
 
 import { cn } from '../../../lib/utils';
-import { currentAuthor } from '../identity';
-import { removeCommentMark } from '../remove-comment';
-import { addReply, deleteComment, editComment, resolveComment, useReviewStore, type ReviewThread } from '../review-store';
-import { applyReviewMutation } from '../review-doc';
 import { ReviewAuthorHeader } from './ReviewAuthorHeader';
 
 const menuItem =
   'flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-body outline-none hover:bg-well data-highlighted:bg-well';
 
-function CommentEditForm({
+export function CommentEditForm({
   label,
   original,
   onCancel,
@@ -27,7 +22,8 @@ function CommentEditForm({
 }) {
   const [value, setValue] = useState(original);
   const body = value.trim();
-  const disabled = body.length === 0 || body === original.trim();
+  const review = useNativeReview();
+  const disabled = review.readOnly || body.length === 0 || body === original.trim();
 
   return (
     <div className="mt-2 flex flex-col gap-2">
@@ -68,7 +64,7 @@ function CommentEditForm({
   );
 }
 
-function ActionsMenu({
+export function ActionsMenu({
   label,
   open,
   onOpenChange,
@@ -83,11 +79,13 @@ function ActionsMenu({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const { readOnly } = useNativeReview();
   return (
     <DropdownMenu.Root onOpenChange={onOpenChange} open={open}>
       <DropdownMenu.Trigger asChild>
         <button
           aria-label={label}
+          disabled={readOnly}
           className="flex size-7 shrink-0 items-center justify-center rounded text-faint outline-none transition-colors hover:bg-well hover:text-body"
           onClick={(event) => event.stopPropagation()}
           type="button"
@@ -118,10 +116,11 @@ function ActionsMenu({
   );
 }
 
-export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; editor: PlateEditor }) {
-  const activeId = useReviewStore((state) => state.activeId);
-  const hoverId = useReviewStore((state) => state.hoverId);
-  const setHoverId = useReviewStore((state) => state.setHoverId);
+export function CommentThreadCard({ thread }: { thread: ReviewThread }) {
+  const review = useNativeReview();
+  const activeId = review.activeId;
+  const hoverId = review.hoverId;
+  const setHoverId = review.setHoverId;
   const [draft, setDraft] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -142,37 +141,27 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
   function submit() {
     const body = draft.trim();
     if (!body) return;
-    if (rootHasBody) {
-      applyReviewMutation((meta) =>
-        addReply(meta, nanoid(), {
-          parentId: thread.id,
-          body,
-          by: currentAuthor(),
-          at: new Date().toISOString(),
-        })
-      );
-    } else {
-      applyReviewMutation((meta) => editComment(meta, thread.id, body));
-    }
+    const saved = rootHasBody
+      ? review.command({ op: 'reply_comment', id: crypto.randomUUID(), parent: thread.id, body, author: review.author })
+      : review.command({ op: 'edit_comment', id: thread.id, body });
+    if (!saved) return;
     setDraft('');
   }
 
   function saveEdit(id: string, body: string) {
-    applyReviewMutation((meta) => editComment(meta, id, body, new Date().toISOString()));
-    setEditingId(null);
+    if (review.command({ op: 'edit_comment', id, body })) setEditingId(null);
   }
 
   function resolve() {
-    applyReviewMutation((meta) => resolveComment(meta, thread.id));
+    review.command({ op: 'resolve_comment', id: thread.id, resolved: !resolved });
   }
 
   function discard() {
-    removeCommentMark(editor, thread.id);
-    applyReviewMutation((meta) => deleteComment(meta, thread.id));
+    review.command({ op: 'delete_comment', id: thread.id });
   }
 
   function deleteReply(id: string) {
-    applyReviewMutation((meta) => deleteComment(meta, id));
+    review.command({ op: 'delete_comment', id });
   }
 
   return (
@@ -185,7 +174,8 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
       data-active={isActive ? 'true' : 'false'}
       data-hover={isHover ? 'true' : 'false'}
       data-testid="comment-card"
-      onClick={() => useReviewStore.getState().setActiveId(thread.id)}
+      aria-label={`Comment by ${thread.entry.by}`}
+      onClick={() => review.setActiveId(thread.id)}
       onMouseEnter={() => setHoverId(thread.id)}
       onMouseLeave={() => setHoverId(null)}
       ref={ref}
@@ -203,9 +193,10 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
             openMenuId === thread.id && 'opacity-100'
           )}
         >
-          {resolved || !rootHasBody ? null : (
+          {!rootHasBody ? null : (
             <button
-              aria-label="Resolve comment"
+              disabled={review.readOnly}
+              aria-label={resolved ? "Reopen comment" : "Resolve comment"}
               className="inline-flex size-7 items-center justify-center rounded bg-accent-tint text-accent-ink transition-colors outline-none hover:bg-accent-line hover:text-accent-ink"
               data-testid="resolve-comment"
               onClick={(event) => {
@@ -214,7 +205,7 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
               }}
               type="button"
             >
-              <Check size={16} />
+              {resolved ? <span className="text-xs">Reopen</span> : <Check size={16} />}
             </button>
           )}
           <ActionsMenu
@@ -287,6 +278,7 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
       {isActive || !rootHasBody ? (
         <div className="mt-3 flex flex-col gap-2">
           <input
+            disabled={review.readOnly}
             aria-label={rootHasBody ? 'Reply' : 'Comment'}
             autoFocus={!rootHasBody}
             className="w-full rounded-md border border-line bg-raised px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent"
@@ -315,7 +307,7 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
                   onClick={(event) => {
                     event.stopPropagation();
                     setDraft('');
-                    useReviewStore.getState().setActiveId(null);
+                    review.setActiveId(null);
                   }}
                   onMouseDown={(event) => event.preventDefault()}
                   type="button"
@@ -326,7 +318,7 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
                   aria-label="Submit reply"
                   className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-accent transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-50"
                   data-testid="reply-submit"
-                  disabled={draft.trim().length === 0}
+                  disabled={review.readOnly || draft.trim().length === 0}
                   onClick={(event) => {
                     event.stopPropagation();
                     submit();
@@ -355,7 +347,7 @@ export function CommentThreadCard({ thread, editor }: { thread: ReviewThread; ed
                 aria-label="Submit comment"
                 className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-accent transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-50"
                 data-testid="reply-submit"
-                disabled={draft.trim().length === 0}
+                disabled={review.readOnly || draft.trim().length === 0}
                 onClick={(event) => {
                   event.stopPropagation();
                   submit();

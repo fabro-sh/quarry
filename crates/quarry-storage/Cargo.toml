@@ -9,11 +9,13 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+blake3.workspace = true
 chrono.workspace = true
 fs2.workspace = true
 quarry-cas.workspace = true
-quarry-collab-codec.workspace = true
+quarry-markdown.workspace = true
 quarry-core.workspace = true
+quarry-document.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
@@ -21,6 +23,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 turso.workspace = true
+utoipa.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

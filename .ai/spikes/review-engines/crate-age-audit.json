@@ -1,0 +1,461 @@
+{
+  "cutoff": "2026-09-04T02:04:36+00:00",
+  "packages": [
+    {
+      "name": "arc-swap",
+      "version": "1.9.2",
+      "published": "2026-06-28T17:45:51.059560Z",
+      "eligible": true
+    },
+    {
+      "name": "async-lock",
+      "version": "3.4.2",
+      "published": "2025-12-21T16:24:46.954239Z",
+      "eligible": true
+    },
+    {
+      "name": "async-trait",
+      "version": "0.1.92",
+      "published": "2026-08-08T07:10:35.376083Z",
+      "eligible": true
+    },
+    {
+      "name": "automerge",
+      "version": "0.11.0",
+      "published": "2026-08-12T00:01:55.507259Z",
+      "eligible": true
+    },
+    {
+      "name": "bitflags",
+      "version": "2.13.1",
+      "published": "2026-07-15T20:36:19.695060Z",
+      "eligible": true
+    },
+    {
+      "name": "block-buffer",
+      "version": "0.12.1",
+      "published": "2026-06-11T15:40:05.682576Z",
+      "eligible": true
+    },
+    {
+      "name": "borsh",
+      "version": "1.8.1",
+      "published": "2026-08-26T20:58:11.161301Z",
+      "eligible": true
+    },
+    {
+      "name": "bumpalo",
+      "version": "3.20.3",
+      "published": "2026-05-22T14:59:11.132139Z",
+      "eligible": true
+    },
+    {
+      "name": "bytes",
+      "version": "1.12.1",
+      "published": "2026-07-08T10:01:28.616466Z",
+      "eligible": true
+    },
+    {
+      "name": "cfg-if",
+      "version": "1.0.4",
+      "published": "2025-10-15T08:12:46.455816Z",
+      "eligible": true
+    },
+    {
+      "name": "cfg_aliases",
+      "version": "0.2.2",
+      "published": "2026-07-16T14:57:16.699789Z",
+      "eligible": true
+    },
+    {
+      "name": "chacha20",
+      "version": "0.10.2",
+      "published": "2026-08-27T17:51:13.045493Z",
+      "eligible": true
+    },
+    {
+      "name": "const-oid",
+      "version": "0.10.2",
+      "published": "2026-01-07T23:11:57.242553Z",
+      "eligible": true
+    },
+    {
+      "name": "cpufeatures",
+      "version": "0.3.1",
+      "published": "2026-08-26T18:39:59.636708Z",
+      "eligible": true
+    },
+    {
+      "name": "crossbeam-utils",
+      "version": "0.8.22",
+      "published": "2026-07-06T15:51:40.163512Z",
+      "eligible": true
+    },
+    {
+      "name": "crypto-common",
+      "version": "0.2.2",
+      "published": "2026-05-19T16:01:22.304187Z",
+      "eligible": true
+    },
+    {
+      "name": "dashmap",
+      "version": "6.2.1",
+      "published": "2026-05-17T21:28:34.356251Z",
+      "eligible": true
+    },
+    {
+      "name": "digest",
+      "version": "0.11.3",
+      "published": "2026-05-03T12:54:48.023505Z",
+      "eligible": true
+    },
+    {
+      "name": "either",
+      "version": "1.18.0",
+      "published": "2026-08-20T19:36:48.266137Z",
+      "eligible": true
+    },
+    {
+      "name": "event-listener",
+      "version": "5.4.2",
+      "published": "2026-07-27T11:31:20.582548Z",
+      "eligible": true
+    },
+    {
+      "name": "event-listener-strategy",
+      "version": "0.5.4",
+      "published": "2025-03-27T17:31:33.741698Z",
+      "eligible": true
+    },
+    {
+      "name": "fastrand",
+      "version": "2.5.0",
+      "published": "2026-07-19T12:40:53.683020Z",
+      "eligible": true
+    },
+    {
+      "name": "flate2",
+      "version": "1.1.10",
+      "published": "2026-08-28T04:35:22.192325Z",
+      "eligible": true
+    },
+    {
+      "name": "getrandom",
+      "version": "0.4.3",
+      "published": "2026-06-17T18:01:59.979552Z",
+      "eligible": true
+    },
+    {
+      "name": "hashbrown",
+      "version": "0.14.5",
+      "published": "2024-04-28T18:32:09.203645Z",
+      "eligible": true
+    },
+    {
+      "name": "hex",
+      "version": "0.4.3",
+      "published": "2021-03-03T10:48:58.682837Z",
+      "eligible": true
+    },
+    {
+      "name": "hexane",
+      "version": "1.0.0-alpha.5",
+      "published": "2026-08-11T23:25:18.096556Z",
+      "eligible": true
+    },
+    {
+      "name": "hybrid-array",
+      "version": "0.4.14",
+      "published": "2026-07-30T16:40:03.901575Z",
+      "eligible": true
+    },
+    {
+      "name": "itertools",
+      "version": "0.15.0",
+      "published": "2026-06-16T15:09:28.880416Z",
+      "eligible": true
+    },
+    {
+      "name": "itoa",
+      "version": "1.0.18",
+      "published": "2026-03-20T00:12:37.043881Z",
+      "eligible": true
+    },
+    {
+      "name": "js-sys",
+      "version": "0.3.104",
+      "published": "2026-08-08T00:57:01.489848Z",
+      "eligible": true
+    },
+    {
+      "name": "leb128",
+      "version": "0.2.7",
+      "published": "2026-06-15T18:58:07.087966Z",
+      "eligible": true
+    },
+    {
+      "name": "libc",
+      "version": "0.2.189",
+      "published": "2026-07-21T21:33:28.018110Z",
+      "eligible": true
+    },
+    {
+      "name": "lock_api",
+      "version": "0.4.14",
+      "published": "2025-10-03T23:33:12.850087Z",
+      "eligible": true
+    },
+    {
+      "name": "memchr",
+      "version": "2.8.3",
+      "published": "2026-07-08T00:49:54.408285Z",
+      "eligible": true
+    },
+    {
+      "name": "once_cell",
+      "version": "1.21.4",
+      "published": "2026-03-12T10:59:52.512992Z",
+      "eligible": true
+    },
+    {
+      "name": "parking",
+      "version": "2.2.1",
+      "published": "2024-09-07T17:39:03.956479Z",
+      "eligible": true
+    },
+    {
+      "name": "parking_lot_core",
+      "version": "0.9.12",
+      "published": "2025-10-03T23:33:43.164426Z",
+      "eligible": true
+    },
+    {
+      "name": "pin-project-lite",
+      "version": "0.2.17",
+      "published": "2026-02-27T15:19:08.132543Z",
+      "eligible": true
+    },
+    {
+      "name": "proc-macro2",
+      "version": "1.0.107",
+      "published": "2026-07-19T00:18:25.189787Z",
+      "eligible": true
+    },
+    {
+      "name": "quote",
+      "version": "1.0.47",
+      "published": "2026-07-19T00:16:57.083778Z",
+      "eligible": true
+    },
+    {
+      "name": "r-efi",
+      "version": "6.0.0",
+      "published": "2026-02-03T09:53:46.251122Z",
+      "eligible": true
+    },
+    {
+      "name": "rand",
+      "version": "0.10.2",
+      "published": "2026-07-02T09:01:38.792937Z",
+      "eligible": true
+    },
+    {
+      "name": "rand_core",
+      "version": "0.10.1",
+      "published": "2026-04-13T15:26:43.049921Z",
+      "eligible": true
+    },
+    {
+      "name": "redox_syscall",
+      "version": "0.5.18",
+      "published": "2025-10-04T14:57:04.747959Z",
+      "eligible": true
+    },
+    {
+      "name": "rustc-hash",
+      "version": "2.1.3",
+      "published": "2026-07-02T19:13:03.150587Z",
+      "eligible": true
+    },
+    {
+      "name": "rustversion",
+      "version": "1.0.23",
+      "published": "2026-07-07T02:10:26.015429Z",
+      "eligible": true
+    },
+    {
+      "name": "scopeguard",
+      "version": "1.2.0",
+      "published": "2023-07-17T13:47:53.232324Z",
+      "eligible": true
+    },
+    {
+      "name": "serde",
+      "version": "1.0.229",
+      "published": "2026-07-18T23:05:13.266456Z",
+      "eligible": true
+    },
+    {
+      "name": "serde_core",
+      "version": "1.0.229",
+      "published": "2026-07-18T23:05:10.896830Z",
+      "eligible": true
+    },
+    {
+      "name": "serde_derive",
+      "version": "1.0.229",
+      "published": "2026-07-18T23:05:07.504375Z",
+      "eligible": true
+    },
+    {
+      "name": "serde_json",
+      "version": "1.0.149",
+      "published": "2026-01-06T16:23:34.585926Z",
+      "eligible": true
+    },
+    {
+      "name": "sha2",
+      "version": "0.11.0",
+      "published": "2026-03-25T15:05:27.949444Z",
+      "eligible": true
+    },
+    {
+      "name": "smallstr",
+      "version": "0.3.1",
+      "published": "2025-08-13T16:23:37.929669Z",
+      "eligible": true
+    },
+    {
+      "name": "smallvec",
+      "version": "1.16.0",
+      "published": "2026-09-01T15:26:29.894397Z",
+      "eligible": true
+    },
+    {
+      "name": "smol_str",
+      "version": "0.3.6",
+      "published": "2026-03-04T06:27:06.114096Z",
+      "eligible": true
+    },
+    {
+      "name": "syn",
+      "version": "2.0.119",
+      "published": "2026-07-15T00:23:48.828241Z",
+      "eligible": true
+    },
+    {
+      "name": "syn",
+      "version": "3.0.4",
+      "published": "2026-08-24T00:39:54.110906Z",
+      "eligible": true
+    },
+    {
+      "name": "thiserror",
+      "version": "2.0.20",
+      "published": "2026-08-08T06:22:23.795550Z",
+      "eligible": true
+    },
+    {
+      "name": "thiserror-impl",
+      "version": "2.0.20",
+      "published": "2026-08-08T06:22:19.469295Z",
+      "eligible": true
+    },
+    {
+      "name": "tinyvec",
+      "version": "1.13.1",
+      "published": "2026-09-04T01:26:57.203733Z",
+      "eligible": true
+    },
+    {
+      "name": "tinyvec_macros",
+      "version": "0.1.1",
+      "published": "2023-02-02T23:03:04.651564Z",
+      "eligible": true
+    },
+    {
+      "name": "tracing",
+      "version": "0.1.44",
+      "published": "2025-12-18T14:26:12.360139Z",
+      "eligible": true
+    },
+    {
+      "name": "tracing-attributes",
+      "version": "0.1.31",
+      "published": "2025-11-26T11:23:01.809940Z",
+      "eligible": true
+    },
+    {
+      "name": "tracing-core",
+      "version": "0.1.36",
+      "published": "2025-12-18T14:13:04.171045Z",
+      "eligible": true
+    },
+    {
+      "name": "typenum",
+      "version": "1.20.1",
+      "published": "2026-05-29T16:00:41.793255Z",
+      "eligible": true
+    },
+    {
+      "name": "unicode-ident",
+      "version": "1.0.24",
+      "published": "2026-02-16T02:46:44.304053Z",
+      "eligible": true
+    },
+    {
+      "name": "unicode-segmentation",
+      "version": "1.13.3",
+      "published": "2026-06-01T15:58:43.979474Z",
+      "eligible": true
+    },
+    {
+      "name": "wasm-bindgen",
+      "version": "0.2.127",
+      "published": "2026-08-08T00:56:59.500214Z",
+      "eligible": true
+    },
+    {
+      "name": "wasm-bindgen-macro",
+      "version": "0.2.127",
+      "published": "2026-08-08T00:56:57.526148Z",
+      "eligible": true
+    },
+    {
+      "name": "wasm-bindgen-macro-support",
+      "version": "0.2.127",
+      "published": "2026-08-08T00:56:55.670334Z",
+      "eligible": true
+    },
+    {
+      "name": "wasm-bindgen-shared",
+      "version": "0.2.127",
+      "published": "2026-08-08T00:56:52.445936Z",
+      "eligible": true
+    },
+    {
+      "name": "windows-link",
+      "version": "0.2.1",
+      "published": "2025-10-06T17:35:08.351469Z",
+      "eligible": true
+    },
+    {
+      "name": "yrs",
+      "version": "0.27.2",
+      "published": "2026-06-12T18:41:48.885997Z",
+      "eligible": true
+    },
+    {
+      "name": "zlib-rs",
+      "version": "0.6.7",
+      "published": "2026-08-03T13:07:20.445034Z",
+      "eligible": true
+    },
+    {
+      "name": "zmij",
+      "version": "1.0.23",
+      "published": "2026-07-13T12:58:53.705886Z",
+      "eligible": true
+    }
+  ]
+}

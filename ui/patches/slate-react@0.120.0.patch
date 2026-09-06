@@ -1,0 +1,197 @@
+diff --git a/node_modules/slate-react/.bun-tag-3123c666f0d892f0 b/.bun-tag-3123c666f0d892f0
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/slate-react/.bun-tag-603a4b3a7fbe6888 b/.bun-tag-603a4b3a7fbe6888
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/slate-react/.bun-tag-9ef69f0d79193eb7 b/.bun-tag-9ef69f0d79193eb7
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/slate-react/.bun-tag-d0103f6c576afcdb b/.bun-tag-d0103f6c576afcdb
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/slate-react/.bun-tag-d65b6c81b9489302 b/.bun-tag-d65b6c81b9489302
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/dist/index.es.js b/dist/index.es.js
+index 3159686e1db93f7992a1940c8b32843af558f4bf..b406cd0b852d522b362adb929d647d47beb28719 100644
+--- a/dist/index.es.js
++++ b/dist/index.es.js
+@@ -1920,7 +1920,6 @@ var reconcileChildren = (editor, _ref) => {
+     onIndexChange,
+     debug
+   } = _ref;
+-  chunkTree.modifiedChunks.clear();
+   var chunkTreeHelper = new ChunkTreeHelper(chunkTree, {
+     chunkSize,
+     debug
+@@ -2066,7 +2065,11 @@ var ChunkAncestor = props => {
+     return renderElement(element, chunkNode.index, chunkNode.key);
+   });
+ };
+-var ChunkTree = ChunkAncestor;
++// Backport Slate #5988: invalidations must survive Strict Mode's second render.
++var ChunkTree = props => {
++  useEffect(() => { props.root.modifiedChunks.clear(); });
++  return React.createElement(ChunkAncestor, props);
++};
+ var MemoizedChunk = /*#__PURE__*/React.memo(ChunkAncestor, (prev, next) => prev.root === next.root && prev.renderElement === next.renderElement && prev.renderChunk === next.renderChunk && !next.root.modifiedChunks.has(next.ancestor));
+ 
+ var ElementContext = /*#__PURE__*/createContext(null);
+@@ -2617,6 +2620,12 @@ var Editable = /*#__PURE__*/forwardRef((props, forwardedRef) => {
+     }
+   }, 100), [editor, readOnly, state]);
+   var scheduleOnDOMSelectionChange = useMemo(() => debounce(onDOMSelectionChange, 0), [onDOMSelectionChange]);
++  var flushDOMSelection = useCallback(() => {
++    // Clipboard and keyboard events may arrive before selectionchange.
++    scheduleOnDOMSelectionChange.flush();
++    onDOMSelectionChange();
++    onDOMSelectionChange.flush();
++  }, [scheduleOnDOMSelectionChange, onDOMSelectionChange]);
+   androidInputManagerRef.current = useAndroidInputManager({
+     node: ref,
+     onDOMSelectionChange,
+@@ -3392,12 +3401,14 @@ var Editable = /*#__PURE__*/forwardRef((props, forwardedRef) => {
+       }
+     }, [attributes.onCompositionStart, editor]),
+     onCopy: useCallback(event => {
++      if (ReactEditor.hasSelectableTarget(editor, event.target) && !isDOMEventTargetInput(event)) flushDOMSelection();
+       if (ReactEditor.hasSelectableTarget(editor, event.target) && !isEventHandled(event, attributes.onCopy) && !isDOMEventTargetInput(event)) {
+         event.preventDefault();
+         ReactEditor.setFragmentData(editor, event.clipboardData, 'copy');
+       }
+-    }, [attributes.onCopy, editor]),
++    }, [attributes.onCopy, editor, flushDOMSelection]),
+     onCut: useCallback(event => {
++      if (!readOnly && ReactEditor.hasSelectableTarget(editor, event.target) && !isDOMEventTargetInput(event)) flushDOMSelection();
+       if (!readOnly && ReactEditor.hasSelectableTarget(editor, event.target) && !isEventHandled(event, attributes.onCut) && !isDOMEventTargetInput(event)) {
+         event.preventDefault();
+         ReactEditor.setFragmentData(editor, event.clipboardData, 'cut');
+@@ -3415,7 +3426,7 @@ var Editable = /*#__PURE__*/forwardRef((props, forwardedRef) => {
+           }
+         }
+       }
+-    }, [readOnly, editor, attributes.onCut]),
++    }, [readOnly, editor, attributes.onCut, flushDOMSelection]),
+     onDragOver: useCallback(event => {
+       if (ReactEditor.hasTarget(editor, event.target) && !isEventHandled(event, attributes.onDragOver)) {
+         // Only when the target is void, call `preventDefault` to signal
+@@ -3494,6 +3505,7 @@ var Editable = /*#__PURE__*/forwardRef((props, forwardedRef) => {
+     }, [readOnly, state, editor, attributes.onFocus]),
+     onKeyDown: useCallback(event => {
+       if (!readOnly && ReactEditor.hasEditableTarget(editor, event.target)) {
++        flushDOMSelection();
+         var _androidInputManagerR5;
+         (_androidInputManagerR5 = androidInputManagerRef.current) === null || _androidInputManagerR5 === void 0 || _androidInputManagerR5.handleKeyDown(event);
+         var {
+@@ -3738,8 +3750,9 @@ var Editable = /*#__PURE__*/forwardRef((props, forwardedRef) => {
+           }
+         }
+       }
+-    }, [readOnly, editor, attributes.onKeyDown]),
++    }, [readOnly, editor, attributes.onKeyDown, flushDOMSelection]),
+     onPaste: useCallback(event => {
++      if (!readOnly && ReactEditor.hasEditableTarget(editor, event.target) && !isDOMEventTargetInput(event)) flushDOMSelection();
+       if (!readOnly && ReactEditor.hasEditableTarget(editor, event.target) && !isEventHandled(event, attributes.onPaste)) {
+         // COMPAT: Certain browsers don't support the `beforeinput` event, so we
+         // fall back to React's `onPaste` here instead.
+@@ -3753,7 +3766,7 @@ var Editable = /*#__PURE__*/forwardRef((props, forwardedRef) => {
+           ReactEditor.insertData(editor, event.clipboardData);
+         }
+       }
+-    }, [readOnly, editor, attributes.onPaste])
++    }, [readOnly, editor, attributes.onPaste, flushDOMSelection])
+   }), /*#__PURE__*/React.createElement(Children, {
+     decorations: decorations,
+     node: editor,
+diff --git a/dist/index.js b/dist/index.js
+index f15948f7f98cd78615ec9ddc8c24e10be88cea28..aac99308e9113b16ef6655de38ce9c9024b216db 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -2237,7 +2237,6 @@ var reconcileChildren = function reconcileChildren(editor, _ref) {
+     onUpdate = _ref.onUpdate,
+     onIndexChange = _ref.onIndexChange,
+     debug = _ref.debug;
+-  chunkTree.modifiedChunks.clear();
+   var chunkTreeHelper = new ChunkTreeHelper(chunkTree, {
+     chunkSize: chunkSize,
+     debug: debug
+@@ -2382,7 +2381,11 @@ var ChunkAncestor = function ChunkAncestor(props) {
+     return renderElement(element, chunkNode.index, chunkNode.key);
+   });
+ };
+-var ChunkTree = ChunkAncestor;
++// Backport Slate #5988: invalidations must survive Strict Mode's second render.
++var ChunkTree = props => {
++  React.useEffect(() => { props.root.modifiedChunks.clear(); });
++  return React.createElement(ChunkAncestor, props);
++};
+ var MemoizedChunk = /*#__PURE__*/React.memo(ChunkAncestor, function (prev, next) {
+   return prev.root === next.root && prev.renderElement === next.renderElement && prev.renderChunk === next.renderChunk && !next.root.modifiedChunks.has(next.ancestor);
+ });
+@@ -3075,6 +3078,12 @@ var Editable = /*#__PURE__*/React.forwardRef(function (props, forwardedRef) {
+   var scheduleOnDOMSelectionChange = React.useMemo(function () {
+     return debounce(onDOMSelectionChange, 0);
+   }, [onDOMSelectionChange]);
++  var flushDOMSelection = React.useCallback(() => {
++    // Clipboard and keyboard events may arrive before selectionchange.
++    scheduleOnDOMSelectionChange.flush();
++    onDOMSelectionChange();
++    onDOMSelectionChange.flush();
++  }, [scheduleOnDOMSelectionChange, onDOMSelectionChange]);
+   androidInputManagerRef.current = useAndroidInputManager({
+     node: ref,
+     onDOMSelectionChange: onDOMSelectionChange,
+@@ -3844,12 +3853,14 @@ var Editable = /*#__PURE__*/React.forwardRef(function (props, forwardedRef) {
+       }
+     }, [attributes.onCompositionStart, editor]),
+     onCopy: React.useCallback(function (event) {
++      if (ReactEditor.hasSelectableTarget(editor, event.target) && !isDOMEventTargetInput(event)) flushDOMSelection();
+       if (ReactEditor.hasSelectableTarget(editor, event.target) && !isEventHandled(event, attributes.onCopy) && !isDOMEventTargetInput(event)) {
+         event.preventDefault();
+         ReactEditor.setFragmentData(editor, event.clipboardData, 'copy');
+       }
+-    }, [attributes.onCopy, editor]),
++    }, [attributes.onCopy, editor, flushDOMSelection]),
+     onCut: React.useCallback(function (event) {
++      if (!readOnly && ReactEditor.hasSelectableTarget(editor, event.target) && !isDOMEventTargetInput(event)) flushDOMSelection();
+       if (!readOnly && ReactEditor.hasSelectableTarget(editor, event.target) && !isEventHandled(event, attributes.onCut) && !isDOMEventTargetInput(event)) {
+         event.preventDefault();
+         ReactEditor.setFragmentData(editor, event.clipboardData, 'cut');
+@@ -3865,7 +3876,7 @@ var Editable = /*#__PURE__*/React.forwardRef(function (props, forwardedRef) {
+           }
+         }
+       }
+-    }, [readOnly, editor, attributes.onCut]),
++    }, [readOnly, editor, attributes.onCut, flushDOMSelection]),
+     onDragOver: React.useCallback(function (event) {
+       if (ReactEditor.hasTarget(editor, event.target) && !isEventHandled(event, attributes.onDragOver)) {
+         // Only when the target is void, call `preventDefault` to signal
+@@ -3944,6 +3955,7 @@ var Editable = /*#__PURE__*/React.forwardRef(function (props, forwardedRef) {
+     }, [readOnly, state, editor, attributes.onFocus]),
+     onKeyDown: React.useCallback(function (event) {
+       if (!readOnly && ReactEditor.hasEditableTarget(editor, event.target)) {
++        flushDOMSelection();
+         var _androidInputManagerR5;
+         (_androidInputManagerR5 = androidInputManagerRef.current) === null || _androidInputManagerR5 === void 0 || _androidInputManagerR5.handleKeyDown(event);
+         var nativeEvent = event.nativeEvent;
+@@ -4184,8 +4196,9 @@ var Editable = /*#__PURE__*/React.forwardRef(function (props, forwardedRef) {
+           }
+         }
+       }
+-    }, [readOnly, editor, attributes.onKeyDown]),
++    }, [readOnly, editor, attributes.onKeyDown, flushDOMSelection]),
+     onPaste: React.useCallback(function (event) {
++      if (!readOnly && ReactEditor.hasEditableTarget(editor, event.target) && !isDOMEventTargetInput(event)) flushDOMSelection();
+       if (!readOnly && ReactEditor.hasEditableTarget(editor, event.target) && !isEventHandled(event, attributes.onPaste)) {
+         // COMPAT: Certain browsers don't support the `beforeinput` event, so we
+         // fall back to React's `onPaste` here instead.
+@@ -4199,7 +4212,7 @@ var Editable = /*#__PURE__*/React.forwardRef(function (props, forwardedRef) {
+           ReactEditor.insertData(editor, event.clipboardData);
+         }
+       }
+-    }, [readOnly, editor, attributes.onPaste])
++    }, [readOnly, editor, attributes.onPaste, flushDOMSelection])
+   }), /*#__PURE__*/React.createElement(Children, {
+     decorations: decorations,
+     node: editor,

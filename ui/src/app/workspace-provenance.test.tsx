@@ -2,11 +2,11 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig, type SWRConfiguration } from 'swr';
 
-import type { CollabEditorConfig } from '../features/editor/MarkdownEditor';
+import type { DocumentEditorConfig } from '../features/editor/MarkdownEditor';
 import { App } from './App';
 
 type TestWindow = Window & {
-  __quarryTestCollab?: CollabEditorConfig;
+  __quarryTestDocument?: DocumentEditorConfig;
 };
 
 function testWindow() {
@@ -14,23 +14,9 @@ function testWindow() {
 }
 
 vi.mock('../features/editor/MarkdownEditor', () => ({
-  MarkdownEditor({
-    collab,
-    content,
-    onChange,
-  }: {
-    collab?: CollabEditorConfig;
-    content: string;
-    onChange: (content: string) => void;
-  }) {
-    testWindow().__quarryTestCollab = collab;
-    return (
-      <textarea
-        aria-label="Plate markdown editor"
-        onChange={(event) => onChange(event.currentTarget.value)}
-        value={content}
-      />
-    );
+  MarkdownEditor({ document }: { document: DocumentEditorConfig }) {
+    testWindow().__quarryTestDocument = document;
+    return <textarea aria-label="Document configuration" readOnly value={document.documentId} />;
   },
 }));
 
@@ -39,7 +25,7 @@ describe('workspace document mutation provenance', () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     localStorage.clear();
-    delete testWindow().__quarryTestCollab;
+    delete testWindow().__quarryTestDocument;
     window.history.pushState({}, '', '/');
   });
 
@@ -101,20 +87,20 @@ describe('workspace document mutation provenance', () => {
     renderApp();
 
     await openDailyDocument();
-    const collab = testWindow().__quarryTestCollab;
-    expect(collab?.documentId).toBe('doc-daily');
-    expect(collab?.sessionId).toMatch(/^browser:/);
+    const document = testWindow().__quarryTestDocument;
+    expect(document?.documentId).toBe('doc-daily');
+    expect(document?.sessionId).toMatch(/^browser:/);
 
-    act(() => collab?.onSaveStateChange?.('saving'));
+    act(() => document?.onSaveStateChange?.('saving'));
     expect(screen.getByLabelText('Save status')).toHaveTextContent('Saving…');
 
-    act(() => collab?.onSaveStateChange?.('reconnecting'));
-    expect(screen.getByLabelText('Save status')).toHaveTextContent('Reconnecting (read-only)');
+    act(() => document?.onSaveStateChange?.('reconnecting'));
+    expect(screen.getByLabelText('Save status')).toHaveTextContent('Reconnecting');
 
-    act(() => collab?.onSaveStateChange?.('refused'));
-    expect(screen.getByLabelText('Save status')).toHaveTextContent('Live editing unavailable');
+    act(() => document?.onSaveStateChange?.('refused'));
+    expect(screen.getByLabelText('Save status')).toHaveTextContent('Editing unavailable');
 
-    act(() => collab?.onSaveStateChange?.('saved'));
+    act(() => document?.onSaveStateChange?.('saved'));
     expect(screen.getByLabelText('Save status')).toHaveTextContent('Saved');
   });
 
@@ -127,15 +113,15 @@ describe('workspace document mutation provenance', () => {
 
     renderApp();
 
-    expect(await screen.findByLabelText('Plate markdown editor')).toHaveValue('# Tmp');
-    const collab = testWindow().__quarryTestCollab;
-    expect(collab?.documentId).toBe('tmp-doc');
-    expect(collab?.sessionId).toBe('browser:00000000-0000-4000-8000-000000000004');
+    expect(await screen.findByLabelText('Document configuration')).toHaveValue('tmp-doc');
+    const document = testWindow().__quarryTestDocument;
+    expect(document?.documentId).toBe('tmp-doc');
+    expect(document?.sessionId).toBe('browser:00000000-0000-4000-8000-000000000004');
 
-    act(() => collab?.onSaveStateChange?.('saving'));
+    act(() => document?.onSaveStateChange?.('saving'));
     expect(screen.getByLabelText('Save status')).toHaveTextContent('Saving…');
 
-    act(() => collab?.onSaveStateChange?.('saved'));
+    act(() => document?.onSaveStateChange?.('saved'));
     expect(screen.getByLabelText('Save status')).toHaveTextContent('Saved');
     expect(screen.getByRole('button', { name: 'Codex · waiting' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: ['Han', 'doff to Agent'].join('') })).not.toBeInTheDocument();
@@ -145,7 +131,7 @@ describe('workspace document mutation provenance', () => {
     expect(fetch).not.toHaveBeenCalledWith('/v1/tmp/documents', undefined);
   });
 
-  it('keeps the selected editor mounted across a checkpoint head move', async () => {
+  it('keeps the selected editor mounted across a document version change', async () => {
     stubBrowserOrigin('00000000-0000-4000-8000-000000000007');
     vi.stubGlobal('fetch', vi.fn(provenanceFetch()));
     vi.stubGlobal('EventSource', MockEventSource);
@@ -154,7 +140,7 @@ describe('workspace document mutation provenance', () => {
     renderApp({ mutate: vi.fn(async () => undefined) });
 
     await openDailyDocument();
-    const editor = screen.getByLabelText('Plate markdown editor');
+    const editor = screen.getByLabelText('Document configuration');
 
     act(() => {
       MockEventSource.instances[0].emit('doc.changed', {
@@ -162,19 +148,19 @@ describe('workspace document mutation provenance', () => {
         library: 'provenance-lib',
         path: 'daily.md',
         doc_id: 'doc-daily',
-        origin_id: 'agent-injected:session-checkpoint:1',
+        origin_id: 'agent-injected:document-command:1',
         version_id: 'v2',
       });
     });
 
     expect(screen.queryByLabelText('Document loading')).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Plate markdown editor')).toBe(editor);
+    expect(screen.getByLabelText('Document configuration')).toBe(editor);
   });
 });
 
 async function openDailyDocument() {
   await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
-  expect(await screen.findByLabelText('Plate markdown editor')).toHaveValue('# Local');
+  expect(await screen.findByLabelText('Document configuration')).toHaveValue('doc-daily');
 }
 
 function renderApp(config: Record<string, unknown> = {}) {

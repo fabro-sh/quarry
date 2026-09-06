@@ -1,0 +1,570 @@
+{
+  "baseline_commit": "d967c14a0b8d733b556b1702345c871cf50d1e08",
+  "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "baseline": [
+    {
+      "markdown_bytes": 114814,
+      "keys": 100,
+      "p50_key_to_frame_ms": 6.300000190734863,
+      "p95_key_to_frame_ms": 12,
+      "max_frame_gap_ms": 13.932000190734925
+    },
+    {
+      "markdown_bytes": 114814,
+      "keys": 100,
+      "p50_key_to_frame_ms": 6.5,
+      "p95_key_to_frame_ms": 12.899999618530273,
+      "max_frame_gap_ms": 17
+    },
+    {
+      "markdown_bytes": 114814,
+      "keys": 100,
+      "p50_key_to_frame_ms": 6.399999618530273,
+      "p95_key_to_frame_ms": 12.700000286102295,
+      "max_frame_gap_ms": 17.199999999999818
+    }
+  ],
+  "native": [
+    {
+      "nativeProfile": {
+        "point": {
+          "calls": 302,
+          "ms": 10.200000762939453,
+          "max": 0.20000028610229492
+        },
+        "fork": {
+          "calls": 100,
+          "ms": 25.100000858306885,
+          "max": 0.7999997138977051
+        },
+        "apply": {
+          "calls": 100,
+          "ms": 348.2000012397766,
+          "max": 8.800000190734863
+        },
+        "selection": {
+          "calls": 100,
+          "ms": 6.499998569488525,
+          "max": 0.2999997138977051
+        },
+        "view": {
+          "calls": 100,
+          "ms": 130.30000162124634,
+          "max": 2.200000286102295
+        },
+        "save_after": {
+          "calls": 100,
+          "ms": 20.899999141693115,
+          "max": 0.9000000953674316
+        }
+      },
+      "markdown_bytes": 114814,
+      "keys": 100,
+      "p50_key_to_frame_ms": 12.199999809265137,
+      "p95_key_to_frame_ms": 14.599999904632568,
+      "max_frame_gap_ms": 24.899999999999864
+    },
+    {
+      "nativeProfile": {
+        "point": {
+          "calls": 302,
+          "ms": 8.000000953674316,
+          "max": 0.19999980926513672
+        },
+        "fork": {
+          "calls": 100,
+          "ms": 22.1000018119812,
+          "max": 0.9000000953674316
+        },
+        "apply": {
+          "calls": 100,
+          "ms": 316.09999895095825,
+          "max": 8.200000286102295
+        },
+        "selection": {
+          "calls": 100,
+          "ms": 6.000000953674316,
+          "max": 0.20000028610229492
+        },
+        "view": {
+          "calls": 100,
+          "ms": 113.90000057220459,
+          "max": 1.5999999046325684
+        },
+        "save_after": {
+          "calls": 100,
+          "ms": 19.500001430511475,
+          "max": 0.7000002861022949
+        }
+      },
+      "markdown_bytes": 114814,
+      "keys": 100,
+      "p50_key_to_frame_ms": 10.800000190734863,
+      "p95_key_to_frame_ms": 12.899999618530273,
+      "max_frame_gap_ms": 25.300000000000182
+    },
+    {
+      "nativeProfile": {
+        "point": {
+          "calls": 302,
+          "ms": 9.199997901916504,
+          "max": 0.20000028610229492
+        },
+        "fork": {
+          "calls": 100,
+          "ms": 22.899999618530273,
+          "max": 0.6999998092651367
+        },
+        "apply": {
+          "calls": 100,
+          "ms": 325.2999997138977,
+          "max": 7.700000286102295
+        },
+        "selection": {
+          "calls": 100,
+          "ms": 6.3000006675720215,
+          "max": 0.20000028610229492
+        },
+        "view": {
+          "calls": 100,
+          "ms": 119.30000114440918,
+          "max": 1.5999999046325684
+        },
+        "save_after": {
+          "calls": 100,
+          "ms": 19.799999713897705,
+          "max": 0.7999997138977051
+        }
+      },
+      "markdown_bytes": 114814,
+      "keys": 100,
+      "p50_key_to_frame_ms": 11.400000095367432,
+      "p95_key_to_frame_ms": 13.400000095367432,
+      "max_frame_gap_ms": 16.700000000000273
+    }
+  ],
+  "native_publication": [
+    {
+      "keys": 100,
+      "requests": 3,
+      "typing_and_save_ms": 3396
+    },
+    {
+      "keys": 100,
+      "requests": 3,
+      "typing_and_save_ms": 3216
+    },
+    {
+      "keys": 100,
+      "requests": 3,
+      "typing_and_save_ms": 3297
+    }
+  ],
+  "method": "Sequential runs on the same host, 100 rapid keys in a 114,814-byte document with 1,401 blocks. Keydown to the next requestAnimationFrame. Pinned Playwright Chromium. Baseline uses its original mocked transport; native uses the actual release Rust server and release WASM in the Vite/React development UI. Not physical display latency or cross-device proof.",
+  "native_before_incremental": [
+    {
+      "nativeProfile": {
+        "point": {
+          "calls": 302,
+          "ms": 6.399997711181641,
+          "max": 0.19999980926513672
+        },
+        "fork": {
+          "calls": 100,
+          "ms": 18.20000123977661,
+          "max": 0.7999997138977051
+        },
+        "apply": {
+          "calls": 100,
+          "ms": 282.80000019073486,
+          "max": 7.700000286102295
+        },
+        "selection": {
+          "calls": 100,
+          "ms": 4.900001049041748,
+          "max": 0.20000028610229492
+        },
+        "view": {
+          "calls": 100,
+          "ms": 99.59999990463257,
+          "max": 1.3000001907348633
+        },
+        "save_after": {
+          "calls": 100,
+          "ms": 15.400000095367432,
+          "max": 1
+        }
+      },
+      "markdown_bytes": 114814,
+      "keys": 100,
+      "p50_key_to_frame_ms": 9.299999713897705,
+      "p95_key_to_frame_ms": 10.800000190734863,
+      "max_frame_gap_ms": 17.200000000000045
+    },
+    {
+      "nativeProfile": {
+        "point": {
+          "calls": 302,
+          "ms": 7.1999993324279785,
+          "max": 0.19999980926513672
+        },
+        "fork": {
+          "calls": 100,
+          "ms": 16.300001621246338,
+          "max": 0.6999998092651367
+        },
+        "apply": {
+          "calls": 100,
+          "ms": 281.80000019073486,
+          "max": 7.599999904632568
+        },
+        "selection": {
+          "calls": 100,
+          "ms": 5.100000381469727,
+          "max": 0.20000028610229492
+        },
+        "view": {
+          "calls": 100,
+          "ms": 102.49999809265137,
+          "max": 1.3000001907348633
+        },
+        "save_after": {
+          "calls": 100,
+          "ms": 14.399999618530273,
+          "max": 0.8000001907348633
+        }
+      },
+      "markdown_bytes": 114814,
+      "keys": 100,
+      "p50_key_to_frame_ms": 9.400000095367432,
+      "p95_key_to_frame_ms": 11.300000190734863,
+      "max_frame_gap_ms": 18.09999999999991
+    },
+    {
+      "nativeProfile": {
+        "point": {
+          "calls": 302,
+          "ms": 4.499999523162842,
+          "max": 0.10000038146972656
+        },
+        "fork": {
+          "calls": 100,
+          "ms": 17.19999647140503,
+          "max": 0.7999997138977051
+        },
+        "apply": {
+          "calls": 100,
+          "ms": 282.3999991416931,
+          "max": 8.099999904632568
+        },
+        "selection": {
+          "calls": 100,
+          "ms": 5.299998760223389,
+          "max": 0.20000028610229492
+        },
+        "view": {
+          "calls": 100,
+          "ms": 99.50000047683716,
+          "max": 1.200000286102295
+        },
+        "save_after": {
+          "calls": 100,
+          "ms": 15.099996089935303,
+          "max": 0.6999998092651367
+        }
+      },
+      "markdown_bytes": 114814,
+      "keys": 100,
+      "p50_key_to_frame_ms": 9.200000286102295,
+      "p95_key_to_frame_ms": 11.299999713897705,
+      "max_frame_gap_ms": 14.799999999999955
+    }
+  ],
+  "native_publication_before_incremental": [
+    {
+      "keys": 100,
+      "requests": 3,
+      "typing_and_save_ms": 2955
+    },
+    {
+      "keys": 100,
+      "requests": 3,
+      "typing_and_save_ms": 2955
+    },
+    {
+      "keys": 100,
+      "requests": 3,
+      "typing_and_save_ms": 2932
+    }
+  ],
+  "concurrent_agent": [
+    {
+      "p95_key_to_frame_ms": 15.599999904632568,
+      "max_frame_gap_ms": 28.92800000000011,
+      "keys": 400,
+      "remote_at_key": 42,
+      "nativeProfile": {
+        "point": {
+          "calls": 1204,
+          "ms": 48.79999828338623,
+          "max": 6.299999713897705
+        },
+        "fork": {
+          "calls": 400,
+          "ms": 136.50000047683716,
+          "max": 0.8999996185302734
+        },
+        "apply": {
+          "calls": 400,
+          "ms": 1484.1000032424927,
+          "max": 8.900000095367432
+        },
+        "selection": {
+          "calls": 400,
+          "ms": 28.400001049041748,
+          "max": 0.3000001907348633
+        },
+        "view": {
+          "calls": 401,
+          "ms": 767.0999979972839,
+          "max": 2.8000001907348633
+        },
+        "save_after": {
+          "calls": 401,
+          "ms": 102.80000591278076,
+          "max": 0.9000000953674316
+        },
+        "contains_history": {
+          "calls": 2,
+          "ms": 0.4999995231628418,
+          "max": 0.2999997138977051
+        },
+        "merge_changes": {
+          "calls": 1,
+          "ms": 8.800000190734863,
+          "max": 8.800000190734863
+        },
+        "locate_point": {
+          "calls": 2,
+          "ms": 0.7999997138977051,
+          "max": 0.5
+        }
+      }
+    },
+    {
+      "p95_key_to_frame_ms": 15.100000381469727,
+      "max_frame_gap_ms": 27.96400038146976,
+      "keys": 400,
+      "remote_at_key": 41,
+      "nativeProfile": {
+        "point": {
+          "calls": 1204,
+          "ms": 44.799997329711914,
+          "max": 0.40000009536743164
+        },
+        "fork": {
+          "calls": 400,
+          "ms": 126.70000457763672,
+          "max": 0.8000001907348633
+        },
+        "apply": {
+          "calls": 400,
+          "ms": 1429.4000039100647,
+          "max": 8.399999618530273
+        },
+        "selection": {
+          "calls": 400,
+          "ms": 29.20000123977661,
+          "max": 0.3000001907348633
+        },
+        "view": {
+          "calls": 401,
+          "ms": 753.8999977111816,
+          "max": 2.9000000953674316
+        },
+        "save_after": {
+          "calls": 401,
+          "ms": 100.30000829696655,
+          "max": 0.7999997138977051
+        },
+        "contains_history": {
+          "calls": 2,
+          "ms": 0.4999995231628418,
+          "max": 0.2999997138977051
+        },
+        "merge_changes": {
+          "calls": 1,
+          "ms": 8.700000286102295,
+          "max": 8.700000286102295
+        },
+        "locate_point": {
+          "calls": 2,
+          "ms": 0.7000002861022949,
+          "max": 0.5
+        }
+      }
+    },
+    {
+      "p95_key_to_frame_ms": 15.5,
+      "max_frame_gap_ms": 30.83199971389763,
+      "keys": 400,
+      "remote_at_key": 41,
+      "nativeProfile": {
+        "point": {
+          "calls": 1204,
+          "ms": 44.5,
+          "max": 0.3000001907348633
+        },
+        "fork": {
+          "calls": 400,
+          "ms": 153.3999948501587,
+          "max": 0.6999998092651367
+        },
+        "apply": {
+          "calls": 400,
+          "ms": 1497.7000017166138,
+          "max": 8.300000190734863
+        },
+        "selection": {
+          "calls": 400,
+          "ms": 29.399999141693115,
+          "max": 0.3000001907348633
+        },
+        "view": {
+          "calls": 401,
+          "ms": 768.4999985694885,
+          "max": 2.799999713897705
+        },
+        "save_after": {
+          "calls": 401,
+          "ms": 102.20000410079956,
+          "max": 0.8000001907348633
+        },
+        "contains_history": {
+          "calls": 2,
+          "ms": 0.6000003814697266,
+          "max": 0.3000001907348633
+        },
+        "merge_changes": {
+          "calls": 1,
+          "ms": 8.800000190734863,
+          "max": 8.800000190734863
+        },
+        "locate_point": {
+          "calls": 2,
+          "ms": 0.7000002861022949,
+          "max": 0.40000009536743164
+        }
+      }
+    }
+  ],
+  "final_evidence": "target/cutover-chrome-final-repeated.log",
+  "baseline_evidence": "target/cutover-chrome-baseline-repeated.log",
+  "concurrent_method": "400 keys at 8 ms intervals in a 1,401-block document. After ten keys, the agent comments on Paragraph 699 and prefixes that paragraph with Agent. Both remote changes must appear before typing ends; exact heading, paragraph and review target are checked after saved reload.",
+  "final_matrix_check": {
+    "evidence": "target/cutover-performance-final.log",
+    "native": [
+      {
+        "nativeProfile": {
+          "point": {
+            "calls": 302,
+            "ms": 8.300002098083496,
+            "max": 0.20000028610229492
+          },
+          "fork": {
+            "calls": 100,
+            "ms": 24.399997234344482,
+            "max": 0.8000001907348633
+          },
+          "apply": {
+            "calls": 100,
+            "ms": 324.40000200271606,
+            "max": 8.300000190734863
+          },
+          "selection": {
+            "calls": 100,
+            "ms": 6.099998474121094,
+            "max": 0.20000028610229492
+          },
+          "view": {
+            "calls": 100,
+            "ms": 117.99999904632568,
+            "max": 1.5
+          },
+          "save_after": {
+            "calls": 100,
+            "ms": 19.699997901916504,
+            "max": 0.9000000953674316
+          }
+        },
+        "markdown_bytes": 114814,
+        "keys": 100,
+        "p50_key_to_frame_ms": 11.299999713897705,
+        "p95_key_to_frame_ms": 13.400000095367432,
+        "max_frame_gap_ms": 32.33200000000011
+      }
+    ],
+    "publication": [
+      {
+        "keys": 100,
+        "requests": 3,
+        "typing_and_save_ms": 3278
+      }
+    ],
+    "concurrent_agent": [
+      {
+        "p95_key_to_frame_ms": 15.099999904632568,
+        "max_frame_gap_ms": 24.59999999999991,
+        "keys": 400,
+        "remote_at_key": 42,
+        "nativeProfile": {
+          "point": {
+            "calls": 1204,
+            "ms": 38.90000057220459,
+            "max": 0.3000001907348633
+          },
+          "fork": {
+            "calls": 400,
+            "ms": 131.30000400543213,
+            "max": 0.8999996185302734
+          },
+          "apply": {
+            "calls": 400,
+            "ms": 1400.299994468689,
+            "max": 8.5
+          },
+          "selection": {
+            "calls": 400,
+            "ms": 26.40000057220459,
+            "max": 0.20000028610229492
+          },
+          "view": {
+            "calls": 401,
+            "ms": 731.4999990463257,
+            "max": 2.9000000953674316
+          },
+          "save_after": {
+            "calls": 401,
+            "ms": 97.20000553131104,
+            "max": 0.9000000953674316
+          },
+          "contains_history": {
+            "calls": 2,
+            "ms": 0.5000004768371582,
+            "max": 0.3000001907348633
+          },
+          "merge_changes": {
+            "calls": 1,
+            "ms": 8.799999713897705,
+            "max": 8.799999713897705
+          },
+          "locate_point": {
+            "calls": 2,
+            "ms": 0.6000003814697266,
+            "max": 0.40000009536743164
+          }
+        }
+      }
+    ]
+  }
+}

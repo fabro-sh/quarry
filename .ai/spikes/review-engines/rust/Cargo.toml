@@ -1,0 +1,11 @@
+[package]
+name = "quarry-review-engine-interop-spike"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+automerge = "=0.11.0"
+yrs = "=0.27.2"
+serde_json = "=1.0.149"

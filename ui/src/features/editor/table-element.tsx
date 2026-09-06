@@ -31,7 +31,7 @@ import {
   type TTableElementWithAlign,
 } from './table';
 
-export const TablePlugin = PlateTablePlugin.configure({
+export const TablePlugin = PlateTablePlugin.extend({ options: { disableSelectionExpansion: true } }).configure({
   options: { disableMerge: true },
 }).overrideEditor(({ editor, tf: { normalizeNode } }) => ({
   transforms: {
@@ -48,7 +48,7 @@ export const TableElement = withHOC(TableProvider, function TableElement(props: 
   const readOnly = useReadOnly();
   const { marginLeft, props: tableProps } = useTableElement();
   return (
-    <PlateElement {...props} className="py-2" style={{ paddingLeft: marginLeft }}>
+    <PlateElement {...props} className="pt-2 pb-6" style={{ paddingLeft: marginLeft }}>
       {/* The horizontal-scroll box wraps only the table; the add-row/column bars
           live outside it as siblings, so they sit in the gutter without being
           clipped (overflow-x:auto forces overflow-y:auto, which would clip them). */}

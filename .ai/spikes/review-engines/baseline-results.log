@@ -1,0 +1,10 @@
+   Compiling quarry-collab-codec v0.1.7-nightly.20260731 (/Users/bhelmkamp/p/fabro-sh/quarry/crates/quarry-collab-codec)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.51s
+     Running tests/review_engines_spike.rs (target/debug/deps/review_engines_spike-33c95bc67e760082)
+
+running 2 tests
+test spike_comment_on_proposed_insert_is_discarded_by_projection ... ok
+test spike_comment_only_link_reconcile_replaces_target_identity ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 41 filtered out; finished in 0.00s
+

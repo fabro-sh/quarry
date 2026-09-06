@@ -1,5 +1,3 @@
-import type { Descendant, TElement } from 'platejs';
-
 import { documentHref } from '../../api/client';
 
 // Library document images are stored as content-addressed documents under
@@ -51,16 +49,4 @@ export function fileToDataUrl(file: File): Promise<string> {
 export function resolveImageSrc(url: string, library: string): string {
   if (/^(?:https?:|data:|blob:)/i.test(url)) return url;
   return documentHref(library, url);
-}
-
-/** Drop transient upload placeholders before serializing — they aren't part of
- * the saved document (the image lands once its upload finishes). */
-export function stripPlaceholders(value: Descendant[]): Descendant[] {
-  const out: Descendant[] = [];
-  for (const node of value) {
-    if ((node as TElement).type === 'placeholder') continue;
-    const children = (node as TElement).children;
-    out.push(Array.isArray(children) ? { ...node, children: stripPlaceholders(children) } : node);
-  }
-  return out;
 }

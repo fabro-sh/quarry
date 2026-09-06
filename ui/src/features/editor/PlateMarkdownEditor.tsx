@@ -1,3 +1,9 @@
+import { createSlateEditor, TextApi, RangeApi } from 'platejs';
+import { NativeReviewContext, ReviewHighlightsContext, type NativeReviewState } from '../review/native-review-context';
+import { NativeSuggestionActions } from './plate-review-actions';
+import { PlatePresence } from './plate-presence';
+import { SourceDraftRecovery } from './source-draft-editor';
+import type { DocumentSelection } from './document-presence';
 import { AutoformatPlugin, type AutoformatRule } from '@platejs/autoformat';
 import {
   BlockquotePlugin,
@@ -20,6 +26,7 @@ import { insertEmptyCodeBlock, toggleCodeBlock } from '@platejs/code-block';
 import { DndPlugin, useDraggable, useDropLine } from '@platejs/dnd';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
+import { createDragDropManager } from 'dnd-core';
 import { getLinkAttributes } from '@platejs/link';
 import {
   FloatingLinkUrlInput,
@@ -43,8 +50,6 @@ import {
 } from '@platejs/list/react';
 import { isOrderedList, toggleList } from '@platejs/list';
 import { MarkdownPlugin } from '@platejs/markdown';
-import { YjsPlugin } from '@platejs/yjs/react';
-import { YjsEditor } from '@slate-yjs/core';
 import {
   flip,
   offset,
@@ -102,11 +107,11 @@ import {
   type TLinkElement,
   type TListElement,
 } from 'platejs';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { createPortal, flushSync } from 'react-dom';
 import remarkGfm from 'remark-gfm';
-import * as Y from 'yjs';
 import {
+  createPlatePlugin,
   ParagraphPlugin,
   Plate,
   PlateContainer,
@@ -128,13 +133,10 @@ import {
   type RenderNodeWrapper,
 } from 'platejs/react';
 
-import { SuggestionPlugin } from '@platejs/suggestion/react';
 
 import { cn } from '../../lib/utils';
-import { type PlateValue } from './markdown-codec';
 import { remarkBreakSemantics } from './remark-break-semantics';
 import { remarkInlineMarks } from './remark-inline-marks';
-import { reviewKit } from './review-kit';
 import { ImageKit, ImageProvider, type ImageApi } from './image-element';
 import { mermaidMdRules, MERMAID_KEY } from './mermaid';
 import { MermaidPlugin } from './mermaid-block';
@@ -143,59 +145,14 @@ import { TableKit } from './table-element';
 import { TocSidebar } from './toc-sidebar';
 import { wikiLinkMdRules } from './wiki-link';
 import { WikiLinkPlugin, WikiLinkProvider, type WikiLinkApi } from './wiki-link-element';
-import { cancelCommentDraft, startCommentDraft } from '../review/comment-draft';
-import { currentAuthor, storedAuthor } from '../review/identity';
-import { markdownToReview, reviewToMarkdown } from '../review/rfm-codec';
-import {
-  removeSuggestion,
-  syncSuggestionsFromValue,
-  useReviewStore,
-} from '../review/review-store';
-import { applyReviewMutation, bindReviewDoc } from '../review/review-doc';
-import type { ReviewMeta } from '../review/rfm-types';
-import {
-  acceptSuggestionById,
-  rejectSuggestionById,
-  resolveSuggestionInMarkdown,
-  type SuggestionResolution,
-} from '../review/accept-reject';
-import { ReviewRail } from '../review/ui/ReviewRail';
-import { RemoteCursorOverlay } from '../collab/RemoteCursorOverlay';
-import {
-  RUST_WS_PROVIDER_TYPE,
-  RustWsProviderWrapper,
-  collabWebSocketBaseUrl,
-  registerRustWsProviderType,
-} from '../collab/rust-ws-provider';
-import {
-  checkpointCoversDoc,
-  collabSaveState,
-  type CollabSaveState,
-} from '../collab/save-state';
-import { collabDebug, recordCollabLifecycleEvent } from '../collab/collab-debug';
-import { useCollabEditorSession } from '../collab/use-collab-editor-session';
-import { registerUnloadGuard } from '../collab/unload-guard';
-import { rawMarkdownMdRules } from './raw-markdown';
 import { RawMarkdownPlugin } from './raw-markdown-block';
-import { serializeMirror } from './mirror-serialize';
-import { getMirrorSerializer } from './mirror-serializer';
-import { MarkdownMirrorPublisher } from './markdown-mirror-publisher';
+import { rawMarkdownMdRules } from './raw-markdown';
+import { documentAdapter, PlateDocumentAdapter, type PlateAdapterOptions } from './plate-document-adapter';
+import { blockAttrs, blockKinds, inlineText, nativeNodeIdOptions, projectPlate, selectedText } from './plate-document-projection';
+import { DocumentModel } from './document-model';
+import type { EditorMode } from './editor-types';
+import { NativeProposalPlugin, NativeReviewPlugin, useReviewDecoration } from './plate-review-decoration';
 
-registerRustWsProviderType();
-
-const REVIEW_RESOLUTION_PUBLISH_ATTEMPTS = 20;
-const REVIEW_RESOLUTION_PUBLISH_INTERVAL_MS = 50;
-// Publishing the App-level markdown mirror serializes the whole document —
-// O(size) work that must never run inside the input event (it was the typing
-// lag on large documents). The mirror only feeds the current-editor diff and
-// the tab title, both fine with a short lag, so every trigger (local edits,
-// remote session updates, review-store changes) coalesces into one trailing
-// serialization per pause.
-const MIRROR_PUBLISH_DEBOUNCE_MS = 300;
-
-// Notion-style markdown shortcuts: typing the markdown prefix at the start of a
-// block (or wrapping marks) auto-converts it. Scoped to the surface Quarry
-// supports so everything round-trips through the markdown codec.
 const autoformatRules: AutoformatRule[] = [
   { match: '# ', mode: 'block', type: KEYS.h1 },
   { match: '## ', mode: 'block', type: KEYS.h2 },
@@ -271,15 +228,14 @@ const BlockList: RenderNodeWrapper = (props) => {
 
 // WebKit/Safari won't run a native HTML5 drag for a draggable element inside a
 // contentEditable region (it fires dragstart then immediately dragend, with no
-// dragover/drop), so block dragging can't work there. Hide the handle rather
-// than show a dead affordance. `navigator.vendor` is "Apple Computer, Inc." in
+// dragover/drop), so Safari uses the handle for block actions only.
+// `navigator.vendor` is "Apple Computer, Inc." in
 // Safari/WebKit and "Google Inc."/"" in Chrome/Firefox.
 const supportsBlockDrag =
   typeof navigator !== 'undefined' && !/apple/i.test(navigator.vendor);
 
 // Notion-style drag handle for reordering top-level blocks (Chrome/Firefox).
 const BlockDraggable: RenderNodeWrapper = (props) => {
-  if (!supportsBlockDrag) return undefined;
   if (props.editor.dom.readOnly) return undefined;
   if (props.path.length !== 1) return undefined;
   return (childProps) => <DraggableBlock {...childProps} />;
@@ -296,12 +252,45 @@ const makeHeadingElement = (as: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') =>
     return <PlateElement as={as} attributes={{ ...attributes, id }} {...props} />;
   };
 
-const plateMarkdownPlugins = [
+// A paste is new content, so it receives new block IDs. Normalize the private
+// fragment with the editor's own plugins before native command translation.
+const NativeClipboardPlugin = createPlatePlugin({ key: 'quarry_clipboard' }).overrideEditor(({ editor, tf: { insertFragment } }) => {
+  const deserialize = editor.api.html.deserialize;
+  return {
+  api: { html: { deserialize(options: Parameters<typeof deserialize>[0]) {
+    const element = typeof options.element === 'string' ? new DOMParser().parseFromString(options.element, 'text/html').body : options.element.cloneNode(true) as HTMLElement;
+    element.querySelectorAll('script,style,iframe,object,embed,template,link,meta').forEach((node) => node.remove());
+    return deserialize({ ...options, element });
+  } } },
+  transforms: { insertFragment(fragment, ...args) {
+    const scratch = createSlateEditor({
+      plugins: plateMarkdownPlugins.filter((plugin) => plugin.key !== TrailingBlockPlugin.key && plugin.key !== 'quarry_clipboard') as never,
+      value: fragment.map(cloneWithoutIds) as TElement[], nodeId: nativeNodeIdOptions, shouldNormalizeEditor: true,
+    });
+    const value = scratch.children;
+    const selection = editor.selection;
+    if (selection) {
+      const [start, end] = RangeApi.edges(selection);
+      const first = editor.api.block({ at: start }), last = editor.api.block({ at: end });
+      // Slate unwraps non-void containers at a fragment's edges when merging
+      // into surrounding text. Empty boundary paragraphs preserve containers;
+      // they merge into the existing prefix/tail without adding visible text.
+      if (blockKinds.get(String(value[0]?.type))?.content === 'container' && first && !editor.api.isStart(start, first[1])) value.unshift({ type: 'p', children: [{ text: '' }] });
+      if (blockKinds.get(String(value.at(-1)?.type))?.content === 'container' && last && !editor.api.isEnd(end, last[1])) value.push({ type: 'p', children: [{ text: '' }] });
+    }
+    insertFragment(value, ...args);
+  } },
+}; });
+
+export const plateMarkdownPlugins = [
+  NativeClipboardPlugin,
+  NativeReviewPlugin,
+  NativeProposalPlugin,
   ParagraphPlugin,
   // Always keep an editable paragraph at the end, so there's a line to type on
   // below the last block — even an atomic void like a Mermaid diagram or image,
   // which would otherwise leave the document with no place to continue writing.
-  // The trailing paragraph is stripped on serialize (stripTrailingEmptyParagraphs).
+  // Empty trailing input is kept local until the user edits it.
   TrailingBlockPlugin,
   H1Plugin.withComponent(makeHeadingElement('h1')),
   H2Plugin.withComponent(makeHeadingElement('h2')),
@@ -331,6 +320,16 @@ const plateMarkdownPlugins = [
   ...ImageKit,
   DndPlugin.configure({
     render: { aboveNodes: BlockDraggable, aboveSlate: EditorDndProvider },
+    handlers: {
+      onDragStart: ({ event }) => {
+        if (!(event.target instanceof Element) || !event.target.closest('[data-quarry-block-handle]')) return;
+        // A block move is owned by React DnD. Slate's text-drag path would
+        // capture and later delete the current text selection a second time.
+        event.dataTransfer.setData('application/x-quarry-block', 'move');
+        return true;
+      },
+      onDrop: ({ event, getOptions }) => event.dataTransfer.types.includes('application/x-quarry-block') || getOptions().isDragging,
+    },
   }),
   AutoformatPlugin.configure({
     options: {
@@ -342,658 +341,127 @@ const plateMarkdownPlugins = [
       })),
     },
   }),
-  ...reviewKit,
   MarkdownPlugin.configure({
     options: { remarkPlugins: [remarkGfm, remarkInlineMarks, remarkBreakSemantics], rules: { ...wikiLinkMdRules, ...mermaidMdRules, ...tableMdRules, ...rawMarkdownMdRules } },
   }),
 ] as const;
 
-// The document interaction mode chosen from the header selector. Viewing is
-// read-only; Editing edits directly; Suggesting tracks edits as suggestion marks.
-export type EditorMode = 'editing' | 'suggesting' | 'viewing';
 
-export interface CollabEditorConfig {
-  baseUrl?: string;
-  documentId: string;
-  /** Save state for the document header: Saved / Saving… / Reconnecting. */
-  onSaveStateChange?: (state: CollabSaveState) => void;
-  roomName?: string;
-  sessionId: string;
-  token?: string;
-}
 
-interface CollabYjsInitOptions {
-  autoConnect: true;
-  autoSelect: 'end';
-  id: string;
-  onReady?: undefined;
-  value: PlateValue;
-}
+// Native review publication updates the surrounding UI independently of
+// Slate's own text updates. Stable props let unchanged editor content bail out.
+const DocumentContent = memo(PlateContent);
+const DocumentContents = memo(TocSidebar);
+const DocumentPresence = memo(PlatePresence);
+const emptyImage: ImageApi = {};
+const emptyWikiLink: WikiLinkApi = {};
 
-export function collabYjsInitOptions(documentId: string, value: PlateValue): CollabYjsInitOptions {
-  return {
-    autoConnect: true,
-    autoSelect: 'end',
-    id: documentId,
-    value,
-  };
-}
-
-export function PlateMarkdownEditor({
-  author = currentAuthor(),
-  collab,
-  content,
-  mode = 'editing',
-  wikiLink,
-  image,
-  onChange,
-}: {
-  author?: string;
-  collab?: CollabEditorConfig;
-  content: string;
-  mode?: EditorMode;
-  wikiLink?: WikiLinkApi;
+export function PlateMarkdownEditor({ model, review, mode, options, onReady, onComment, onCompositionChange, peers, image = emptyImage, wikiLink = emptyWikiLink }: {
+  model: DocumentModel;
+  review: NativeReviewState;
+  peers: DocumentSelection[];
+  mode: EditorMode;
+  options: PlateAdapterOptions;
+  onReady: (adapter: PlateDocumentAdapter) => void | (() => void);
+  onComment: () => void;
+  onCompositionChange: (composing: boolean) => void;
   image?: ImageApi;
-  onChange: (content: string) => void;
+  wikiLink?: WikiLinkApi;
 }) {
-  const storeHydrate = useReviewStore((s) => s.hydrate);
-  const storeGetMeta = useReviewStore((s) => s.getMeta);
-  const collabEnabled = Boolean(collab?.documentId);
-  const collabDocumentId = collab?.documentId ?? '';
-  const collabBaseUrl = collab?.baseUrl;
-  const collabRoomName = collab?.roomName ?? collabDocumentId;
-  const collabSessionId = collab?.sessionId ?? '';
-  const collabToken = collab?.token;
-  const collabProbeBaseUrl = collabBaseUrl ?? collabWebSocketBaseUrl();
-  const { session: collabSession, snapshot: collabSessionSnapshot } = useCollabEditorSession({
-    baseUrl: collabProbeBaseUrl,
-    documentId: collabDocumentId,
-    enabled: collabEnabled,
-    onSaveStateChange: collab?.onSaveStateChange,
-    roomName: collabRoomName,
-  });
-  const handleSessionRefused = useCallback((reason: string) => {
-    console.warn('[collab] session refused by server:', reason);
-    collabSession.refuse(reason);
-  }, [collabSession]);
-  const handleCollabSaveState = useCallback((state: CollabSaveState) => {
-    collabSession.observeSaveState(state);
-  }, [collabSession]);
-  const collabLive = collabSessionSnapshot.lifecycle === 'live';
-  // Awareness cursor label. Never the 'user' sentinel — the server drops blank
-  // names (keeping its "browser" checkpoint fallback), mirroring how REST
-  // mutations omit the default author rather than stamping 'user'.
-  const collabCursorName = storedAuthor() ?? '';
-
-  // The review codec serializes both the value (inline CriticMarkup) and the
-  // store's metadata (YAML endmatter). `serializeMirror` mirrors any
-  // suggestion marks Plate created (via withSuggestion) into the metadata so
-  // they survive the round-trip. Shared by every save path.
-  const serializeWithMeta = useCallback(
-    (value: PlateValue, meta: ReviewMeta): string => serializeMirror(value as never, meta),
-    []
-  );
-  const serialize = useCallback(
-    (value: PlateValue): string => serializeWithMeta(value, storeGetMeta()),
-    [serializeWithMeta, storeGetMeta]
-  );
-
-  const initialValueRef = useRef<PlateValue | null>(null);
-  const initialSerializedRef = useRef<string | null>(null);
-  const initialReviewMetaRef = useRef<ReviewMeta | null>(null);
-  const initialParsedContentRef = useRef<string | null>(null);
-  const initialReviewStoreHydratedRef = useRef(false);
-  if (!initialValueRef.current) {
-    const { value, meta } = markdownToReview(content);
-    initialValueRef.current = value as PlateValue;
-    initialSerializedRef.current = serializeWithMeta(value as PlateValue, meta);
-    initialReviewMetaRef.current = meta;
-    initialParsedContentRef.current = content;
-  }
-  const lastContentRef = useRef(content);
-  const lastSerializedRef = useRef(initialSerializedRef.current ?? '');
-  const reviewResolutionPublishTimerRef = useRef<number | null>(null);
-  const [collabInitTick, setCollabInitTick] = useState(0);
-  const [externalValueRevision, setExternalValueRevision] = useState(0);
-  const editorPlugins = useMemo(() => {
-    if (!collabEnabled || !collab) return plateMarkdownPlugins;
-    return [
-      ...plateMarkdownPlugins,
-      YjsPlugin.configure({
-        render: {
-          afterEditable: RemoteCursorOverlay,
-        },
-        options: {
-          cursors: {
-            data: {
-              color: collabColor(collab.sessionId),
-              name: collabCursorName,
-            },
-          },
-          providers: [
-            {
-              options: {
-                baseUrl: collabBaseUrl,
-                onSessionRefused: handleSessionRefused,
-                roomName: collabRoomName,
-                token: collabToken,
-              },
-              type: RUST_WS_PROVIDER_TYPE,
-            } as never,
-          ],
-          userId: collabSessionId,
-        },
-      }),
-    ] as const;
-  }, [
-    collabBaseUrl,
-    collabCursorName,
-    collabDocumentId,
-    collabEnabled,
-    collabRoomName,
-    collabSessionId,
-    collabToken,
-    handleSessionRefused,
-  ]);
-  const editor = usePlateEditor(
-    {
-      // Stamp a stable id onto every node up front (not just first/last). The
-      // TOC sidebar's scroll-spy correlates the active heading by DOM id, so
-      // headings need ids even before they're edited.
-      nodeId: { normalizeInitialValue: true },
-      plugins: editorPlugins as never,
-      skipInitialization: collabEnabled,
-      value: collabEnabled ? undefined : (initialValueRef.current as never),
+  const current = useRef({ options, onReady, onComment, onCompositionChange }); current.current = { options, onReady, onComment, onCompositionChange };
+  const compositionEnd = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(compositionEnd.current), []);
+  const highlights = useMemo(() => ({ activeId: review.activeId, hoverId: review.hoverId, draftTarget: review.draftTarget,
+    setActiveId: review.setActiveId, setHoverId: review.setHoverId }), [review.activeId, review.hoverId, review.draftTarget, review.setActiveId, review.setHoverId]);
+  const initialValue = useMemo(() => projectPlate(model.view(), true, (point) => model.locate(point)), [model]);
+  // Keep each edit's React work bounded, while Slate's chunk wrappers let the
+  // browser skip layout for distant text. Identity stays in native blocks.
+  const editor = usePlateEditor({ plugins: plateMarkdownPlugins as never, chunking: { chunkSize: 50 }, value: initialValue, nodeId: nativeNodeIdOptions }, [model]);
+  const decorate = useReviewDecoration(model, editor, review.draftTarget);
+  const inputHandlers = useMemo(() => ({
+    onKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && (event.key.toLowerCase() === 'z' || !event.metaKey && event.key.toLowerCase() === 'y')) {
+        event.preventDefault(); documentAdapter(editor)?.history(event.shiftKey || event.key.toLowerCase() === 'y'); return true;
+      }
+      if ((event.metaKey || event.ctrlKey) && event.altKey && event.key.toLowerCase() === 'm') {
+        event.preventDefault(); current.current.onComment(); return true;
+      }
     },
-    [collabDocumentId, collabSessionSnapshot.epoch]
-  );
-  useEditorLifecycleInstrumentation(
-    collabEnabled,
-    collabDocumentId,
-    collabSessionSnapshot.epoch
-  );
-
+    onCompositionStart() {
+      clearTimeout(compositionEnd.current); current.current.onCompositionChange(true);
+      documentAdapter(editor)?.setComposing(true);
+      if (editor.selection && RangeApi.isExpanded(editor.selection)) {
+        // Finish the selected-text deletion before the browser starts changing
+        // the composition node. Otherwise Firefox can remove DOM nodes that
+        // React still needs to reconcile, especially across table boundaries.
+        flushSync(() => { editor.tf.deleteFragment(); editor.api.onChange(); });
+      }
+    },
+    onCompositionEnd() {
+      // Final input can arrive after compositionend. Commit it before merging.
+      compositionEnd.current = setTimeout(() => { documentAdapter(editor)?.setComposing(false); current.current.onCompositionChange(false); }, 0);
+    },
+  }), [editor]);
   useLayoutEffect(() => {
-    if (initialReviewStoreHydratedRef.current) return;
-    const meta = initialReviewMetaRef.current;
-    if (!meta) return;
-    initialReviewStoreHydratedRef.current = true;
-    storeHydrate(meta);
-  }, [storeHydrate]);
-
-  // Set the suggesting author before any suggesting can happen; withSuggestion
-  // normalizes away suggestion marks that lack a currentUserId.
-  useEffect(() => {
-    editor.setOption(SuggestionPlugin, 'currentUserId', author);
-  }, [author, editor]);
-
-
-  // The mode selector is the single source of truth for Suggesting: only that
-  // mode tracks edits as suggestion marks (via withSuggestion).
-  useEffect(() => {
-    editor.setOption(SuggestionPlugin, 'isSuggesting', mode === 'suggesting');
-  }, [editor, mode]);
-
-  useEffect(() => {
-    if (!collabEnabled || !collab) return;
-    // Reuse the render-time parse + serialization when it was for this same
-    // content — markdownToReview is pure, and parsing plus serializing a
-    // large document twice doubles the mount stall. Epoch remounts and
-    // document switches see a different `content` string and parse fresh.
-    const reusable =
-      initialParsedContentRef.current === content &&
-      initialValueRef.current !== null &&
-      initialReviewMetaRef.current !== null &&
-      initialSerializedRef.current !== null;
-    const { value, meta } = reusable
-      ? { value: initialValueRef.current as PlateValue, meta: initialReviewMetaRef.current as ReviewMeta }
-      : markdownToReview(content);
-    lastContentRef.current = content;
-    lastSerializedRef.current = reusable
-      ? (initialSerializedRef.current as string)
-      : reviewToMarkdown(value as never, meta);
-    storeHydrate(meta);
-
-    let disposed = false;
-    let initStarted = false;
-    const yjs = editor.getApi(YjsPlugin).yjs;
-    const initTimer = window.setTimeout(() => {
-      if (disposed) return;
-      initStarted = true;
-      void yjs
-        .init(collabYjsInitOptions(collab.documentId, value as PlateValue))
-        .then(() => {
-          if (!disposed) {
-            setCollabInitTick((tick) => tick + 1);
-            setExternalValueRevision((revision) => revision + 1);
-            collabSession.markInitialized();
-          }
-        })
-        .catch((error: unknown) => {
-          if (!disposed) console.warn('[collab] failed to initialize Yjs editor', error);
-          if (!disposed) collabSession.markInitialized();
-        });
-    }, 0);
-
-    return () => {
-      disposed = true;
-      window.clearTimeout(initTimer);
-      if (initStarted) {
-        // Plate's lifecycle can disconnect the Slate/Yjs binding before this
-        // cleanup runs (notably during Strict Mode replay). Calling disconnect
-        // again emits a false-positive error from slate-yjs.
-        if (YjsEditor.isYjsEditor(editor) && YjsEditor.connected(editor)) {
-          yjs.destroy();
-        }
-        // The plugin's destroy() skips providers that never connected, and
-        // a never-opened y-websocket would otherwise keep retrying forever
-        // with this editor's (stale, possibly bootstrap-seeded) doc — and
-        // merge it into a freshly seeded session on recovery. Sweep every
-        // provider explicitly, connected or not.
-        for (const provider of editor.getOption(YjsPlugin, '_providers') ?? []) {
-          provider.destroy();
-        }
-      }
-    };
-    // `content` is deliberately NOT a dependency: it is only the bootstrap
-    // value for an empty room; once live, the session doc is authoritative.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [collabDocumentId, collabEnabled, collabSession, collabSessionSnapshot.epoch, editor, storeHydrate]);
-
-  useEffect(() => {
-    if (collabEnabled) return;
-    if (content === lastContentRef.current) return;
-    const { value, meta } = markdownToReview(content);
-    resetPlateEditor(editor, value as PlateValue);
-    // Reseed the refs BEFORE hydrating: `storeHydrate` is a Zustand `set` that
-    // synchronously runs the store subscription, which serializes the new
-    // editor value and compares it to `lastSerializedRef`. Reseeding first lets
-    // that notification short-circuit on the equality guard, so a pure document
-    // load doesn't spuriously fire `onChange` and mark the doc dirty.
-    lastContentRef.current = content;
-    // Reseed from the INCOMING doc's freshly-parsed `meta` — NOT the shared
-    // `serialize`, which reads `storeGetMeta()` (still the OUTGOING doc's meta
-    // until `storeHydrate` runs on the next line). The store subscription fires
-    // synchronously inside `storeHydrate` with the new meta; the baseline must
-    // match that, or a pure load spuriously fires onChange.
-    lastSerializedRef.current = reviewToMarkdown(value as never, meta);
-    storeHydrate(meta);
-  }, [collabEnabled, content, editor, storeHydrate]);
-
-  // `onChange` only maintains the App's local Markdown mirror (downloads,
-  // the current-editor diff). Durability is the session checkpoint; nothing
-  // here marks the document dirty or schedules a save.
-  const publishSerializedMarkdown = useCallback(
-    (nextMarkdown: string, options: { guardUnhydratedBlank?: boolean } = {}) => {
-      if (nextMarkdown === lastSerializedRef.current) return false;
-      if (
-        options.guardUnhydratedBlank &&
-        shouldSkipUnhydratedCollabPublish(nextMarkdown, lastSerializedRef.current)
-      ) {
-        collabDebug('editor.skip_unhydrated_blank');
-        return false;
-      }
-      lastContentRef.current = nextMarkdown;
-      lastSerializedRef.current = nextMarkdown;
-      onChange(nextMarkdown);
-      return true;
-    },
-    [onChange]
-  );
-
-  const publishSerializedValue = useCallback(
-    (value: PlateValue, options: { guardUnhydratedBlank?: boolean } = {}) => {
-      return publishSerializedMarkdown(serialize(value), options);
-    },
-    [publishSerializedMarkdown, serialize]
-  );
-
-  // The debounced mirror publish (MIRROR_PUBLISH_DEBOUNCE_MS). Serializes
-  // `editor.children` at fire time, so coalesced triggers publish the latest
-  // value; the serialization itself runs in the mirror worker so a large
-  // document can't block the main thread. The blank guard is sticky across a
-  // batch: any trigger that needs it keeps the batch guarded.
-  const mirrorPublisher = useMemo(
-    () =>
-      new MarkdownMirrorPublisher({
-        debounceMs: MIRROR_PUBLISH_DEBOUNCE_MS,
-        getMeta: storeGetMeta,
-        getValue: () => editor.children as Descendant[],
-        publish: (markdown, guardUnhydratedBlank) => {
-          publishSerializedMarkdown(markdown, { guardUnhydratedBlank });
-        },
-        serialize: (value, meta) => getMirrorSerializer().serialize(value as never, meta),
-      }),
-    [editor, publishSerializedMarkdown, storeGetMeta]
-  );
-  const scheduleMirrorPublish = mirrorPublisher.schedule;
-  useMirrorPublisherLifetime(mirrorPublisher);
-
-  const scheduleReviewResolutionPublish = useCallback((attempt = 0) => {
-    if (reviewResolutionPublishTimerRef.current !== null) {
-      window.clearTimeout(reviewResolutionPublishTimerRef.current);
-    }
-    reviewResolutionPublishTimerRef.current = window.setTimeout(() => {
-      reviewResolutionPublishTimerRef.current = null;
-      if (publishSerializedValue(editor.children as PlateValue)) return;
-      if (attempt + 1 < REVIEW_RESOLUTION_PUBLISH_ATTEMPTS) {
-        scheduleReviewResolutionPublish(attempt + 1);
-      }
-    }, attempt === 0 ? 0 : REVIEW_RESOLUTION_PUBLISH_INTERVAL_MS);
-  }, [editor, publishSerializedValue]);
-
-  const publishResolvedSuggestion = useCallback(
-    (id: string, resolution: SuggestionResolution) => {
-      const resolvedMarkdown = resolveSuggestionInMarkdown(
-        lastSerializedRef.current,
-        id,
-        resolution
-      );
-      applyReviewMutation((meta) => removeSuggestion(meta, id));
-      setExternalValueRevision((revision) => revision + 1);
-      if (resolvedMarkdown && publishSerializedMarkdown(resolvedMarkdown)) return;
-      scheduleReviewResolutionPublish();
-    },
-    [publishSerializedMarkdown, scheduleReviewResolutionPublish]
-  );
-
-  useEffect(() => {
-    return () => {
-      if (reviewResolutionPublishTimerRef.current !== null) {
-        window.clearTimeout(reviewResolutionPublishTimerRef.current);
-        reviewResolutionPublishTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  // Remote session updates (peers, gateway-collaborator transactions,
-  // whole-file merges) land in the doc without a Slate onValueChange; mirror
-  // them into the App content the same way local edits are mirrored. Nothing
-  // is marked dirty — the session already owns durability.
-  useEffect(() => {
-    if (!collabEnabled || collabInitTick === 0) return;
-    const awareness = editor.getOption(YjsPlugin, 'awareness') as { doc?: Y.Doc } | undefined;
-    const doc = awareness?.doc;
-    if (!doc) return;
-    let disposed = false;
-
-    const publishFromSharedDoc = (_update: Uint8Array, origin: unknown) => {
-      if (disposed) return;
-      if (!shouldMirrorSharedDocUpdate(editor, origin)) return;
-      // Bump the value revision synchronously: the debounced publish can be
-      // cancelled by an editor swap racing this update (the remote change
-      // itself re-renders the app), and a missed bump leaves version-keyed
-      // selectors (the review rail) stale.
-      setExternalValueRevision((revision) => revision + 1);
-      // The debounced publish serializes after slate-yjs has applied the
-      // change to the editor children (the doc 'update' event fires first).
-      scheduleMirrorPublish({ guardUnhydratedBlank: true });
-    };
-
-    doc.on('update', publishFromSharedDoc);
-    return () => {
-      disposed = true;
-      doc.off('update', publishFromSharedDoc);
-    };
-  }, [collabDocumentId, collabEnabled, collabInitTick, editor, scheduleMirrorPublish]);
-
-  // Replies/resolves and synced suggestions live in the store, not the editor
-  // value, so an editor-value change won't fire. Mirror store changes too.
-  // The review store is a module-global singleton; safe because Quarry mounts
-  // exactly one editor at a time (this subscription assumes a single editor).
-  // Only meta changes affect the serialized document — hover/active flips
-  // (the review rail) must not cost a full-document serialization.
-  useEffect(() => {
-    return useReviewStore.subscribe((state, previous) => {
-      if (state.meta === previous.meta) return;
-      scheduleMirrorPublish({ guardUnhydratedBlank: collabEnabled });
+    const adapter = new PlateDocumentAdapter(editor, model, {
+      changed: (batch) => current.current.options.changed(batch),
+      proposed: (id) => current.current.options.proposed?.(id),
+      error: (error) => current.current.options.error(error),
+      selection: (points) => current.current.options.selection?.(points),
+      readOnly: () => current.current.options.readOnly?.() ?? false,
+      mode: () => current.current.options.mode?.() ?? 'editing',
+      author: () => current.current.options.author?.() ?? 'user',
     });
-  }, [collabEnabled, scheduleMirrorPublish]);
-
-  // Viewing is the user's read-only mode; a collab editor is additionally
-  // read-only whenever it is not live (disconnected or reseeding) — no
-  // local-only edits can exist, so nothing is ever lost on reconnect.
-  const readOnly = mode === 'viewing' || (collabEnabled && !collabLive);
-
-  return (
-    <WikiLinkProvider value={wikiLink ?? {}}>
-     <ImageProvider value={image ?? {}}>
-      <Plate
-        editor={editor}
-        readOnly={readOnly}
-        onValueChange={({ editor, value }) => {
-          if (editor.meta.resetting) {
-            editor.meta.resetting = undefined;
-            return;
-          }
-          const isLocalChange =
-            !collabEnabled ||
-            !YjsEditor.isYjsEditor(editor) ||
-            YjsEditor.isLocal(editor);
-          if (isLocalChange) {
-            applyReviewMutation((meta) =>
-              syncSuggestionsFromValue(meta, value as never)
-            );
-          }
-          scheduleMirrorPublish();
-        }}
-      >
-        <PlateValueRevisionBridge revision={externalValueRevision} />
-        {collabEnabled ? (
-            <CollabSaveStateBridge onSaveStateChange={handleCollabSaveState} />
-        ) : null}
-        {collabEnabled ? (
-          <ReviewDocBridge documentId={collabDocumentId} onMeta={storeHydrate} />
-        ) : null}
-        {readOnly ? null : (
-          <FloatingFormatToolbar
-            onSuggestionResolved={publishResolvedSuggestion}
-          />
-        )}
-        <div
-          className="relative flex h-full min-h-0"
-            data-collab-save-state={collabEnabled ? collabSessionSnapshot.saveState ?? undefined : undefined}
-        >
-          {/*
-            PlateContainer is the editor's scroll column. It registers the
-            editor's containerRef, which the TOC sidebar reads via useScrollRef()
-            to drive scroll-spy and click-to-scroll — so the scroller must be
-            this element, not an ancestor. ReviewRail is a separate, fixed
-            sibling that scrolls independently.
-          */}
-          <PlateContainer
-            className="relative min-w-0 flex-1 overflow-auto"
-            onClick={(event) => {
-              // Clicking anywhere in the document that isn't a comment or
-              // suggestion mark deselects the active rail card.
-              if (!(event.target as HTMLElement).closest('[data-comment-id],[data-suggestion-id]')) {
-                useReviewStore.getState().setActiveId(null);
-              }
-            }}
-          >
-            <TocSidebar topOffset={48} />
-            <PlateContent
-              aria-label="Plate markdown editor"
-              className="min-h-full w-full pt-12 pb-8 pl-[max(2rem,calc((100%-68ch)/2))] pr-[max(1rem,calc((100%-68ch)/2))] text-[15px] leading-7 text-ink outline-none [&_[data-slate-placeholder=true]]:text-faint"
-              disabled={readOnly}
-              placeholder="Write markdown…"
-              spellCheck={false}
-            />
-          </PlateContainer>
-          <ReviewRail
-            editor={editor}
-            onSuggestionResolved={publishResolvedSuggestion}
-          />
-        </div>
-      </Plate>
-     </ImageProvider>
-    </WikiLinkProvider>
-  );
+    const cleanup = current.current.onReady(adapter);
+    return () => { cleanup?.(); adapter.dispose(); };
+  }, [editor, model]);
+  return <ReviewHighlightsContext.Provider value={highlights}><WikiLinkProvider value={wikiLink}><ImageProvider value={image}>
+    <Plate editor={editor} readOnly={mode === 'viewing'}>
+      <SourceDraftRecovery editor={editor} />
+      {mode !== 'viewing' && <FloatingFormatToolbar onComment={onComment} review={review} />}
+      <div className="relative flex h-full min-h-0">
+        <PlateContainer className="relative min-w-0 flex-1 overflow-auto">
+          <DocumentContents topOffset={48} />
+          <DocumentPresence model={model} peers={peers} />
+          <DocumentContent aria-label="Plate markdown editor"
+            role="textbox"
+            decorate={decorate}
+            className="min-h-full w-full pt-12 pb-8 pl-[max(2rem,calc((100%-68ch)/2))] pr-[max(1rem,calc((100%-68ch)/2))] text-[15px] leading-7 text-ink outline-none [&_[data-slate-placeholder=true]]:text-faint"
+            placeholder="Write markdown…" spellCheck={false}
+            {...inputHandlers} />
+        </PlateContainer>
+      </div>
+    </Plate>
+  </ImageProvider></WikiLinkProvider></ReviewHighlightsContext.Provider>;
 }
-
-function useEditorLifecycleInstrumentation(
-  collabEnabled: boolean,
-  documentId: string,
-  epoch: number
-): void {
-  useEffect(() => {
-    if (!collabEnabled) return;
-    recordCollabLifecycleEvent('editor_mounted');
-    collabDebug('editor.mounted', { documentId, epoch });
-    return () => {
-      recordCollabLifecycleEvent('editor_disposed');
-      collabDebug('editor.disposed', { documentId, epoch });
-    };
-  }, [collabEnabled, documentId, epoch]);
-}
-
-function useMirrorPublisherLifetime(publisher: MarkdownMirrorPublisher): void {
-  useEffect(() => () => publisher[Symbol.dispose](), [publisher]);
-}
-
-export function shouldSkipUnhydratedCollabPublish(nextMarkdown: string, lastMarkdown: string) {
-  return nextMarkdown.trim() === '' && lastMarkdown.trim() !== '';
-}
-
-export function shouldMirrorSharedDocUpdate(editor: PlateEditor, origin: unknown) {
-  return !YjsEditor.isYjsEditor(editor) || !editor.isLocalOrigin(origin);
-}
-
-function ReviewDocBridge({
-  documentId,
-  onMeta,
-}: {
-  documentId: string;
-  onMeta: (meta: ReviewMeta) => void;
-}) {
-  const editor = useEditorRef();
-  const isSynced = Boolean(usePluginOption(YjsPlugin, '_isSynced'));
-
-  useEffect(() => {
-    const awareness = editor.getOption(YjsPlugin, 'awareness') as { doc?: Y.Doc } | undefined;
-    const doc = awareness?.doc;
-    if (!doc) return;
-    return bindReviewDoc(doc, {
-      isSynced,
-      onMeta,
-    });
-  }, [documentId, editor, isSynced, onMeta]);
-
-  return null;
-}
-
-/**
- * Derives the document save state inside the live Plate context:
- * connection + sync come from the Yjs plugin, checkpoint coverage from
- * comparing the provider's last ack snapshot against the local doc (see
- * save-state.ts). Recomputed on every doc update and every ack frame.
- */
-function CollabSaveStateBridge({
-  onSaveStateChange,
-}: {
-  onSaveStateChange: (state: CollabSaveState) => void;
-}) {
-  const editor = useEditorRef();
-  const isConnected = Boolean(usePluginOption(YjsPlugin, '_isConnected'));
-  const isSynced = Boolean(usePluginOption(YjsPlugin, '_isSynced'));
-  const providers = usePluginOption(YjsPlugin, '_providers');
-  const [covered, setCovered] = useState(false);
-  const [saveFailed, setSaveFailed] = useState(false);
-
-  useEffect(() => {
-    const provider = providers?.find(
-      (candidate): candidate is RustWsProviderWrapper =>
-        candidate instanceof RustWsProviderWrapper
-    );
-    const awareness = editor.getOption(YjsPlugin, 'awareness') as { doc?: Y.Doc } | undefined;
-    const doc = awareness?.doc;
-    if (!provider || !doc) {
-      setCovered(false);
-      setSaveFailed(false);
-      return;
-    }
-    const recompute = () => {
-      setCovered(checkpointCoversDoc(provider.lastCheckpoint, doc));
-      setSaveFailed(provider.saveFailed);
-    };
-    recompute();
-    const unsubscribeAck = provider.onCheckpoint(recompute);
-    const unsubscribeFailure = provider.onCheckpointFailure(recompute);
-    doc.on('update', recompute);
-    return () => {
-      unsubscribeAck();
-      unsubscribeFailure();
-      doc.off('update', recompute);
-    };
-  }, [editor, providers]);
-
-  // Closing the tab while the last checkpoint does not cover the doc loses
-  // the uncovered edits (the session doc never syncs back after a remount).
-  // Coverage — not the display state — is the honest dirty signal: it also
-  // warns for typed-then-disconnected, but stays quiet when a disconnect
-  // happens with everything already durable.
-  const coveredRef = useRef(covered);
-  useEffect(() => {
-    coveredRef.current = covered;
-  }, [covered]);
-  useEffect(() => registerUnloadGuard(window, () => !coveredRef.current), []);
-
-  const state = collabSaveState({ connected: isConnected, synced: isSynced, covered, saveFailed });
-  useEffect(() => {
-    onSaveStateChange(state);
-  }, [onSaveStateChange, state]);
-
-  return null;
-}
-
-// Nudges Plate's version-keyed selectors (the review rail, the floating
-// toolbar) after externally-applied editor changes — Yjs init seeding,
-// remote session updates, and suggestion resolution (collab or not) mutate
-// `editor.children` / the review store without a Slate change notification
-// reaching the mounted <Slate> context.
-//
-// The nudge MUST go through `editor.onChange()` rather than a local
-// `useIncrementVersion`: Plate's `useIncrementVersion` keeps a private
-// per-hook counter ref, so a second instance writes the same small integers
-// as the canonical one inside Plate's `useSlateProps`. Whenever the two
-// counters collided, the jotai version-set was value-equal and swallowed,
-// freezing every `useEditorSelector` in the live editor — which is exactly
-// the "expanded selections never show the floating toolbar in a session"
-// bug. Routing through `editor.onChange()` keeps a single writer.
-function PlateValueRevisionBridge({ revision }: { revision: number }) {
-  const editor = useEditorRef();
-
-  useEffect(() => {
-    if (revision === 0) return;
-    // Deferred one tick: the bridge renders as an earlier sibling of the
-    // editor surface, so this effect flushes BEFORE the <Slate> effect (in
-    // the later PlateContent subtree) that registers the editor's change
-    // handler — and an onChange with no handler registered is silently
-    // lost. Exactly the Yjs-init / epoch-remount case this bridge exists
-    // for.
-    const timer = window.setTimeout(() => editor.api.onChange(), 0);
-    return () => window.clearTimeout(timer);
-  }, [revision, editor]);
-
-  return null;
-}
-
 function FloatingFormatToolbar({
-  onSuggestionResolved,
+  onComment, review,
 }: {
-  onSuggestionResolved: (id: string, resolution: SuggestionResolution) => void;
+  onComment: () => void;
+  review: NativeReviewState;
 }) {
   const editor = useEditorRef();
   const focusedEditorId = useEventEditorValue('focus');
+  const commenting = Boolean(review.draftTarget);
   const state = useFloatingToolbarState({
     editorId: editor.id,
     focusedEditorId,
+    hideToolbar: commenting,
     floatingOptions: {
       placement: 'top',
       middleware: [offset(8), flip({ padding: 8 }), shift({ padding: 8 })],
     },
   });
-  const { hidden, props, ref } = useFloatingToolbar(state);
+  // Inline void chips have native text even though Slate's string is empty.
+  const selectedNativeText = useEditorSelector((editor) => editor.selection && editor.api.isExpanded()
+    ? editor.api.string() || (selectedText(editor.children, editor.selection).length ? 'selected' : '') : '', []);
+  const { hidden, props, ref } = useFloatingToolbar({ ...state, selectionText: selectedNativeText });
+  useEffect(() => {
+    if (!commenting) return;
+    // The selection remains the comment's target. Keep its formatting popup
+    // closed after submission until the user starts a new text selection.
+    state.setWaitForCollapsedSelection(true); state.setOpen(false);
+  }, [commenting, state.setWaitForCollapsedSelection, state.setOpen]);
   if (hidden) return null;
   return (
     <div
@@ -1032,76 +500,21 @@ function FloatingFormatToolbar({
         <ListTodo size={15} />
       </TodoListButton>
       <div aria-hidden="true" className="mx-0.5 h-5 w-px bg-line" />
-      <CommentButton />
-      <SuggestionActions onSuggestionResolved={onSuggestionResolved} />
+      <CommentButton onComment={onComment} />
+      <NativeReviewContext.Provider value={review}><NativeSuggestionActions /></NativeReviewContext.Provider>
     </div>
   );
 }
 
-// When the selection sits inside a suggestion, expose minimal Accept/Reject
-// controls that apply or revert it. Plan 3 builds the full per-card review rail;
-// this is the minimal reachable surface so the accept/reject behavior exists in
-// the editor. The id under the selection drives `acceptSuggestionById` /
-// `rejectSuggestionById` from the tested command layer.
-function SuggestionActions({
-  onSuggestionResolved,
-}: {
-  onSuggestionResolved: (id: string, resolution: SuggestionResolution) => void;
-}) {
-  const editor = useEditorRef();
-  const suggestionId = useEditorSelector((ed) => {
-    const entry = ed.getApi(SuggestionPlugin).suggestion.node();
-    return entry ? ed.getApi(SuggestionPlugin).suggestion.nodeId(entry[0]) : undefined;
-  }, []);
-  if (!suggestionId) return null;
-  return (
-    <>
-      <div aria-hidden="true" className="mx-0.5 h-5 w-px bg-line" />
-      <button
-        aria-label="Accept suggestion"
-        className="inline-flex size-7 items-center justify-center rounded text-muted transition-colors hover:bg-well hover:text-body"
-        data-testid="accept-suggestion"
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={() => {
-          acceptSuggestionById(editor, suggestionId);
-          onSuggestionResolved(suggestionId, 'accept');
-          editor.tf.focus();
-        }}
-        title="Accept suggestion"
-        type="button"
-      >
-        <Check size={15} />
-      </button>
-      <button
-        aria-label="Reject suggestion"
-        className="inline-flex size-7 items-center justify-center rounded text-muted transition-colors hover:bg-well hover:text-body"
-        data-testid="reject-suggestion"
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={() => {
-          rejectSuggestionById(editor, suggestionId);
-          onSuggestionResolved(suggestionId, 'reject');
-          editor.tf.focus();
-        }}
-        title="Reject suggestion"
-        type="button"
-      >
-        <X size={15} />
-      </button>
-    </>
-  );
-}
-
-function CommentButton() {
-  const editor = useEditorRef();
+function CommentButton({ onComment }: { onComment: () => void }) {
   return (
     <button
       aria-label="Comment"
       className="inline-flex size-7 items-center justify-center rounded text-muted transition-colors hover:bg-well hover:text-body"
       data-testid="comment-button"
-      // Preserve the text selection through the click: setDraft marks the
-      // selected range, so the selection must survive the mousedown.
+      // Preserve the text selection while the comment composer opens.
       onMouseDown={(event) => event.preventDefault()}
-      onClick={() => startCommentDraft(editor)}
+      onClick={onComment}
       title="Comment"
       type="button"
     >
@@ -1416,7 +829,10 @@ const TURN_INTO_ITEMS = [
 function setBlockType(editor: PlateEditor, type: string) {
   editor.tf.withoutNormalizing(() => {
     for (const [node, path] of editor.api.blocks<TElement>({ mode: 'lowest' })) {
-      if (node.type !== type) editor.tf.setNodes({ type }, { at: path });
+      if (node.type === type) continue;
+      const adapter = documentAdapter(editor);
+      if (adapter?.options.mode?.() === 'suggesting') adapter.updateBlock(String(node.id), type, blockAttrs(node));
+      else editor.tf.setNodes({ type }, { at: path });
     }
   });
 }
@@ -1567,11 +983,13 @@ function TodoListItem(props: PlateElementProps) {
   );
 }
 
-// Provides the editor's react-dnd context. react-dnd v14 keeps a single global
-// manager/backend, so this coexists with the document tree's own DndProvider
-// (react-arborist) without a second HTML5 backend.
+// Own the editor's drag manager and scope its events to this editor. The tree
+// has a backend scoped to its own root. React DnD's implicit global singleton
+// would reuse that backend and never receive drag events from the editor.
 function EditorDndProvider({ children }: { children?: ReactNode }) {
-  return <DndProvider backend={HTML5Backend}>{children}</DndProvider>;
+  const [root, setRoot] = useState<HTMLDivElement | null>(null);
+  const manager = useMemo(() => root ? createDragDropManager(HTML5Backend, undefined, { rootElement: root }) : undefined, [root]);
+  return <div className="contents" ref={setRoot}>{manager && <DndProvider manager={manager}>{children}</DndProvider>}</div>;
 }
 
 const HANDLE_SIZE = 24;
@@ -1582,7 +1000,7 @@ function DraggableBlock(props: PlateElementProps) {
   // Disable the drag preview (transparent image) — otherwise Chrome renders its
   // default globe icon for the empty preview element. The dragged block fades
   // (opacity-50) and the drop-line shows the target, which is feedback enough.
-  const { isDragging, nodeRef, handleRef } = useDraggable({ element, preview: { disable: true } });
+  const { isDragging, nodeRef, handleRef } = useDraggable({ element, drag: { canDrag: supportsBlockDrag }, preview: { disable: true } });
   // Center the handle on the block's first line. Blocks (esp. headings) have
   // their own margin-top and line-height, so measure the rendered element rather
   // than assuming a fixed offset. The handle lives in a small left padding
@@ -1612,15 +1030,16 @@ function DraggableBlock(props: PlateElementProps) {
         style={{ height: HANDLE_SIZE, top: handleTop }}
       >
         <button
-          aria-label="Drag to move block"
-          className="flex size-6 cursor-grab items-center justify-center rounded text-faint transition-colors hover:bg-well hover:text-muted active:cursor-grabbing"
+          aria-label={supportsBlockDrag ? 'Drag to move block' : 'Block actions'}
+          className={cn('flex size-6 items-center justify-center rounded text-faint transition-colors hover:bg-well hover:text-muted', supportsBlockDrag && 'cursor-grab active:cursor-grabbing')}
           data-plate-prevent-deselect
+          data-quarry-block-handle
           onClick={(event) => {
             const box = event.currentTarget.getBoundingClientRect();
             setMenuRect({ left: box.left, top: box.bottom + 4 });
           }}
           ref={handleRef}
-          title="Drag to move · click for actions"
+          title={supportsBlockDrag ? 'Drag to move · click for actions' : 'Block actions'}
           type="button"
         >
           <GripVertical size={15} />
@@ -1644,10 +1063,13 @@ const blockMenuItem =
   'flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-body outline-none hover:bg-well';
 
 function cloneWithoutIds(node: Descendant): Descendant {
-  if (!ElementApi.isElement(node)) return { ...node };
-  const { id, ...rest } = node;
-  void id;
-  return { ...rest, children: node.children.map(cloneWithoutIds) };
+  // Review ownership belongs to the original characters. Wiki source spelling
+  // and marks describe visible content; they contain no native identity.
+  const rest = Object.fromEntries(Object.entries(node).filter(([key]) => key !== 'id' &&
+    (!key.startsWith('quarry') || key === 'quarrySource' || key === 'quarryMarks' || key === 'quarryLeaves')));
+  if (TextApi.isText(node)) return { ...rest, text: node.text };
+  if (node.type === 'quarry_proposal') return { text: node.children.map(inlineText).join('') };
+  return { ...rest, type: node.type, children: node.children.map(cloneWithoutIds) };
 }
 
 // Normalize to a paragraph first (unwrap code, drop heading), then toggle the
@@ -1694,7 +1116,8 @@ function duplicateBlock(editor: PlateEditor, element: TElement) {
 function deleteBlock(editor: PlateEditor, element: TElement) {
   const at = editor.api.findPath(element);
   if (!at) return;
-  editor.tf.removeNodes({ at });
+  const adapter = documentAdapter(editor);
+  if (adapter) adapter.deleteBlock(String(element.id)); else editor.tf.removeNodes({ at });
   editor.tf.focus();
 }
 
@@ -1787,26 +1210,4 @@ function BlockDropLine() {
       contentEditable={false}
     />
   );
-}
-
-function resetPlateEditor(editor: PlateEditor, value: PlateValue) {
-  // The draft range is anchored to the outgoing document; it dies with it.
-  cancelCommentDraft(editor);
-  editor.tf.replaceNodes(value as never, {
-    at: [],
-    children: true,
-  });
-  editor.meta.resetting = true;
-  editor.history.undos = [];
-  editor.history.redos = [];
-  editor.operations = [];
-}
-
-function collabColor(seed: string) {
-  const colors = ['#2563eb', '#16a34a', '#dc2626', '#9333ea', '#0891b2', '#ca8a04'];
-  let hash = 0;
-  for (const char of seed) {
-    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  }
-  return colors[hash % colors.length];
 }

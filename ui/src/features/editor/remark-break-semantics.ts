@@ -6,9 +6,9 @@ import { visit } from 'unist-util-visit';
 
 /*
  * CommonMark break semantics, mirroring the Rust codec
- * (crates/quarry-collab-codec): a soft break (a word-wrap newline in the
+ * (crates/quarry-markdown): a soft break (a word-wrap newline in the
  * source) is collapsible whitespace, a hard break is a literal `\n` inside
- * the text. Parity is pinned by the slate-yjs compat fixtures.
+ * the text. Native conformance tests check the resulting text commands.
  *
  *   - parse: a transformer collapses soft-break newlines inside mdast text
  *     values to spaces and rewrites `break` nodes to `\n` text, merging

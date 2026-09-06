@@ -1,10 +1,10 @@
 mod agent_events;
 mod agent_prompt;
 mod assets;
-mod collab;
-mod collab_handlers;
 mod conflicts;
 mod discovery;
+mod document_authority;
+mod document_engine;
 mod document_handlers;
 mod error;
 mod gateway;
@@ -19,13 +19,10 @@ mod onboarding;
 mod presence;
 mod review;
 mod search_handlers;
-mod session;
 mod sse;
 mod system_handlers;
 mod tmp_document_handlers;
 mod transaction_handlers;
-
-pub use session::{MSG_QUARRY_CHECKPOINT, MSG_QUARRY_CHECKPOINT_FAILED};
 
 use agent_events::{
     AgentEventRecord, AgentEventsAckRequest, AgentEventsAckResponse, AgentPendingEventsResponse,
@@ -79,7 +76,7 @@ use uuid::Uuid;
 pub struct AppState {
     store: QuarryStore,
     client_ip_source: ClientIpSource,
-    sessions: session::SessionHub,
+    documents: document_authority::DocumentAuthority,
     agent_events: AgentEventJournal,
     agent_presence: AgentPresenceRegistry,
     shutdown: CancellationToken,
@@ -112,7 +109,6 @@ pub struct ServerConfig {
 }
 
 const REQUEST_ID_HEADER: &str = "x-quarry-request-id";
-const ALLOW_DOCUMENT_KIND_CHANGE_HEADER: &str = "x-quarry-allow-document-kind-change";
 const X_ROBOTS_TAG_HEADER: &str = "x-robots-tag";
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
 const TMP_DOCUMENT_HTTP_BODY_LIMIT: usize =
@@ -147,7 +143,7 @@ async fn touch_agent_presence(
 
 /// Builds the server state for `store`. Pair with
 /// [`install_markdown_writer`] so same-process Git/FUSE/CLI writes route
-/// through the gateway and the session mode switch (one owning process per
+/// through the native command gateway (one owning process per
 /// database; out-of-process writers cannot open the store at all).
 pub fn app_state(store: QuarryStore) -> AppState {
     app_state_with_config(store, ServerConfig::default())
@@ -157,11 +153,11 @@ pub fn app_state_with_config(store: QuarryStore, config: ServerConfig) -> AppSta
     let shutdown = CancellationToken::new();
     let agent_events = AgentEventJournal::default();
     agent_events.spawn_ingest(store.clone(), shutdown.clone());
-    let sessions = session::SessionHub::new(store.clone());
+    let documents = document_authority::DocumentAuthority::default();
     AppState {
         store,
         client_ip_source: config.client_ip_source,
-        sessions,
+        documents,
         agent_events,
         agent_presence: AgentPresenceRegistry::default(),
         shutdown,
@@ -208,7 +204,6 @@ pub fn router_with_state(state: AppState) -> Router {
         .route("/v1/capabilities", get(system_handlers::capabilities))
         .route("/v1/openapi.json", get(system_handlers::openapi_json));
     let router = install_admin_routes(router);
-    let router = install_collab_routes(router);
     let router = install_tmp_document_routes(router);
     let router = install_library_document_routes(router);
     let router = router.fallback(get(browser_asset));
@@ -238,18 +233,17 @@ async fn api_error_envelope_middleware(request: Request, next: Next) -> Response
         let status = parts.status;
         let original_headers = parts.headers.clone();
         const ERROR_BODY_LIMIT: usize = 64 * 1024;
-        if let Ok(bytes) = to_bytes(body, ERROR_BODY_LIMIT).await {
-            if let Ok(payload) = serde_json::from_slice::<ApiErrorResponse>(&bytes)
-                && payload.code.status() == status
-            {
-                if status == axum::http::StatusCode::SERVICE_UNAVAILABLE {
-                    parts
-                        .headers
-                        .entry(header::RETRY_AFTER)
-                        .or_insert(HeaderValue::from_static("1"));
-                }
-                return Response::from_parts(parts, Body::from(bytes));
+        if let Ok(bytes) = to_bytes(body, ERROR_BODY_LIMIT).await
+            && let Ok(payload) = serde_json::from_slice::<ApiErrorResponse>(&bytes)
+            && payload.code.status() == status
+        {
+            if status == axum::http::StatusCode::SERVICE_UNAVAILABLE {
+                parts
+                    .headers
+                    .entry(header::RETRY_AFTER)
+                    .or_insert(HeaderValue::from_static("1"));
             }
+            return Response::from_parts(parts, Body::from(bytes));
         }
         return normalized_error_response(status, original_headers);
     }
@@ -277,10 +271,10 @@ fn normalized_error_response(
 
 /// Strict Content-Security-Policy for the tmp-only public build. `'unsafe-inline'`
 /// is required for the editor's runtime styles; `connect-src 'self'` covers the
-/// same-origin collab WebSocket and SSE; the strict `frame-src`/`default-src`
+/// same-origin document requests and SSE; the strict `frame-src`/`default-src`
 /// deliberately block external media embeds.
 const CONTENT_SECURITY_POLICY: HeaderValue = HeaderValue::from_static(
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; \
      img-src 'self' data: blob:; connect-src 'self'; frame-src 'none'; \
      frame-ancestors 'none'; base-uri 'self'",
 );
@@ -330,21 +324,6 @@ fn install_admin_routes(router: Router<AppState>) -> Router<AppState> {
     router
 }
 
-fn install_collab_routes(router: Router<AppState>) -> Router<AppState> {
-    // The raw `/v1/collab/{document_id}` route takes an internal id and no
-    // secret, so it serves only library documents. Tmp documents use the
-    // secret-authenticated `/v1/tmp/collab/{secret}/{room}` route instead, and
-    // this route is omitted entirely from the tmp-only build.
-    if !cfg!(feature = "lib-documents") {
-        return router;
-    }
-
-    router.route(
-        "/v1/collab/{document_id}",
-        get(collab_handlers::collab_websocket),
-    )
-}
-
 fn install_tmp_document_routes(router: Router<AppState>) -> Router<AppState> {
     if !cfg!(feature = "tmp-documents") {
         return router;
@@ -363,10 +342,6 @@ fn install_tmp_document_routes(router: Router<AppState>) -> Router<AppState> {
             "/v1/tmp/documents",
             post(tmp_document_handlers::create_tmp_document)
                 .layer(DefaultBodyLimit::max(TMP_DOCUMENT_HTTP_BODY_LIMIT)),
-        )
-        .route(
-            "/v1/tmp/collab/{secret}/{room}",
-            get(collab_handlers::tmp_collab_websocket),
         )
         .route("/v1/tmp/documents/{*path}", tmp_document_route)
 }
@@ -419,6 +394,26 @@ fn install_library_document_routes(router: Router<AppState>) -> Router<AppState>
                 .post(document_handlers::post_document_action)
                 .patch(document_handlers::patch_document_metadata)
                 .delete(document_handlers::delete_document),
+        )
+        .route(
+            "/v1/libraries/{library}/documents-by-id/{document_id}/selection",
+            post(document_engine::selection_by_id),
+        )
+        .route(
+            "/v1/libraries/{library}/documents-by-id/{document_id}/document-state",
+            get(document_engine::read_by_id),
+        )
+        .route(
+            "/v1/libraries/{library}/documents-by-id/{document_id}/document-commands",
+            post(document_engine::commands_by_id),
+        )
+        .route(
+            "/v1/libraries/{library}/documents-by-id/{document_id}/transactions",
+            post(document_engine::transactions_by_id),
+        )
+        .route(
+            "/v1/libraries/{library}/documents-by-id/{document_id}/events/stream",
+            get(document_engine::events_by_id),
         )
         .route(
             "/v1/libraries/{library}/transactions",
@@ -725,16 +720,28 @@ fn should_warn_non_loopback(addr: SocketAddr) -> bool {
 #[openapi(
     paths(
         system_handlers::health,
+        tmp_document_handlers::tmp_document_state_openapi,
+        tmp_document_handlers::tmp_document_commands_openapi,
+        document_engine::read_by_id,
+        document_engine::commands_by_id,
+        document_engine::events_by_id,
+        document_engine::transactions_by_id,
+        document_handlers::library_document_state_openapi,
+        document_engine::selection_by_id,
+        document_engine::tmp_selection_openapi,
+        document_engine::library_archive_get_openapi,
+        document_engine::library_archive_post_openapi,
+        document_engine::tmp_archive_get_openapi,
+        document_engine::tmp_archive_post_openapi,
+        document_handlers::library_document_commands_openapi,
         system_handlers::capabilities,
         system_handlers::openapi_json,
-        collab_handlers::collab_websocket_openapi,
         sse::events,
         library_handlers::create_library,
         library_handlers::list_libraries,
         library_handlers::get_library,
         document_handlers::list_documents,
         tmp_document_handlers::create_tmp_document,
-        collab_handlers::tmp_collab_websocket_openapi,
         tmp_document_handlers::get_tmp_document,
         tmp_document_handlers::head_tmp_document,
         tmp_document_handlers::put_tmp_document,
@@ -1021,7 +1028,9 @@ mod tests {
 
     use super::*;
     use crate::sse::{StoreEventPayloadMode, store_event_payload, store_event_type};
-    use axum::body::{Body, to_bytes};
+    #[cfg(any(feature = "lib-documents", feature = "tmp-documents"))]
+    use axum::body::Body;
+    use axum::body::to_bytes;
     #[cfg(any(feature = "lib-documents", feature = "tmp-documents"))]
     use axum::http::Method;
     use axum::http::{StatusCode, header};
@@ -1591,6 +1600,10 @@ mod tests {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DocumentSubResource<'path> {
     Document,
+    DocumentState,
+    DocumentCommands,
+    Archive,
+    Selection,
     Backlinks,
     OutgoingLinks,
     Blocks,
@@ -1615,6 +1628,10 @@ pub(crate) enum DocumentSubResource<'path> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TmpDocumentSubResource<'path> {
     Document,
+    DocumentState,
+    DocumentCommands,
+    Archive,
+    Selection,
     AgentPrompt,
     Blocks,
     Review,
@@ -1653,6 +1670,10 @@ pub(crate) fn parse_document_subresource(path: &str) -> (&str, DocumentSubResour
 
     for (suffix, subresource) in [
         ("/events/stream", DocumentSubResource::EventsStream),
+        ("/document-state", DocumentSubResource::DocumentState),
+        ("/archive", DocumentSubResource::Archive),
+        ("/selection", DocumentSubResource::Selection),
+        ("/document-commands", DocumentSubResource::DocumentCommands),
         ("/agent-prompt", DocumentSubResource::AgentPrompt),
         ("/outgoing-links", DocumentSubResource::OutgoingLinks),
         ("/transactions", DocumentSubResource::Transactions),
@@ -1693,6 +1714,13 @@ pub(crate) fn parse_tmp_document_subresource(path: &str) -> (&str, TmpDocumentSu
 
     for (suffix, subresource) in [
         ("/events/stream", TmpDocumentSubResource::EventsStream),
+        ("/document-state", TmpDocumentSubResource::DocumentState),
+        ("/archive", TmpDocumentSubResource::Archive),
+        ("/selection", TmpDocumentSubResource::Selection),
+        (
+            "/document-commands",
+            TmpDocumentSubResource::DocumentCommands,
+        ),
         ("/agent-prompt", TmpDocumentSubResource::AgentPrompt),
         ("/transactions", TmpDocumentSubResource::Transactions),
         ("/presence", TmpDocumentSubResource::Presence),

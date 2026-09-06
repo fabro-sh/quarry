@@ -276,6 +276,46 @@ fn event_matches_document_filter(event: &StoreEvent, document_path: Option<&str>
     event.path() == Some(document_path) || event.new_path() == Some(document_path)
 }
 
+/// Browser subscriptions use document identity so a rename does not detach
+/// a connected editor. A lag notification causes a complete state refresh.
+pub(crate) async fn events_for_native_document(
+    store: &QuarryStore,
+    library: &str,
+    document_id: String,
+    shutdown: CancellationToken,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>> + use<>>, ApiError> {
+    let library = store.get_library(library).await?;
+    let stream = stream::unfold(
+        (store.subscribe_events(), library.id, document_id, shutdown),
+        |(mut receiver, library, document, shutdown)| async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => return None,
+                    result = receiver.recv() => {
+                        let event = match result {
+                            Ok(event) if event.library_id() == library && event.doc_id() == Some(document.as_str()) => {
+                                let kind = store_event_type(&event);
+                                let payload = store_event_payload("", &kind, &event, StoreEventPayloadMode::OmitPaths);
+                                Event::default().event(kind).data(payload.to_string())
+                            }
+                            Ok(_) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => Event::default().event("stream.lagged").data("{}"),
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+                        };
+                        return Some((Ok(event), (receiver, library, document, shutdown)));
+                    }
+                }
+            }
+        },
+    );
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keepalive"),
+    ))
+}
+
 pub(crate) fn store_event_type(event: &StoreEvent) -> String {
     match event.kind() {
         StoreEventKind::DocumentPut => "doc.changed",

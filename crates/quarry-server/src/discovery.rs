@@ -272,7 +272,7 @@ pub(crate) async fn agent_discovery(headers: HeaderMap) -> Result<Response, ApiE
             limitations: vec![
                 "Library REST agent endpoints in the full/local build trust localhost and do not currently enforce bearer-token auth.",
                 "Tmp document URL secrets are bearer capabilities; do not log or redistribute them.",
-                "Library invite URL tokens identify browser/collab joins and are not REST bearer tokens.",
+                "Library invite URL tokens identify browser document access and are not REST bearer tokens.",
                 "Quarry does not currently support rewrite.apply.",
             ],
             route_hints: AgentDiscoveryRouteHints {

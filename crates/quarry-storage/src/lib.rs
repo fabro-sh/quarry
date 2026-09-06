@@ -1,6 +1,16 @@
 mod blocks;
 mod directories;
+mod document_commands;
+mod document_import;
+pub use document_commands::{build_document_commit, command_error};
+mod document_archive;
+mod document_state;
+pub use document_archive::DocumentArchive;
+mod document_write;
 mod documents;
+pub use document_import::{
+    document_review_projection, import_document, import_document_with_markdown,
+};
 mod events;
 mod libraries;
 mod links;
@@ -18,12 +28,13 @@ pub use blocks::{
     BlockMutationCommit, BlockMutationOutcome, BlockMutationState, BlockReviewItem,
     BlockReviewKind, BlockReviewState, BlockShadowBase, BlockTransactionRecord, BlockWriteBase,
     DocumentKind, DocumentScopeRef, MARKDOWN_INSERT_SUGGESTION_CONTEXT, NewBlockReviewItem,
-    SessionSeedState, document_kind,
+    document_kind,
 };
+pub use document_state::{DurableDocumentCommit, DurableDocumentState, document_projection};
 pub use documents::PutDocumentRequest;
 pub use events::{StoreEvent, StoreEventKind};
 /// Re-exported because the store's block APIs speak it.
-pub use quarry_collab_codec::BlockRow;
+pub use quarry_markdown::BlockRow;
 use row::{
     collab_invite_token_from_row, conflict_from_row, document_entry_from_row, int, opt_blob,
     opt_text, text, transaction_from_row,
@@ -79,14 +90,6 @@ pub struct DirectoryMetadata {
     pub mode: Option<i64>,
     pub mtime: String,
     pub inode: i64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CollabDocumentSeed {
-    pub document_id: String,
-    pub head_version_id: String,
-    pub content_type: String,
-    pub content: Vec<u8>,
 }
 
 impl QuarryStore {
@@ -244,13 +247,18 @@ impl QuarryStore {
 
     pub(crate) async fn migrate(&self) -> Result<()> {
         let conn = self.conn()?;
+        document_state::check_upgrade_drafts(&conn).await?;
         conn.execute_batch(SCHEMA).await.map_err(map_turso_error)?;
         migrate_documents_scope_ttl(&conn).await?;
         ensure_documents_created_ip_address_column(&conn).await?;
         ensure_document_indexes_conn(&conn).await?;
         ensure_links_resolution_status_column(&conn).await?;
-        // Sessions are discardable (recovery is reseed-from-rows); the legacy
-        // CRDT recovery-state table is dropped wholesale.
+        conn.execute_batch(document_state::SCHEMA)
+            .await
+            .map_err(map_turso_error)?;
+        document_state::migrate_projection_keys(&conn).await?;
+        self.migrate_document_states().await?;
+        // Retired recovery snapshots are not a document authority.
         conn.execute("DROP TABLE IF EXISTS collab_recovery_states", ())
             .await
             .map_err(map_turso_error)?;
@@ -583,48 +591,6 @@ impl QuarryStore {
         now: &str,
     ) -> Result<()> {
         error_if_document_expired_conn(conn, DocumentLookupScope::Tmp, path, now).await
-    }
-
-    async fn collab_document_seed_conn(
-        &self,
-        conn: &Connection,
-        document_id: &str,
-    ) -> Result<Option<CollabDocumentSeed>> {
-        let mut rows = conn
-            .query(
-                "SELECT d.id, v.id, v.content_type, v.content_hash, v.inline_content
-                 FROM documents d
-                 JOIN document_versions v ON v.id = d.head_version_id
-                 WHERE d.id = ?1
-                   AND d.document_scope = 'library'
-                   AND d.deleted_at IS NULL
-                   AND d.head_version_id IS NOT NULL
-                   AND (d.expires_at IS NULL OR d.expires_at > ?2)
-                 LIMIT 1",
-                params![document_id.to_string(), now_timestamp()],
-            )
-            .await
-            .map_err(map_turso_error)?;
-        let Some(row) = rows.next().await.map_err(map_turso_error)? else {
-            return Ok(None);
-        };
-        let content_hash = opt_text(&row, 3)?;
-        let inline_content = opt_blob(&row, 4)?;
-        let content = match (inline_content, content_hash) {
-            (Some(bytes), None) => bytes,
-            (None, Some(hash)) => self.cas.read(&hash)?,
-            _ => {
-                return Err(QuarryError::Invariant(format!(
-                    "head version for document {document_id} violates inline/CAS invariant"
-                )));
-            }
-        };
-        Ok(Some(CollabDocumentSeed {
-            document_id: text(&row, 0)?,
-            head_version_id: text(&row, 1)?,
-            content_type: text(&row, 2)?,
-            content,
-        }))
     }
 
     async fn collab_invite_token_conn(
@@ -1194,18 +1160,19 @@ CREATE TABLE IF NOT EXISTS aliases(
 );
 
 CREATE TABLE IF NOT EXISTS blocks(
-  block_id TEXT PRIMARY KEY,
+  block_id TEXT NOT NULL,
   document_id TEXT NOT NULL,
   parent_block_id TEXT,
   position INTEGER NOT NULL,
   block_type TEXT NOT NULL,
   attrs TEXT NOT NULL,
   text TEXT NOT NULL,
-  marks TEXT NOT NULL
+  marks TEXT NOT NULL,
+  PRIMARY KEY(document_id,block_id)
 );
 
 CREATE TABLE IF NOT EXISTS block_review_items(
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   document_id TEXT NOT NULL,
   block_id TEXT NOT NULL,
   kind TEXT NOT NULL,
@@ -1220,7 +1187,8 @@ CREATE TABLE IF NOT EXISTS block_review_items(
   context_after TEXT,
   parent_item_id TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(document_id,id)
 );
 
 CREATE TABLE IF NOT EXISTS block_shadow_bases(
@@ -1570,7 +1538,7 @@ async fn insert_document_conn(
     Ok((id, None))
 }
 
-async fn publish_put_conn(conn: &Connection, doc_id: &str, version_id: &str) -> Result<()> {
+async fn publish_native_put_conn(conn: &Connection, doc_id: &str, version_id: &str) -> Result<()> {
     conn.execute(
         "UPDATE documents SET head_version_id = ?1, deleted_at = NULL, updated_at = ?2 WHERE id = ?3",
         params![version_id.to_string(), now_timestamp(), doc_id.to_string()],

@@ -13,9 +13,10 @@ This spec is based on:
 - Downloaded research resources in `.ai/research/browser/resources/`.
 
 
-The research initially favored a source-first CodeMirror 6 editor because it best matches Obsidian Live Preview, SilverBullet, and Zettlr. Product review chose PlateJS instead, with local reference implementations available in `~/p/udecode/plate` and `~/p/fabro-sh/potion`. The resulting product decision is to use a deliberately constrained PlateJS editor while keeping markdown text as the canonical Quarry document format. Plate-specific JSON is an editor implementation detail, not durable Quarry content.
-## Product Outcome
-At the end of the full browser effort, a user can:
+The browser uses Plate/Slate for input and the shared Rust/WASM Automerge engine
+for document identity, commands, review and merge rules. Markdown and browser
+nodes are projections. The durable command architecture is specified in
+[Architecture](docs/architecture.md).
 
 - Start `quarry serve` and open a local web workspace from the same daemon.
 
@@ -23,7 +24,7 @@ At the end of the full browser effort, a user can:
 
 - Open, read, edit, rename, move, create, and delete markdown documents.
 
-- Edit markdown in a constrained PlateJS editor that imports from and exports to markdown without making Plate JSON the canonical document format.
+- Edit markdown in a Plate/Slate editor backed by native document commands.
 
 - Use `[[wikilinks]]`, markdown links, embeds, headings, tags, and backlinks as first-class navigation tools.
 
@@ -108,7 +109,7 @@ These are out of scope for MVP and v1 unless explicitly promoted later:
 
 - Rich block database editing.
 
-- Persisting PlateJS JSON as canonical Quarry document content.
+- Persisting Editor JSON as canonical Quarry document content.
 
 ## Phased Scope
 ### MVP
@@ -124,7 +125,7 @@ MVP includes:
 
 - Open/read document view.
 
-- Constrained PlateJS markdown editor using only markdown-compatible capabilities.
+- Native document editor using only markdown-compatible capabilities.
 
 - Create, edit, save, rename/move, and delete documents.
 
@@ -185,7 +186,7 @@ v1 turns the MVP into a complete Obsidian-style local workspace.
 
 v1 includes:
 
-- Constrained PlateJS markdown editor with markdown import/export, a raw markdown/source fallback, and only markdown-compatible plugins enabled.
+- Native document editor with markdown import/export, a raw markdown/source fallback, and only markdown-compatible plugins enabled.
 
 - `[[wikilink]]`, `![[embed]]`, `#tag`, heading, markdown link, image, blockquote, list, emphasis, code fence, and frontmatter handling.
 
@@ -243,7 +244,7 @@ Candidates:
 
 - Full offline editing with IndexedDB metadata cache and mutation outbox.
 
-- CRDT collaboration with a Plate-compatible collaboration layer if multi-user editing becomes a real product requirement.
+- Native Automerge document commands support concurrent browser and agent editing.
 
 - Remote auth using a same-origin Backend-for-Frontend and httpOnly cookies.
 
@@ -282,9 +283,11 @@ Tree requirements:
 - No local tree mutation is considered committed until the REST mutation succeeds.
 
 ### Markdown Editing
-The editor uses PlateJS. Quarry persists markdown text as the canonical document content. The browser converts markdown into a Plate editing value for interaction, then serializes back to markdown for saves. Unsupported or lossy markdown must remain editable through a raw markdown/source fallback.
-
-The Plate setup should be intentionally small. Start from PlateJS and Potion patterns, but enable only capabilities that map cleanly to markdown: paragraphs, headings, lists, emphasis/strong/code marks, links, blockquotes, code blocks, images/embeds, horizontal rules, and the minimum UI needed to operate them. Disable incompatible rich document features rather than carrying them into Quarry.
+The editor projects the native document and translates input into explicit
+commands. A strict shared schema covers paragraphs, headings, lists, formatting,
+links, quotes, code, images, diagrams, rules and tables. Source blocks retain
+syntax that cannot be represented without loss. Existing native history cannot
+be replaced with serialized editor nodes or a fresh Markdown import.
 
 MVP editor requirements:
 
@@ -319,7 +322,7 @@ v1 editor requirements:
 
 - Render Mermaid diagrams from fenced code blocks in preview/read mode without executing arbitrary document HTML.
 
-- Avoid enabling Plate plugins whose state cannot serialize cleanly back to markdown.
+- Editor features must translate into native document commands and pass Markdown projection tests.
 
 ### Save and Conflict Handling
 The browser always saves through REST. The current document ETag is captured when the document is fetched. Writes use `If-Match` for existing documents and `If-None-Match: *` for creates.
@@ -492,7 +495,7 @@ Requirements:
 
 - Show binary metadata: path, content type, byte size, hash if exposed, and download action.
 
-- Do not attempt to edit unknown binary formats in the Plate editor.
+- Do not attempt to edit unknown binary formats in the Markdown editor.
 
 - Disable raw HTML execution/rendering unless a future sanitized rendering mode is explicitly designed.
 
@@ -538,7 +541,7 @@ Use:
 
 - shadcn/ui + Tailwind + Radix primitives for UI.
 
-- PlateJS for markdown editing.
+- Plate/Slate and the Rust/WASM document engine for Markdown editing.
 
 - cmdk for command palette.
 
@@ -1048,7 +1051,7 @@ MVP is accepted when:
 
 v1 is accepted when:
 
-- PlateJS editing preserves markdown fidelity for the supported syntax set, with raw markdown/source fallback for unsupported syntax.
+- Native document editing preserves Markdown fidelity for the supported syntax set, with raw markdown/source fallback for unsupported syntax.
 
 - Search is server-backed for path/title/body queries, with ranking/snippets when the selected backend supports them.
 

@@ -234,7 +234,9 @@ impl QuarryStore {
                         None,
                     )
                     .await?;
-                    publish_put_conn(conn, &doc_id, &version.id).await?;
+                    store
+                        .publish_document_version_conn(conn, &doc_id, &version.id)
+                        .await?;
                     conn.execute(
                         "UPDATE documents SET expires_at = ?1 WHERE id = ?2",
                         params![expires_at, doc_id.clone()],
@@ -489,12 +491,9 @@ impl QuarryStore {
                             "fork source head {source_head_version_id} is missing from version history"
                         ))
                     })?;
-                crate::blocks::clone_block_state_conn(
-                    conn,
-                    &source_document_id,
-                    &target_document_id,
-                )
-                .await?;
+                if !crate::document_state::clone_state_conn(conn, &source_document_id, &target_document_id, &target_head_version_id).await? {
+                    return Err(QuarryError::Invariant("Fork source has no native document state".into()));
+                }
                 conn.execute(
                     "UPDATE documents SET head_version_id = ?1, updated_at = ?2 WHERE id = ?3",
                     params![target_head_version_id, now, target_document_id],

@@ -36,10 +36,11 @@ pub(crate) struct CreateTmpDocumentRequest {
     pub expires_at: Option<String>,
 }
 
-/// The tmp GET query: the library shape minus the collab `token` (tmp
+/// The tmp GET query: the library shape minus the invitation `token` (tmp
 /// documents authenticate by capability secret, not invite token).
 #[derive(Debug, Deserialize)]
 pub(crate) struct TmpDocumentGetQuery {
+    since: Option<String>,
     against: Option<String>,
     #[serde(default, flatten)]
     review: DocumentReviewQuery,
@@ -353,6 +354,27 @@ pub(crate) async fn get_tmp_document(
 ) -> Result<Response, ApiError> {
     let (document_path, subresource) = parse_tmp_document_subresource(&path);
     match subresource {
+        TmpDocumentSubResource::DocumentState => {
+            return crate::document_engine::read(
+                &state,
+                &quarry_storage::DocumentScopeRef::Tmp,
+                document_path,
+                query.since.as_deref(),
+            )
+            .await;
+        }
+        TmpDocumentSubResource::Archive => {
+            return crate::document_engine::archive(
+                &state,
+                &quarry_storage::DocumentScopeRef::Tmp,
+                document_path,
+                None,
+            )
+            .await;
+        }
+        TmpDocumentSubResource::DocumentCommands | TmpDocumentSubResource::Selection => {
+            return Err(QuarryError::NotFound("This resource requires POST".into()).into());
+        }
         TmpDocumentSubResource::AgentPrompt => {
             touch_agent_presence(&state, &headers, None, document_path).await?;
             state.store.head_tmp_document(document_path).await?;
@@ -496,12 +518,12 @@ pub(crate) async fn head_tmp_document(
         (
             "If-Match" = Option<String>,
             Header,
-            description = "Optional strict ETag precondition; must match the current document head"
+            description = "Strict save using the ETag of the version read; must match the current document head"
         ),
         (
             "X-Quarry-Merge-Base" = Option<String>,
             Header,
-            description = "Optional known version used as the three-way merge base"
+            description = "Merge using the known version read as the three-way merge base"
         ),
         (
             "If-None-Match" = Option<String>,
@@ -517,6 +539,7 @@ pub(crate) async fn head_tmp_document(
     ),
     responses(
         (status = 200, body = markdown_write::PutDocumentOutcome),
+        (status = 428, description = "Updating Markdown requires If-Match or X-Quarry-Merge-Base from the original read; unversioned writes create only", body = ApiErrorResponse),
         (status = 412, body = ApiErrorResponse),
         (status = 413, description = "Tmp Markdown body exceeds 1 MiB", body = ApiErrorResponse),
         (status = 415, description = "Tmp writes require a Markdown Content-Type", body = ApiErrorResponse)
@@ -581,6 +604,34 @@ pub(crate) async fn post_tmp_document_action(
 ) -> Result<Response, ApiError> {
     let (document_path, subresource) = parse_tmp_document_subresource(&path);
     match subresource {
+        TmpDocumentSubResource::Selection => {
+            crate::document_engine::selection_for_scope(
+                &state,
+                &quarry_storage::DocumentScopeRef::Tmp,
+                document_path,
+                request,
+            )
+            .await
+        }
+        TmpDocumentSubResource::Archive => {
+            crate::document_engine::archive(
+                &state,
+                &quarry_storage::DocumentScopeRef::Tmp,
+                document_path,
+                Some(request),
+            )
+            .await
+        }
+        TmpDocumentSubResource::DocumentCommands => {
+            crate::document_engine::commands(
+                &state,
+                &quarry_storage::DocumentScopeRef::Tmp,
+                document_path,
+                request,
+            )
+            .await
+        }
+
         TmpDocumentSubResource::Transactions => {
             touch_agent_presence(&state, &headers, None, document_path).await?;
             gateway::tmp_document_block_transactions(&state, document_path, request).await
@@ -638,10 +689,7 @@ pub(crate) async fn post_tmp_document_action(
             touch_agent_presence(&state, &headers, None, document_path).await?;
             let created_ip_address = creation_ip_address(&state, &headers)?;
             let source = state.store.head_tmp_document(document_path).await?;
-            let guard = state.sessions.lock_document(&source.id).await;
-            if let Some(session) = guard.session() {
-                session.checkpoint_browser_session(&state.store).await?;
-            }
+            let _guard = state.documents.lock(&source.id).await;
             let entry = if let Some(created_ip_address) = created_ip_address {
                 state
                     .store
@@ -653,6 +701,7 @@ pub(crate) async fn post_tmp_document_action(
             json_response(StatusCode::CREATED, &entry)
         }
         TmpDocumentSubResource::Document
+        | TmpDocumentSubResource::DocumentState
         | TmpDocumentSubResource::AgentPrompt
         | TmpDocumentSubResource::Blocks
         | TmpDocumentSubResource::Review
@@ -755,3 +804,34 @@ mod tests {
         assert!(parse_cloudfront_viewer_address(&headers).is_err());
     }
 }
+
+#[utoipa::path(
+    get,
+    path = "/v1/tmp/documents/{secret}/document-state",
+    params(("secret" = String, Path), ("since" = Option<String>, Query, description = "Comma-separated native heads already held by the client")),
+    responses(
+        (status = 200, body = crate::document_engine::DocumentStateResponse),
+        (status = 400, body = ApiErrorResponse),
+        (status = 404, body = ApiErrorResponse),
+        (status = 412, body = ApiErrorResponse),
+        (status = 503, body = ApiErrorResponse)
+    )
+)]
+#[expect(dead_code, reason = "OpenAPI documentation stub")]
+pub(crate) async fn tmp_document_state_openapi() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/tmp/documents/{secret}/document-commands",
+    params(("secret" = String, Path)),
+    request_body = crate::document_engine::DocumentBatchRequest,
+    responses(
+        (status = 200, body = crate::document_engine::DocumentCommandAck),
+        (status = 400, body = ApiErrorResponse),
+        (status = 404, body = ApiErrorResponse),
+        (status = 412, body = ApiErrorResponse),
+        (status = 503, body = ApiErrorResponse)
+    )
+)]
+#[expect(dead_code, reason = "OpenAPI documentation stub")]
+pub(crate) async fn tmp_document_commands_openapi() {}

@@ -136,11 +136,9 @@ impl QuarryStore {
                         None,
                     )
                     .await?;
-                    publish_put_conn(conn, &doc_id, &version.id).await?;
-                    // A legacy put bypasses the block import path, so any block
-                    // projection for this document is now stale: drop it fail-closed
-                    // (see the `blocks` module docs).
-                    blocks::clear_block_state_conn(conn, &doc_id).await?;
+                    store
+                        .publish_document_version_conn(conn, &doc_id, &version.id)
+                        .await?;
                     ensure_path_inodes_conn(conn, &library.id, &path).await?;
                     store.reindex_links_conn(conn, &library.id).await?;
                     commit_transaction_record_conn(conn, &tx.id).await?;
@@ -209,9 +207,26 @@ impl QuarryStore {
         scope: &DocumentScopeRef,
         path: &str,
     ) -> Result<DocumentListEntry> {
+        self.head_document_for_scope_conn(&self.conn()?, scope, path)
+            .await
+    }
+
+    pub(crate) async fn head_document_for_scope_conn(
+        &self,
+        conn: &Connection,
+        scope: &DocumentScopeRef,
+        path: &str,
+    ) -> Result<DocumentListEntry> {
         match scope {
-            DocumentScopeRef::Library { slug } => self.head_document(slug, path).await,
-            DocumentScopeRef::Tmp => self.head_tmp_document(path).await,
+            DocumentScopeRef::Library { slug } => {
+                let path = normalize_path(path)?;
+                let library = Self::require_library_conn(conn, slug).await?;
+                self.document_entry_conn(conn, &library.id, &path).await
+            }
+            DocumentScopeRef::Tmp => {
+                self.tmp_document_entry_conn(conn, TmpDocumentSecret::parse(path)?.as_str())
+                    .await
+            }
         }
     }
 
@@ -260,14 +275,6 @@ impl QuarryStore {
             })
         })
         .await
-    }
-
-    pub async fn collab_document_seed(
-        &self,
-        document_id: &str,
-    ) -> Result<Option<CollabDocumentSeed>> {
-        let conn = self.conn()?;
-        self.collab_document_seed_conn(&conn, document_id).await
     }
 
     pub async fn create_collab_invite_token(
@@ -476,7 +483,6 @@ impl QuarryStore {
                     )
                     .await
                     .map_err(map_turso_error)?;
-                    blocks::clear_block_state_conn(conn, &doc_id).await?;
                     delete_path_inode_conn(conn, &library.id, &path).await?;
                     store.reindex_links_conn(conn, &library.id).await?;
                     commit_transaction_record_conn(conn, &tx.id).await?;

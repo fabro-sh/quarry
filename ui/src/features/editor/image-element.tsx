@@ -8,6 +8,7 @@ import {
   useSelected,
   withHOC,
   type PlateElementProps,
+  type AnyPlatePlugin,
 } from 'platejs/react';
 
 import { cn } from '../../lib/utils';
@@ -97,10 +98,10 @@ export const PlaceholderElement = withHOC(
       if (!path) return;
       editor.tf.withoutNormalizing(() => {
         editor.tf.removeNodes({ at: path });
-        editor.tf.insertNodes({ type: KEYS.img, url: uploadedUrl, children: [{ text: '' }] }, { at: path });
+        editor.tf.insertNodes({ type: KEYS.img, url: uploadedUrl, caption: [{ text: uploadingFile?.name ?? '' }], children: [{ text: '' }] }, { at: path });
       });
       api.placeholder.removeUploadingFile(element.id as string);
-    }, [uploadedUrl, api.placeholder, editor, element]);
+    }, [uploadedUrl, uploadingFile, api.placeholder, editor, element]);
 
     return (
       <PlateElement className="my-1.5" {...props}>
@@ -127,7 +128,7 @@ export const PlaceholderElement = withHOC(
   }
 );
 
-export const ImageKit = [
+export const ImageKit: AnyPlatePlugin[] = [
   ImagePlugin.configure({ options: { disableUploadInsert: true }, render: { node: ImageElement } }),
   PlaceholderPlugin.configure({
     options: { disableFileDrop: true },

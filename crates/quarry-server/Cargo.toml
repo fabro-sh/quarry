@@ -25,9 +25,10 @@ mime_guess.workspace = true
 percent-encoding.workspace = true
 pulldown-cmark.workspace = true
 quarry-core = { workspace = true, features = ["openapi"] }
-quarry-collab-codec.workspace = true
+quarry-markdown.workspace = true
 quarry-git = { workspace = true, optional = true }
 quarry-storage.workspace = true
+quarry-document = { workspace = true, features = ["schema"] }
 regex.workspace = true
 rust-embed = { workspace = true }
 serde.workspace = true
@@ -41,11 +42,9 @@ tracing.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
 uuid.workspace = true
-yrs.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["test-util"] }
-tokio-tungstenite.workspace = true
+tokio = { workspace = true, features = ["test-util", "io-util"] }
 tracing-subscriber.workspace = true

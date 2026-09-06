@@ -419,7 +419,8 @@ async fn projection_renames_unlinks_and_removes_empty_directories() -> anyhow::R
 }
 
 #[tokio::test]
-async fn projection_rename_file_over_existing_file_replaces_target() -> anyhow::Result<()> {
+async fn projection_rename_over_markdown_without_a_read_version_retains_both_files()
+-> anyhow::Result<()> {
     let store = test_store().await;
     let library = store
         .create_library("notes")
@@ -467,19 +468,25 @@ async fn projection_rename_file_over_existing_file_replaces_target() -> anyhow::
         .context("stat current draft before rename")?
         .inode;
 
-    projection
-        .rename("drafts/.current.md.tmp", "drafts/current.md")
-        .await
-        .context("rename temporary draft over current draft")?;
+    assert!(matches!(
+        projection
+            .rename("drafts/.current.md.tmp", "drafts/current.md")
+            .await,
+        Err(quarry_core::QuarryError::PreconditionFailed(_))
+    ));
+    assert_eq!(
+        store
+            .get_document(&library.slug, "drafts/.current.md.tmp")
+            .await?
+            .content,
+        b"new\n"
+    );
 
-    // Phase 4: renaming over a markdown document is a whole-file write to
-    // the TARGET — its identity (document id, inode) survives and the temp
-    // file's content lands through the reconciler.
     let document = store
         .get_document(&library.slug, "drafts/current.md")
         .await
         .context("load current draft after rename")?;
-    assert_eq!(document.content, b"new\n");
+    assert_eq!(document.content, b"old\n");
     assert_eq!(document.id, target_id);
     assert_eq!(
         projection
@@ -489,7 +496,7 @@ async fn projection_rename_file_over_existing_file_replaces_target() -> anyhow::
             .inode,
         target_inode
     );
-    assert!(projection.attr("drafts/.current.md.tmp").await.is_err());
+    assert!(projection.attr("drafts/.current.md.tmp").await.is_ok());
     Ok(())
 }
 
@@ -982,6 +989,7 @@ async fn concurrent_canonical_edit_and_fuse_write_converge_with_conflict_items()
     let head = store.head_document(&library.slug, "doc.md").await?;
     store
         .write_block_markdown(quarry_storage::BlockMarkdownWrite {
+            document_id: None,
             scope: quarry_storage::DocumentScopeRef::library(&library.slug),
             path: "doc.md".to_string(),
             markdown: base_export.replace("Alpha.", "Alpha, canonical."),
@@ -1086,14 +1094,9 @@ async fn critic_markup_content_is_a_write_error_not_a_silent_byte_write() -> any
     Ok(())
 }
 
-/// A FUSE flush while a browser session is active converges THROUGH the
-/// session: the write succeeds (no errno), the merge is durable
-/// (checkpoint-before-ack), and the live doc broadcasts the change to the
-/// connected client like any collaborator edit.
+/// A FUSE publication shares native identity with a connected browser.
 #[tokio::test]
-async fn fuse_flush_during_an_active_session_converges_through_the_session() -> anyhow::Result<()> {
-    use futures_util::StreamExt;
-
+async fn fuse_flush_publishes_native_state_and_notifies_connected_readers() -> anyhow::Result<()> {
     let store = bare_store().await;
     let state = quarry_server::app_state(store.clone());
     let _writer = quarry_server::install_markdown_writer(&state);
@@ -1106,63 +1109,85 @@ async fn fuse_flush_during_an_active_session_converges_through_the_session() -> 
     )
     .await?;
     let ids_before = top_level_ids(&store.load_block_tree(&document_id).await?);
-
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let app = quarry_server::router_with_state(state);
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-
-    // A connected browser opens the live session.
-    let (mut socket, _) =
-        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/collab/{document_id}")).await?;
-    // Drain the seed/sync frames until the line goes quiet.
-    while let Ok(Some(_)) =
-        tokio::time::timeout(std::time::Duration::from_millis(300), socket.next()).await
-    {}
-
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}/v1/libraries/notes/documents-by-id/{document_id}");
+    let initial: serde_json::Value = client
+        .get(format!("{base}/document-state"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let mut browser = quarry_document::Document::load(&serde_json::from_value::<Vec<u8>>(
+        initial["bytes"].clone(),
+    )?)?;
+    let before = browser.heads();
+    let mut events = client
+        .get(format!("{base}/events/stream"))
+        .send()
+        .await?
+        .error_for_status()?;
     let projection = FuseProjection::open(store.clone(), &library.slug, false).await?;
-    let current = String::from_utf8(store.get_document(&library.slug, "live.md").await?.content)
-        .context("stored markdown should be valid UTF-8")?;
     overwrite_through_handle(
         &projection,
         "live.md",
-        &current.replace("Bravo.", "Bravo, via FUSE during the session."),
+        "# Title\n\nAlpha.\n\nBravo, via FUSE.\n",
     )
-    .await
-    .context("a flush during a session must not fail")?;
-
-    // Durable immediately (the session-mode write checkpoints before ack)…
-    let merged = String::from_utf8(store.get_document(&library.slug, "live.md").await?.content)
-        .context("merged markdown should be valid UTF-8")?;
-    assert_eq!(
-        merged,
-        "# Title\n\nAlpha.\n\nBravo, via FUSE during the session.\n"
-    );
+    .await?;
+    let mut received = String::new();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while !received.contains("doc.changed") {
+            let chunk = events.chunk().await?.context("event stream closed")?;
+            received.push_str(&String::from_utf8_lossy(&chunk));
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    let saved: serde_json::Value = client
+        .get(format!("{base}/document-state"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let bytes = serde_json::from_value::<Vec<u8>>(saved["bytes"].clone())?;
+    browser.merge(&quarry_document::Document::load(&bytes)?)?;
+    assert_ne!(browser.heads(), before);
+    assert_eq!(browser.block_view(&ids_before[2])?.text, "Bravo, via FUSE.");
     assert_eq!(
         top_level_ids(&store.load_block_tree(&document_id).await?),
         ids_before
     );
-    // …and the live doc broadcast the merge to the connected browser.
-    let frame = tokio::time::timeout(std::time::Duration::from_secs(2), socket.next())
-        .await
-        .context("the session must broadcast the FUSE merge to subscribers")?
-        .context("socket should remain open")??;
-    assert!(frame.is_binary());
-
-    socket.close(None).await.ok();
+    let durable = store
+        .durable_document_for_scope(
+            &quarry_storage::DocumentScopeRef::library("notes"),
+            "live.md",
+        )
+        .await?
+        .context("native state")?;
+    assert_eq!(
+        quarry_document::Document::load(&durable.bytes)?.heads(),
+        browser.heads()
+    );
+    assert_eq!(
+        store.get_document("notes", "live.md").await?.content,
+        b"# Title\n\nAlpha.\n\nBravo, via FUSE.\n"
+    );
     server.abort();
     Ok(())
 }
 
-/// The editor atomic-save pattern (vim: write the buffer to a temp file,
-/// rename it over the document) routes through the reconciler: the target
-/// document id survives, sibling block ids and live anchors are preserved,
-/// and the temp file's edit merges instead of replacing the projection.
+/// A temporary file does not identify the target version it was based on.
+/// Refuse an unsafe replacement and retain both content and review identity.
 #[tokio::test]
-async fn atomic_save_rename_preserves_target_identity_block_ids_and_anchors() -> anyhow::Result<()>
-{
+async fn unversioned_atomic_save_retains_target_identity_anchors_and_incoming_file()
+-> anyhow::Result<()> {
     let store = test_store().await;
     let library = store.create_library("notes").await?;
     let document_id = import_markdown(
@@ -1203,7 +1228,17 @@ async fn atomic_save_rename_preserves_target_identity_block_ids_and_anchors() ->
         .await?;
     projection.release_handle(handle).await?;
     // …then renames it over the original.
-    projection.rename("doc.md.tmp", "doc.md").await?;
+    assert!(matches!(
+        projection.rename("doc.md.tmp", "doc.md").await,
+        Err(quarry_core::QuarryError::PreconditionFailed(_))
+    ));
+    assert_eq!(
+        store
+            .get_document(&library.slug, "doc.md.tmp")
+            .await?
+            .content,
+        edited.as_bytes()
+    );
 
     // The target document survived with its identity and projection intact.
     assert_eq!(
@@ -1221,7 +1256,7 @@ async fn atomic_save_rename_preserves_target_identity_block_ids_and_anchors() ->
             .find(|row| row.block_id == ids_before[2])
             .context("edited block should still exist")?
             .text,
-        "Bravo, atomically saved."
+        "Bravo."
     );
     let items = store.list_block_review_items(&document_id).await?;
     let kept = items
@@ -1230,12 +1265,12 @@ async fn atomic_save_rename_preserves_target_identity_block_ids_and_anchors() ->
         .context("anchor review item should survive")?;
     assert_eq!(kept.state, quarry_storage::BlockReviewState::Open);
     assert_eq!(kept.block_id, ids_before[1]);
-    // The temp document is gone.
+    // The incoming file remains available.
     assert!(
         store
             .head_document(&library.slug, "doc.md.tmp")
             .await
-            .is_err()
+            .is_ok()
     );
     Ok(())
 }

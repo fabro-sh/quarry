@@ -70,7 +70,7 @@ Extract:
 - origin: `http://127.0.0.1:5173`
 - library: the URL-decoded segment after `/lib/`
 - path: the encoded path after `/documents/`
-- token: locator for browser/collab joins on library documents
+- token: locator for browser document access on library documents
 - tmp secret: the single URL segment after `/tmp/`
 
 Library REST endpoints in the current full/local Quarry build are
@@ -164,8 +164,11 @@ are UTF-16 code units; range ends are exclusive.
 
 - `block_id`s survive edits, moves, and Git/FUSE/CLI file writes. Copy them
   verbatim from `/blocks`; never invent them.
-- `document_clock` is the version your read corresponds to — pass it as
-  `base_clock` so the server can detect staleness.
+- `document_clock` identifies this exact read. Every transaction requires it
+  as `base_clock`. Keep the content and clock together. Never attach a newer
+  clock to operations computed from an older read. `/review` exposes its read
+  clock as `baseToken`. When combining both reads, require their clocks to
+  match; otherwise read again.
 - `raw_markdown` blocks carry their source in `attrs.markdown`; edit them with
   `set_block_attrs`, never with text ops.
 
@@ -192,11 +195,13 @@ curl -sS -X POST "$DOC/transactions" \
 The ack is `{status, document_clock, transaction_id, changed_block_ids}`:
 
 - `status` is `committed`, or `committed_rebased` when your `base_clock` was
-  an older known version and the ops still applied cleanly against the
-  current rows.
-- The ack means the change is durable. Live browser sessions receive the
-  transaction as another collaborator before the ack returns — no
-  coordination needed.
+  an older known version. The server resolves your offsets against that
+  saved version, then merges the native commands into the current document.
+  Unsafe changes fail explicitly. A deletion cannot hide text or formatting
+  added to its subtree since your read.
+- The ack means the change is durable. Live browser sessions receive a
+  notification and fetch the committed changes. An ack does not mean every
+  connected browser has already displayed the change.
 - `client_tx_id` is the idempotency key (unique per document): replaying the
   same id returns the original ack without re-applying. Reuse the SAME id only
   to retry a timed-out request; use a NEW id for rebuilt requests.
@@ -248,8 +253,8 @@ Review ops (same envelope, freely mixable with edit ops):
 | `suggestion.add` | `{block_id, start, end, replacement, body?, quote?}` |
 | `suggestion.add_block_delete` | `{block_id, body?, quote?}` — proposes deleting the block and descendants |
 | `suggestion.add_markdown` | `{after_block_id?, markdown, body?}` — proposes a structural Markdown insertion |
-| `suggestion.accept` | `{item_id}` — applies the replacement or structural insertion/deletion and deletes suggestion replies |
-| `suggestion.reject` | `{item_id}` — resolves without changing text and deletes suggestion replies |
+| `suggestion.accept` | `{item_id}` — applies the proposed change and retains its discussion |
+| `suggestion.reject` | `{item_id}` — rejects the proposed change without changing canonical text and retains its discussion |
 | `conflict.keep_canonical` | `{item_id}` — resolves while retaining the current hunk |
 | `conflict.accept_incoming` | `{item_id}` — verifies the current hunk, atomically replaces it with incoming, and resolves |
 
@@ -285,13 +290,18 @@ curl -sS -X PUT "$DOC" \
   writes. Do not rely on client defaults. Tmp document URLs require a Markdown
   media type, reject missing or non-Markdown `Content-Type` with 415, and
   reject canonical UTF-8 Markdown larger than 1 MiB with 413.
-- Send `If-Match` with the current clock as a strict compare-and-swap
-  precondition. A stale value fails 412 without changing the document.
-- Send `X-Quarry-Merge-Base` with the clock whose content your Markdown was
-  based on. It may be an older known version and drives diff3 independently
-  of `If-Match`; an unknown value fails 412. Omitting it degenerates to a
-  two-way merge. After a stale `If-Match`, re-read the head, update only
-  `If-Match`, and retain the original merge base.
+- Updating an existing Markdown document requires `If-Match` or
+  `X-Quarry-Merge-Base` from the version you read. Missing both returns 428
+  `PRECONDITION_REQUIRED` without changing the document. Unversioned writes
+  create only; use `If-None-Match: *` to make creation explicit.
+- `If-Match` is strict compare-and-swap: a changed head fails 412. After that
+  failure, read the document and rebuild the edit. Never attach a fresh clock
+  to an old file unless you also retain its original merge base.
+- `X-Quarry-Merge-Base` selects the original known version for a three-way
+  merge. Later changes are preserved or retained as conflicts. An unknown
+  version fails 412. It may be used alone, or with `If-Match` to also require
+  an unchanged head. If both are used, a strict retry can update `If-Match`
+  while keeping the original merge base.
 - `block_id`s and review anchors survive the rewrite. Merge leftovers become
   `conflicts` in `GET $DOC/review` — never write failures. A 200 alone does
   NOT mean your Markdown is now the document: inspect both `changed` and

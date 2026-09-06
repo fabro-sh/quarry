@@ -732,7 +732,7 @@ impl SyncPathReconciler<'_> {
             Some(self.peer_id),
             &conflict_path,
             git,
-            BlockWriteBase::CurrentCanonical,
+            BlockWriteBase::Unversioned,
             quarry_core::WritePrecondition::None,
         )
         .await?
@@ -767,14 +767,28 @@ impl SyncPathReconciler<'_> {
         precondition: quarry_core::WritePrecondition,
     ) -> Result<()> {
         // When the Quarry document is unchanged since the last sync, the
-        // current canonical state is the common ancestor.
+        // recorded version is the common ancestor. Keep that exact version
+        // even when no Markdown shadow has been recorded yet.
+        let base = match &precondition {
+            quarry_core::WritePrecondition::IfMatch(version_id) => {
+                let version = self
+                    .store
+                    .document_version(&self.library.slug, path, version_id)
+                    .await?;
+                BlockWriteBase::Markdown {
+                    markdown: version.content,
+                    version_id: Some(version_id.clone()),
+                }
+            }
+            _ => BlockWriteBase::Unversioned,
+        };
         write_git_file_to_document(
             self.store,
             &self.library.slug,
             Some(self.peer_id),
             path,
             git,
-            BlockWriteBase::CurrentCanonical,
+            base,
             precondition,
         )
         .await?;
@@ -817,8 +831,8 @@ async fn write_git_file_to_document(
 /// Imports a Git worktree into a library.
 ///
 /// **Atomicity (changed in Phase 4):** Markdown files commit PER DOCUMENT
-/// through the reconciling writer (two-way merge against the current
-/// canonical state; byte-identical files are no-ops) and therefore escape
+/// through the native writer (create or byte-identical no-op only; changed
+/// documents require peer sync with a recorded base) and therefore escape
 /// the staged transaction — an import that fails midway leaves the markdown
 /// documents already imported in place. Raw files keep the staged
 /// multi-document transaction and roll back together on failure.
@@ -937,18 +951,16 @@ async fn import_worktree_transaction(
     let mut imported_paths = Vec::new();
     for WorktreeImportFile { path, file } in import_files {
         if is_block_file(&path, &file.content_type) {
-            // Phase 4: Markdown imports reconcile per document (two-way —
-            // plain `git import` has no peer scope, so the base is the
-            // current canonical state). Byte-identical files are no-ops, so
-            // re-imports do not churn versions. Raw files keep the staged
-            // multi-document transaction below.
+            // Plain imports have no peer read version. Existing changed
+            // Markdown requires a recorded base; rejected files remain in the
+            // worktree. Identical imports are no-ops. Peer sync carries bases.
             write_markdown_file(
                 store,
                 library,
                 None,
                 &path,
                 &file,
-                BlockWriteBase::CurrentCanonical,
+                BlockWriteBase::Unversioned,
             )
             .await?;
         } else {
@@ -1635,8 +1647,8 @@ fn is_block_file(path: &str, content_type: &str) -> bool {
 
 /// One reconciled Markdown write from a Git worktree file, with per-peer
 /// shadow-base bookkeeping: the diff3 base is the canonical text this peer
-/// last synced (recorded at export/import); a missing base degrades to the
-/// two-way merge. After the write the peer's base advances to the new
+/// last synced (recorded at export/import). A missing base cannot overwrite
+/// an existing document. After the write the peer's base advances to the new
 /// canonical text. Merge conflicts never fail the sync — they surface as
 /// conflict review items on the document. CriticMarkup (content the codec
 /// rejects outright) DOES fail the file's import with the typed
@@ -1667,6 +1679,7 @@ async fn write_markdown_file(
     };
     let outcome = store
         .write_block_markdown(BlockMarkdownWrite {
+            document_id: None,
             scope: DocumentScopeRef::library(library),
             path: path.to_string(),
             markdown,

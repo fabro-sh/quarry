@@ -2,7 +2,9 @@
 #![allow(clippy::unwrap_used, reason = "tests use unwrap for HTTP fixtures")]
 
 use anyhow::Context;
-use axum::body::{Body, to_bytes};
+use axum::body::Body;
+#[cfg(feature = "tmp-documents")]
+use axum::body::to_bytes;
 use axum::http::{Method, Request, StatusCode, header};
 use quarry_core::DocumentSource;
 use quarry_server::router;
@@ -12,8 +14,11 @@ use tower::ServiceExt;
 
 mod common;
 
-use common::{document_test_app, json_request, open_test_store, response_json};
+#[cfg(feature = "tmp-documents")]
+use common::{document_test_app, json_request};
+use common::{open_test_store, response_json};
 
+#[cfg(feature = "tmp-documents")]
 fn assert_json_timestamp(value: &Value) {
     let timestamp = value.as_str().expect("timestamp should be a string");
     chrono::DateTime::parse_from_rfc3339(timestamp).expect("timestamp should parse as RFC 3339");
@@ -155,6 +160,7 @@ async fn agent_presence_records_status_by_document() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "tmp-documents")]
 async fn tmp_agent_presence_omits_capability_path() -> anyhow::Result<()> {
     let (_root, app, _store) = document_test_app().await;
 
@@ -265,9 +271,10 @@ async fn presence_test_app(library: &str) -> (tempfile::TempDir, axum::Router) {
     (root, router(store))
 }
 
-fn block_tx(client_tx_id: &str, ops: Value) -> Value {
+fn block_tx(client_tx_id: &str, base_clock: &Value, ops: Value) -> Value {
     serde_json::json!({
         "client_tx_id": client_tx_id,
+        "base_clock": base_clock,
         "actor": {"kind": "agent", "id": "agent-1", "label": "Agent One"},
         "ops": ops
     })
@@ -540,6 +547,15 @@ async fn document_write_with_agent_header_touches_presence() -> anyhow::Result<(
                 .method(Method::PUT)
                 .uri("/v1/libraries/presence-write/documents/live.md")
                 .header(header::CONTENT_TYPE, "text/markdown")
+                .header(
+                    header::IF_MATCH,
+                    common::markdown_precondition(
+                        &app,
+                        "/v1/libraries/presence-write/documents/live.md",
+                    )
+                    .await
+                    .1,
+                )
                 .header("X-Agent-Id", "agent-w")
                 .body(Body::from("hello again"))
                 .context("build document write request")?,
@@ -548,6 +564,15 @@ async fn document_write_with_agent_header_touches_presence() -> anyhow::Result<(
         .context("send document write request")?;
     assert_eq!(response.status(), StatusCode::OK);
 
+    let tree = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/libraries/presence-write/documents/live.md/blocks")
+                .body(Body::empty())?,
+        )
+        .await?;
+    let tree = response_json(tree).await;
     let response = app
         .clone()
         .oneshot(
@@ -559,6 +584,7 @@ async fn document_write_with_agent_header_touches_presence() -> anyhow::Result<(
                 .body(Body::from(
                     block_tx(
                         "tx-presence",
+                        &tree["document_clock"],
                         serde_json::json!([{
                             "op": "insert_block",
                             "position": 1,

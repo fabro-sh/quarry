@@ -1,50 +1,19 @@
-//! Canonical block rows: the relational source of truth for BlockDocuments.
+//! Derived block and review indexes for native Markdown documents.
 //!
-//! Phase 1 of the session-scoped collaboration rewrite (see
-//! `docs/superpowers/plans/2026-06-09-session-scoped-collab-rewrite.md`).
-//! Markdown documents import into `blocks` rows through the production codec
-//! (`quarry-collab-codec`), with frontmatter merged into document metadata —
-//! the place frontmatter already lives — and the deterministic normalized
-//! export written through the existing `document_versions` path so legacy
-//! read paths keep working. Review anchors are `{block_id, start_offset,
-//! end_offset}` in UTF-16 code units (matching Yjs). Collapsed ranges normally
-//! represent dead anchors or insertion suggestions; a structural
-//! block-deletion suggestion uses `[0, 0)` as a block-identity anchor.
-//!
-//! Legacy writes and the projection: a version published outside the import
-//! path (`put_document`, staged-transaction commits) or a document delete
-//! drops the block projection — rows and review anchors — fail-closed via
-//! [`clear_block_state_conn`], because the rows would otherwise serve stale
-//! content. `export_block_document` returns `NotFound` until the document is
-//! re-imported. An imported empty body is canonicalized to one empty
-//! paragraph row so "zero rows" always means "no projection". Document moves
-//! keep the projection (rows are keyed by document id and content does not
-//! change). Since Phase 4, every Markdown writer (REST PUT, Git, FUSE, CLI,
-//! version restores, Git conflict siblings) reconciles through
-//! [`BlockMarkdownWriter`] and metadata patches commit through the gateway
-//! with a metadata override — the clearing path remains for raw documents,
-//! staged-transaction commits, and any direct `put_document`/`patch_metadata`
-//! caller that bypasses the server routes. Staged commits stay on the byte
-//! path deliberately: the explicit transaction API publishes pre-staged
-//! versions for MANY paths atomically in one SQL transaction, which cannot
-//! ride the per-document gateway dispatch — a recorded limitation (see the
-//! README), not an oversight.
-//!
-//! `block_shadow_bases` holds the Phase 4 diff3 bases (currently Git peer
-//! bases; FUSE bases are per-open-handle in memory, the CLI is two-way);
-//! `block_transactions` is the semantic mutation history (Phase 2).
+//! Automerge owns content, structure, and review targets. These rows support
+//! queries and the public block API. Every publication updates native state,
+//! its indexes, Markdown versions, and command receipts in one SQL transaction.
+//! Raw documents retain their byte representation. Markdown import creates
+//! native identity once; later whole-file writes reconcile through commands.
 
 use super::*;
-use quarry_collab_codec::{
-    BlockRow, LinkRange, MarkRun, block_rows_to_markdown, is_utf16_boundary,
-    markdown_to_block_rows, utf16_len,
-};
 use quarry_core::render_markdown_frontmatter;
+use quarry_markdown::{BlockRow, LinkRange, MarkRun, block_rows_to_markdown};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 /// How a document participates in the block model. `BlockDocument`s are
-/// canonical in block rows; `RawDocument`s keep the untouched byte path.
+/// canonical in Automerge; `RawDocument`s keep the untouched byte path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DocumentKind {
     BlockDocument,
@@ -89,7 +58,8 @@ pub fn document_kind(path: &str, content_type: &str) -> DocumentKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BlockReviewKind {
     Comment,
     Suggestion,
@@ -117,7 +87,8 @@ impl BlockReviewKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BlockReviewState {
     Open,
     Resolved,
@@ -150,7 +121,7 @@ impl BlockReviewState {
 
 /// A review anchor row. Offsets are UTF-16 code units into the block's flat
 /// text; `end_offset` is exclusive.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BlockReviewItem {
     pub id: String,
     pub document_id: String,
@@ -213,16 +184,18 @@ pub struct NewBlockReviewItem {
     pub parent_item_id: Option<String>,
 }
 
-/// A whole-file Markdown write of a BlockDocument, reconciled against the
-/// canonical block rows via diff3 (Phase 4). Adapters (Git, FUSE, CLI) differ
-/// only in base bookkeeping; the single implementation lives in quarry-server
-/// (it owns the mutation gateway and the session mode switch) and is
-/// installed into the store by the serving process — see
+/// A whole-file Markdown write translated into native document commands.
+/// Git, FUSE and CLI adapters supply their last observed Markdown as the base.
+/// The serving process installs the shared command gateway; see
 /// [`QuarryStore::set_block_markdown_writer`].
 #[derive(Clone, Debug)]
 pub struct BlockMarkdownWrite {
     pub scope: DocumentScopeRef,
     pub path: String,
+    /// An existing document's identity, when the writer holds a file handle.
+    /// Resolve its current path within the write operation. A deleted identity
+    /// must fail, even if another document now occupies the original path.
+    pub document_id: Option<String>,
     /// The full incoming text (frontmatter + body).
     pub markdown: String,
     /// Caller metadata merged over the incoming frontmatter (at minimum
@@ -240,9 +213,12 @@ pub struct BlockMarkdownWrite {
 /// The diff3 base selector for one whole-file write.
 #[derive(Clone, Debug)]
 pub enum BlockWriteBase {
-    /// Two-way degenerate case (CLI, missing shadow base): the base is the
-    /// current canonical state, so nothing can conflict and every incoming
-    /// difference applies.
+    /// No original read version is available. Create or byte-identical no-op
+    /// only; an existing document must never be overwritten on this basis.
+    Unversioned,
+    /// The caller has verified a strict head precondition under the write
+    /// gate, or is performing an explicit version restore. File adapters
+    /// without an original read version must use `Unversioned`.
     CurrentCanonical,
     /// A stored shadow base: Git peer bases, FUSE open-handle bases, or an
     /// explicit REST merge-base version. The full text (frontmatter tolerated);
@@ -284,7 +260,7 @@ pub struct BlockMarkdownWriteOutcome {
     pub conflict_items: Vec<BlockMarkdownConflict>,
 }
 
-/// The Phase 4 whole-file write path. Reconciliation failures never fail the
+/// The whole-file Markdown adapter. Reconciliation failures never fail the
 /// write (conflicts become review items); errors are content errors
 /// (CriticMarkup → [`QuarryError::UnsupportedMarkdown`]) or ordinary storage
 /// failures.
@@ -326,7 +302,7 @@ struct InlineRanges {
     links: Vec<LinkRange>,
 }
 
-/// One consistent read of everything the Phase 2 gateway needs to apply a
+/// One consistent read of everything the command gateway needs to apply a
 /// semantic mutation: the document head, the block rows (materialized
 /// in-memory from the head Markdown when the stored projection is missing —
 /// nothing is persisted by this read), review anchors, the set of known
@@ -340,19 +316,15 @@ pub struct BlockMutationState {
     pub content_type: String,
     pub metadata: JsonValue,
     pub rows: Vec<BlockRow>,
-    /// True when `rows` were materialized in-memory from the head Markdown
-    /// because the stored projection was missing (legacy write cleared it or
-    /// the document was never imported).
-    pub projection_missing: bool,
     pub review_items: Vec<BlockReviewItem>,
     pub version_ids: HashSet<String>,
     pub replay: Option<BlockTransactionRecord>,
 }
 
 /// The computed final state of one semantic mutation, committed atomically by
-/// [`QuarryStore::commit_block_mutation`]: the full row set, the full review
+/// [`QuarryStore::commit_durable_document_for_scope`]: the full row set, the full review
 /// item set, the normalized Markdown export of those rows (published through
-/// the existing `document_versions` path so legacy readers/events keep
+/// the existing `document_versions` path so version readers/events keep
 /// working), and the history record inputs.
 #[derive(Clone, Debug)]
 pub struct BlockMutationCommit {
@@ -364,14 +336,12 @@ pub struct BlockMutationCommit {
     pub client_tx_id: String,
     pub actor_kind: String,
     pub actor_id: Option<String>,
-    /// Display actor recorded on the legacy `transactions` history row.
+    /// Display actor recorded on the `transactions` history row.
     pub transaction_actor: Option<String>,
-    /// Optional message/provenance for the legacy `transactions` history row
-    /// (session checkpoints mark themselves as coalesced autosave history).
+    /// Optional message and provenance for the transaction history.
     pub transaction_message: Option<String>,
     pub transaction_provenance: Option<JsonValue>,
-    /// Rides on the emitted `doc.changed` event so browsers can classify the
-    /// write (session checkpoints use a benign provenance).
+    /// Identifies the writer on the emitted `doc.changed` event.
     pub origin_id: Option<String>,
     pub source: DocumentSource,
     /// Stored verbatim in `block_transactions.ops`; the gateway includes the
@@ -382,24 +352,6 @@ pub struct BlockMutationCommit {
     pub rows: Vec<BlockRow>,
     pub review_items: Vec<BlockReviewItem>,
     pub normalized_markdown: String,
-}
-
-/// One consistent read of everything a live editing session needs to seed
-/// from canonical state (or a checkpoint needs to refresh its head): the
-/// document's identity, head version, and block projection. Rows are
-/// materialized in-memory from the head Markdown when the stored projection
-/// is missing (nothing is persisted by this read — the first checkpoint
-/// persists them).
-#[derive(Clone, Debug)]
-pub struct SessionSeedState {
-    pub document_id: String,
-    pub scope: DocumentScopeRef,
-    pub path: String,
-    pub head_version_id: String,
-    pub content_type: String,
-    pub metadata: JsonValue,
-    pub rows: Vec<BlockRow>,
-    pub review_items: Vec<BlockReviewItem>,
 }
 
 #[derive(Debug)]
@@ -429,7 +381,17 @@ impl BlockMarkdownWriter for NoBlockMarkdownWriter {
 }
 
 impl QuarryStore {
-    /// Installs the whole-file Markdown write path (Phase 4). The serving
+    /// Resolve an active document by native id within the caller's scope.
+    pub async fn document_path_for_scope_id(
+        &self,
+        scope: &DocumentScopeRef,
+        id: &str,
+    ) -> Result<String> {
+        let conn = self.conn()?;
+        let scope = self.resolve_document_scope_conn(&conn, scope).await?;
+        Ok(document_head_for_scope_conn(&conn, &scope, id).await?.path)
+    }
+    /// Installs the whole-file Markdown write path. The serving
     /// process (quarry-server) calls this once at startup and keeps the
     /// strong `Arc` alive for the serving lifetime (the registry holds a
     /// `Weak` — see the field docs); Git/FUSE/CLI then route every
@@ -444,8 +406,7 @@ impl QuarryStore {
 
     /// Routes a whole-file BlockDocument write through the installed
     /// reconciling writer. Errors when no writer is installed — adapters
-    /// must never fall back to the legacy byte path for Markdown, or the
-    /// write would clear the block projection and bypass live sessions.
+    /// Markdown writes require native commands that preserve text identity.
     pub async fn write_block_markdown(
         &self,
         write: BlockMarkdownWrite,
@@ -472,29 +433,15 @@ impl QuarryStore {
         load_block_tree_conn(&conn, document_id).await
     }
 
-    /// Replaces a document's whole block row set in one transaction.
-    /// Per-operation mutation arrives with the Phase 2 gateway.
-    pub async fn replace_block_tree(&self, document_id: &str, rows: &[BlockRow]) -> Result<()> {
-        let document_id = document_id.to_string();
-        let rows = rows.to_vec();
-        self.write_transaction(move |_store, conn| {
-            Box::pin(async move {
-                require_document_conn(conn, &document_id).await?;
-                replace_block_rows_conn(conn, &document_id, &rows).await
-            })
-        })
-        .await
-    }
-
     /// Imports a Markdown document as canonical block rows.
     ///
     /// Frontmatter merges into document metadata (the existing mechanism);
     /// the body becomes rows via the codec, falling back to `raw_markdown`
     /// rows for safe unsupported constructs and surfacing the codec's typed
-    /// [`quarry_collab_codec::Unsupported`] error for unsafe ones. The
+    /// [`quarry_markdown::Unsupported`] error for unsafe ones. The
     /// deterministic normalized export is written through the existing
     /// version path in the same transaction, so rows and version content
-    /// always agree and legacy readers keep working.
+    /// always agree and version readers see the same content.
     #[expect(
         clippy::too_many_arguments,
         reason = "commit rows mirror storage columns"
@@ -546,8 +493,7 @@ impl QuarryStore {
     }
 
     /// [`QuarryStore::import_block_document`] for either scope, with an
-    /// `origin_id` echoed on the emitted `doc.changed` event (the Phase 4
-    /// first-import path) and transaction attribution recorded on the import
+    /// `origin_id` echoed on the emitted `doc.changed` event and transaction attribution recorded on the import
     /// transaction. Unset provenance defaults per scope.
     #[expect(
         clippy::too_many_arguments,
@@ -564,6 +510,38 @@ impl QuarryStore {
         precondition: WritePrecondition,
         origin_id: Option<String>,
         transaction: TransactionMetadata,
+    ) -> Result<WriteOutcome> {
+        self.import_block_document_with_native(
+            scope,
+            path,
+            markdown,
+            metadata,
+            content_type,
+            source,
+            precondition,
+            origin_id,
+            transaction,
+            None,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "import carries the same publication fields as the public storage API"
+    )]
+    pub(crate) async fn import_block_document_with_native(
+        &self,
+        scope: &DocumentScopeRef,
+        path: &str,
+        markdown: &str,
+        metadata: JsonValue,
+        content_type: &str,
+        source: DocumentSource,
+        precondition: WritePrecondition,
+        origin_id: Option<String>,
+        transaction: TransactionMetadata,
+        native: Option<Box<quarry_document::Document>>,
     ) -> Result<WriteOutcome> {
         let path = match scope {
             DocumentScopeRef::Library { .. } => normalize_path(path)?,
@@ -583,13 +561,32 @@ impl QuarryStore {
             )));
         }
         let (frontmatter, body) = split_markdown_frontmatter(markdown)?;
-        let rows = canonical_rows(markdown_to_block_rows(body, || Uuid::new_v4().to_string())?);
+        // Validate through the same importer used by every document creator.
+        // Review syntax must reach publication intact so its native targets
+        // and discussions are created together with the body.
+        let imported = Box::new(quarry_markdown::import_markdown_document(
+            "validation",
+            body,
+            &mut || Uuid::new_v4().to_string(),
+        )?);
         let mut merged_metadata = frontmatter;
         merge_json(&mut merged_metadata, metadata.clone());
         let normalized = format!(
             "{}{}",
             render_markdown_frontmatter(&merged_metadata)?,
-            block_rows_to_markdown(&rows)?
+            if imported
+                .comments()
+                .map_err(crate::document_state::document_error)?
+                .is_empty()
+                && imported
+                    .proposals()
+                    .map_err(crate::document_state::document_error)?
+                    .is_empty()
+            {
+                quarry_markdown::document_to_markdown(&imported)?
+            } else {
+                body.to_string()
+            }
         );
         if matches!(scope, DocumentScopeRef::Tmp) {
             validate_tmp_markdown_text(&normalized)?;
@@ -672,8 +669,32 @@ impl QuarryStore {
                         None,
                     )
                     .await?;
-                    publish_put_conn(conn, &doc_id, &version.id).await?;
-                    replace_block_rows_conn(conn, &doc_id, &rows).await?;
+                    if let Some(native) = &native {
+                        if old_version_id.is_some()
+                            || document_state::load_state_conn(conn, &doc_id)
+                                .await?
+                                .is_some()
+                        {
+                            return Err(QuarryError::PreconditionFailed(
+                                "An archive can only create a new document".into(),
+                            ));
+                        }
+                        let mut copy = native
+                            .copy_as(&doc_id)
+                            .map_err(document_state::document_error)?;
+                        crate::document_write::persist_projection(
+                            conn,
+                            &doc_id,
+                            &version.id,
+                            &mut copy,
+                        )
+                        .await?;
+                        crate::publish_native_put_conn(conn, &doc_id, &version.id).await?;
+                    } else {
+                        store
+                            .publish_document_version_conn(conn, &doc_id, &version.id)
+                            .await?;
+                    }
                     if let ResolvedDocumentScope::Library { id } = &resolved_scope {
                         ensure_path_inodes_conn(conn, id, &path).await?;
                         store.reindex_links_conn(conn, id).await?;
@@ -700,12 +721,7 @@ impl QuarryStore {
         Ok(outcome)
     }
 
-    /// Exports a BlockDocument from its canonical rows: frontmatter rendered
-    /// from document metadata plus the deterministic Markdown body.
-    ///
-    /// A document without rows has no block projection (it was never
-    /// imported, or a legacy write cleared it) and returns `NotFound` rather
-    /// than serving stale or fabricated content.
+    /// Export the native document's Markdown projection with its metadata.
     pub async fn export_block_document(&self, document_id: &str) -> Result<String> {
         let conn = self.conn()?;
         // One read transaction so the head metadata and the rows cannot tear
@@ -719,12 +735,14 @@ impl QuarryStore {
                     head.path, head.content_type
                 )));
             }
-            let rows = load_block_tree_conn(&conn, document_id).await?;
-            if rows.is_empty() {
-                return Err(QuarryError::NotFound(format!(
-                    "block rows for document {document_id} (re-import required)"
-                )));
-            }
+            let saved = document_state::load_state_conn(&conn, document_id)
+                .await?
+                .ok_or_else(|| {
+                    QuarryError::Invariant("Markdown document has no native state".into())
+                })?;
+            let document = quarry_document::Document::load(&saved.bytes)
+                .map_err(document_state::document_error)?;
+            let rows = document_projection(&document)?;
             Ok(format!(
                 "{}{}",
                 render_markdown_frontmatter(&head.metadata)?,
@@ -741,67 +759,126 @@ impl QuarryStore {
     /// range is legal for orphaned anchors and structural block-deletion
     /// suggestions.
     pub async fn put_block_review_item(&self, item: NewBlockReviewItem) -> Result<BlockReviewItem> {
-        self.write_transaction(move |_store, conn| {
-            Box::pin(async move {
-                if item.kind != BlockReviewKind::Conflict {
-                    let block_text =
-                        block_text_conn(conn, &item.document_id, &item.block_id).await?;
-                    validate_anchor_offsets(&item, &block_text)?;
+        let conn = self.conn()?;
+        let mut rows = conn.query("SELECT d.document_scope,d.path,l.slug FROM documents d LEFT JOIN libraries l ON l.id=d.library_id WHERE d.id=?1", params![item.document_id.clone()]).await.map_err(map_turso_error)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(map_turso_error)?
+            .ok_or_else(|| QuarryError::NotFound(item.document_id.clone()))?;
+        let scope = if text(&row, 0)? == "tmp" {
+            DocumentScopeRef::Tmp
+        } else {
+            DocumentScopeRef::library(&text(&row, 2)?)
+        };
+        let path = text(&row, 1)?;
+        let saved = self
+            .durable_document_for_scope(&scope, &path)
+            .await?
+            .ok_or_else(|| {
+                QuarryError::Unsupported("Review requires a Markdown document".into())
+            })?;
+        let document =
+            Box::new(quarry_document::Document::load(&saved.bytes).map_err(crate::command_error)?);
+        let id = Uuid::new_v4().to_string();
+        let author = item.author.unwrap_or_default();
+        let mut commands = Vec::new();
+        use quarry_document::Command;
+        match item.kind {
+            BlockReviewKind::Comment => {
+                if let Some(parent) = item.parent_item_id {
+                    commands.push(Command::ReplyComment {
+                        id: id.clone(),
+                        parent,
+                        author: author.clone(),
+                        body: item.body.unwrap_or_default(),
+                    });
+                } else {
+                    let ranges = document
+                        .selection(
+                            &item.block_id,
+                            item.start_offset as usize,
+                            item.end_offset as usize,
+                        )
+                        .map_err(crate::command_error)?;
+                    commands.push(Command::AddComment {
+                        id: id.clone(),
+                        author: author.clone(),
+                        body: item.body.unwrap_or_default(),
+                        ranges,
+                    });
                 }
-                // Conflict items (Phase 4) anchor by `after_block_id` in
-                // `block_id` ("" = document start) with a collapsed placement
-                // range — no text anchor to validate (mirrors
-                // validate_review_items_against_rows).
-                let id = Uuid::new_v4().to_string();
-                let now = now_timestamp();
-                conn.execute(
-                    "INSERT INTO block_review_items
-                 (id, document_id, block_id, kind, start_offset, end_offset, body, replacement,
-                  author, state, quote, context_before, context_after, parent_item_id,
-                  created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
-                    vec![
-                        Value::Text(id.clone()),
-                        Value::Text(item.document_id.clone()),
-                        Value::Text(item.block_id.clone()),
-                        Value::Text(item.kind.as_str().to_string()),
-                        Value::Integer(i64::from(item.start_offset)),
-                        Value::Integer(i64::from(item.end_offset)),
-                        opt_value(item.body.clone()),
-                        opt_value(item.replacement.clone()),
-                        opt_value(item.author.clone()),
-                        Value::Text(item.state.as_str().to_string()),
-                        opt_value(item.quote.clone()),
-                        opt_value(item.context_before.clone()),
-                        opt_value(item.context_after.clone()),
-                        opt_value(item.parent_item_id.clone()),
-                        Value::Text(now.clone()),
-                        Value::Text(now.clone()),
-                    ],
-                )
-                .await
-                .map_err(map_turso_error)?;
-                Ok(BlockReviewItem {
-                    id,
-                    document_id: item.document_id,
-                    block_id: item.block_id,
-                    kind: item.kind,
-                    start_offset: item.start_offset,
-                    end_offset: item.end_offset,
-                    body: item.body,
-                    replacement: item.replacement,
-                    author: item.author,
-                    state: item.state,
-                    quote: item.quote,
-                    context_before: item.context_before,
-                    context_after: item.context_after,
-                    parent_item_id: item.parent_item_id,
-                    created_at: now.clone(),
-                    updated_at: now,
-                })
-            })
-        })
-        .await
+                if item.state == BlockReviewState::Resolved {
+                    commands.push(Command::ResolveComment {
+                        id: id.clone(),
+                        resolved: true,
+                    });
+                } else if item.state != BlockReviewState::Open {
+                    return Err(QuarryError::InvalidInput("New comments require a current target; missing targets belong to document import".into()));
+                }
+            }
+            BlockReviewKind::Suggestion => {
+                commands.push(Command::ProposeReplacement {
+                    id: id.clone(),
+                    author: author.clone(),
+                    block: item.block_id.clone(),
+                    at: document
+                        .point(&item.block_id, item.start_offset as usize)
+                        .map_err(crate::command_error)?,
+                    ranges: document
+                        .selection(
+                            &item.block_id,
+                            item.start_offset as usize,
+                            item.end_offset as usize,
+                        )
+                        .map_err(crate::command_error)?,
+                    text: item.replacement.unwrap_or_default(),
+                });
+                if let Some(body) = item.body {
+                    commands.push(Command::EditProposal {
+                        id: id.clone(),
+                        body,
+                    });
+                }
+            }
+            BlockReviewKind::Conflict => commands.push(Command::AddConflict {
+                conflict: quarry_document::Conflict {
+                    id: id.clone(),
+                    after: (!item.block_id.is_empty()).then_some(item.block_id),
+                    base: item.context_before.unwrap_or_default(),
+                    incoming: item.body.unwrap_or_default(),
+                    canonical: item.quote.unwrap_or_default(),
+                    resolved: item.state == BlockReviewState::Resolved,
+                    author: author.clone(),
+                    metadata: Default::default(),
+                },
+            }),
+        }
+        let request_id = Uuid::new_v4().to_string();
+        self.apply_document_commands(
+            &scope,
+            &path,
+            &quarry_document::CommandBatch {
+                request_id: request_id.clone(),
+                actor: quarry_document::DocumentActor {
+                    kind: "api".into(),
+                    id: None,
+                    label: Some(author),
+                },
+                requests: vec![quarry_document::CommandRequest {
+                    request_id,
+                    base: document.heads().iter().map(ToString::to_string).collect(),
+                    commands,
+                    at: now_timestamp(),
+                }],
+            },
+        )
+        .await?;
+        self.list_block_review_items(&item.document_id)
+            .await?
+            .into_iter()
+            .find(|item| item.id == id)
+            .ok_or_else(|| QuarryError::Invariant("Committed review item is missing".into()))
     }
 
     pub async fn list_block_review_items(&self, document_id: &str) -> Result<Vec<BlockReviewItem>> {
@@ -906,46 +983,6 @@ impl QuarryStore {
         }
     }
 
-    /// Records one semantic mutation transaction. `client_tx_id` is unique
-    /// per document: a duplicate returns `QuarryError::Conflict` so Phase 2
-    /// can answer idempotently from the stored record.
-    pub async fn record_block_transaction(
-        &self,
-        document_id: &str,
-        client_tx_id: &str,
-        actor_kind: &str,
-        actor_id: Option<String>,
-        ops: JsonValue,
-        resulting_version_id: Option<String>,
-    ) -> Result<BlockTransactionRecord> {
-        let document_id = document_id.to_string();
-        let client_tx_id = client_tx_id.to_string();
-        let actor_kind = actor_kind.to_string();
-        self.write_transaction(move |_store, conn| {
-            Box::pin(async move {
-                if block_transaction_conn(conn, &document_id, &client_tx_id)
-                    .await?
-                    .is_some()
-                {
-                    return Err(QuarryError::Conflict(format!(
-                        "block transaction {client_tx_id} already recorded for document {document_id}"
-                    )));
-                }
-                insert_block_transaction_conn(
-                    conn,
-                    &document_id,
-                    &client_tx_id,
-                    &actor_kind,
-                    actor_id,
-                    ops,
-                    resulting_version_id,
-                )
-                .await
-            })
-        })
-        .await
-    }
-
     pub async fn block_transaction(
         &self,
         document_id: &str,
@@ -955,12 +992,8 @@ impl QuarryStore {
         block_transaction_conn(&conn, document_id, client_tx_id).await
     }
 
-    /// Loads the consistent pre-state for one semantic mutation (see
-    /// [`BlockMutationState`]). When the stored projection is missing for a
-    /// BlockDocument, rows are materialized in-memory from the head Markdown
-    /// (fresh `block_id`s, not persisted); committing the mutation persists
-    /// them. RawDocuments load with empty rows — callers reject those before
-    /// using them.
+    /// Loads native state, its projections and receipts from one SQL snapshot.
+    /// Markdown documents require native state. Raw documents have no blocks.
     pub async fn block_mutation_state(
         &self,
         library: &str,
@@ -991,24 +1024,28 @@ impl QuarryStore {
                 }
                 DocumentScopeRef::Tmp => self.tmp_document_conn(&conn, &path).await?,
             };
-            let stored_rows = load_block_tree_conn(&conn, &document.id).await?;
-            let projection_missing = stored_rows.is_empty();
-            let rows = if projection_missing
-                && document_kind(&document.path, &document.version.content_type)
-                    == DocumentKind::BlockDocument
+            let saved = document_state::load_state_conn(&conn, &document.id).await?;
+            let (rows, review_items) = if let Some(saved) = saved {
+                if saved.version_id != document.version.id.as_str() {
+                    return Err(QuarryError::Invariant(
+                        "Native state and published version disagree".into(),
+                    ));
+                }
+                let native = quarry_document::Document::load(&saved.bytes)
+                    .map_err(document_state::document_error)?;
+                (
+                    document_projection(&native)?,
+                    crate::document_review_projection(&native)?,
+                )
+            } else if document_kind(&document.path, &document.version.content_type)
+                == DocumentKind::RawDocument
             {
-                let markdown = String::from_utf8(document.content.clone()).map_err(|_| {
-                    QuarryError::InvalidInput(format!(
-                        "document {} is not valid UTF-8 Markdown",
-                        document.path
-                    ))
-                })?;
-                let (_, body) = split_markdown_frontmatter(&markdown)?;
-                canonical_rows(markdown_to_block_rows(body, || Uuid::new_v4().to_string())?)
+                (Vec::new(), Vec::new())
             } else {
-                stored_rows
+                return Err(QuarryError::Invariant(
+                    "Markdown document has no native state".into(),
+                ));
             };
-            let review_items = list_block_review_items_conn(&conn, &document.id).await?;
             let version_ids = document_version_ids_conn(&conn, &document.id).await?;
             let replay = block_transaction_conn(&conn, &document.id, client_tx_id).await?;
             Ok(BlockMutationState {
@@ -1018,7 +1055,6 @@ impl QuarryStore {
                 content_type: document.version.content_type,
                 metadata: document.version.metadata,
                 rows,
-                projection_missing,
                 review_items,
                 version_ids,
                 replay,
@@ -1028,118 +1064,53 @@ impl QuarryStore {
         finish_tx(&conn, result).await
     }
 
-    /// Loads the consistent state a live session seeds from (or a checkpoint
-    /// refreshes against), keyed by document id. Returns `Ok(None)` for
-    /// missing/deleted documents and for RawDocuments (which never host
-    /// sessions).
-    pub async fn session_seed_state(&self, document_id: &str) -> Result<Option<SessionSeedState>> {
-        let conn = self.conn()?;
-        conn.execute("BEGIN", ()).await.map_err(map_turso_error)?;
-        let result = async {
-            let mut head_rows = conn
-                .query(
-                    "SELECT d.id, d.path, d.document_scope, l.slug, v.id, v.content_type, v.metadata_json,
-                            v.content_hash, v.inline_content
-                     FROM documents d
-                     LEFT JOIN libraries l ON l.id = d.library_id
-                     JOIN document_versions v ON v.id = d.head_version_id
-                     WHERE d.id = ?1
-                       AND d.deleted_at IS NULL
-                       AND d.head_version_id IS NOT NULL
-                       AND (
-                         (d.document_scope = 'library' AND (d.expires_at IS NULL OR d.expires_at > ?2))
-                         OR (d.document_scope = 'tmp' AND d.library_id IS NULL AND d.expires_at > ?2)
-                       )
-                     LIMIT 1",
-                    params![document_id.to_string(), now_timestamp()],
-                )
-                .await
-                .map_err(map_turso_error)?;
-            let Some(row) = head_rows.next().await.map_err(map_turso_error)? else {
-                return Ok(None);
-            };
-            let path = text(&row, 1)?;
-            let scope = match text(&row, 2)?.as_str() {
-                "library" => DocumentScopeRef::Library {
-                    slug: opt_text(&row, 3)?.ok_or_else(|| {
-                        QuarryError::Invariant(format!(
-                            "library document {document_id} is missing a library slug"
-                        ))
-                    })?,
-                },
-                "tmp" => DocumentScopeRef::Tmp,
-                other => {
-                    return Err(QuarryError::Invariant(format!(
-                        "document {document_id} has unsupported scope {other}"
-                    )));
-                }
-            };
-            let content_type = text(&row, 5)?;
-            if document_kind(&path, &content_type) == DocumentKind::RawDocument {
-                return Ok(None);
-            }
-            let content_hash = opt_text(&row, 7)?;
-            let inline_content = opt_blob(&row, 8)?;
-            let stored_rows = load_block_tree_conn(&conn, document_id).await?;
-            let rows = if stored_rows.is_empty() {
-                let content = match (inline_content, content_hash) {
-                    (Some(bytes), None) => bytes,
-                    (None, Some(hash)) => self.cas.read(&hash)?,
-                    _ => {
-                        return Err(QuarryError::Invariant(format!(
-                            "head version for document {document_id} violates inline/CAS invariant"
-                        )))
-                    }
-                };
-                let markdown = String::from_utf8(content).map_err(|_| {
-                    QuarryError::InvalidInput(format!(
-                        "document {path} is not valid UTF-8 Markdown"
-                    ))
-                })?;
-                let (_, body) = split_markdown_frontmatter(&markdown)?;
-                canonical_rows(markdown_to_block_rows(body, || Uuid::new_v4().to_string())?)
-            } else {
-                stored_rows
-            };
-            let review_items = list_block_review_items_conn(&conn, document_id).await?;
-            Ok(Some(SessionSeedState {
-                document_id: text(&row, 0)?,
-                scope,
-                path,
-                head_version_id: text(&row, 4)?,
-                content_type,
-                metadata: serde_json::from_str(&text(&row, 6)?)?,
-                rows,
-                review_items,
-            }))
-        }
-        .await;
-        finish_tx(&conn, result).await
-    }
-
-    /// Commits one semantic mutation atomically: replaces the row set and the
-    /// review item set, publishes the normalized Markdown export as ONE new
-    /// document version through the existing `document_versions` path (so
-    /// legacy readers, history, and links keep working), and records the
-    /// mutation history row — all in one SQL transaction. Emits the same
-    /// document-changed events as other writes after the commit.
-    ///
-    /// A duplicate `client_tx_id` returns [`BlockMutationOutcome::Replayed`]
-    /// without re-applying; a moved head fails with `PreconditionFailed` so
-    /// the caller can reload state and recompute.
-    pub async fn commit_block_mutation(
-        &self,
-        library: &str,
-        commit: BlockMutationCommit,
-    ) -> Result<BlockMutationOutcome> {
-        self.commit_block_mutation_for_scope(&DocumentScopeRef::library(library), commit)
-            .await
-    }
-
-    pub async fn commit_block_mutation_for_scope(
+    pub async fn commit_durable_document_for_scope(
         &self,
         scope: &DocumentScopeRef,
         commit: BlockMutationCommit,
+        durable: DurableDocumentCommit,
+    ) -> Result<BlockMutationOutcome> {
+        if matches!(scope, DocumentScopeRef::Tmp) {
+            validate_tmp_markdown_text(&commit.normalized_markdown)?;
+        }
+        let document = quarry_document::Document::load(&durable.bytes)
+            .map_err(document_state::document_error)?;
+        if document.id().map_err(document_state::document_error)? != commit.document_id {
+            return Err(QuarryError::InvalidInput(
+                "Document state belongs to another document".into(),
+            ));
+        }
+        if durable.request_hash.is_empty() {
+            return Err(QuarryError::InvalidInput(
+                "Document command requires a request hash".into(),
+            ));
+        }
+        if document_projection(&document)? != commit.rows {
+            return Err(QuarryError::InvalidInput(
+                "Block projection does not match the canonical document".into(),
+            ));
+        }
+        if crate::document_review_projection(&document)? != commit.review_items {
+            return Err(QuarryError::InvalidInput(
+                "Review projection does not match the canonical document".into(),
+            ));
+        }
+        let body = block_rows_to_markdown(&commit.rows).map_err(document_state::document_error)?;
+        let markdown = format!("{}{}", render_markdown_frontmatter(&commit.metadata)?, body);
+        if markdown != commit.normalized_markdown {
+            return Err(QuarryError::InvalidInput(
+                "Markdown projection does not match the canonical document".into(),
+            ));
+        }
+        self.commit_document_mutation_inner(scope, commit, durable)
+            .await
+    }
+
+    async fn commit_document_mutation_inner(
+        &self,
+        scope: &DocumentScopeRef,
+        commit: BlockMutationCommit,
+        durable: DurableDocumentCommit,
     ) -> Result<BlockMutationOutcome> {
         let mut commit = commit;
         if matches!(scope, DocumentScopeRef::Tmp) {
@@ -1149,22 +1120,34 @@ impl QuarryStore {
             commit.metadata = tmp_metadata_with_content_type(commit.metadata, &content_type);
             commit.content_type = content_type;
         }
-        validate_review_items_against_rows(&commit.rows, &commit.review_items)?;
         let origin_id = commit.origin_id;
         let scope = scope.clone();
         let outcome = self
             .write_transaction(move |store, conn| {
                 Box::pin(async move {
                     let resolved_scope = store.resolve_document_scope_conn(conn, &scope).await?;
+                    let head =
+                        document_head_for_scope_conn(conn, &resolved_scope, &commit.document_id)
+                            .await?;
                     if let Some(replayed) =
                         block_transaction_conn(conn, &commit.document_id, &commit.client_tx_id)
                             .await?
                     {
+                        if document_state::receipt_hash_conn(
+                            conn,
+                            &commit.document_id,
+                            &commit.client_tx_id,
+                        )
+                        .await?
+                        .as_deref()
+                            != Some(durable.request_hash.as_str())
+                        {
+                            return Err(QuarryError::PreconditionFailed(
+                                "Idempotency key was used for a different request".into(),
+                            ));
+                        }
                         return Ok(BlockMutationOutcome::Replayed(replayed));
                     }
-                    let head =
-                        document_head_for_scope_conn(conn, &resolved_scope, &commit.document_id)
-                            .await?;
                     if head.head_version_id != commit.expected_head_version_id {
                         return Err(QuarryError::PreconditionFailed(format!(
                             "document {} head moved from {} to {}",
@@ -1208,7 +1191,7 @@ impl QuarryStore {
                         None,
                     )
                     .await?;
-                    publish_put_conn(conn, &commit.document_id, &version.id).await?;
+                    crate::publish_native_put_conn(conn, &commit.document_id, &version.id).await?;
                     replace_block_rows_conn(conn, &commit.document_id, &commit.rows).await?;
                     replace_block_review_items_conn(
                         conn,
@@ -1216,6 +1199,16 @@ impl QuarryStore {
                         &commit.review_items,
                     )
                     .await?;
+                    {
+                        document_state::write_state_conn(
+                            conn,
+                            &commit.document_id,
+                            &version.id,
+                            &commit.client_tx_id,
+                            &durable,
+                        )
+                        .await?;
+                    }
                     let record = insert_block_transaction_conn(
                         conn,
                         &commit.document_id,
@@ -1255,147 +1248,6 @@ impl QuarryStore {
         }
         Ok(outcome)
     }
-}
-
-fn validate_anchor_offsets(item: &NewBlockReviewItem, block_text: &str) -> Result<()> {
-    let length = utf16_len(block_text);
-    if item.start_offset > item.end_offset {
-        return Err(QuarryError::InvalidInput(format!(
-            "anchor start {} is after end {}",
-            item.start_offset, item.end_offset
-        )));
-    }
-    if item.end_offset > length {
-        return Err(QuarryError::InvalidInput(format!(
-            "anchor end {} is past the block text (UTF-16 length {length})",
-            item.end_offset
-        )));
-    }
-    if !is_utf16_boundary(block_text, item.start_offset)
-        || !is_utf16_boundary(block_text, item.end_offset)
-    {
-        return Err(QuarryError::InvalidInput(format!(
-            "anchor offsets [{}, {}) split a surrogate pair",
-            item.start_offset, item.end_offset
-        )));
-    }
-    let block_delete_suggestion =
-        item.kind == BlockReviewKind::Suggestion && item.replacement.is_none();
-    if block_delete_suggestion && (item.start_offset != 0 || item.end_offset != 0) {
-        return Err(QuarryError::InvalidInput(
-            "a block-deletion suggestion must use the block anchor [0, 0)".to_string(),
-        ));
-    }
-    if item.start_offset == item.end_offset
-        && item.state != BlockReviewState::Orphaned
-        && !block_delete_suggestion
-    {
-        return Err(QuarryError::InvalidInput(
-            "a collapsed anchor range means orphaned at the row layer".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-async fn block_text_conn(conn: &Connection, document_id: &str, block_id: &str) -> Result<String> {
-    let mut rows = conn
-        .query(
-            "SELECT text FROM blocks WHERE block_id = ?1 AND document_id = ?2 LIMIT 1",
-            params![block_id.to_string(), document_id.to_string()],
-        )
-        .await
-        .map_err(map_turso_error)?;
-    match rows.next().await.map_err(map_turso_error)? {
-        Some(row) => text(&row, 0),
-        None => Err(QuarryError::NotFound(format!(
-            "block {block_id} in document {document_id}"
-        ))),
-    }
-}
-
-async fn require_document_conn(conn: &Connection, document_id: &str) -> Result<()> {
-    let mut rows = conn
-        .query(
-            "SELECT id FROM documents WHERE id = ?1 LIMIT 1",
-            params![document_id.to_string()],
-        )
-        .await
-        .map_err(map_turso_error)?;
-    if rows.next().await.map_err(map_turso_error)?.is_none() {
-        return Err(QuarryError::NotFound(format!("document {document_id}")));
-    }
-    Ok(())
-}
-
-struct BlockDocumentHead {
-    path: String,
-    content_type: String,
-    metadata: JsonValue,
-}
-
-async fn head_version_head_conn(conn: &Connection, document_id: &str) -> Result<BlockDocumentHead> {
-    let mut rows = conn
-        .query(
-            "SELECT d.path, v.content_type, v.metadata_json
-             FROM documents d
-             JOIN document_versions v ON v.id = d.head_version_id
-             WHERE d.id = ?1
-             LIMIT 1",
-            params![document_id.to_string()],
-        )
-        .await
-        .map_err(map_turso_error)?;
-    match rows.next().await.map_err(map_turso_error)? {
-        Some(row) => Ok(BlockDocumentHead {
-            path: text(&row, 0)?,
-            content_type: text(&row, 1)?,
-            metadata: serde_json::from_str(&text(&row, 2)?)?,
-        }),
-        None => Err(QuarryError::NotFound(format!("document {document_id}"))),
-    }
-}
-
-/// Canonical row shape for an imported body: an empty body becomes one empty
-/// paragraph row (matching the editor's empty-document shape), so "zero rows"
-/// always means "no block projection" rather than "empty document".
-fn canonical_rows(rows: Vec<BlockRow>) -> Vec<BlockRow> {
-    if !rows.is_empty() {
-        return rows;
-    }
-    vec![BlockRow {
-        block_id: Uuid::new_v4().to_string(),
-        parent_block_id: None,
-        position: 0,
-        block_type: "p".to_string(),
-        attrs: quarry_collab_codec::Attrs::new(),
-        text: String::new(),
-        marks: Vec::new(),
-        links: Vec::new(),
-    }]
-}
-
-/// Drops a document's block projection (rows and review anchors).
-///
-/// Called by the legacy write paths (`put_document`, staged-transaction
-/// commits, `delete_document`): a version published outside the import path
-/// would leave the rows serving stale content, and a delete would orphan
-/// them. The projection is removed fail-closed; `export_block_document`
-/// returns `NotFound` until the document is re-imported. Phase 4's diff3
-/// reconciliation replaces this with identity-preserving merges.
-pub(crate) async fn clear_block_state_conn(conn: &Connection, document_id: &str) -> Result<()> {
-    conn.execute(
-        "DELETE FROM blocks WHERE document_id = ?1",
-        params![document_id.to_string()],
-    )
-    .await
-    .map_err(map_turso_error)?;
-    conn.execute(
-        "DELETE FROM block_review_items WHERE document_id = ?1",
-        params![document_id.to_string()],
-    )
-    .await
-    .map_err(map_turso_error)?;
-    Ok(())
 }
 
 pub(crate) async fn replace_block_rows_conn(
@@ -1452,94 +1304,6 @@ pub(crate) async fn load_block_tree_conn(
         loaded.push(block_row_from_row(&row)?);
     }
     order_depth_first(document_id, loaded)
-}
-
-/// Clones one document's canonical block projection and review state under a
-/// new document id. Block and review ids are database-wide primary keys, so
-/// every id is reminted and parent/anchor references are rewritten together.
-pub(crate) async fn clone_block_state_conn(
-    conn: &Connection,
-    source_document_id: &str,
-    target_document_id: &str,
-) -> Result<()> {
-    let source_rows = load_block_tree_conn(conn, source_document_id).await?;
-    let source_items = list_block_review_items_conn(conn, source_document_id).await?;
-
-    let mut block_ids = HashMap::with_capacity(source_rows.len());
-    for row in &source_rows {
-        block_ids.insert(row.block_id.clone(), Uuid::new_v4().to_string());
-    }
-    // Orphaned/invalidated review items can retain an anchor id after its row
-    // is gone. Remap those ids too so the fork never points back into the
-    // source document's identity space.
-    for item in &source_items {
-        if !item.block_id.is_empty() {
-            block_ids
-                .entry(item.block_id.clone())
-                .or_insert_with(|| Uuid::new_v4().to_string());
-        }
-    }
-
-    let mut target_rows = Vec::with_capacity(source_rows.len());
-    for mut row in source_rows {
-        let source_block_id = row.block_id.clone();
-        row.block_id = block_ids.get(&source_block_id).cloned().ok_or_else(|| {
-            QuarryError::Invariant(format!(
-                "fork source block {source_block_id} is missing an id mapping"
-            ))
-        })?;
-        row.parent_block_id = row
-            .parent_block_id
-            .as_ref()
-            .map(|parent_id| {
-                block_ids.get(parent_id).cloned().ok_or_else(|| {
-                    QuarryError::Invariant(format!(
-                        "fork source parent block {parent_id} is missing an id mapping"
-                    ))
-                })
-            })
-            .transpose()?;
-        target_rows.push(row);
-    }
-
-    let item_ids: HashMap<_, _> = source_items
-        .iter()
-        .map(|item| (item.id.clone(), Uuid::new_v4().to_string()))
-        .collect();
-    let mut target_items = Vec::with_capacity(source_items.len());
-    for mut item in source_items {
-        let source_item_id = item.id.clone();
-        item.id = item_ids.get(&source_item_id).cloned().ok_or_else(|| {
-            QuarryError::Invariant(format!(
-                "fork source review item {source_item_id} is missing an id mapping"
-            ))
-        })?;
-        item.document_id = target_document_id.to_string();
-        if !item.block_id.is_empty() {
-            let source_block_id = item.block_id.clone();
-            item.block_id = block_ids.get(&source_block_id).cloned().ok_or_else(|| {
-                QuarryError::Invariant(format!(
-                    "fork source review anchor {source_block_id} is missing an id mapping"
-                ))
-            })?;
-        }
-        item.parent_item_id = item
-            .parent_item_id
-            .as_ref()
-            .map(|parent_id| {
-                item_ids.get(parent_id).cloned().ok_or_else(|| {
-                    QuarryError::Invariant(format!(
-                        "fork source review parent {parent_id} is missing an id mapping"
-                    ))
-                })
-            })
-            .transpose()?;
-        target_items.push(item);
-    }
-
-    validate_review_items_against_rows(&target_rows, &target_items)?;
-    replace_block_rows_conn(conn, target_document_id, &target_rows).await?;
-    replace_block_review_items_conn(conn, target_document_id, &target_items).await
 }
 
 /// Orders flat rows into depth-first document order: parents before children,
@@ -1658,7 +1422,7 @@ async fn insert_block_transaction_conn(
 /// The review-item set is replaced wholesale at mutation commit; items carry
 /// their ids and timestamps through unchanged so history-stable identifiers
 /// survive text adjustments.
-async fn replace_block_review_items_conn(
+pub(crate) async fn replace_block_review_items_conn(
     conn: &Connection,
     document_id: &str,
     items: &[BlockReviewItem],
@@ -1701,7 +1465,7 @@ async fn replace_block_review_items_conn(
     Ok(())
 }
 
-async fn list_block_review_items_conn(
+pub(crate) async fn list_block_review_items_conn(
     conn: &Connection,
     document_id: &str,
 ) -> Result<Vec<BlockReviewItem>> {
@@ -1833,176 +1597,38 @@ async fn document_head_for_scope_conn(
     }
 }
 
-/// Internal invariant check before a mutation commit: every review item must
-/// either anchor a live block with in-range boundary-aligned offsets, or be a
-/// dead anchor (any non-open state) — open items never reference missing
-/// blocks, and a collapsed range is only legal for insertion or block-deletion
-/// suggestions and their replies.
-fn validate_review_items_against_rows(rows: &[BlockRow], items: &[BlockReviewItem]) -> Result<()> {
-    let texts: HashMap<&str, &str> = rows
-        .iter()
-        .map(|row| (row.block_id.as_str(), row.text.as_str()))
-        .collect();
-    let items_by_id: HashMap<&str, &BlockReviewItem> =
-        items.iter().map(|item| (item.id.as_str(), item)).collect();
-    for item in items {
-        if item.kind == BlockReviewKind::Conflict {
-            // Conflict items (Phase 4) anchor by `after_block_id` in
-            // `block_id` ("" = document start) with a collapsed placement
-            // range; they carry Markdown payloads, not text anchors, so
-            // row-anchored offset validation does not apply.
-            continue;
-        }
-        let markdown_insert_reply = is_reply_to_open_markdown_insert_suggestion(item, &items_by_id);
-        if item.is_markdown_insert_suggestion() || markdown_insert_reply {
-            if item.start_offset != 0 || item.end_offset != 0 {
-                return Err(QuarryError::InvalidInput(format!(
-                    "Markdown-insertion suggestion thread {} must use the structural anchor [0, 0)",
-                    item.id
-                )));
-            }
-            if item.state == BlockReviewState::Open
-                && !item.block_id.is_empty()
-                && !texts.contains_key(item.block_id.as_str())
-            {
-                return Err(QuarryError::InvalidInput(format!(
-                    "open Markdown-insertion suggestion thread {} anchors missing block {}",
-                    item.id, item.block_id
-                )));
-            }
-            continue;
-        }
-        let Some(text) = texts.get(item.block_id.as_str()) else {
-            if item.state == BlockReviewState::Open {
-                return Err(QuarryError::InvalidInput(format!(
-                    "open review item {} anchors missing block {}",
-                    item.id, item.block_id
-                )));
-            }
-            continue;
-        };
-        if item.start_offset > item.end_offset
-            || item.end_offset > utf16_len(text)
-            || !is_utf16_boundary(text, item.start_offset)
-            || !is_utf16_boundary(text, item.end_offset)
-        {
-            return Err(QuarryError::InvalidInput(format!(
-                "review item {} has offsets [{}, {}) outside block {}",
-                item.id, item.start_offset, item.end_offset, item.block_id
-            )));
-        }
-        if item.is_block_delete_suggestion() && (item.start_offset != 0 || item.end_offset != 0) {
-            return Err(QuarryError::InvalidInput(format!(
-                "block-deletion suggestion {} must use the block anchor [0, 0)",
-                item.id
-            )));
-        }
-        // A collapsed range is meaningful for an open INSERTION suggestion
-        // (the live-session "type in suggesting mode" shape) or a structural
-        // block-deletion suggestion. Replies inherit their root suggestion's
-        // collapsed anchor.
-        let collapsed_insertion_reply = is_reply_to_open_insertion_suggestion(item, &items_by_id);
-        let collapsed_block_delete_reply =
-            is_reply_to_open_block_delete_suggestion(item, &items_by_id);
-        if item.start_offset == item.end_offset
-            && item.state == BlockReviewState::Open
-            && !is_open_insertion_suggestion(item)
-            && !is_open_block_delete_suggestion(item)
-            && !collapsed_insertion_reply
-            && !collapsed_block_delete_reply
-        {
-            return Err(QuarryError::InvalidInput(format!(
-                "open review item {} has a collapsed range",
-                item.id
-            )));
-        }
+pub(crate) struct BlockDocumentHead {
+    path: String,
+    content_type: String,
+    pub(crate) metadata: JsonValue,
+}
+
+pub(crate) async fn head_version_head_conn(
+    conn: &Connection,
+    document_id: &str,
+) -> Result<BlockDocumentHead> {
+    let mut rows = conn
+        .query(
+            "SELECT d.path, v.content_type, v.metadata_json
+             FROM documents d
+             JOIN document_versions v ON v.id = d.head_version_id
+             WHERE d.id = ?1 AND d.deleted_at IS NULL AND (d.expires_at IS NULL OR d.expires_at > ?2)
+             LIMIT 1",
+            params![document_id.to_string(), now_timestamp()],
+        )
+        .await
+        .map_err(map_turso_error)?;
+    match rows.next().await.map_err(map_turso_error)? {
+        Some(row) => Ok(BlockDocumentHead {
+            path: text(&row, 0)?,
+            content_type: text(&row, 1)?,
+            metadata: serde_json::from_str(&text(&row, 2)?)?,
+        }),
+        None => Err(QuarryError::NotFound(format!("document {document_id}"))),
     }
-    Ok(())
 }
 
-fn is_open_insertion_suggestion(item: &BlockReviewItem) -> bool {
-    item.kind == BlockReviewKind::Suggestion
-        && item.state == BlockReviewState::Open
-        && !item.is_markdown_insert_suggestion()
-        && item.start_offset == item.end_offset
-        && item
-            .replacement
-            .as_deref()
-            .is_some_and(|replacement| !replacement.is_empty())
-}
-
-fn is_open_block_delete_suggestion(item: &BlockReviewItem) -> bool {
-    item.is_block_delete_suggestion()
-        && item.state == BlockReviewState::Open
-        && item.start_offset == 0
-        && item.end_offset == 0
-}
-
-fn is_reply_to_open_insertion_suggestion(
-    item: &BlockReviewItem,
-    items_by_id: &HashMap<&str, &BlockReviewItem>,
-) -> bool {
-    if item.kind != BlockReviewKind::Comment || item.parent_item_id.is_none() {
-        return false;
-    }
-    let Some(parent) = item
-        .parent_item_id
-        .as_deref()
-        .and_then(|parent_id| items_by_id.get(parent_id))
-    else {
-        return false;
-    };
-    is_open_insertion_suggestion(parent)
-        && parent.document_id == item.document_id
-        && parent.block_id == item.block_id
-        && parent.start_offset == item.start_offset
-        && parent.end_offset == item.end_offset
-}
-
-fn is_reply_to_open_block_delete_suggestion(
-    item: &BlockReviewItem,
-    items_by_id: &HashMap<&str, &BlockReviewItem>,
-) -> bool {
-    if item.kind != BlockReviewKind::Comment || item.parent_item_id.is_none() {
-        return false;
-    }
-    let Some(parent) = item
-        .parent_item_id
-        .as_deref()
-        .and_then(|parent_id| items_by_id.get(parent_id))
-    else {
-        return false;
-    };
-    is_open_block_delete_suggestion(parent)
-        && parent.document_id == item.document_id
-        && parent.block_id == item.block_id
-        && parent.start_offset == item.start_offset
-        && parent.end_offset == item.end_offset
-}
-
-fn is_reply_to_open_markdown_insert_suggestion(
-    item: &BlockReviewItem,
-    items_by_id: &HashMap<&str, &BlockReviewItem>,
-) -> bool {
-    if item.kind != BlockReviewKind::Comment || item.parent_item_id.is_none() {
-        return false;
-    }
-    let Some(parent) = item
-        .parent_item_id
-        .as_deref()
-        .and_then(|parent_id| items_by_id.get(parent_id))
-    else {
-        return false;
-    };
-    parent.is_markdown_insert_suggestion()
-        && parent.state == BlockReviewState::Open
-        && parent.document_id == item.document_id
-        && parent.block_id == item.block_id
-        && item.start_offset == 0
-        && item.end_offset == 0
-}
-
-async fn block_transaction_conn(
+pub(crate) async fn block_transaction_conn(
     conn: &Connection,
     document_id: &str,
     client_tx_id: &str,

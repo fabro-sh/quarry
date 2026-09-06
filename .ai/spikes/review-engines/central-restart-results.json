@@ -1,0 +1,18 @@
+{
+  "results": [
+    {
+      "retainHistory": false,
+      "quote": "TAR!GET",
+      "text": "See TAR!GET here.",
+      "correct": false,
+      "note": "Resetting version and discarding steps falsely accepts stale positions"
+    },
+    {
+      "retainHistory": true,
+      "quote": "TAR!GET",
+      "text": "Earlier See TAR!GET here.",
+      "correct": true,
+      "note": "Old client rebased through persisted steps"
+    }
+  ]
+}

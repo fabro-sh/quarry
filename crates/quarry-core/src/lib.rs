@@ -127,7 +127,7 @@ pub enum QuarryError {
     #[error("unsupported: {0}")]
     Unsupported(String),
     #[error("unsupported markdown: {0}")]
-    UnsupportedMarkdown(#[from] quarry_collab_codec::Unsupported),
+    UnsupportedMarkdown(#[from] quarry_markdown::Unsupported),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]

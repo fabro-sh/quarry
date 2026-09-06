@@ -1,0 +1,149 @@
+[
+  {
+    "nativeProfile": {
+      "point": {
+        "calls": 64,
+        "ms": 2.9000015258789062,
+        "max": 0.20000028610229492
+      },
+      "fork": {
+        "calls": 20,
+        "ms": 8,
+        "max": 1
+      },
+      "apply": {
+        "calls": 20,
+        "ms": 73.69999837875366,
+        "max": 9.099999904632568
+      },
+      "selection": {
+        "calls": 20,
+        "ms": 1.799999713897705,
+        "max": 0.20000028610229492
+      },
+      "view": {
+        "calls": 20,
+        "ms": 34.500000953674316,
+        "max": 2.299999713897705
+      },
+      "save_after": {
+        "calls": 20,
+        "ms": 6.799999713897705,
+        "max": 1.4000000953674316
+      },
+      "contains_history": {
+        "calls": 4,
+        "ms": 0.9000000953674316,
+        "max": 0.2999997138977051
+      }
+    },
+    "browser": "chromium",
+    "markdown_bytes": 117488,
+    "blocks": 800,
+    "open_ms": 2423,
+    "keystroke_ms": {
+      "p50": 29,
+      "p95": 52,
+      "max": 57
+    },
+    "reload_ms": 1117
+  },
+  {
+    "nativeProfile": {
+      "point": {
+        "calls": 64,
+        "ms": 9,
+        "max": 2
+      },
+      "fork": {
+        "calls": 20,
+        "ms": 16,
+        "max": 2
+      },
+      "apply": {
+        "calls": 20,
+        "ms": 338,
+        "max": 18
+      },
+      "selection": {
+        "calls": 20,
+        "ms": 5,
+        "max": 1
+      },
+      "view": {
+        "calls": 20,
+        "ms": 181,
+        "max": 10
+      },
+      "save_after": {
+        "calls": 20,
+        "ms": 21,
+        "max": 2
+      },
+      "contains_history": {
+        "calls": 5,
+        "ms": 3,
+        "max": 1
+      }
+    },
+    "browser": "firefox",
+    "markdown_bytes": 117488,
+    "blocks": 800,
+    "open_ms": 3828,
+    "keystroke_ms": {
+      "p50": 54,
+      "p95": 71,
+      "max": 72
+    },
+    "reload_ms": 2422
+  },
+  {
+    "nativeProfile": {
+      "point": {
+        "calls": 64,
+        "ms": 4.000000000000455,
+        "max": 1.0000000000004547
+      },
+      "fork": {
+        "calls": 20,
+        "ms": 7.0000000000009095,
+        "max": 1.0000000000004547
+      },
+      "apply": {
+        "calls": 20,
+        "ms": 84.99999999999864,
+        "max": 7
+      },
+      "selection": {
+        "calls": 20,
+        "ms": 2,
+        "max": 1
+      },
+      "view": {
+        "calls": 20,
+        "ms": 35.999999999999545,
+        "max": 3
+      },
+      "save_after": {
+        "calls": 20,
+        "ms": 7.000000000000455,
+        "max": 1.0000000000004547
+      },
+      "contains_history": {
+        "calls": 4,
+        "ms": 0,
+        "max": 0
+      }
+    },
+    "browser": "webkit",
+    "markdown_bytes": 117488,
+    "blocks": 800,
+    "open_ms": 3307,
+    "keystroke_ms": {
+      "p50": 35,
+      "p95": 56,
+      "max": 58
+    },
+    "reload_ms": 1832
+  }
+]

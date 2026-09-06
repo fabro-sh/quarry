@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "0.1.5-nightly.20260721"
+    "version": "0.1.7-nightly.20260731"
   },
   "paths": {
     "/v1/capabilities": {
@@ -26,6 +26,29 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "tags": [
+          "sse"
+        ],
+        "operationId": "events",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-sent event stream"
           }
         }
       }
@@ -50,6 +73,3118 @@
         }
       }
     },
+    "/v1/libraries": {
+      "get": {
+        "tags": [
+          "library_handlers"
+        ],
+        "operationId": "list_libraries",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Library"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "library_handlers"
+        ],
+        "operationId": "create_library",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateLibraryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Library"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}": {
+      "get": {
+        "tags": [
+          "library_handlers"
+        ],
+        "operationId": "get_library",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Library"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/conflicts": {
+      "get": {
+        "tags": [
+          "conflicts"
+        ],
+        "operationId": "list_conflicts",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConflictRecord"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/conflicts/{conflict}": {
+      "get": {
+        "tags": [
+          "conflicts"
+        ],
+        "operationId": "get_conflict",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "conflict",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictRecord"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/conflicts/{conflict}/resolve": {
+      "post": {
+        "tags": [
+          "conflicts"
+        ],
+        "operationId": "resolve_conflict",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "conflict",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictRecord"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents": {
+      "get": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "list_documents",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "prefix",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentListEntry"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents-by-id/{document_id}/document-commands": {
+      "post": {
+        "tags": [
+          "document_engine"
+        ],
+        "operationId": "commands_by_id",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentCommandAck"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents-by-id/{document_id}/document-state": {
+      "get": {
+        "tags": [
+          "document_engine"
+        ],
+        "operationId": "read_by_id",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Comma-separated native heads already held by the client",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentStateResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents-by-id/{document_id}/events/stream": {
+      "get": {
+        "tags": [
+          "document_engine"
+        ],
+        "operationId": "events_by_id",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Native document events"
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents-by-id/{document_id}/selection": {
+      "post": {
+        "tags": [
+          "document_engine"
+        ],
+        "operationId": "selection_by_id",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentSelection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentSelection"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents-by-id/{document_id}/transactions": {
+      "post": {
+        "tags": [
+          "document_engine"
+        ],
+        "operationId": "transactions_by_id",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Committed document transaction"
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}": {
+      "get": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "get_document",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "put_document",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "Strict save using the ETag of the version read; must match the current document head",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "X-Quarry-Merge-Base",
+            "in": "header",
+            "description": "Merge using the known version read as the three-way merge base for Markdown writes",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "Use * to create a new document",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "X-Quarry-Allow-Document-Kind-Change",
+            "in": "header",
+            "description": "Set to true to intentionally change an existing Markdown block document into a raw document",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Whole-document Markdown writes require Content-Type: text/markdown. Raw writes must use an explicit raw media type; existing Markdown documents reject raw kind changes unless X-Quarry-Allow-Document-Kind-Change: true is sent.",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "text/markdown": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PutDocumentOutcome"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Existing Markdown document would be changed into a raw document without X-Quarry-Allow-Document-Kind-Change: true",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Updating Markdown requires If-Match or X-Quarry-Merge-Base from the original read; unversioned writes create only",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "delete_document",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionRecord"
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "head_document",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/agent-prompt": {
+      "get": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "document_agent_prompt_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ready-to-paste AI agent connect instructions",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/archive": {
+      "get": {
+        "tags": [
+          "document_engine"
+        ],
+        "operationId": "library_archive_get_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentArchive"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "document_engine"
+        ],
+        "operationId": "library_archive_post_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentArchive"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteOutcome"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Destination exists"
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/backlinks": {
+      "get": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "document_backlinks_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkCollection"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/blocks": {
+      "get": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "document_blocks_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockTreeResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/document-commands": {
+      "post": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "library_document_commands_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentCommandAck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/document-state": {
+      "get": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "library_document_state_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Comma-separated native heads already held by the client",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentStateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/events/stream": {
+      "get": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "document_events_stream_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Document-scoped server-sent event stream"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/metadata": {
+      "patch": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "patch_document_metadata",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Value"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteOutcome"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/move": {
+      "post": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "post_document_action",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionRecord"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/outgoing-links": {
+      "get": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "document_outgoing_links_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkCollection"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/presence": {
+      "get": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "agent_presence_list_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPresenceListResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "agent_presence_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentPresenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPresenceResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/review": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "operationId": "document_review_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeResolved",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DryRunValue"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentReviewResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/share": {
+      "get": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "document_share_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CollabInviteToken"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "document_share_create_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCollabInviteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollabInviteToken"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/share/{token}/revoke": {
+      "post": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "document_share_revoke_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollabInviteToken"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/snapshot": {
+      "get": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "document_snapshot_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDocumentSnapshot"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/transactions": {
+      "post": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "document_block_transactions_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockTransactionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockTransactionAck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/ttl": {
+      "patch": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "document_ttl_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TtlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TtlResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/versions": {
+      "get": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "document_versions_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentHistoryEntry"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/versions/raw": {
+      "get": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "document_versions_raw_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentVersion"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/versions/{version}": {
+      "get": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "document_version_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentVersionContent"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/versions/{version}/diff": {
+      "get": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "document_version_diff_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "against",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionDiff"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/documents/{path}/versions/{version}/restore": {
+      "post": {
+        "tags": [
+          "document_handlers"
+        ],
+        "operationId": "document_version_restore_openapi",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteOutcome"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/events/ack": {
+      "post": {
+        "tags": [
+          "agent_events"
+        ],
+        "operationId": "agent_events_ack",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentEventsAckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentEventsAckResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/events/pending": {
+      "get": {
+        "tags": [
+          "agent_events"
+        ],
+        "operationId": "agent_events_pending",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPendingEventsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/git/export": {
+      "post": {
+        "tags": [],
+        "operationId": "git_export",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitExportResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/git/import": {
+      "post": {
+        "tags": [],
+        "operationId": "git_import",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitImportResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/git/peers": {
+      "get": {
+        "tags": [],
+        "operationId": "list_git_peers",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GitPeer"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [],
+        "operationId": "create_git_peer",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitPeerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitPeer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/git/peers/{peer}/pull": {
+      "post": {
+        "tags": [],
+        "operationId": "git_pull",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "peer",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitSyncResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/git/peers/{peer}/push": {
+      "post": {
+        "tags": [],
+        "operationId": "git_push",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "peer",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitSyncResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/git/peers/{peer}/sync": {
+      "post": {
+        "tags": [],
+        "operationId": "git_sync",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "peer",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitSyncResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/graph": {
+      "get": {
+        "tags": [
+          "search_handlers"
+        ],
+        "operationId": "graph",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "root",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "link_kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resolved",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/reindex": {
+      "post": {
+        "tags": [
+          "search_handlers"
+        ],
+        "operationId": "reindex_library",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReindexReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/search": {
+      "get": {
+        "tags": [
+          "search_handlers"
+        ],
+        "operationId": "search_documents",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/search/suggest": {
+      "get": {
+        "tags": [
+          "search_handlers"
+        ],
+        "operationId": "suggest_documents",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SearchSuggestion"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/transactions": {
+      "post": {
+        "tags": [
+          "transaction_handlers"
+        ],
+        "operationId": "begin_transaction",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BeginTransactionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionRecord"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/transactions/{tx}/commit": {
+      "post": {
+        "tags": [
+          "transaction_handlers"
+        ],
+        "operationId": "commit_transaction",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionRecord"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/transactions/{tx}/documents/{path}": {
+      "put": {
+        "tags": [
+          "transaction_handlers"
+        ],
+        "operationId": "stage_put_document",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Value"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "transaction_handlers"
+        ],
+        "operationId": "stage_delete_document",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Value"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/transactions/{tx}/documents/{path}/metadata": {
+      "patch": {
+        "tags": [
+          "transaction_handlers"
+        ],
+        "operationId": "patch_transaction_document_metadata",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Value"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Value"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/transactions/{tx}/documents/{path}/move": {
+      "post": {
+        "tags": [
+          "transaction_handlers"
+        ],
+        "operationId": "post_transaction_document_action",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Value"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/libraries/{library}/transactions/{tx}/rollback": {
+      "post": {
+        "tags": [
+          "transaction_handlers"
+        ],
+        "operationId": "rollback_transaction",
+        "parameters": [
+          {
+            "name": "library",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionRecord"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/openapi.json": {
       "get": {
         "tags": [
@@ -66,37 +3201,6 @@
                 }
               }
             }
-          }
-        }
-      }
-    },
-    "/v1/tmp/collab/{secret}/{room}": {
-      "get": {
-        "tags": [
-          "collab_handlers"
-        ],
-        "operationId": "tmp_collab_websocket_openapi",
-        "parameters": [
-          {
-            "name": "secret",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "room",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "101": {
-            "description": "Yjs collaboration websocket for tmp capability documents"
           }
         }
       }
@@ -208,7 +3312,7 @@
           {
             "name": "If-Match",
             "in": "header",
-            "description": "Optional strict ETag precondition; must match the current document head",
+            "description": "Strict save using the ETag of the version read; must match the current document head",
             "required": false,
             "schema": {
               "type": [
@@ -220,7 +3324,7 @@
           {
             "name": "X-Quarry-Merge-Base",
             "in": "header",
-            "description": "Optional known version used as the three-way merge base",
+            "description": "Merge using the known version read as the three-way merge base",
             "required": false,
             "schema": {
               "type": [
@@ -286,6 +3390,16 @@
           },
           "415": {
             "description": "Tmp writes require a Markdown Content-Type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Updating Markdown requires If-Match or X-Quarry-Merge-Base from the original read; unversioned writes create only",
             "content": {
               "application/json": {
                 "schema": {
@@ -396,6 +3510,77 @@
         }
       }
     },
+    "/v1/tmp/documents/{secret}/archive": {
+      "get": {
+        "tags": [
+          "document_engine"
+        ],
+        "operationId": "tmp_archive_get_openapi",
+        "parameters": [
+          {
+            "name": "secret",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentArchive"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "document_engine"
+        ],
+        "operationId": "tmp_archive_post_openapi",
+        "parameters": [
+          {
+            "name": "secret",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentArchive"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteOutcome"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Destination exists"
+          }
+        }
+      }
+    },
     "/v1/tmp/documents/{secret}/blocks": {
       "get": {
         "tags": [
@@ -434,6 +3619,165 @@
             }
           },
           "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tmp/documents/{secret}/document-commands": {
+      "post": {
+        "tags": [
+          "tmp_document_handlers"
+        ],
+        "operationId": "tmp_document_commands_openapi",
+        "parameters": [
+          {
+            "name": "secret",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentCommandAck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tmp/documents/{secret}/document-state": {
+      "get": {
+        "tags": [
+          "tmp_document_handlers"
+        ],
+        "operationId": "tmp_document_state_openapi",
+        "parameters": [
+          {
+            "name": "secret",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Comma-separated native heads already held by the client",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentStateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
             "description": "",
             "content": {
               "application/json": {
@@ -607,6 +3951,56 @@
         }
       }
     },
+    "/v1/tmp/documents/{secret}/promote": {
+      "post": {
+        "tags": [
+          "tmp_document_handlers"
+        ],
+        "operationId": "tmp_document_promote_openapi",
+        "parameters": [
+          {
+            "name": "secret",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteTmpDocumentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentListEntry"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/tmp/documents/{secret}/review": {
       "get": {
         "tags": [
@@ -648,6 +4042,49 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tmp/documents/{secret}/selection": {
+      "post": {
+        "tags": [
+          "document_engine"
+        ],
+        "operationId": "tmp_selection_openapi",
+        "parameters": [
+          {
+            "name": "secret",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentSelection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentSelection"
+                  }
                 }
               }
             }
@@ -1008,19 +4445,12 @@
     "schemas": {
       "AgentBlockRef": {
         "type": "object",
-        "required": [
-          "ordinal"
-        ],
         "properties": {
-          "contentHash": {
+          "blockId": {
             "type": [
               "string",
               "null"
             ]
-          },
-          "ordinal": {
-            "type": "integer",
-            "minimum": 0
           }
         },
         "additionalProperties": false
@@ -1289,6 +4719,17 @@
           },
           "status": {
             "type": "string"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResolvedTarget",
+                "description": "Native targets can span blocks. Discussion status is independent of\nwhether target text is attached, hidden, deleted, or unknown at import."
+              }
+            ]
           }
         }
       },
@@ -1333,6 +4774,12 @@
             "type": "string",
             "description": "The losing incoming hunk (empty = the write deleted this region)."
           },
+          "replies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentReviewReply"
+            }
+          },
           "status": {
             "type": "string"
           }
@@ -1368,6 +4815,16 @@
           },
           "status": {
             "type": "string"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResolvedTarget"
+              }
+            ]
           }
         }
       },
@@ -1423,6 +4880,22 @@
           "replies"
         ],
         "properties": {
+          "acceptance_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "action": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProposalAction"
+              }
+            ]
+          },
           "anchor": {
             "oneOf": [
               {
@@ -1472,6 +4945,16 @@
           },
           "status": {
             "type": "string"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResolvedTarget"
+              }
+            ]
           }
         }
       },
@@ -1493,6 +4976,9 @@
       "AgentSuggestionKind": {
         "type": "string",
         "enum": [
+          "block_move",
+          "block_update",
+          "format",
           "block_delete",
           "markdown_insert",
           "insert",
@@ -1521,9 +5007,11 @@
         "type": "string",
         "description": "Stable machine-readable codes returned by every `/v1` HTTP error.",
         "enum": [
+          "FORBIDDEN",
           "INVALID_REQUEST",
           "NOT_FOUND",
           "GONE",
+          "PRECONDITION_REQUIRED",
           "PRECONDITION_FAILED",
           "CONFLICT",
           "METHOD_NOT_ALLOWED",
@@ -1650,6 +5138,32 @@
           }
         }
       },
+      "Attachment": {
+        "type": "object",
+        "required": [
+          "owner",
+          "start",
+          "end",
+          "quote"
+        ],
+        "properties": {
+          "end": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "owner": {
+            "$ref": "#/components/schemas/TargetOwner"
+          },
+          "quote": {
+            "type": "string"
+          },
+          "start": {
+            "type": "integer",
+            "description": "UTF-16 offsets into the displayed block or proposal, excluding markers.",
+            "minimum": 0
+          }
+        }
+      },
       "BeginTransactionRequest": {
         "type": "object",
         "properties": {
@@ -1674,6 +5188,50 @@
                 "$ref": "#/components/schemas/Value"
               }
             ]
+          }
+        }
+      },
+      "Block": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "position",
+          "segments",
+          "deleted"
+        ],
+        "properties": {
+          "attrs": {
+            "type": "object",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "parent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "segments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SegmentRef"
+            }
           }
         }
       },
@@ -1818,7 +5376,7 @@
           },
           "status": {
             "type": "string",
-            "description": "`committed` (clock matched the head or was omitted) or\n`committed_rebased` (stale-but-valid clock; ops validated against the\ncurrent rows)."
+            "description": "`committed` (clock matched the head) or `committed_rebased` (operations\nresolved against a known older version and merged into the current head)."
           },
           "transaction_id": {
             "type": "string",
@@ -1854,6 +5412,7 @@
         "type": "object",
         "required": [
           "client_tx_id",
+          "base_clock",
           "actor",
           "ops"
         ],
@@ -1862,10 +5421,8 @@
             "$ref": "#/components/schemas/BlockTransactionActor"
           },
           "base_clock": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "description": "The document_clock of the read used to construct these operations."
           },
           "client_tx_id": {
             "type": "string"
@@ -1899,6 +5456,28 @@
             "description": "The current document clock (head version id) the rows correspond to."
           },
           "document_id": {
+            "type": "string"
+          }
+        }
+      },
+      "BlockView": {
+        "type": "object",
+        "required": [
+          "block",
+          "text",
+          "runs"
+        ],
+        "properties": {
+          "block": {
+            "$ref": "#/components/schemas/Block"
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TextRun"
+            }
+          },
+          "text": {
             "type": "string"
           }
         }
@@ -1954,6 +5533,995 @@
           },
           "role": {
             "type": "string"
+          }
+        }
+      },
+      "Command": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "op"
+            ],
+            "properties": {
+              "after": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "before": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "revert"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "op"
+            ],
+            "properties": {
+              "block": {
+                "$ref": "#/components/schemas/SeedBlock"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "insert_block"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "op"
+            ],
+            "properties": {
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "move_block"
+                ]
+              },
+              "parent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "at",
+              "new_block",
+              "op"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "block": {
+                "type": "string"
+              },
+              "new_block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "split_block"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "left",
+              "right",
+              "op"
+            ],
+            "properties": {
+              "left": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "join_blocks"
+                ]
+              },
+              "right": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "op"
+            ],
+            "properties": {
+              "block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "delete_block"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "kind",
+              "attrs",
+              "op"
+            ],
+            "properties": {
+              "attrs": {
+                "type": "object",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "block": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "set_block"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "at",
+              "text",
+              "op"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "insert_text"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "ranges",
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "delete_text"
+                ]
+              },
+              "ranges": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TextRange"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "ranges",
+              "name",
+              "value",
+              "op"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "format"
+                ]
+              },
+              "ranges": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TextRange"
+                }
+              },
+              "value": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "author",
+              "body",
+              "ranges",
+              "op"
+            ],
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "add_comment"
+                ]
+              },
+              "ranges": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TextRange"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "parent",
+              "author",
+              "body",
+              "op"
+            ],
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "reply_comment"
+                ]
+              },
+              "parent": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "body",
+              "op"
+            ],
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "edit_comment"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "op"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "delete_comment"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "resolved",
+              "op"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "resolve_comment"
+                ]
+              },
+              "resolved": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "author",
+              "block",
+              "at",
+              "text",
+              "op"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "author": {
+                "type": "string"
+              },
+              "block": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "propose_insertion"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "author",
+              "block",
+              "at",
+              "ranges",
+              "text",
+              "op"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "author": {
+                "type": "string"
+              },
+              "block": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "propose_replacement"
+                ]
+              },
+              "ranges": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TextRange"
+                }
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "author",
+              "ranges",
+              "name",
+              "value",
+              "op"
+            ],
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "propose_format"
+                ]
+              },
+              "ranges": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TextRange"
+                }
+              },
+              "value": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "author",
+              "block",
+              "kind",
+              "attrs",
+              "op"
+            ],
+            "properties": {
+              "attrs": {
+                "type": "object",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "author": {
+                "type": "string"
+              },
+              "block": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "propose_block_update"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "author",
+              "block",
+              "op"
+            ],
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "block": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "propose_block_move"
+                ]
+              },
+              "parent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "author",
+              "block",
+              "op"
+            ],
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "block": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "propose_block_delete"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "author",
+              "blocks",
+              "op"
+            ],
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SeedBlock"
+                }
+              },
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "propose_blocks"
+                ]
+              },
+              "parent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "proposal",
+              "block",
+              "kind",
+              "attrs",
+              "op"
+            ],
+            "properties": {
+              "attrs": {
+                "type": "object",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "block": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "set_proposed_block"
+                ]
+              },
+              "proposal": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "proposal",
+              "blocks",
+              "op"
+            ],
+            "properties": {
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ProposedBlockPlacement"
+                }
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "set_proposed_structure"
+                ]
+              },
+              "proposal": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "proposal",
+              "block",
+              "at",
+              "new_block",
+              "op"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "block": {
+                "type": "string"
+              },
+              "new_block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "split_proposed_block"
+                ]
+              },
+              "proposal": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "proposal",
+              "left",
+              "right",
+              "op"
+            ],
+            "properties": {
+              "left": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "join_proposed_blocks"
+                ]
+              },
+              "proposal": {
+                "type": "string"
+              },
+              "right": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "op"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "accept_proposal"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "op"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "reject_proposal"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "body",
+              "op"
+            ],
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "edit_proposal"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "conflict",
+              "op"
+            ],
+            "properties": {
+              "conflict": {
+                "$ref": "#/components/schemas/Conflict"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "add_conflict"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "op"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "resolve_conflict"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Transport-independent commands. Positions belong to a document version;\ncallers must retain that version when submitting delayed text/review edits."
+      },
+      "CommandBatch": {
+        "type": "object",
+        "required": [
+          "request_id",
+          "actor",
+          "requests"
+        ],
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/DocumentActor"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "requests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommandRequest"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "CommandRequest": {
+        "type": "object",
+        "description": "The browser and authority execute this same request against the same base.\nIts actor and generated segment IDs are deterministic. Commands following\nan unacknowledged edit therefore retain valid native character references.",
+        "required": [
+          "request_id",
+          "base",
+          "commands"
+        ],
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "base": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "commands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Command"
+            }
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Comment": {
+        "type": "object",
+        "required": [
+          "id",
+          "author",
+          "body",
+          "target",
+          "original_quote",
+          "state"
+        ],
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ReviewMetadata"
+          },
+          "original_quote": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/DiscussionState"
+          },
+          "target": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TargetFragment"
+            }
+          }
+        }
+      },
+      "CommentView": {
+        "type": "object",
+        "required": [
+          "comment",
+          "target"
+        ],
+        "properties": {
+          "comment": {
+            "$ref": "#/components/schemas/Comment"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ResolvedTarget"
+          }
+        }
+      },
+      "Conflict": {
+        "type": "object",
+        "required": [
+          "id",
+          "base",
+          "incoming",
+          "canonical",
+          "resolved",
+          "author",
+          "metadata"
+        ],
+        "properties": {
+          "after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": "string"
+          },
+          "base": {
+            "type": "string"
+          },
+          "canonical": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "incoming": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ReviewMetadata"
+          },
+          "resolved": {
+            "type": "boolean"
           }
         }
       },
@@ -2085,6 +6653,99 @@
                 "$ref": "#/components/schemas/Value"
               }
             ]
+          }
+        }
+      },
+      "DiscussionState": {
+        "type": "string",
+        "enum": [
+          "open",
+          "resolved"
+        ]
+      },
+      "DocumentActor": {
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "DocumentArchive": {
+        "type": "object",
+        "description": "Portable native history, review targets, and document metadata. Markdown\nalone cannot represent retained characters or every review decision.",
+        "required": [
+          "format",
+          "version",
+          "bytes"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          "format": {
+            "type": "string"
+          },
+          "metadata": {},
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "DocumentCommandAck": {
+        "type": "object",
+        "required": [
+          "request_id",
+          "document_clock",
+          "transaction_id",
+          "heads",
+          "changed_block_ids"
+        ],
+        "properties": {
+          "changed_block_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "document_clock": {
+            "type": "string"
+          },
+          "heads": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "transaction_id": {
+            "type": "string"
           }
         }
       },
@@ -2308,6 +6969,29 @@
           }
         }
       },
+      "DocumentSelection": {
+        "type": "object",
+        "required": [
+          "client_id",
+          "author",
+          "points"
+        ],
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "client_id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TextPoint"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "DocumentSource": {
         "type": "string",
         "enum": [
@@ -2316,6 +7000,56 @@
           "fuse",
           "cli",
           "system"
+        ]
+      },
+      "DocumentStateResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "writable",
+              "metadata",
+              "document_clock",
+              "bytes",
+              "document",
+              "format"
+            ],
+            "properties": {
+              "base": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bytes": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              },
+              "document": {
+                "$ref": "#/components/schemas/DocumentView"
+              },
+              "document_clock": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "automerge"
+                ]
+              },
+              "metadata": {},
+              "writable": {
+                "type": "boolean"
+              }
+            }
+          }
         ]
       },
       "DocumentVersion": {
@@ -2408,6 +7142,58 @@
           }
         }
       },
+      "DocumentView": {
+        "type": "object",
+        "required": [
+          "document_id",
+          "schema_version",
+          "heads",
+          "blocks",
+          "comments",
+          "proposals",
+          "conflicts"
+        ],
+        "properties": {
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockView"
+            }
+          },
+          "comments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommentView"
+            }
+          },
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Conflict"
+            }
+          },
+          "document_id": {
+            "type": "string"
+          },
+          "heads": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "proposals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProposalView"
+            }
+          },
+          "schema_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "DryRunValue": {
         "type": "string",
         "enum": [
@@ -2418,6 +7204,171 @@
           "false",
           "no"
         ]
+      },
+      "GitExportRequest": {
+        "type": "object",
+        "required": [
+          "repo"
+        ],
+        "properties": {
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "force_large": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "frontmatter_markdown": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "repo": {
+            "type": "string"
+          }
+        }
+      },
+      "GitExportResult": {
+        "type": "object",
+        "required": [
+          "exported_paths"
+        ],
+        "properties": {
+          "commit_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exported_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "GitImportRequest": {
+        "type": "object",
+        "required": [
+          "repo"
+        ],
+        "properties": {
+          "repo": {
+            "type": "string"
+          }
+        }
+      },
+      "GitImportResult": {
+        "type": "object",
+        "required": [
+          "imported_paths",
+          "transaction_id"
+        ],
+        "properties": {
+          "imported_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "transaction_id": {
+            "type": "string"
+          }
+        }
+      },
+      "GitPeer": {
+        "type": "object",
+        "required": [
+          "id",
+          "library_id",
+          "kind",
+          "config"
+        ],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/Value"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "library_id": {
+            "type": "string"
+          }
+        }
+      },
+      "GitPeerRequest": {
+        "type": "object",
+        "required": [
+          "repo"
+        ],
+        "properties": {
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "type": "string"
+          }
+        }
+      },
+      "GitSyncResult": {
+        "type": "object",
+        "required": [
+          "imported_paths",
+          "exported_paths",
+          "conflict_paths",
+          "conflicts"
+        ],
+        "properties": {
+          "commit_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conflict_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConflictRecord"
+            }
+          },
+          "exported_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "imported_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
       },
       "GraphEdge": {
         "type": "object",
@@ -2591,6 +7542,378 @@
           }
         }
       },
+      "Proposal": {
+        "type": "object",
+        "required": [
+          "id",
+          "author",
+          "body",
+          "action",
+          "segments",
+          "state",
+          "metadata"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ProposalAction"
+          },
+          "author": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ReviewMetadata"
+          },
+          "segments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SegmentRef"
+            }
+          },
+          "state": {
+            "$ref": "#/components/schemas/ProposalState"
+          }
+        }
+      },
+      "ProposalAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "unavailable"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "at",
+              "delete_target",
+              "original_quote",
+              "kind"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "delete_target": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TargetFragment"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              },
+              "original_quote": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "target",
+              "name",
+              "value",
+              "expected",
+              "kind"
+            ],
+            "properties": {
+              "expected": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": false,
+                  "prefixItems": [
+                    {
+                      "type": "string"
+                    },
+                    {}
+                  ]
+                },
+                "description": "Text and this mark's values at proposal time. Other marks and\nblock placement can change without invalidating the decision."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "format"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "target": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TargetFragment"
+                }
+              },
+              "value": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "block_kind",
+              "attrs",
+              "expected_kind",
+              "expected_attrs",
+              "kind"
+            ],
+            "properties": {
+              "attrs": {
+                "type": "object",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "block": {
+                "type": "string"
+              },
+              "block_kind": {
+                "type": "string"
+              },
+              "expected_attrs": {
+                "type": "object",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "expected_kind": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "update_block"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "kind"
+            ],
+            "properties": {
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "block": {
+                "type": "string"
+              },
+              "expected_before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "expected_parent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "move_block"
+                ]
+              },
+              "parent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "expected",
+              "kind"
+            ],
+            "properties": {
+              "block": {
+                "type": "string"
+              },
+              "expected": {
+                "type": "string",
+                "description": "Exact subtree content when the deletion was proposed. A changed\nsubtree requires a new decision instead of dropping unseen edits."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "delete_block"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "blocks",
+              "kind"
+            ],
+            "properties": {
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Block"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "insert_blocks"
+                ]
+              },
+              "parent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "ProposalState": {
+        "type": "string",
+        "enum": [
+          "open",
+          "accepted",
+          "rejected",
+          "closed"
+        ]
+      },
+      "ProposalView": {
+        "type": "object",
+        "required": [
+          "proposal",
+          "blocks",
+          "text",
+          "runs",
+          "target"
+        ],
+        "properties": {
+          "acceptance_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "None only when the current document can accept this proposal."
+          },
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockView"
+            }
+          },
+          "proposal": {
+            "$ref": "#/components/schemas/Proposal"
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TextRun"
+            }
+          },
+          "target": {
+            "$ref": "#/components/schemas/ResolvedTarget"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "ProposedBlockPlacement": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "position",
+              "kind"
+            ],
+            "properties": {
+              "block": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "existing"
+                ]
+              },
+              "parent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "position": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "kind"
+            ],
+            "properties": {
+              "block": {
+                "$ref": "#/components/schemas/SeedBlock"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "new"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A proposed tree can retain existing characters or introduce a new block.\nExisting blocks never take replacement text from an editor projection."
+      },
       "PutConflictOutcome": {
         "type": "object",
         "required": [
@@ -2664,6 +7987,49 @@
           },
           "ok": {
             "type": "boolean"
+          }
+        }
+      },
+      "ResolvedTarget": {
+        "type": "object",
+        "required": [
+          "state",
+          "attachments"
+        ],
+        "properties": {
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            }
+          },
+          "state": {
+            "$ref": "#/components/schemas/TargetState"
+          }
+        }
+      },
+      "ReviewMetadata": {
+        "type": "object",
+        "required": [
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "legacy_record": {
+            "description": "Exact legacy fields retained by the one-time importer."
+          },
+          "unattached_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Preserves records whose targets were already missing before migration."
+          },
+          "updated_at": {
+            "type": "string"
           }
         }
       },
@@ -2763,6 +8129,194 @@
             ]
           },
           "title": {
+            "type": "string"
+          }
+        }
+      },
+      "SeedBlock": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "position",
+          "text"
+        ],
+        "properties": {
+          "attrs": {
+            "type": "object",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "parent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "SegmentRef": {
+        "type": "object",
+        "required": [
+          "source",
+          "segment"
+        ],
+        "properties": {
+          "segment": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "TargetFragment": {
+        "type": "object",
+        "required": [
+          "source",
+          "first",
+          "last",
+          "last_width"
+        ],
+        "properties": {
+          "first": {
+            "type": "string",
+            "description": "Exact native character identities. Retained text makes these durable\neven when the characters are hidden by a deletion or their owner moves."
+          },
+          "last": {
+            "type": "string"
+          },
+          "last_width": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "TargetOwner": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "kind"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "block"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "kind"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "proposal"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "TargetState": {
+        "type": "string",
+        "enum": [
+          "attached",
+          "hidden",
+          "deleted",
+          "unattached"
+        ]
+      },
+      "TextPoint": {
+        "type": "object",
+        "required": [
+          "source",
+          "cursor"
+        ],
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "TextRange": {
+        "type": "object",
+        "required": [
+          "source",
+          "start",
+          "end"
+        ],
+        "properties": {
+          "end": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          }
+        }
+      },
+      "TextRun": {
+        "type": "object",
+        "required": [
+          "text",
+          "marks",
+          "source",
+          "source_start"
+        ],
+        "properties": {
+          "marks": {
+            "type": "object",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_start": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "text": {
             "type": "string"
           }
         }

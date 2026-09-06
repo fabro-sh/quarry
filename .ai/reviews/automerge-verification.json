@@ -1,0 +1,178 @@
+{
+  "recorded_at": "2026-09-05T15:02:54.829758+00:00",
+  "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "build_env": {
+    "CARGO_TARGET_DIR": "target/cutover",
+    "native_and_feature_builds": "sequential",
+    "performance": "release Rust server, release WASM, Vite/React development shell"
+  },
+  "linux": {
+    "image": "sha256:2a906a97fbe65bd2709ace92856bde296b1aeb3b7820b620ae7e0e0395b96888",
+    "rust": "1.95.0",
+    "network": "disabled",
+    "cargo": "locked and offline"
+  },
+  "checks": [
+    {
+      "name": "macOS Rust all features",
+      "command": "cargo test --locked --workspace --all-features --no-fail-fast",
+      "evidence": "target/cutover-workspace-incremental-complete.log",
+      "sha256": "013a109f4be914d9979f86ca54e7b6b600ea82a0308859c36409f55ac4a0d859",
+      "result": "passed",
+      "targets": 53,
+      "passed": 573,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "name": "macOS Rust default",
+      "command": "cargo test --locked --workspace --no-fail-fast",
+      "evidence": "target/cutover-default-incremental-complete.log",
+      "sha256": "c57f40b0ef1cc06c03bec0d8704db708348b0783027c10eb952f6b0cd8dbbf52",
+      "result": "passed",
+      "targets": 53,
+      "passed": 562,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "name": "Linux Rust all features",
+      "command": "cargo test --locked --offline --workspace --all-features --no-fail-fast -j 1",
+      "evidence": "target/cutover-linux-incremental-serial.log",
+      "sha256": "cfb8417eed006604dd6164494f6c7abae2b0265c9c349dca2ca11815645e85fd",
+      "result": "passed",
+      "targets": 53,
+      "passed": 572,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "name": "Temporary-only server",
+      "command": "cargo test --locked -p quarry-server --no-default-features --features tmp-documents",
+      "evidence": "target/cutover-tmp-only-tests.log",
+      "sha256": "5420ed2b137e9fe0fe5da14b9312c589f157e647778ba00f422b6c976ccac519",
+      "result": "passed",
+      "targets": 15,
+      "passed": 109,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "name": "Library-only server",
+      "command": "cargo test --locked -p quarry-server --no-default-features --features lib-documents",
+      "evidence": "target/cutover-lib-only-tests.log",
+      "sha256": "d3cba9d42ccccee8c678c8e51690398c0f3e642a1a36a05574039e3707ffa321",
+      "result": "passed",
+      "targets": 15,
+      "passed": 193,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "name": "No-document server surface",
+      "command": "cargo test --locked -p quarry-server --no-default-features --test feature_surface",
+      "evidence": "target/cutover-no-documents-tests.log",
+      "sha256": "e509b6fce0798bba3268315e9dbad34ee747a1747176da4e7c245b11f2b91533",
+      "result": "passed",
+      "targets": 1,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "name": "Clippy all features",
+      "command": "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
+      "evidence": "target/cutover-clippy-incremental-complete.log",
+      "sha256": "18fbba9055af09c81e7deb1f214ac357e6bdccdffd46faf507589579178af077",
+      "result": "passed"
+    },
+    {
+      "name": "Clippy library-only",
+      "command": "cargo clippy --locked -p quarry-server -p quarry-cli -p quarry --no-default-features --features lib-documents --all-targets -- -D warnings",
+      "evidence": "target/cutover-lib-only-incremental.log",
+      "sha256": "4112d2a558f5b1ac4e16a897cc2cefae114f7c773c0aad6f3a24a4168e9717db",
+      "result": "passed"
+    },
+    {
+      "name": "Clippy no documents",
+      "command": "cargo clippy --locked -p quarry-server -p quarry-cli -p quarry --no-default-features --all-targets -- -D warnings",
+      "evidence": "target/cutover-no-documents-incremental.log",
+      "sha256": "9b34352dd5c0cf4b1b27111c9c0271e16069c5baf8a605edc36960cb10c7746d",
+      "result": "passed"
+    },
+    {
+      "name": "UI unit and WASM contracts",
+      "command": "bun run test",
+      "evidence": "target/cutover-ui-final.log",
+      "sha256": "ae99ae615dd41ede8c2f0dcda5e9e569aa392f612b814ba6c83cd31b857fc9a8",
+      "result": "passed",
+      "passed": 156,
+      "files": 17
+    },
+    {
+      "name": "TypeScript and production build",
+      "command": "bun run build",
+      "evidence": "target/cutover-ui-build-final.log",
+      "sha256": "fa4a84aa4411755fa827b9930a6772305d23203d1eae311183c4c59aa356cec4",
+      "result": "passed"
+    },
+    {
+      "name": "Live browser conformance",
+      "command": "bunx playwright test -c playwright.live.config.ts --workers=1",
+      "evidence": "target/cutover-browser-final.log",
+      "sha256": "e399cf4494fcded2c2a1a859f3442e6865872e094c2813a510e371d29976b1ff",
+      "result": "passed",
+      "passed": 63,
+      "skipped": 0,
+      "retries": 0
+    },
+    {
+      "name": "Chrome repeated comparison and concurrent edits",
+      "command": "QUARRY_PROFILE=1 QUARRY_PERFORMANCE=1 bunx playwright test -c playwright.live.config.ts --workers=1 --project=chromium --grep Chrome --repeat-each=3",
+      "evidence": "target/cutover-chrome-final-repeated.log",
+      "sha256": "bd521249b1df3e902da6b97a90f69edf6e251d332b78ca51eec4ccd2f05208db",
+      "result": "passed",
+      "passed": 6,
+      "skipped": 0
+    },
+    {
+      "name": "All-browser performance",
+      "command": "QUARRY_PROFILE=1 QUARRY_PERFORMANCE=1 bunx playwright test -c playwright.live.config.ts --workers=1",
+      "evidence": "target/cutover-performance-final.log",
+      "sha256": "05e0fcb1794dc195001e4b7e8f05c739fe84da674115ddab303c479e3ed01863",
+      "result": "passed",
+      "passed": 5,
+      "skipped": 4
+    },
+    {
+      "name": "Formatting and architecture",
+      "command": "cargo fmt --all --check; python3 scripts/check-document-architecture.py; git diff --check",
+      "evidence": "target/cutover-final-static-checks.log",
+      "sha256": "76c021d601369a794d14e85c7fa40bc6826e0cd4b4acedffbcfe9795cd2092ee",
+      "result": "passed"
+    },
+    {
+      "name": "API generation",
+      "command": "bun run generate:api",
+      "evidence": "target/cutover-api-incremental-generation.log",
+      "sha256": "541ce493c44eb90d8c41730b7a8ef9d7f1ed8b4725e4eebeff4a033803a70b97",
+      "result": "passed"
+    },
+    {
+      "name": "Controlled cache race regression",
+      "command": "bun run test src/features/editor/document-session.test.ts",
+      "evidence": "target/cutover-session-cache-race-after.log",
+      "sha256": "a925903df219a1fc1c7cecce1e815c2466b258dbb6955faddab5059a7edc99be",
+      "result": "passed",
+      "passed": 5
+    }
+  ],
+  "limits": [
+    "Suite counts overlap; they are not one total of unique tests.",
+    "macOS/Linux full Rust checks precede only final feature-specific test fixture gates and the Tokio io-util dev feature; the isolated feature variants verify those fixture fixes. Native runtime code is unchanged.",
+    "Chrome metrics are pinned Playwright Chromium on this host, not physical-display or cross-device proof.",
+    "Four performance skips are the two Chrome-only cases in Firefox and WebKit.",
+    "No actual kernel FUSE mount or physical operating-system IME was exercised.",
+    "UI behavior differences are listed in the conformance report."
+  ]
+}

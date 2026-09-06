@@ -687,6 +687,7 @@ describe('Quarry API client', () => {
 
     const failure = await postBlockTransaction(libraryDocumentRef('notes', 'doc.md'), {
       client_tx_id: 'tx-1',
+      base_clock: 'version-1',
       actor: { kind: 'agent' },
       ops: [{ op: 'delete_block', block_id: 'b1' }],
     }).then(
@@ -720,6 +721,7 @@ describe('Quarry API client', () => {
 
     const failure = await postBlockTransaction(libraryDocumentRef('notes', 'doc.md'), {
       client_tx_id: 'tx-1',
+      base_clock: 'version-1',
       actor: { kind: 'agent' },
       ops: [{ op: 'delete_block', block_id: 'b1' }],
     }).then(

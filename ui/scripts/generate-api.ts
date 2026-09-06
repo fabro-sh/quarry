@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -15,3 +16,8 @@ if (!response.ok) {
 
 await mkdir(dirname(output), { recursive: true });
 await writeFile(output, JSON.stringify(await response.json(), null, 2));
+
+// The browser command types come from the same Rust schemas as the HTTP API.
+execFileSync(resolve(dirname(output), '../../../node_modules/.bin/openapi-ts'), [
+  '-i', output, '-o', resolve(dirname(output), 'schema'), '-p', '@hey-api/typescript', '-e', 'false', '--no-log-file',
+], { stdio: 'inherit' });

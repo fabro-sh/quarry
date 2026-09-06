@@ -3,6 +3,23 @@ import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
 
 import { App } from './App';
+import type { DocumentBodyProps } from './document-body';
+import { acceptAllDocumentSuggestions } from '../features/editor/document-actions';
+
+vi.mock('../features/editor/document-actions', () => ({ acceptAllDocumentSuggestions: vi.fn() }));
+// Workspace tests exercise routing, file actions and metadata. Native editor
+// commands, persistence and review are covered by real EditorView tests.
+vi.mock('./document-body', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./document-body')>();
+  const { useEffect } = await import('react');
+  return { ...actual, DocumentBody(props: DocumentBodyProps) {
+    useEffect(() => { if (props.documentId === 'doc-blocked') props.onSaveStateChange('saving'); }, [props.documentId, props.onSaveStateChange]);
+    if (props.contentType.includes('markdown') || /\.md$/.test(props.path)) {
+      return <section aria-label="Editor"><div aria-label="Workspace editor">{props.content}</div></section>;
+    }
+    return <actual.DocumentBody {...props} />;
+  } };
+});
 
 describe('Quarry Browser workspace', () => {
   afterEach(() => {
@@ -12,7 +29,7 @@ describe('Quarry Browser workspace', () => {
     window.history.pushState({}, '', '/');
   });
 
-  it('shows no save status or manual Save button without a live collab session', async () => {
+  it('shows no save status or manual Save button without an open document session', async () => {
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/v1/libraries') {
@@ -57,10 +74,8 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
-    // The save state derives from the live collab session (connection +
-    // checkpoint acks); without a session none is shown, there is no manual
-    // Save button, and the mode selector is the header's document control.
-    // (Save-state round trips need a real websocket, so they live in e2e.)
+    // Durable command publication drives save state. Real-server browser
+    // tests cover its round trip; this workspace fixture checks the controls.
     expect(await screen.findByRole('button', { name: 'Document mode' })).toHaveTextContent(
       'Editing'
     );
@@ -332,10 +347,10 @@ describe('Quarry Browser workspace', () => {
 
     renderApp();
 
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Deep'));
+    await waitFor(() => expect(screen.getByLabelText('Workspace editor')).toHaveTextContent('Deep'));
     await userEvent.click(screen.getByRole('treeitem', { name: /Next/ }));
 
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Next'));
+    await waitFor(() => expect(screen.getByLabelText('Workspace editor')).toHaveTextContent('Next'));
     expect(window.location.pathname).toBe('/lib/routed-lib/documents/next.md');
   });
 
@@ -387,7 +402,7 @@ describe('Quarry Browser workspace', () => {
   it('accepts every open suggestion from the document actions menu in one transaction', async () => {
     const secret = '0fedcba9876543210fedcba987654321';
     window.history.pushState({}, '', `/tmp/${secret}`);
-    let accepted = false;
+    const accepted = false;
     const suggestions = [
       {
         id: 's-open-1',
@@ -453,22 +468,6 @@ describe('Quarry Browser workspace', () => {
           conflicts: [],
         });
       }
-      if (url === `/v1/tmp/documents/${secret}/transactions` && init?.method === 'POST') {
-        expect(JSON.parse(String(init.body))).toMatchObject({
-          actor: { kind: 'user' },
-          ops: [
-            { op: 'suggestion.accept', item_id: 's-open-1' },
-            { op: 'suggestion.accept', item_id: 's-open-2' },
-          ],
-        });
-        accepted = true;
-        return json({
-          status: 'committed',
-          document_clock: 'tmp-v2',
-          transaction_id: 'tx-accept-all',
-          changed_block_ids: ['b1', 'b3'],
-        });
-      }
       return new Response('not found', { status: 404 });
     });
     vi.stubGlobal('fetch', fetch);
@@ -482,16 +481,12 @@ describe('Quarry Browser workspace', () => {
 
     fireEvent.click(acceptAll);
 
-    await waitFor(() => expect(accepted).toBe(true));
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Document actions' }));
-    await waitFor(() =>
-      expect(
-        screen.getByRole('menuitem', { name: 'Accept all suggestions' })
-      ).toHaveAttribute('data-disabled')
-    );
+    expect(acceptAllDocumentSuggestions).toHaveBeenCalledWith('tmp-accept-all');
   });
 
-  it('badges open diff3 conflicts on a tmp document and dismisses them from the panel', async () => {
+  it('updates the conflict badge when native review events report a decision', async () => {
+    vi.stubGlobal('EventSource', MockEventSource);
+    MockEventSource.instances = [];
     const secret = '5f1e0d3c2b4a49188c7d6e5f4a3b2c1d';
     window.history.pushState({}, '', `/tmp/${secret}`);
     const openConflict = {
@@ -530,19 +525,6 @@ describe('Quarry Browser workspace', () => {
           conflicts: [resolved ? { ...openConflict, status: 'resolved' } : openConflict],
         });
       }
-      if (url === `/v1/tmp/documents/${secret}/transactions` && init?.method === 'POST') {
-        expect(JSON.parse(String(init.body))).toMatchObject({
-          actor: { kind: 'user' },
-          ops: [{ op: 'conflict.keep_canonical', item_id: 'x1' }],
-        });
-        resolved = true;
-        return json({
-          status: 'committed',
-          document_clock: 'tmp-v2',
-          transaction_id: 'tx-1',
-          changed_block_ids: [],
-        });
-      }
       return new Response('not found', { status: 404 });
     });
     vi.stubGlobal('fetch', fetch);
@@ -553,16 +535,9 @@ describe('Quarry Browser workspace', () => {
     // open-conflict count and the card offers explicit resolution choices.
     const badge = await screen.findByTestId('comments-tab-badge');
     expect(badge).toHaveTextContent('1');
-    const card = await screen.findByTestId('comments-panel-conflict');
-    expect(within(card).getByText('Agent rewrite.')).toBeInTheDocument();
-
-    fireEvent.click(within(card).getByTestId('keep-canonical-conflict'));
-
+    resolved = true;
+    act(() => { for (const source of MockEventSource.instances) source.emit('doc.changed', { type: 'doc.changed', doc_id: 'tmp-1', path: secret }); });
     await waitFor(() => expect(screen.queryByTestId('comments-tab-badge')).not.toBeInTheDocument());
-    expect(screen.getByTestId('comments-panel-conflict')).toHaveAttribute(
-      'data-status',
-      'resolved'
-    );
   });
 
   it('subscribes tmp documents to their event stream and refreshes review from it', async () => {
@@ -889,7 +864,7 @@ describe('Quarry Browser workspace', () => {
       await documentReady;
     });
 
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Deep body'));
+    await waitFor(() => expect(screen.getByLabelText('Workspace editor')).toHaveTextContent('Deep body'));
   });
 
   it('offers tree context menu actions for folders and documents', async () => {
@@ -984,7 +959,7 @@ describe('Quarry Browser workspace', () => {
     await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
 
     await userEvent.click(screen.getByRole('treeitem', { name: /Source/ }));
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Source'));
+    await waitFor(() => expect(screen.getByLabelText('Workspace editor')).toHaveTextContent('Source'));
     expect(window.location.pathname).toBe('/lib/tree-lib/documents/folder/source.md');
 
     fireEvent.contextMenu(treeItemLabel(/Source/, 'Source'), { clientX: 40, clientY: 72 });
@@ -1247,7 +1222,7 @@ describe('Quarry Browser workspace', () => {
 
     // Scope link assertions to the details pane: the editor now also renders
     // `[[Guide]]`/`[[Missing]]` as wiki-link chips with the same text.
-    await screen.findByLabelText('Plate markdown editor');
+    await screen.findByLabelText('Workspace editor');
     const details = within(screen.getByLabelText('Document details'));
     expect(await details.findAllByText('guide.md')).toHaveLength(2);
     expect(details.getByText('Missing')).toBeInTheDocument();
@@ -1259,7 +1234,7 @@ describe('Quarry Browser workspace', () => {
     // URLs have no document destination and are filtered out.
     expect(details.queryByText('# Links')).not.toBeInTheDocument();
     expect(details.queryByText('https://example.com')).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Links');
+    expect(screen.getByLabelText('Workspace editor')).toHaveTextContent('Links');
     const resolvedLinkButtons = details.getAllByRole('button', { name: 'guide.md' });
     await userEvent.hover(resolvedLinkButtons[0]);
     expect((await screen.findAllByLabelText('Link preview'))[0]).toHaveTextContent('Hover preview body.');
@@ -1269,11 +1244,11 @@ describe('Quarry Browser workspace', () => {
     expect(details.getByText('source.md')).toBeInTheDocument();
     await userEvent.click(details.getByRole('button', { name: 'Create document for Missing' }));
     expect(prompt).toHaveBeenCalledWith('New document path', 'Missing.md');
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Untitled'));
+    await waitFor(() => expect(screen.getByLabelText('Workspace editor')).toHaveTextContent('Untitled'));
 
     await userEvent.click(details.getAllByRole('button', { name: 'guide.md' })[0]);
     await waitFor(() =>
-      expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Hover preview body.')
+      expect(screen.getByLabelText('Workspace editor')).toHaveTextContent('Hover preview body.')
     );
   });
 
@@ -1341,7 +1316,7 @@ describe('Quarry Browser workspace', () => {
     expect(screen.getByText(/-# Old/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByLabelText('Restore version v1'));
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Old'));
+    await waitFor(() => expect(screen.getByLabelText('Workspace editor')).toHaveTextContent('Old'));
     expect(fetch).toHaveBeenCalledWith(
       '/v1/libraries/versions-lib/documents/versioned.md/versions/v1/restore',
       expect.objectContaining({ method: 'POST' })
@@ -1530,7 +1505,7 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
-    expect(await screen.findByLabelText('Plate markdown editor')).toHaveTextContent('Initial');
+    expect(await screen.findByLabelText('Workspace editor')).toHaveTextContent('Initial');
     expect(MockEventSource.instances[0]?.url).toBe('/v1/events?library=events-lib');
 
     content = '# External';
@@ -1542,7 +1517,7 @@ describe('Quarry Browser workspace', () => {
       });
     });
 
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('External'));
+    await waitFor(() => expect(screen.getByLabelText('Workspace editor')).toHaveTextContent('External'));
 
     outgoing = [link({ src_path: 'daily.md', target_text: 'Guide', target_path: 'guide.md' })];
     act(() => {
@@ -1566,7 +1541,7 @@ describe('Quarry Browser workspace', () => {
       });
     });
 
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Git synced'));
+    await waitFor(() => expect(screen.getByLabelText('Workspace editor')).toHaveTextContent('Git synced'));
   });
 
   it('seeds recreated same-path documents instead of showing the deleted document cache', async () => {
@@ -1637,14 +1612,14 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await waitFor(() => expect(fetch).toHaveBeenCalledWith('/v1/libraries/cache-lib/documents/daily.md'));
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Old cached body'));
+    await waitFor(() => expect(screen.getByLabelText('Workspace editor')).toHaveTextContent('Old cached body'));
 
     await userEvent.keyboard('{Control>}k{/Control}');
     await userEvent.click(await screen.findByText('Delete current document'));
-    await waitFor(() => expect(screen.queryByLabelText('Plate markdown editor')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByLabelText('Workspace editor')).not.toBeInTheDocument());
 
     await userEvent.click(screen.getByRole('button', { name: 'Create document' }));
-    const editor = await screen.findByLabelText('Plate markdown editor');
+    const editor = await screen.findByLabelText('Workspace editor');
     expect(editor).toHaveTextContent('Untitled');
     expect(editor).not.toHaveTextContent('Old cached body');
     expect(confirm).toHaveBeenCalledWith('Delete daily.md?');
@@ -1699,7 +1674,7 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
-    expect(await screen.findByLabelText('Plate markdown editor')).toHaveTextContent('Initial');
+    expect(await screen.findByLabelText('Workspace editor')).toHaveTextContent('Initial');
 
     content = '# Polled';
     outgoing = [link({ src_path: 'daily.md', target_text: 'Guide', target_path: 'guide.md' })];
@@ -1707,7 +1682,7 @@ describe('Quarry Browser workspace', () => {
       MockEventSource.instances[0].onerror?.(new Event('error'));
     });
 
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Polled'));
+    await waitFor(() => expect(screen.getByLabelText('Workspace editor')).toHaveTextContent('Polled'));
     expect(screen.getByText('guide.md')).toBeInTheDocument();
   });
 
@@ -1934,7 +1909,7 @@ describe('Quarry Browser workspace', () => {
     await userEvent.click(await screen.findByRole('treeitem', { name: /photo.png/ }));
     const image = await screen.findByRole('img', { name: 'assets/photo.png preview' });
     expect(image).toHaveAttribute('src', '/v1/libraries/media-lib/documents/assets/photo.png');
-    expect(screen.queryByLabelText('Plate markdown editor')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Workspace editor')).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('treeitem', { name: /raw.bin/ }));
     const binaryPreview = await screen.findByRole('region', { name: 'Binary document preview' });
@@ -1946,7 +1921,7 @@ describe('Quarry Browser workspace', () => {
       'href',
       '/v1/libraries/media-lib/documents/archives/raw.bin'
     );
-    expect(screen.queryByLabelText('Plate markdown editor')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Workspace editor')).not.toBeInTheDocument();
   });
 
   it('opens the command palette from the keyboard and quick-opens documents', async () => {
@@ -2003,7 +1978,7 @@ describe('Quarry Browser workspace', () => {
     await userEvent.type(await screen.findByRole('combobox', { name: 'Command palette' }), 'guide');
     await userEvent.click(await screen.findByText('Open Guide'));
 
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Guide'));
+    await waitFor(() => expect(screen.getByLabelText('Workspace editor')).toHaveTextContent('Guide'));
   });
 
   it('opens workspace settings from the command palette', async () => {
@@ -2191,7 +2166,7 @@ describe('Quarry Browser workspace', () => {
 
     await userEvent.keyboard('{Enter}');
 
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Journal'));
+    await waitFor(() => expect(screen.getByLabelText('Workspace editor')).toHaveTextContent('Journal'));
     expect(window.location.pathname).toBe('/lib/search-key-lib/documents/journal.md');
   });
 
@@ -2336,7 +2311,7 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Readme/ }));
-    await screen.findByLabelText('Plate markdown editor');
+    await screen.findByLabelText('Workspace editor');
     await userEvent.keyboard('{Control>}k{/Control}');
     await userEvent.click(await screen.findByText('Download as Markdown'));
 
@@ -2633,7 +2608,7 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Readme/ }));
-    await waitFor(() => expect(screen.getByLabelText('Plate markdown editor')).toHaveTextContent('Current'));
+    await waitFor(() => expect(screen.getByLabelText('Workspace editor')).toHaveTextContent('Current'));
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Document actions' }));
     await userEvent.click(await screen.findByText('Upload Markdown'));
     await userEvent.upload(
@@ -2813,7 +2788,7 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Fail/ }));
-    const editor = await screen.findByLabelText('Plate markdown editor');
+    const editor = await screen.findByLabelText('Workspace editor');
     expect(editor).toHaveTextContent('Current');
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Document actions' }));
     await userEvent.click(await screen.findByText('Upload Markdown'));

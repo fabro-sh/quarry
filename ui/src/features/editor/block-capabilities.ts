@@ -1,4 +1,4 @@
-import manifest from '../../../../crates/quarry-collab-codec/block-capabilities.json';
+import manifest from '../../../../crates/quarry-document/block-capabilities.json';
 
 export type BlockContentModel = 'text' | 'container' | 'void' | 'raw';
 export type InlineSyntax = 'parsed' | 'literal';
@@ -8,6 +8,8 @@ export interface BlockCapabilities {
   content: BlockContentModel;
   inlineSyntax: InlineSyntax;
   promoteFullTextDelete: boolean;
+  children: string[];
+  root: boolean;
 }
 
 function readRegistry(value: unknown): readonly BlockCapabilities[] {

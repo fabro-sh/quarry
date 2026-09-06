@@ -42,7 +42,7 @@ directly from these tiers.
   ```
 - [ ] Open the UI and confirm it loads without console errors.
 - [ ] Create at least two libraries: `manual-main` and `manual-other`.
-- [ ] Keep browser devtools Network open for ETag, SSE, and WebSocket observations.
+- [ ] Keep browser devtools Network open for ETag, SSE, and document request observations.
 - [ ] For each section, record any console error, server log warning, failed request, stale banner, or unexpected conflict dialog.
 
 ## P0 Smoke: System Starts And Basic Persistence Works
@@ -51,7 +51,7 @@ directly from these tiers.
 - [ ] `GET /v1/openapi.json` returns all expected route groups.
 - [ ] UI library picker shows `manual-main` and `manual-other`.
 - [ ] Create `notes/smoke.md` in the UI.
-- [ ] Type text, wait for the save status to become `Saved` (checkpoint ack), reload, and confirm content persisted.
+- [ ] Type text, wait for the save status to become `Saved` (durable command receipt), reload, and confirm content persisted.
 - [ ] Read the same document through CLI:
   ```sh
   cargo run -p quarry -- get manual-main notes/smoke.md
@@ -129,18 +129,13 @@ directly from these tiers.
 - [ ] Collapse and expand left and right panes, reload, and confirm layout persistence.
 - [ ] Toggle light/dark theme and confirm persistence after reload.
 
-### Save State And Session Checkpoints
+### Save State And Native Commands
 
-The editor has no autosave drafts: typing flows through the live session and
-durability comes from debounced checkpoints. The three save states are
-`Saved`, `Saving…`, and `Reconnecting (read-only)`.
-
-- [ ] Type a short edit and confirm the status shows `Saving…` then settles to `Saved` within the checkpoint debounce.
-- [ ] Type multiple bursts quickly and confirm checkpoints are debounced/coalesced, not per keystroke (watch version history).
-- [ ] Reload immediately after `Saved` and confirm the canonical content matches what was on screen.
-- [ ] Write the same document through REST while it is open and confirm the change merges into the live editor as a collaborator edit (no dialog, no reload, not marked dirty).
-- [ ] Stop the daemon while the document is open: confirm the editor becomes `Reconnecting (read-only)` and the last-known content stays visible.
-- [ ] Restart the daemon and confirm the editor reconnects, reseeds from canonical state, and becomes editable with `Saved`.
+- [ ] Type and confirm `Saving…` becomes `Saved` after durable publication.
+- [ ] Disconnect, type, close the page, reconnect and reopen. Confirm the local draft merges with remote edits.
+- [ ] Lose a command response after commit. Confirm the exact request retries and creates only one version.
+- [ ] Reject a conflicting structural draft. Confirm the draft remains downloadable and recovery requires an explicit choice.
+- [ ] Restart the server during typing. Confirm acknowledged edits and persisted local requests survive.
 
 ### Markdown Editing Features
 
@@ -192,54 +187,19 @@ projected by `GET /review`; the document text never carries CriticMarkup.
 - [ ] Attempt to `PUT` Markdown containing CriticMarkup (`{++x++}`) and confirm a typed `UNSUPPORTED_MARKDOWN` rejection, not silent acceptance.
 - [ ] Produce a diff3 conflict (see Git section) and confirm the conflict review item appears in the rail with kept and incoming text, and can be resolved/dismissed without changing the document.
 
-## Live Browser Collaboration And CRDT/Yjs [P1]
+## Live Browser Collaboration And Automerge [P1]
 
-These are among the highest-risk tests. Use two isolated browser contexts with
-different `quarry:author` values.
-
-### Session Join, Awareness, And Cursors
-
-- [ ] Open the same Markdown document in User A and User B contexts.
-- [ ] Confirm both users see the same initial content.
-- [ ] Confirm both users connect to `/v1/collab/{document_id}` over WebSocket.
-- [ ] Confirm remote cursor or presence labels appear when both users focus/type.
-- [ ] Confirm author labels/colors are stable across reload.
-- [ ] Confirm non-Markdown or binary documents do not try to start rich CRDT editing.
-
-### Concurrent Editing And Checkpoints
-
-- [ ] User A types in one paragraph and User B sees it without reload.
-- [ ] User B types in another paragraph and User A sees it without reload.
-- [ ] Both users type in the same paragraph at the same time and confirm the merged result has both edits and no duplicated seed content.
-- [ ] Confirm save status returns to `Saved` in both browsers (the server checkpoints the shared session; there is no browser-side flusher).
-- [ ] Close one tab and confirm the remaining tab keeps editing and reaching `Saved`.
-- [ ] Reload both browsers and confirm the persisted Markdown matches the visible editor content.
-- [ ] Confirm checkpoint `doc.changed` events do not disturb the open editors (no dialogs, no dirty state).
-
-### Review Markup In Live Collaboration
-
-- [ ] User B switches to Suggesting mode and types a suggestion; User A sees the suggestion mark and rail card without reload.
-- [ ] User A accepts the suggestion; User B sees the mark disappear and final text remain.
-- [ ] User A adds a comment; User B sees the comment mark and rail card.
-- [ ] User B replies or resolves the comment; User A sees the updated rail state.
-- [ ] Reload both browsers and confirm comments/suggestions persist as RFM Markdown.
-- [ ] Confirm no stale suggestion card remains after accept/reject on either browser.
-
-### Recovery, Reconnect, Move, Delete, And External Writes
-
-- [ ] Disconnect one browser (e.g. devtools offline): confirm it becomes `Reconnecting (read-only)` with the last content visible; continue editing in the other browser; restore the connection and confirm the first browser reseeds and converges.
-- [ ] Stop the daemon during active edits, restart, reopen the document, and confirm only the un-checkpointed debounce window is lost (sessions reseed from the last checkpoint).
-- [ ] While both browsers have the document open, write a different version through REST or CLI and confirm the change merges into both live editors as a collaborator edit — no external-change dialog, no lost typing (overlapping same-region edits may surface as conflict review items).
-- [ ] Move the active document from another surface and confirm the live session retargets to the new path.
-- [ ] Delete the active document from another surface and confirm the UI behaves predictably (clears or navigates; no crash).
-- [ ] Confirm edits made after a move checkpoint to the new path, not the old path.
-
-### Performance And Scale For Live Sessions
-
-- [ ] Open a document of at least 500 paragraphs and confirm join completes within a couple of seconds with no visible stall.
-- [ ] Paste a large block of Markdown in one browser and confirm the other browser receives it.
-- [ ] Edit rapidly for at least two minutes and confirm no runaway version churn or memory growth is obvious.
-- [ ] Open three or more browser contexts and confirm convergence remains stable.
+- [ ] Open two browsers and an agent on the same document. Concurrent text edits converge after reload.
+- [ ] Share selections and confirm remote cursors follow native positions after prefix edits, split, move and join. Presence creates no versions.
+- [ ] Keep a comment draft private while another browser moves its target. Submit it and confirm it attaches to the original characters, even when the same quote appears elsewhere.
+- [ ] Comment on proposed Unicode text. Accept the proposal and confirm the comment follows that exact text into the body.
+- [ ] Delete a target's text or block. Confirm its discussion remains explicit. Undo and confirm the original target is restored.
+- [ ] Compose text with an IME while the agent edits. Confirm composition finishes correctly and the result converges.
+- [ ] Move or rename a document during edits. Confirm native commands follow document identity.
+- [ ] Export a `.quarry` archive and import it as a new document. Confirm review, metadata and history remain intact, with a new document ID.
+- [ ] Open a viewer invitation and confirm both body and review mutations are disabled. Revoke it and confirm requests fail.
+- [ ] Open the same document in several tabs, go offline, edit independently, close one tab, reconnect and verify all persisted requests apply once.
+- [ ] Measure loading, typing, selection, save, reconnect and memory use with a 100 KiB formatted document and many review records.
 
 ## Agent HTTP APIs And Human-Agent Collaboration [P1]
 
@@ -261,6 +221,9 @@ different `quarry:author` values.
 - [ ] Test `insert_block` (top level and under a parent), `delete_block`, and `move_block`; confirm `move_block` preserves the moved block's id, content, and anchors.
 - [ ] Test `set_block_type` (e.g. paragraph → heading) and confirm id, text, and anchors are preserved.
 - [ ] Re-read `/blocks` after edits and confirm untouched sibling `block_id`s did not change.
+- [ ] Omit `base_clock`, or send null or blank, and confirm `INVALID_TRANSACTION` (400) without a new version.
+- [ ] Read a comment range, insert an identical occurrence before it in a browser, then submit the original range and clock. Confirm the comment attaches to the original occurrence.
+- [ ] Delete a block using a clock from before browser typing in its subtree. Confirm `PRECONDITION_FAILED` and no partial commit.
 - [ ] Send a garbage `base_clock` and confirm `412` with typed `{code: "STALE_BASE", retryable: true}`.
 - [ ] Send an OLDER known `base_clock` with compatible ops and confirm a `committed_rebased` ack.
 - [ ] Reference a deleted `block_id` and confirm typed `BLOCK_DELETED` (`retryable: false`).
@@ -337,7 +300,8 @@ Run this section on Linux with `fuse3`. Waivable on non-Linux release candidates
 - [ ] Mount writable with `--serve-addr` so REST and FUSE share one process.
 - [ ] Create a file through the mount and read it through REST and UI.
 - [ ] Write through REST and confirm the mounted file updates or invalidates correctly.
-- [ ] Edit with an editor that writes a temp file then renames over the original and confirm final content is correct.
+- [ ] Save through an open FUSE handle during HTTP edits and confirm both changes survive. Rename the document through HTTP before flushing and confirm the handle follows its identity.
+- [ ] Attempt a changed temp-file replacement without the original read version. Confirm it returns an error, preserves the current document, and retains the incoming temp file.
 - [ ] Rename a file in the mount and confirm REST/UI see the new path.
 - [ ] Delete a file in the mount and confirm REST/UI see deletion.
 - [ ] Create and remove empty directories and confirm directory metadata survives remount.
@@ -400,7 +364,7 @@ A release candidate is shippable when:
 And these cross-surface invariants held throughout testing (not restated per
 section above — confirm them globally):
 
-- [ ] Block rows are the durable source of truth for Markdown documents (exports are deterministic projections); raw bytes are the source of truth for everything else.
+- [ ] Automerge is the durable source of truth for Markdown documents (block rows and exports are deterministic projections); raw bytes are the source of truth for everything else.
 - [ ] FUSE, REST, CLI, Git, browser, and agent operations converge on the same committed state.
 - [ ] Agent review marks and human review marks remain compatible in Markdown.
 - [ ] Deleting, moving, or restoring documents never loses version history unexpectedly.

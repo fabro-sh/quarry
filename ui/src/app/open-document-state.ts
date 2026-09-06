@@ -34,7 +34,7 @@ type DocumentAction =
       readonly document: LoadedDocument;
       readonly identity: OpenDocumentIdentity;
     }
-  | { readonly type: 'mirror-changed'; readonly content: string }
+  | { readonly type: 'preview-changed'; readonly content: string }
   | { readonly type: 'head-adopted'; readonly etag: string }
   | { readonly type: 'view-version'; readonly versionId: string }
   | { readonly type: 'compare-version'; readonly versionId: string | null }
@@ -97,7 +97,7 @@ export function useOpenDocumentController({
       []
     ),
     changeContent: useCallback(
-      (content) => dispatch({ type: 'mirror-changed', content }),
+      (content) => dispatch({ type: 'preview-changed', content }),
       []
     ),
     diffCurrent: useCallback(() => dispatch({ type: 'open-current-diff' }), []),
@@ -150,9 +150,7 @@ export function reduceDocumentState(
       if (state.type === 'open' && sameIdentity(state.identity, action.identity)) {
         return {
           ...state,
-          content: isLiveMarkdown(action.document)
-            ? state.content
-            : action.document.content,
+          content: action.document.content,
           contentType: action.document.contentType,
           etag: action.document.etag,
         };
@@ -168,7 +166,7 @@ export function reduceDocumentState(
         selectedVersionId: null,
       };
     }
-    case 'mirror-changed':
+    case 'preview-changed':
       return state.type === 'open' ? { ...state, content: action.content } : state;
     case 'head-adopted':
       return state.type === 'open' ? { ...state, etag: action.etag } : state;
@@ -212,13 +210,6 @@ function sameIdentity(left: OpenDocumentIdentity, right: OpenDocumentIdentity): 
     left.library === right.library &&
     left.path === right.path &&
     left.scope === right.scope
-  );
-}
-
-function isLiveMarkdown(document: LoadedDocument): boolean {
-  return (
-    document.documentId.length > 0 &&
-    document.contentType.split(';', 1)[0]?.trim().toLowerCase() === 'text/markdown'
   );
 }
 
