@@ -35,6 +35,103 @@ fn compare_fresh(document: &Document) {
 }
 
 #[test]
+fn incremental_join_after_concurrent_typing_invalidates_every_deleted_source() {
+    let base = fixture();
+    let mut authority = base.fork();
+    let mut reader = base.fork();
+    compare_fresh(&reader);
+    let initial = authority.heads();
+    authority
+        .insert_text(&authority.point("p2", 8).unwrap(), "!")
+        .unwrap();
+    reader
+        .merge_changes(
+            &authority.save_after(&initial).unwrap(),
+            &initial,
+            &authority.heads(),
+        )
+        .unwrap();
+    compare_fresh(&reader);
+    let before_join = authority.heads();
+    authority
+        .apply_request(&CommandRequest {
+            request_id: "delayed-delete-and-join".into(),
+            base: base.heads().iter().map(ToString::to_string).collect(),
+            at: String::new(),
+            commands: vec![
+                Command::DeleteText {
+                    ranges: base.selection("p0", 5, 29).unwrap(),
+                },
+                Command::DeleteText {
+                    ranges: base.selection("p2", 0, 5).unwrap(),
+                },
+                Command::DeleteBlock { block: "p1".into() },
+                Command::JoinBlocks {
+                    left: "p0".into(),
+                    right: "p2".into(),
+                },
+            ],
+        })
+        .unwrap();
+    compare_fresh(&authority);
+    reader
+        .merge_changes(
+            &authority.save_after(&before_join).unwrap(),
+            &before_join,
+            &authority.heads(),
+        )
+        .unwrap();
+    assert_eq!(reader.view().unwrap(), authority.view().unwrap());
+    compare_fresh(&reader);
+}
+
+#[test]
+fn incremental_marks_on_multiple_sources_and_their_undo_match_fresh_archives() {
+    for deletion in [false, true] {
+        let mut authority = fixture();
+        let mut reader = authority.fork();
+        compare_fresh(&reader);
+        let before = authority.heads();
+        let commands = ["p0", "p2", "p5"].map(|block| {
+            let ranges = authority.selection(block, 8, 14).unwrap();
+            if deletion {
+                Command::DeleteText { ranges }
+            } else {
+                Command::Format {
+                    ranges,
+                    name: "bold".into(),
+                    value: true.into(),
+                }
+            }
+        });
+        authority.apply(&commands).unwrap();
+        let after = authority.heads();
+        let delta = authority.save_after(&before).unwrap();
+        reader.merge_changes(&delta, &before, &after).unwrap();
+        assert_eq!(reader.view().unwrap(), authority.view().unwrap());
+        compare_fresh(&reader);
+        // Duplicate delivery must not introduce or discard derived changes.
+        reader.merge_changes(&delta, &before, &after).unwrap();
+        compare_fresh(&reader);
+        authority
+            .apply(&[Command::Revert {
+                before: before.iter().map(ToString::to_string).collect(),
+                after: after.iter().map(ToString::to_string).collect(),
+            }])
+            .unwrap();
+        reader
+            .merge_changes(
+                &authority.save_after(&after).unwrap(),
+                &after,
+                &authority.heads(),
+            )
+            .unwrap();
+        assert_eq!(reader.view().unwrap(), authority.view().unwrap());
+        compare_fresh(&reader);
+    }
+}
+
+#[test]
 fn incremental_remote_changes_match_full_merges_with_warm_caches_and_local_typing() {
     let mut authority = fixture();
     let mut browser = authority.fork();

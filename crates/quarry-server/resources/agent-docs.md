@@ -244,10 +244,17 @@ same request ID and payload; it does not publish a second version.
   outside the changed span survive; anchors overlapping it orphan (comments)
   or invalidate (suggestions).
 - `set_block_type` — `{block_id, block_type, attrs?}`. Changes the type while
-  preserving compatible content and anchors. It rejects conversions that
-  would discard flat text or container children, and is not valid to or from
-  `raw_markdown`. Without explicit `attrs`, compatible attrs are preserved;
-  converting a list paragraph to another type removes its list shape.
+  preserving compatible content and anchors. Without `attrs`, it uses the
+  shared native conversion action. `p` means plain text and removes list
+  membership even when the source is already a `p`. Headings and quotes also
+  remove list properties. Converting text to `code_block` creates a container
+  and retains the original block ID as its `code_line`. Converting a code line
+  to text lifts it out of the container and keeps neighboring code intact.
+  Re-read blocks for the resulting structure and any new container IDs.
+  With explicit `attrs`, this is a strict property write: supply valid attrs
+  and the required structure. Writes that discard text or leave invalid
+  children are rejected. Conversion to or from `raw_markdown` requires an
+  explicit replacement.
 - `set_block_attrs` — `{block_id, attrs}`. Replaces attrs wholesale (for
   `raw_markdown` blocks, `attrs.markdown` must stay a non-empty string).
 - `add_mark` — `{block_id, start, end, marks}` over UTF-16 offsets. `marks`
@@ -662,6 +669,42 @@ Then report the evidence to the user. Do not keep retrying destructive writes.
 metadata and the current version. Browser commands use `POST .../document-commands`.
 A command request records the native heads from which its positions were captured.
 The shared Rust/WASM engine validates and applies the same commands in both places.
+For native block conversions, use an `edit` command with action
+`{"op":"convert_block","block":"<block-id>","target":{"kind":"h3"}}`.
+The edit mode selects direct editing or a suggestion. To address a block inside
+an existing insertion proposal, also supply `proposal` on the action. The same
+conversion rules apply in each case. A list target uses `kind: "p"` and a `list`
+object with `style` (`disc`, `decimal`, or `todo`) and optional `indent`, `start`,
+and `checked`. Omitting `list` requests a non-list block. Structural conversion
+suggestions retain current text when accepted and reject competing structural
+changes. Raw `set_block` commands remain strict; do not copy list attrs onto a
+heading and expect the engine to infer a conversion.
+
+Native commands in one request run in order against its recorded base version.
+Use the native command builder when a later action needs a position created by
+an earlier action. A failed builder cannot publish partial edits.
+
+For selection replacement, use the `edit` action `replace_selection` with native
+`anchor` and `focus` text points and the replacement `text`. Direct replacement
+joins surviving sibling text blocks and hides fully selected middle blocks.
+A selection across containers keeps those containers. Canonical Suggesting edits
+keep the selected text visible until acceptance. Editing a selection inside an
+existing block proposal updates that proposal's text and structure together.
+
+Use `move_text` with `block`, `start`, `end`, and `to` native text points to move
+existing characters between document blocks. Supply `proposal` to move text
+between blocks inside one existing proposal. This transfers their original
+identities and review targets. Do not emulate a move with delete and insert.
+`split_container` splits before child index `at` into `new_block`; `join_blocks`
+joins adjacent text blocks or adjacent containers. For structural changes within
+an existing block proposal, use `edit_proposed_blocks` with its `proposal` ID and
+an `insert`, `move`, `delete`, `split_container`, or `join_containers` action.
+
+These actions preserve the normal delayed-write checks. Concurrent text can
+survive moves and joins. Competing structural changes require a fresh read.
+Deleting a whole block rejects unseen changes to its content. Retain the original
+request identity and base when retrying; never attach new heads to old positions.
+
 For subsequent reads, `GET .../document-state?since=<comma-separated-native-heads>`
 returns only missing Automerge changes in `bytes`, with those heads in `base`.
 Apply these changes to existing native state; they are not a standalone archive.

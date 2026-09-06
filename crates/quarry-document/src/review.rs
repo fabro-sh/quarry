@@ -7,7 +7,7 @@ use automerge::ReadDoc;
 use std::collections::{BTreeMap, BTreeSet};
 
 impl Document {
-    fn new_review_metadata(&self) -> ReviewMetadata {
+    pub(crate) fn new_review_metadata(&self) -> ReviewMetadata {
         let time = self.command_time.clone().unwrap_or_default();
         ReviewMetadata {
             created_at: time.clone(),
@@ -17,7 +17,7 @@ impl Document {
         }
     }
 
-    fn update_review_time(&self, metadata: &mut ReviewMetadata) {
+    pub(crate) fn update_review_time(&self, metadata: &mut ReviewMetadata) {
         if let Some(time) = self.command_time.as_ref().filter(|t| !t.is_empty()) {
             metadata.updated_at.clone_from(time);
         }
@@ -1315,6 +1315,7 @@ impl Document {
             ProposalAction::Format { target, .. } => self.resolve_target(&target),
             ProposalAction::DeleteBlock { block, .. }
             | ProposalAction::UpdateBlock { block, .. }
+            | ProposalAction::ConvertBlock { block, .. }
             | ProposalAction::MoveBlock { block, .. } => {
                 let block = self.block(&block)?;
                 Ok(ResolvedTarget {
@@ -1403,6 +1404,19 @@ impl Document {
                 }
                 let mut candidate = self.fork();
                 candidate.set_block(block, kind, attrs.clone())?;
+            }
+            ProposalAction::ConvertBlock {
+                block,
+                target,
+                expected,
+            } => {
+                if self.conversion_snapshot(block).as_ref().ok() != Some(expected) {
+                    return Err(changed(
+                        "Proposed block conversion target changed; review the current structure",
+                    ));
+                }
+                let mut candidate = self.fork();
+                candidate.convert_block(block, target)?;
             }
             ProposalAction::MoveBlock {
                 block,
@@ -1527,6 +1541,9 @@ impl Document {
                     ..
                 } => {
                     d.set_block(block, kind, attrs.clone())?;
+                }
+                ProposalAction::ConvertBlock { block, target, .. } => {
+                    d.convert_block(block, target)?;
                 }
                 ProposalAction::MoveBlock {
                     block,

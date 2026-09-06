@@ -38,6 +38,17 @@ pub enum Command {
         left: String,
         right: String,
     },
+    JoinContainers {
+        left: String,
+        right: String,
+    },
+    MoveText {
+        block: String,
+        proposal: Option<String>,
+        start: TextPoint,
+        end: TextPoint,
+        to: TextPoint,
+    },
     DeleteBlock {
         block: String,
     },
@@ -45,6 +56,21 @@ pub enum Command {
         block: String,
         kind: String,
         attrs: BTreeMap<String, serde_json::Value>,
+    },
+    ConvertBlock {
+        block: String,
+        target: crate::BlockConversion,
+    },
+    ConvertProposedBlock {
+        proposal: String,
+        block: String,
+        target: crate::BlockConversion,
+    },
+    ProposeBlockConversion {
+        id: String,
+        author: String,
+        block: String,
+        target: crate::BlockConversion,
     },
     InsertText {
         at: TextPoint,
@@ -408,8 +434,31 @@ impl Document {
                 new_block,
             } => self.split_block(block, at, new_block),
             Command::JoinBlocks { left, right } => self.join_blocks(left, right),
+            Command::JoinContainers { left, right } => {
+                let commands = self.join_container_commands(left, right)?;
+                self.apply(&commands)
+            }
+            Command::MoveText {
+                block,
+                proposal,
+                start,
+                end,
+                to,
+            } => self.move_text(block, proposal.as_deref(), start, end, to),
             Command::DeleteBlock { block } => self.delete_block(block),
             Command::SetBlock { block, kind, attrs } => self.set_block(block, kind, attrs.clone()),
+            Command::ConvertBlock { block, target } => self.convert_block(block, target),
+            Command::ConvertProposedBlock {
+                proposal,
+                block,
+                target,
+            } => self.convert_proposed_block(proposal, block, target),
+            Command::ProposeBlockConversion {
+                id,
+                author,
+                block,
+                target,
+            } => self.propose_block_conversion(id, author, block, target),
             Command::InsertText { at, text } => self.insert_text(at, text),
             Command::DeleteText { ranges } => self.delete_text(ranges),
             Command::Format {

@@ -1,4 +1,5 @@
-import { expect, test, type Page } from 'playwright/test';
+import { expect, type Page } from 'playwright/test';
+import { test } from './helpers/performance-browser';
 import { writeFileSync } from 'node:fs';
 import { blocks, body, createDocument, openDocument, review, select, transaction } from './helpers/native-document';
 

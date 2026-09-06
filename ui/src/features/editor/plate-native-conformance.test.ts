@@ -11,7 +11,7 @@ import { DocumentModel, type DocumentBatch, type DocumentView } from './document
 import { PlateDocumentAdapter } from './plate-document-adapter';
 import { nativeNodeIdOptions, projectPlate, slatePoint } from './plate-document-projection';
 import { sourceDrafts } from './source-drafts';
-import { plateMarkdownPlugins } from './PlateMarkdownEditor';
+import { applyBlockType, plateMarkdownPlugins, turnIntoList } from './PlateMarkdownEditor';
 
 const root = resolve(process.cwd(), '..');
 beforeAll(() => {
@@ -44,6 +44,164 @@ function fixture(markdown = '😀 See TARGET here.\n\nSee TARGET elsewhere.') {
   const receive = (remote: DocumentModel) => { adapter.flush(); adapter.rememberSelection(); model.merge(remote.save()); adapter.refresh(); };
   return { model, editor, adapter, batches, errors, select, comment, check, receive, setMode(value: EditorMode) { mode = value; }, close() { adapter.dispose(); model.dispose(); } };
 }
+
+test.each(['disc', 'decimal', 'todo'])('converting a %s list item removes list properties and preserves native review', (style) => {
+  for (const kind of ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote']) {
+    const t = fixture('Before TARGET after.\n\nSecond item.');
+    try {
+      const [first, second] = t.model.view().blocks;
+      const attrs = { listStyleType: style, indent: 2, ...(style === 'decimal' ? { listStart: 7, listRestart: 7, listRestartPolite: 7 } : {}), ...(style === 'todo' ? { checked: true } : {}), align: 'right' };
+      t.adapter.command([{ op: 'set_block', block: first.block.id, kind: 'p', attrs },
+        { op: 'set_block', block: second.block.id, kind: 'p', attrs: { listStyleType: style, indent: 2 } }]);
+      t.comment('target', first.block.id, 7, 13);
+      const before = t.model.view().blocks[0];
+      t.select(first.block.id, 0);
+      applyBlockType(t.editor, kind); t.check();
+      expect(t.model.view().blocks[0]).toMatchObject({ text: first.text, block: { id: first.block.id, kind, attrs: { align: 'right' }, segments: before.block.segments } });
+      expect(t.model.view().blocks[0].block.attrs).toEqual({ align: 'right' });
+      expect(t.model.view().blocks[1].block.attrs.listStyleType).toBe(style);
+      expect(t.model.view().comments[0].target.attachments[0].quote).toBe('TARGET');
+      t.adapter.history(false); t.check();
+      expect(t.model.view().blocks[0]).toEqual(before);
+      t.adapter.history(true); t.check();
+      expect(t.model.view().blocks[0].block.kind).toBe(kind);
+      expect(t.model.view().blocks[0].block.attrs).toEqual({ align: 'right' });
+    } finally { t.close(); }
+  }
+});
+
+test.each(['disc', 'decimal', 'todo'])('a suggested %s list conversion is one review decision', (style) => {
+  for (const kind of ['h3', 'p', 'blockquote']) {
+    const t = fixture('Before TARGET after.');
+    try {
+      const block = t.model.view().blocks[0].block.id;
+      t.adapter.command([{ op: 'set_block', block, kind: 'p', attrs: { listStyleType: style, indent: 2, ...(style === 'todo' ? { checked: true } : {}) } }]);
+      t.comment('target', block, 7, 13); t.setMode('suggesting'); t.select(block, 0);
+      const before = t.model.view().blocks[0];
+      applyBlockType(t.editor, kind); t.check();
+      expect(t.model.view().blocks[0]).toEqual(before);
+      expect(t.model.view().proposals).toHaveLength(1);
+      const proposal = t.model.view().proposals[0].proposal;
+      expect(proposal.action).toMatchObject({ kind: 'update_block', block_kind: kind, attrs: {}, expected_attrs: before.block.attrs });
+      t.adapter.history(false); t.check();
+      expect(t.model.view().proposals.filter((view) => view.proposal.state === 'open')).toHaveLength(0);
+      t.adapter.history(true); t.check();
+      // A concurrent text edit must not invalidate the block-property decision.
+      t.adapter.command([{ op: 'insert_text', at: t.model.point(block, 0), text: 'Agent ' }]);
+      t.adapter.command([{ op: 'accept_proposal', id: proposal.id }]); t.check();
+      expect(t.model.view().blocks[0]).toMatchObject({ text: 'Agent Before TARGET after.', block: { id: block, kind, attrs: {} } });
+      expect(t.model.view().blocks[0].block.attrs).toEqual({});
+      expect(t.model.view().comments[0].target.attachments[0].quote).toBe('TARGET');
+    } finally { t.close(); }
+  }
+});
+
+test.each(['editing', 'suggesting'] as const)('a list inside a block proposal converts in %s mode without copying its target', (mode) => {
+  const t = fixture('Existing');
+  try {
+    t.adapter.command([{ op: 'propose_blocks', id: 'proposal', author: 'Agent', parent: null, before: null,
+      blocks: [{ id: 'item', kind: 'p', parent: null, position: 0, attrs: { listStyleType: 'todo', indent: 2, checked: true }, text: 'TARGET' }] }]);
+    const [node] = t.editor.api.node<TElement>({ at: [], match: (node) => node.quarryProposedBlock === 'item' })!;
+    t.comment('target', String(node.id), 0, 6); t.setMode(mode); t.select(String(node.id), 0);
+    applyBlockType(t.editor, 'h3'); t.check();
+    expect(t.model.view().proposals).toHaveLength(1);
+    expect(t.model.view().proposals[0].blocks[0].block).toMatchObject({ id: 'item', kind: 'h3', attrs: {} });
+    expect(t.model.view().proposals[0].blocks[0].block.attrs).toEqual({});
+    t.adapter.command([{ op: 'accept_proposal', id: 'proposal' }]); t.check();
+    expect(t.model.view().comments[0].target.attachments[0]).toMatchObject({ owner: { kind: 'block', id: 'item' }, quote: 'TARGET' });
+  } finally { t.close(); }
+});
+
+test.each(['disc', 'decimal', 'todo'])('a %s list item converts to code with its native text and comment intact', (style) => {
+  const t = fixture('Before TARGET after.');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.adapter.command([{ op: 'set_block', block, kind: 'p', attrs: { listStyleType: style, indent: 2 } }]);
+    t.comment('target', block, 7, 13); t.select(block, 0);
+    const before = t.model.view().blocks[0];
+    applyBlockType(t.editor, 'code_block'); t.check();
+    const line = t.model.view().blocks.find((view) => view.block.id === block)!;
+    expect(line.block.kind).toBe('code_line'); expect(line.block.attrs).toEqual({});
+    expect(line.block.segments).toEqual(before.block.segments);
+    expect(t.model.view().comments[0].target.attachments[0].quote).toBe('TARGET');
+    t.adapter.history(false); t.check(); expect(t.model.view().blocks[0]).toEqual(before);
+  } finally { t.close(); }
+});
+
+test('changing a list style in Suggesting mode does not first propose leaving the list', () => {
+  const t = fixture('- TARGET');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.setMode('suggesting'); t.select(block, 0);
+    turnIntoList(t.editor, 'decimal'); t.check();
+    expect(t.model.view().proposals).toHaveLength(1);
+    expect(t.model.view().proposals[0].proposal.action).toMatchObject({ kind: 'update_block', block_kind: 'p', attrs: { listStyleType: 'decimal' } });
+    expect(t.model.view().blocks[0].block.attrs.listStyleType).toBe('disc');
+  } finally { t.close(); }
+});
+
+test('the native schema still rejects a heading with list membership', () => {
+  const model = DocumentModel.fromMarkdown('- TARGET');
+  try {
+    const before = model.view(), block = before.blocks[0].block;
+    expect(() => model.edit((draft) => draft.apply([{ op: 'set_block', block: block.id, kind: 'h3', attrs: block.attrs }]))).toThrow('Only paragraphs can be list items');
+    expect(model.view()).toEqual(before);
+  } finally { model.dispose(); }
+});
+
+test.each(['disc', 'decimal', 'todo'])('heading autoformat and Plate toggle use native conversion for a %s list', (style) => {
+  for (const entry of ['autoformat', 'toggle']) {
+    const t = fixture('Before TARGET after.');
+    try {
+      const block = t.model.view().blocks[0].block.id;
+      t.adapter.command([{ op: 'set_block', block, kind: 'p', attrs: { listStyleType: style, indent: 2 } }]);
+      t.comment('target', block, 7, 13); t.select(block, 0);
+      if (entry === 'autoformat') for (const char of '### ') t.editor.tf.insertText(char);
+      else t.editor.tf.toggleBlock('h3');
+      t.check();
+      expect(t.model.view().blocks[0]).toMatchObject({ text: 'Before TARGET after.', block: { id: block, kind: 'h3', attrs: {} } });
+      expect(t.model.view().blocks[0].block.attrs).toEqual({});
+      expect(t.model.view().comments[0].target.attachments[0].quote).toBe('TARGET');
+      expect(t.batches.flatMap((batch) => batch.requests.flatMap((request) => request.commands)).some((command) => command.op === 'edit' && command.action.op === 'convert_block')).toBe(true);
+    } finally { t.close(); }
+  }
+});
+
+test.each(['editing', 'suggesting'] as const)('code conversion is a native edit in %s mode and keeps agent text through acceptance', (mode) => {
+  const t = fixture('- Before TARGET after.');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.comment('target', block, 7, 13); t.setMode(mode); t.select(block, 0);
+    applyBlockType(t.editor, 'code_block'); t.check();
+    if (mode === 'suggesting') {
+      expect(t.model.view().blocks[0].block.kind).toBe('p');
+      expect(t.model.view().proposals).toHaveLength(1);
+      t.adapter.command([{ op: 'insert_text', at: t.model.point(block, 0), text: 'Agent ' }]);
+      t.adapter.command([{ op: 'accept_proposal', id: t.model.view().proposals[0].proposal.id }]); t.check();
+    }
+    expect(t.model.view().blocks.find((view) => view.block.id === block)?.block.kind).toBe('code_line');
+    expect(t.model.view().comments[0].target.attachments[0].quote).toBe('TARGET');
+    t.setMode('editing'); t.select(block, 0); applyBlockType(t.editor, 'h3'); t.check();
+    expect(t.model.view().blocks[0].block.kind).toBe('h3');
+    expect(t.model.view().blocks[0].block.id).toBe(block);
+  } finally { t.close(); }
+});
+
+test.each(['editing', 'suggesting'] as const)('converting the empty input creates one native block in %s mode', (mode) => {
+  for (const kind of ['h3', 'code_block']) {
+    const t = fixture('');
+    try {
+      t.setMode(mode); t.editor.tf.select({ path: [0, 0], offset: 0 });
+      applyBlockType(t.editor, kind); t.check();
+      if (mode === 'suggesting') {
+        expect(t.model.view().proposals).toHaveLength(1);
+        t.adapter.command([{ op: 'accept_proposal', id: t.model.view().proposals[0].proposal.id }]); t.check();
+      }
+      expect(t.model.view().blocks[0].block.kind).toBe(kind);
+      expect(t.model.view().blocks).toHaveLength(kind === 'code_block' ? 2 : 1);
+    } finally { t.close(); }
+  }
+});
 
 test.each(['backward', 'forward'] as const)('adjacent %s deletions form one native proposal and undo group', (direction) => {
   const t = fixture('Before TARGET after.');
@@ -330,6 +488,93 @@ test('Suggesting in an empty document keeps the input scaffold private and propo
     t.adapter.history(false); t.check();
     expect(t.model.view().blocks).toEqual([]);
   } finally { t.close(); }
+});
+
+for (const kind of ['paragraphs', 'list', 'code', 'proposed paragraphs', 'proposed code']) {
+for (const action of ['delete', 'type', 'paste'] as const) test(`replacing three ${kind} with ${action} joins the surviving native text`, () => {
+  const code = kind.includes('code'), proposed = kind.startsWith('proposed');
+  const markdown = code ? '```\nKeep FIRST\nRemove middle\nLAST TARGET\n```' : kind === 'list' ? '- Keep FIRST\n- Remove middle\n- LAST TARGET' : 'Keep FIRST\n\nRemove middle\n\nLAST TARGET';
+  const t = fixture(proposed ? 'Canonical' : markdown);
+  try {
+    if (proposed) {
+      t.setMode('suggesting');
+      const children = ['Keep FIRST', 'Remove middle', 'LAST TARGET'].map((text) => ({ type: code ? 'code_line' : 'p', children: [{ text }] }));
+      t.editor.tf.insertNodes<TElement>(code ? { type: 'code_block', children } : children, { at: [1] }); t.check();
+      t.setMode('editing');
+    }
+    const views = () => (proposed ? t.model.view().proposals[0].blocks : t.model.view().blocks).filter((view) => view.block.kind !== 'code_block');
+    const [first, middle, last] = views();
+    const slateId = (id: string) => proposed ? String(t.editor.api.node<TElement>({ at: [], match: (node) => node.quarryProposedBlock === id })![0].id) : id;
+    t.comment('tail', slateId(last.block.id), 5, 11);
+    t.comment('removed', slateId(middle.block.id), 0, middle.text.length);
+    t.editor.tf.select({ anchor: slatePoint(t.editor.children, slateId(first.block.id), 5)!, focus: slatePoint(t.editor.children, slateId(last.block.id), 5)! });
+    if (action === 'delete') t.editor.tf.deleteFragment();
+    else if (action === 'type') t.editor.tf.insertText('New ');
+    else t.editor.tf.insertFragment([{ type: code ? 'code_line' : 'p', children: [{ text: 'New ' }] }]);
+    t.check();
+    expect(views().map((view) => view.text)).toEqual([action === 'delete' ? 'Keep TARGET' : 'Keep New TARGET']);
+    expect(t.model.view().comments.find((view) => view.comment.id === 'tail')!.target.attachments[0]).toMatchObject({ quote: 'TARGET', owner: { id: proposed ? t.model.view().proposals[0].proposal.id : first.block.id } });
+    expect(t.model.view().comments.find((view) => view.comment.id === 'removed')!.target.state).toBe('hidden');
+    t.adapter.history(false); t.check();
+    expect(views().map((view) => view.text)).toEqual(['Keep FIRST', 'Remove middle', 'LAST TARGET']);
+    expect(t.model.view().comments.find((view) => view.comment.id === 'removed')!.target.state).toBe('attached');
+    t.adapter.history(true); t.check();
+    if (proposed) {
+      expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Canonical']);
+      t.adapter.command([{ op: 'accept_proposal', id: t.model.view().proposals[0].proposal.id }]); t.check();
+      expect(t.model.view().comments.find((view) => view.comment.id === 'tail')!.target.attachments[0]).toMatchObject({ quote: 'TARGET', owner: { id: first.block.id } });
+    }
+  } finally { t.close(); }
+});
+}
+
+for (const count of [2, 3, 5]) for (const backward of [false, true]) test(`deleting a ${backward ? 'backward' : 'forward'} selection over ${count} blocks keeps Unicode and bold text`, () => {
+  const t = fixture(['😀 Start', ...Array<string>(count - 2).fill('Middle'), 'End **TARGET**'].join('\n\n'));
+  try {
+    const initial = t.model.view().blocks;
+    t.comment('tail', initial.at(-1)!.block.id, 4, 10);
+    const anchor = slatePoint(t.editor.children, initial[0].block.id, 3)!, focus = slatePoint(t.editor.children, initial.at(-1)!.block.id, 4)!;
+    t.editor.tf.select(backward ? { anchor: focus, focus: anchor } : { anchor, focus });
+    t.editor.tf.deleteFragment(); t.check();
+    expect(t.model.view().blocks[0].text).toBe('😀 TARGET');
+    expect(t.model.view().blocks[0].runs.find((run) => run.text === 'TARGET')!.marks.bold).toBe(true);
+    expect(t.editor.selection!.anchor).toEqual(slatePoint(t.editor.children, initial[0].block.id, 3));
+    expect(t.model.view().comments[0].target.attachments[0].quote).toBe('TARGET');
+    t.adapter.history(false); t.check();
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(initial.map((view) => view.text));
+  } finally { t.close(); }
+});
+
+test('moving then joining blocks within one input keeps native operation order', () => {
+  const t = fixture('First\n\nMiddle\n\nTARGET');
+  try {
+    const last = t.model.view().blocks[2]; t.comment('tail', last.block.id, 0, 6);
+    t.editor.tf.withoutNormalizing(() => {
+      t.editor.tf.moveNodes({ at: [2], to: [1] });
+      t.editor.tf.mergeNodes({ at: [1] });
+    }); t.check();
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(['FirstTARGET', 'Middle']);
+    expect(t.model.view().comments[0].target.attachments[0].quote).toBe('TARGET');
+  } finally { t.close(); }
+});
+
+test('a second browser projects a delayed deletion after a concurrent edit in the absorbed source', () => {
+  const t = fixture('Keep FIRST\n\nRemove middle\n\nLAST TARGET');
+  const authority = new DocumentModel(t.model.save()), reader = new DocumentModel(t.model.save());
+  try {
+    const [first, , last] = t.model.view().blocks;
+    let base = authority.heads();
+    reader.view();
+    authority.edit((draft) => draft.apply([{ op: 'insert_text', at: authority.point(last.block.id, 8), text: '!' }]));
+    reader.merge(authority.changesSince(base), base, authority.heads()); reader.view();
+    t.editor.tf.select({ anchor: slatePoint(t.editor.children, first.block.id, 5)!, focus: slatePoint(t.editor.children, last.block.id, 5)! });
+    t.editor.tf.deleteFragment(); t.check();
+    base = authority.heads();
+    authority.applyBatch(t.batches.at(-1)!);
+    reader.merge(authority.changesSince(base), base, authority.heads());
+    expect(authority.view().blocks.map((view) => view.text)).toEqual(['Keep TAR!GET']);
+    expect(reader.view()).toEqual(authority.view());
+  } finally { t.close(); authority.dispose(); reader.dispose(); }
 });
 
 test('multiline paste splits existing text without replacing its comment identity', () => {
@@ -959,5 +1204,114 @@ for (const before of [false, true]) test(`merging a new proposed line before pub
     expect(t.model.view().comments[0].target.attachments.map((part) => part.quote).join('')).toBe('TARGET');
     t.adapter.history(false); t.check();
     expect(t.model.view().proposals[0].blocks.filter((view) => view.block.kind === 'code_line').map((view) => view.text)).toEqual(['TARGET']);
+  } finally { t.close(); }
+});
+
+for (const proposed of [false, true]) for (const count of [3, 5, 8]) test(`ordered plugin sequences match native replay and fresh readers (${proposed ? 'proposal' : 'canonical'}, ${count} blocks)`, () => {
+  const t = fixture(proposed ? 'Canonical' : Array.from({ length: count }, (_, index) => `Block ${index} 😀 TARGET`).join('\n\n'));
+  let reader: DocumentModel | undefined;
+  try {
+    if (proposed) {
+      t.setMode('suggesting');
+      t.editor.tf.insertNodes(Array.from({ length: count }, (_, index) => ({ type: 'p', children: [{ text: `Block ${index} 😀 TARGET` }] })), { at: [1] }); t.check();
+      t.setMode('editing');
+    }
+    const views = () => proposed ? t.model.view().proposals[0].blocks : t.model.view().blocks;
+    const last = views().at(-1)!;
+    const display = (id: string) => proposed ? String(t.editor.api.node<TElement>({ at: [], match: (node) => node.quarryProposedBlock === id })![0].id) : id;
+    t.comment('target', display(last.block.id), last.text.length - 6, last.text.length);
+    reader = new DocumentModel(t.model.save());
+    const initial = reader.heads(); reader.view();
+    const offset = proposed ? 1 : 0;
+    const before = t.batches.length;
+    t.editor.tf.withoutNormalizing(() => {
+      t.editor.tf.moveNodes({ at: [offset + count - 1], to: [offset + 1] });
+      t.editor.tf.removeNodes({ at: [offset + count - 1] });
+      t.editor.tf.mergeNodes({ at: [offset + 1] });
+      t.editor.tf.select({ path: [offset, 0], offset: 2 });
+      t.editor.tf.insertBreak();
+    }); t.check();
+    expect(t.batches.length - before).toBe(1);
+    expect(t.batches.at(-1)!.requests).toHaveLength(1);
+    reader.merge(t.model.changesSince(initial), initial, t.model.heads());
+    expect(reader.view()).toEqual(t.model.view());
+    const fresh = new DocumentModel(reader.save());
+    try { expect(reader.view()).toEqual(fresh.view()); } finally { fresh.dispose(); }
+    expect(t.model.view().comments[0].target.attachments[0].quote).toBe('TARGET');
+    t.adapter.history(false); t.check();
+    expect(views()).toHaveLength(count);
+    t.adapter.history(true); t.check();
+    expect(t.model.view().comments[0].target.attachments[0].quote).toBe('TARGET');
+  } finally { reader?.dispose(); t.close(); }
+});
+
+test.each(['before', 'after', 'another block'] as const)('moving an existing marked text leaf %s preserves review and one transaction', (destination) => {
+  const t = fixture('Start **TARGET** end.\n\nSecond.');
+  try {
+    const [first, second] = t.model.view().blocks;
+    t.comment('target', first.block.id, 6, 12);
+    const before = t.batches.length;
+    t.editor.tf.moveNodes({ at: [0, 1], to: destination === 'before' ? [0, 0] : destination === 'after' ? [0, 2] : [1, 0] }); t.check();
+    expect(t.batches.length - before).toBe(1);
+    const expected = destination === 'before' ? ['TARGETStart  end.', 'Second.'] : destination === 'after' ? ['Start  end.TARGET', 'Second.'] : ['Start  end.', 'TARGETSecond.'];
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(expected);
+    expect(t.model.view().comments[0].target.attachments[0]).toMatchObject({ quote: 'TARGET', owner: { id: destination === 'another block' ? second.block.id : first.block.id } });
+    const moved = t.model.view().blocks[destination === 'another block' ? 1 : 0];
+    expect(moved.runs.find((run) => run.text === 'TARGET')!.marks.bold).toBe(true);
+    t.adapter.history(false); t.check();
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual([first.text, second.text]);
+  } finally { t.close(); }
+});
+
+for (const mode of ['editing', 'suggesting'] as const) test(`moving proposed text between blocks keeps its review in ${mode} mode`, () => {
+  const t = fixture('Canonical');
+  try {
+    t.setMode('suggesting');
+    t.editor.tf.insertNodes([{ type: 'p', children: [{ text: 'Start ' }, { text: 'TARGET', bold: true }, { text: ' end.' }] }, { type: 'p', children: [{ text: 'Second.' }] }], { at: [1] }); t.check();
+    const proposal = t.model.view().proposals[0];
+    const source = proposal.blocks[0];
+    const node = t.editor.api.node<TElement>({ at: [], match: (node) => node.quarryProposedBlock === source.block.id })![0];
+    t.comment('target', String(node.id), 6, 12); t.setMode(mode);
+    t.editor.tf.moveNodes({ at: [1, 1], to: [2, 0] }); t.check();
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Canonical']);
+    expect(t.model.view().proposals[0].blocks.map((view) => view.text)).toEqual(['Start  end.', 'TARGETSecond.']);
+    expect(t.model.view().comments[0].target.attachments[0].quote).toBe('TARGET');
+    t.adapter.history(false); t.check();
+    expect(t.model.view().proposals[0].blocks.map((view) => view.text)).toEqual(['Start TARGET end.', 'Second.']);
+    t.adapter.history(true); t.check();
+    t.adapter.command([{ op: 'accept_proposal', id: proposal.proposal.id }]); t.check();
+    expect(t.model.view().comments[0].target.attachments[0]).toMatchObject({ quote: 'TARGET', owner: { id: proposal.blocks[1].block.id } });
+  } finally { t.close(); }
+});
+
+test('a plugin split applies its new block properties in the same native request', () => {
+  const t = fixture('Start TARGET');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.comment('target', block, 6, 12);
+    const before = t.batches.length;
+    t.editor.tf.withoutNormalizing(() => {
+      t.editor.tf.apply({ type: 'split_node', path: [0, 0], position: 6, properties: {} });
+      t.editor.tf.apply({ type: 'split_node', path: [0], position: 1, properties: { type: 'h3' } });
+    }); t.check();
+    expect(t.batches.length - before).toBe(1);
+    expect(t.model.view().blocks.map((view) => [view.block.kind, view.text])).toEqual([['p', 'Start '], ['h3', 'TARGET']]);
+    expect(t.model.view().comments[0].target.attachments[0].quote).toBe('TARGET');
+    t.adapter.history(false); t.check();
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Start TARGET']);
+  } finally { t.close(); }
+});
+
+test('selection replacement can end in the virtual input after repeated undo', () => {
+  const t = fixture('### Keep TARGET');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    for (let n = 0; n < 3; n++) {
+      t.editor.tf.select({ anchor: slatePoint(t.editor.children, block, 5)!, focus: { path: [1, 0], offset: 0 } });
+      t.editor.tf.deleteFragment(); t.check();
+      expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Keep ']);
+      t.adapter.history(false); t.check();
+      expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Keep TARGET']);
+    }
   } finally { t.close(); }
 });

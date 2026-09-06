@@ -17,6 +17,10 @@ pub struct NativeCommandBuilder {
 
 #[wasm_bindgen]
 impl NativeCommandBuilder {
+    pub fn locate_point(&self, point: &str) -> Result<String, JsValue> {
+        let point: TextPoint = serde_json::from_str(point).map_err(error)?;
+        serde_json::to_string(&self.builder.locate_point(&point).map_err(error)?).map_err(error)
+    }
     pub fn block_view(&self, id: &str) -> Result<String, JsValue> {
         serde_json::to_string(&self.builder.block_view(id).map_err(error)?).map_err(error)
     }

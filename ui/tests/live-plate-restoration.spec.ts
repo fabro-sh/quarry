@@ -20,7 +20,7 @@ test('the restored Plate toolbar formats commented text and saves real typing th
     await expect(body(user.page).locator('strong')).toHaveText('TARGET');
     await expect(body(user.page).locator('[data-comment-id]')).toHaveText('TARGET');
     expect((await review(request, fixture.url)).comments.some((item: { body?: string }) => item.body === 'Keep this exact target')).toBe(true);
-    await user.page.screenshot({ path: '../target/restored-plate-first-browser.png', fullPage: true });
+    await user.page.screenshot({ path: test.info().outputPath('restored-plate-first-browser.png'), fullPage: true });
     expect(user.errors).toEqual([]);
   } finally { await user.context.close(); }
 });

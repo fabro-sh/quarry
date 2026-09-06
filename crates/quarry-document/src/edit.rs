@@ -41,6 +41,13 @@ pub enum EditAction {
         ranges: Vec<TextRange>,
         text: String,
     },
+    /// Replace a visible selection. Native structure decides which text blocks
+    /// join; selections across containers retain their container boundaries.
+    ReplaceSelection {
+        anchor: TextPoint,
+        focus: TextPoint,
+        text: String,
+    },
     Format {
         ranges: Vec<TextRange>,
         name: String,
@@ -51,6 +58,11 @@ pub enum EditAction {
         proposal: Option<String>,
         kind: String,
         attrs: BTreeMap<String, serde_json::Value>,
+    },
+    ConvertBlock {
+        block: String,
+        proposal: Option<String>,
+        target: crate::BlockConversion,
     },
     MoveBlock {
         block: String,
@@ -76,9 +88,25 @@ pub enum EditAction {
         right: String,
         proposal: Option<String>,
     },
+    SplitContainer {
+        block: String,
+        at: usize,
+        new_block: String,
+    },
+    MoveText {
+        block: String,
+        proposal: Option<String>,
+        start: TextPoint,
+        end: TextPoint,
+        to: TextPoint,
+    },
     SetProposedStructure {
         proposal: String,
         blocks: Vec<crate::ProposedBlockPlacement>,
+    },
+    EditProposedBlocks {
+        proposal: String,
+        action: crate::ProposedBlockEdit,
     },
 }
 
@@ -101,6 +129,7 @@ impl Document {
             && !matches!(
                 action,
                 EditAction::ReplaceText { .. }
+                    | EditAction::ReplaceSelection { .. }
                     | EditAction::InsertText { .. }
                     | EditAction::DeleteText { .. }
             )
@@ -108,6 +137,16 @@ impl Document {
             return Err(unsupported());
         }
         let commands = match action {
+            EditAction::EditProposedBlocks { proposal, action } => {
+                return self.edit_proposed_blocks_commands(proposal, action);
+            }
+            EditAction::ReplaceSelection {
+                anchor,
+                focus,
+                text,
+            } => {
+                return self.replace_selection_commands(mode, anchor, focus, text);
+            }
             EditAction::InsertText { at, text } => {
                 return self.edit_commands(
                     mode,
@@ -262,6 +301,52 @@ impl Document {
                     }]
                 }
             }
+            EditAction::ConvertBlock {
+                block,
+                proposal,
+                target,
+            } => {
+                let previous = self.conversion_block(block, proposal.as_deref())?;
+                // Property-only conversions use the existing review decision.
+                // Structural conversions retain their intent until acceptance.
+                if previous.kind != "code_block"
+                    && previous.kind != "code_line"
+                    && target.kind != "code_block"
+                {
+                    let attrs = target.attributes(&previous)?;
+                    if previous.kind == target.kind && previous.attrs == attrs {
+                        return Ok(Vec::new());
+                    }
+                    return self.edit_commands(
+                        mode,
+                        &EditAction::SetBlock {
+                            block: block.clone(),
+                            proposal: proposal.clone(),
+                            kind: target.kind.clone(),
+                            attrs,
+                        },
+                    );
+                }
+                if let Some(proposal) = proposal {
+                    vec![Command::ConvertProposedBlock {
+                        proposal: proposal.clone(),
+                        block: block.clone(),
+                        target: target.clone(),
+                    }]
+                } else if let Some((id, author)) = suggestion {
+                    vec![Command::ProposeBlockConversion {
+                        id: id.clone(),
+                        author: author.clone(),
+                        block: block.clone(),
+                        target: target.clone(),
+                    }]
+                } else {
+                    vec![Command::ConvertBlock {
+                        block: block.clone(),
+                        target: target.clone(),
+                    }]
+                }
+            }
             EditAction::SetBlock {
                 block,
                 proposal,
@@ -397,11 +482,47 @@ impl Document {
                         "Joining canonical blocks in Suggesting mode is not supported".into(),
                     ));
                 } else {
+                    if crate::block_capabilities(&self.active_block(left)?.kind)
+                        .is_some_and(|kind| kind.content == crate::BlockContentModel::Container)
+                    {
+                        return Ok(vec![Command::JoinContainers {
+                            left: left.clone(),
+                            right: right.clone(),
+                        }]);
+                    }
                     vec![Command::JoinBlocks {
                         left: left.clone(),
                         right: right.clone(),
                     }]
                 }
+            }
+            EditAction::SplitContainer {
+                block,
+                at,
+                new_block,
+            } => {
+                if suggestion.is_some() {
+                    return Err(unsupported());
+                }
+                self.split_container_commands(block, *at, new_block)?
+            }
+            EditAction::MoveText {
+                block,
+                proposal,
+                start,
+                end,
+                to,
+            } => {
+                if suggestion.is_some() && proposal.is_none() {
+                    return Err(unsupported());
+                }
+                vec![Command::MoveText {
+                    block: block.clone(),
+                    proposal: proposal.clone(),
+                    start: start.clone(),
+                    end: end.clone(),
+                    to: to.clone(),
+                }]
             }
             EditAction::SetProposedStructure { proposal, blocks } => {
                 vec![Command::SetProposedStructure {

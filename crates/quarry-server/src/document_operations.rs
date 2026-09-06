@@ -304,19 +304,23 @@ impl Draft {
                 attrs,
             } => {
                 validate_block_type(block_type)?;
-                let block = self.document.block(block_id).map_err(error)?;
-                let old_attrs = block.attrs.into_iter().collect();
-                let attrs = match attrs {
-                    Some(attrs) => normalize_list_attrs(block_type, attrs)?,
-                    None => super::normalize_inherited_list_attrs(block_type, &old_attrs)?,
+                match attrs {
+                    Some(attrs) => self.apply(vec![Command::SetBlock {
+                        block: block_id.clone(),
+                        kind: block_type.clone(),
+                        attrs: normalize_list_attrs(block_type, attrs)?
+                            .into_iter()
+                            .collect(),
+                    }]),
+                    None => self.apply(vec![Command::Edit {
+                        mode: quarry_document::EditMode::Direct,
+                        action: quarry_document::EditAction::ConvertBlock {
+                            block: block_id.clone(),
+                            proposal: None,
+                            target: quarry_document::BlockConversion::plain(block_type),
+                        },
+                    }]),
                 }
-                .into_iter()
-                .collect();
-                self.apply(vec![Command::SetBlock {
-                    block: block_id.clone(),
-                    kind: block_type.clone(),
-                    attrs,
-                }])
             }
             BlockOp::AddMark {
                 block_id,

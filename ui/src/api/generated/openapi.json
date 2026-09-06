@@ -5247,6 +5247,29 @@
           }
         }
       },
+      "BlockConversion": {
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "list": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ListFormat",
+                "description": "None means a non-list block, including plain p -> p conversions."
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "BlockLinkRangePayload": {
         "type": "object",
         "required": [
@@ -5699,6 +5722,64 @@
           {
             "type": "object",
             "required": [
+              "left",
+              "right",
+              "op"
+            ],
+            "properties": {
+              "left": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "join_containers"
+                ]
+              },
+              "right": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "start",
+              "end",
+              "to",
+              "op"
+            ],
+            "properties": {
+              "block": {
+                "type": "string"
+              },
+              "end": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "move_text"
+                ]
+              },
+              "proposal": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "to": {
+                "$ref": "#/components/schemas/TextPoint"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
               "block",
               "op"
             ],
@@ -5741,6 +5822,84 @@
                 "enum": [
                   "set_block"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "target",
+              "op"
+            ],
+            "properties": {
+              "block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "convert_block"
+                ]
+              },
+              "target": {
+                "$ref": "#/components/schemas/BlockConversion"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "proposal",
+              "block",
+              "target",
+              "op"
+            ],
+            "properties": {
+              "block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "convert_proposed_block"
+                ]
+              },
+              "proposal": {
+                "type": "string"
+              },
+              "target": {
+                "$ref": "#/components/schemas/BlockConversion"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "author",
+              "block",
+              "target",
+              "op"
+            ],
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "block": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "propose_block_conversion"
+                ]
+              },
+              "target": {
+                "$ref": "#/components/schemas/BlockConversion"
               }
             }
           },
@@ -7370,6 +7529,33 @@
           },
           {
             "type": "object",
+            "description": "Replace a visible selection. Native structure decides which text blocks\njoin; selections across containers retain their container boundaries.",
+            "required": [
+              "anchor",
+              "focus",
+              "text",
+              "op"
+            ],
+            "properties": {
+              "anchor": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "focus": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "replace_selection"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
             "required": [
               "ranges",
               "name",
@@ -7428,6 +7614,34 @@
                   "string",
                   "null"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "target",
+              "op"
+            ],
+            "properties": {
+              "block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "convert_block"
+                ]
+              },
+              "proposal": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "target": {
+                "$ref": "#/components/schemas/BlockConversion"
               }
             }
           },
@@ -7575,6 +7789,69 @@
           {
             "type": "object",
             "required": [
+              "block",
+              "at",
+              "new_block",
+              "op"
+            ],
+            "properties": {
+              "at": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "block": {
+                "type": "string"
+              },
+              "new_block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "split_container"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "start",
+              "end",
+              "to",
+              "op"
+            ],
+            "properties": {
+              "block": {
+                "type": "string"
+              },
+              "end": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "move_text"
+                ]
+              },
+              "proposal": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "to": {
+                "$ref": "#/components/schemas/TextPoint"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
               "proposal",
               "blocks",
               "op"
@@ -7590,6 +7867,28 @@
                 "type": "string",
                 "enum": [
                   "set_proposed_structure"
+                ]
+              },
+              "proposal": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "proposal",
+              "action",
+              "op"
+            ],
+            "properties": {
+              "action": {
+                "$ref": "#/components/schemas/ProposedBlockEdit"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "edit_proposed_blocks"
                 ]
               },
               "proposal": {
@@ -7967,6 +8266,40 @@
           }
         }
       },
+      "ListFormat": {
+        "type": "object",
+        "required": [
+          "style"
+        ],
+        "properties": {
+          "checked": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "indent": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "start": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "style": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "MoveRequest": {
         "type": "object",
         "required": [
@@ -8174,6 +8507,35 @@
             "type": "object",
             "required": [
               "block",
+              "target",
+              "expected",
+              "kind"
+            ],
+            "properties": {
+              "block": {
+                "type": "string"
+              },
+              "expected": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Block"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "convert_block"
+                ]
+              },
+              "target": {
+                "$ref": "#/components/schemas/BlockConversion"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
               "kind"
             ],
             "properties": {
@@ -8318,6 +8680,140 @@
             "type": "string"
           }
         }
+      },
+      "ProposedBlockEdit": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "blocks",
+              "op"
+            ],
+            "properties": {
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SeedBlock"
+                }
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "insert"
+                ]
+              },
+              "parent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "op"
+            ],
+            "properties": {
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "move"
+                ]
+              },
+              "parent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "op"
+            ],
+            "properties": {
+              "block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "delete"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "at",
+              "new_block",
+              "op"
+            ],
+            "properties": {
+              "at": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "block": {
+                "type": "string"
+              },
+              "new_block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "split_container"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "left",
+              "right",
+              "op"
+            ],
+            "properties": {
+              "left": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "join_containers"
+                ]
+              },
+              "right": {
+                "type": "string"
+              }
+            }
+          }
+        ]
       },
       "ProposedBlockPlacement": {
         "oneOf": [

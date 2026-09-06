@@ -422,6 +422,18 @@ impl Document {
             if let ProposalAction::MoveBlock { block, .. } = &proposal.action {
                 self.block(block)?;
             }
+            if let ProposalAction::ConvertBlock {
+                block,
+                target,
+                expected,
+            } = &proposal.action
+            {
+                self.block(block)?;
+                let previous = expected.iter().find(|b| &b.id == block).ok_or_else(|| {
+                    DocumentError::Invalid("Conversion proposal has no original block".into())
+                })?;
+                target.attributes(previous)?;
+            }
             for segment in &proposal.segments {
                 checked_segment(segment)?;
                 if proposal.state != ProposalState::Accepted

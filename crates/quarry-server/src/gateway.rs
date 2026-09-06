@@ -916,21 +916,6 @@ fn normalize_list_attrs(block_type: &str, attrs: &Attrs) -> Result<Attrs, Gatewa
     Ok(attrs)
 }
 
-/// `set_block_type` without explicit attrs normally preserves them, but list
-/// identity cannot survive a conversion away from `p`: the browser would
-/// remove these fields on receipt. Preserve every non-list attr while
-/// dropping the complete list shape before the ack.
-fn normalize_inherited_list_attrs(block_type: &str, attrs: &Attrs) -> Result<Attrs, GatewayError> {
-    if block_type == "p" || !attrs.contains_key("listStyleType") {
-        return normalize_list_attrs(block_type, attrs);
-    }
-    let mut attrs = attrs.clone();
-    for field in ["listStyleType", "indent", "listStart", "checked"] {
-        attrs.shift_remove(field);
-    }
-    Ok(attrs)
-}
-
 fn display_json_value(value: &JsonValue) -> String {
     value
         .as_str()
@@ -1824,6 +1809,8 @@ mod tests {
             "indent": 2,
             "listStyleType": "disc",
             "listStart": 2,
+            "listRestart": 2,
+            "listRestartPolite": 2,
             "checked": true,
             "custom": "keep"
         }))

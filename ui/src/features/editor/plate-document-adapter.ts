@@ -1,5 +1,5 @@
 import { assignLegacyApi, assignLegacyTransforms, ElementApi, RangeApi, TextApi, type Descendant, type Operation, type Path, type Point, type SlateEditor, type TElement } from 'platejs';
-import { DocumentModel, type Command, type DocumentBatch, type DocumentTransaction, type DocumentDraft, type TextPoint, type TextRange, type Attributes, type EditAction, type EditMode } from './document-model';
+import { DocumentModel, type BlockConversion, type Command, type DocumentBatch, type DocumentTransaction, type DocumentDraft, type TextPoint, type TextRange, type Attributes, type EditAction, type EditMode } from './document-model';
 import type { EditorMode } from './editor-types';
 import { sourceDrafts, type SourceBlock } from './source-drafts';
 import { wikiLinkLeaves, type WikiLinkNode } from './wiki-link';
@@ -29,7 +29,7 @@ export class PlateDocumentAdapter {
   private structureChanged = false;
   private proposedMoves = new Set<string>();
   private proposedDeletes = new Set<string>();
-  private proposedStructures = new Set<string>();
+  private proposedStructureChanged = false;
   private dirty = new Set<string>();
   private dirtyProposals = new Set<string>();
   private formatProposals = new Map<string, { name: string; value: unknown; ranges: TextRange[] }>();
@@ -58,6 +58,7 @@ export class PlateDocumentAdapter {
   private readonly addMark: SlateEditor['tf']['addMark'];
   private readonly removeMark: SlateEditor['tf']['removeMark'];
   private readonly normalizeNode: SlateEditor['tf']['normalizeNode'];
+  private readonly toggleBlock: SlateEditor['tf']['toggleBlock'];
 
   constructor(readonly editor: SlateEditor, readonly model: DocumentModel, readonly options: PlateAdapterOptions) {
     this.apply = editor.tf.apply; this.onChange = editor.api.onChange;
@@ -66,6 +67,7 @@ export class PlateDocumentAdapter {
     this.insertFragment = editor.tf.insertFragment;
     this.deleteForward = editor.tf.deleteForward; this.deleteFragment = editor.tf.deleteFragment; this.insertBreak = editor.tf.insertBreak;
     this.addMark = editor.tf.addMark; this.removeMark = editor.tf.removeMark; this.normalizeNode = editor.tf.normalizeNode;
+    this.toggleBlock = editor.tf.toggleBlock;
     this.nativeIds = new Set(model.view().blocks.map((view) => view.block.id));
     this.scaffolds.add(inputBlockId(model.view()));
     adapters.set(editor, this);
@@ -95,8 +97,18 @@ export class PlateDocumentAdapter {
         if (this.applyPlaceholder(operation)) return;
         this.tx();
         this.promoteInput(operation);
+        const moved = operation.type === 'move_node' ? nodeAt(editor.children, operation.path) : undefined;
         this.translate(operation);
         editor.tf.withoutSaving(() => this.apply(operation));
+        if (operation.type === 'split_node') {
+          const path = [...operation.path]; path[path.length - 1]++;
+          const next = nodeAt(editor.children, path);
+          if (isBlock(next)) this.applySplitProperties(next);
+        }
+        if (moved && isBlock(moved)) {
+          if (moved.quarryProposal) this.moveProposedBlock(String(moved.id));
+          else if (this.options.mode?.() !== 'suggesting') this.moveCanonicalBlock(String(moved.id));
+        }
       } catch (error) { this.fail(error); }
     };
     editor.api.onChange = (options) => {
@@ -110,7 +122,7 @@ export class PlateDocumentAdapter {
     editor.tf.undo = () => this.history(false); editor.tf.redo = () => this.history(true);
     editor.tf.insertText = (...args) => this.input(() => {
       if (this.suggestSelection(args[0])) return;
-      if (this.replaceAcrossContainers(args[0])) return;
+      if (this.replaceSelection(args[0])) return;
       this.insertText(...args);
     });
     editor.tf.insertFragment = (...args) => this.input(() => {
@@ -121,11 +133,11 @@ export class PlateDocumentAdapter {
         if (anchor.proposedBlock && focus.proposedBlock && anchor.block === focus.block
           && selectedText(editor.children, selection).every((part) => part.proposal && part.block === anchor.block)) this.insertingProposal = anchor.block;
       }
-      try { this.insertFragment(...args); } finally { this.insertingProposal = previous; this.endIntent(); }
+      try { if (this.options.mode?.() !== 'suggesting') this.replaceSelection(''); this.insertFragment(...args); } finally { this.insertingProposal = previous; this.endIntent(); }
     });
     editor.tf.deleteFragment = (...args) => this.input(() => {
       if (this.suggestSelection('')) return;
-      if (this.replaceAcrossContainers('')) return;
+      if (this.replaceSelection('')) return;
       this.deleteFragment(...args);
     });
     editor.tf.deleteBackward = (...args) => this.input(() => {
@@ -146,6 +158,11 @@ export class PlateDocumentAdapter {
     });
     editor.tf.addMark = (...args) => { this.endIntent(); if (!this.suggestFormat(args[0], args[1])) this.addMark(...args); };
     editor.tf.removeMark = (...args) => { this.endIntent(); if (!this.suggestFormat(args[0], null)) this.removeMark(...args); };
+    editor.tf.toggleBlock = (type, options) => {
+      const entries = [...editor.api.blocks<TElement>({ mode: 'lowest' })];
+      const kind = entries.every(([node]) => node.type === type) ? (options?.defaultType ?? 'p') : type;
+      this.convertBlocks(entries.map(([node]) => String(node.id)), { kind });
+    };
     editor.tf.normalizeNode = (...args) => {
       if (!args[0][1].length && editor.children.at(-1)?.type !== 'p') {
         let id = inputBlockId(model.view());
@@ -159,7 +176,7 @@ export class PlateDocumentAdapter {
     // Slate's own transforms call its legacy methods. Plate maintains both
     // surfaces when installing plugins; an attached adapter must do the same.
     assignLegacyTransforms(editor, { apply: editor.tf.apply, undo: editor.tf.undo, redo: editor.tf.redo,
-      insertText: editor.tf.insertText, insertFragment: editor.tf.insertFragment, deleteBackward: editor.tf.deleteBackward, deleteForward: editor.tf.deleteForward, deleteFragment: editor.tf.deleteFragment, insertBreak: editor.tf.insertBreak, addMark: editor.tf.addMark, removeMark: editor.tf.removeMark, normalizeNode: editor.tf.normalizeNode });
+      insertText: editor.tf.insertText, insertFragment: editor.tf.insertFragment, deleteBackward: editor.tf.deleteBackward, deleteForward: editor.tf.deleteForward, deleteFragment: editor.tf.deleteFragment, insertBreak: editor.tf.insertBreak, addMark: editor.tf.addMark, removeMark: editor.tf.removeMark, normalizeNode: editor.tf.normalizeNode, toggleBlock: editor.tf.toggleBlock });
     assignLegacyApi(editor, { onChange: editor.api.onChange });
   }
 
@@ -207,7 +224,7 @@ export class PlateDocumentAdapter {
     this.editor.tf.apply = this.apply; this.editor.api.onChange = this.onChange;
     this.editor.tf.undo = this.undo; this.editor.tf.redo = this.redo;
     const transforms = { apply: this.apply, undo: this.undo, redo: this.redo, insertText: this.insertText, insertFragment: this.insertFragment,
-      deleteBackward: this.deleteBackward, deleteForward: this.deleteForward, deleteFragment: this.deleteFragment, insertBreak: this.insertBreak, addMark: this.addMark, removeMark: this.removeMark, normalizeNode: this.normalizeNode };
+      deleteBackward: this.deleteBackward, deleteForward: this.deleteForward, deleteFragment: this.deleteFragment, insertBreak: this.insertBreak, addMark: this.addMark, removeMark: this.removeMark, normalizeNode: this.normalizeNode, toggleBlock: this.toggleBlock };
     Object.assign(this.editor.tf, transforms); assignLegacyTransforms(this.editor, transforms);
     assignLegacyApi(this.editor, { onChange: this.onChange });
     this.transaction?.abort(); this.transaction = undefined;
@@ -238,6 +255,43 @@ export class PlateDocumentAdapter {
   }
   updateBlock(block: string, kind: string, attrs: Attributes) {
     this.updateSourceBlock(this.beginSourceEdit(block), kind, attrs);
+  }
+  convertBlocks(ids: string[], target: BlockConversion) {
+    if (!ids.length || this.options.readOnly?.() || this.options.mode?.() === 'viewing') return;
+    const group = this.inputDepth ? this.group : undefined;
+    this.flush(); this.rememberSelection();
+    const proposed: string[] = [];
+    const commands: Command[] = [];
+    let created: { block: string; proposal?: string } | undefined;
+    for (const id of ids) {
+      const entry = flattenBlocks(this.editor.children).find(({ node }) => node.id === id);
+      if (entry && !entry.node.quarryProposal && !this.nativeIds.has(id)) {
+        const block = crypto.randomUUID(), mode = this.editMode(), parent = entry.parent;
+        const position = this.position(entry.path);
+        const seed = { id: block, kind: 'p', attrs: {}, parent, position, text: blockText(entry.node) };
+        if (mode.kind === 'suggest') {
+          const before = this.model.view().blocks.filter((view) => view.block.parent === parent)[position]?.block.id ?? null;
+          commands.push(this.content({ op: 'insert_blocks', parent, before, blocks: [{ ...seed, parent: null, position: 0 }] }, mode));
+          commands.push(this.content({ op: 'convert_block', block, proposal: mode.id, target }, { kind: 'direct' }));
+          proposed.push(mode.id); created = { block, proposal: mode.id };
+        } else {
+          commands.push(this.content({ op: 'insert_block', block: seed }, mode));
+          commands.push(this.content({ op: 'convert_block', block, target }, mode));
+          created = { block };
+        }
+        continue;
+      }
+      const block = this.beginSourceEdit(id), mode = this.editMode();
+      if (!block.proposal && mode.kind === 'suggest') proposed.push(mode.id);
+      commands.push(this.content({ op: 'convert_block', block: block.id, proposal: block.proposal ?? null, target }, mode));
+    }
+    this.command(commands, undefined, group);
+    if (created) {
+      const point = created.proposal ? this.model.proposedBlockPoint(created.proposal, created.block, 0) : this.model.point(created.block, 0);
+      this.savedSelection = [point, point]; this.refresh();
+    }
+    const latest = proposed.filter((id) => this.model.view().proposals.some((view) => view.proposal.id === id)).at(-1);
+    if (latest) this.options.proposed?.(latest);
   }
   private updateSourceBlock(block: SourceBlock, kind: string, attrs: Attributes) {
     this.endIntent();
@@ -351,32 +405,41 @@ export class PlateDocumentAdapter {
     } catch (error) { this.endIntent(); this.options.error(error); }
     return true;
   }
-  private replaceAcrossContainers(text: string): boolean {
+  private replaceSelection(text: string): boolean {
     const selection = this.editor.selection;
     if (this.presenting || !selection || RangeApi.isCollapsed(selection)) return false;
     const [start, end] = RangeApi.edges(selection);
-    const first = blockAt(this.editor.children, start.path), last = blockAt(this.editor.children, end.path);
-    if (!first || !last || first.path.slice(0, -1).join('.') === last.path.slice(0, -1).join('.')) return false;
+    let from = textOffset(this.editor.children, start), to = textOffset(this.editor.children, end);
+    if (from.block === to.block && from.proposedBlock === to.proposedBlock) return false;
     try {
       if (this.options.readOnly?.()) return true;
-      this.flush();
-      const from = textOffset(this.editor.children, start);
-      const selected = selectedText(this.editor.children, selection);
-      if (selected.some((part) => part.proposal)) throw new Error('Accept or reject the intervening suggestion before replacing this selection');
-      // Delete each selected text span in place. Keep Slate's ordinary input
-      // operations so composition can continue in the same DOM text node.
-      this.editor.tf.withoutNormalizing(() => {
-        for (const part of selected.reverse()) {
-          const anchor = slatePoint(this.editor.children, part.block, part.offset)!;
-          const focus = slatePoint(this.editor.children, part.block, part.end)!;
-          this.editor.tf.delete({ at: { anchor, focus } });
-        }
-        const point = slatePoint(this.editor.children, from.block, from.offset);
-        if (point) this.editor.tf.select(point);
-        if (text) this.insertText(text);
-      });
-    } catch (error) { this.endIntent(); this.options.error(error); }
+      const parts = selectedText(this.editor.children, selection);
+      if (parts.some((part) => Boolean(part.proposal) !== Boolean(from.proposal) || part.proposal && part.block !== from.block)) throw new Error('Accept or reject the intervening suggestion before replacing this selection');
+      const formatting = { ...this.formatting(start.path), ...this.editor.api.marks() };
+      const tx = this.tx();
+      this.ensureSelectionBlock(start); this.ensureSelectionBlock(end);
+      from = textOffset(this.editor.children, start); to = textOffset(this.editor.children, end);
+      tx.apply([this.content({ op: 'replace_selection', anchor: this.nativePoint(from), focus: this.nativePoint(to), text })]);
+      this.nativeIds = new Set(tx.view().blocks.map(({ block }) => block.id));
+      if (text) this.exactMarks(from.block, from.blockOffset ?? from.offset, text.length, formatting, from.proposal, from.proposedBlock);
+      const caret = { ...from, offset: from.offset + text.length, blockOffset: from.blockOffset === undefined ? undefined : from.blockOffset + text.length };
+      const point = this.nativePoint(caret), location = tx.locate(point);
+      this.present(() => this.editor.tf.withoutNormalizing(() => {
+        this.presentChildren([], projectPlate(tx.view(), true, (point) => tx.locate(point)));
+        const selected = location && slatePoint(this.editor.children, location.owner.id, location.offset, location.owner.kind === 'proposal', point.source, location.proposed_block);
+        if (selected) this.editor.tf.select(selected);
+      }));
+      this.savedSelection = [point, point];
+    } catch (error) { this.fail(error); }
     return true;
+  }
+  private ensureSelectionBlock(point: Point) {
+    let owner = blockAt(this.editor.children, point.path);
+    if (owner && !owner.node.quarryProposal && !this.nativeIds.has(String(owner.node.id)) && this.scaffolds.has(String(owner.node.id))) {
+      this.present(() => this.editor.tf.setNodes({ id: crypto.randomUUID() }, { at: owner!.path }));
+      owner = blockAt(this.editor.children, point.path);
+    }
+    if (owner && !owner.node.quarryProposal) this.ensure(owner.node, owner.path);
   }
   private suggestFormat(name: string, value: unknown): boolean {
     if (this.options.mode?.() !== 'suggesting' || !this.editor.selection || this.presenting) return false;
@@ -508,23 +571,6 @@ export class PlateDocumentAdapter {
   }
   private translate(op: Operation) {
     if (op.type === 'set_selection') return;
-    if (op.type === 'merge_node') {
-      const right = nodeAt(this.editor.children, op.path);
-      const leftPath = [...op.path]; leftPath[leftPath.length - 1]--;
-      const left = nodeAt(this.editor.children, leftPath);
-      // A paste can join a new block to existing text before its turn ends.
-      // Give both blocks native sources before transferring their characters.
-      if (isBlock(right) && isBlock(left) && right.quarryProposal && right.quarryProposal === left.quarryProposal
-        && Boolean(right.quarryNewProposedBlock) !== Boolean(left.quarryNewProposedBlock)) this.reconcileProposedStructures();
-    }
-    const pending = op.type === 'insert_node' ? blockAt(this.editor.children, op.path.slice(0, -1)) : blockAt(this.editor.children, op.path);
-    if (pending?.node.quarryNewProposedBlock) {
-      if (op.type === 'split_node' && isBlock(nodeAt(this.editor.children, op.path))) {
-        const id = crypto.randomUUID(); op.properties.id = id; op.properties.quarryProposedBlock = id;
-      }
-      if (op.type === 'insert_node' && isBlock(op.node)) this.assignProposedTree(op.node, String(pending.node.quarryProposal));
-      this.proposedStructures.add(String(pending.node.quarryProposal)); return;
-    }
     // Plate may normalize or format a newly inserted subtree before its
     // operation batch ends. Its native proposal is created from that final
     // subtree; no canonical block is created during these local operations.
@@ -554,13 +600,34 @@ export class PlateDocumentAdapter {
         const assign = (node: Descendant) => {
           if (!isBlock(node)) return;
           if (!node.id || this.nativeIds.has(String(node.id))) node.id = crypto.randomUUID();
-          if (blockKinds.get(node.type)!.content === 'container') node.children.forEach(assign);
+          if (blockKinds.get(node.type)!.content === 'container') {
+            const childKind = blockKinds.get(node.type)!.children.find((kind) => blockKinds.get(kind)?.content === 'text');
+            if (childKind) {
+              const children: Descendant[] = [];
+              for (const child of node.children) {
+                if (isBlock(child)) children.push(child);
+                else {
+                  let wrapper = children.at(-1);
+                  if (!wrapper || !isBlock(wrapper) || wrapper.type !== childKind) { wrapper = { type: childKind, children: [] }; children.push(wrapper); }
+                  (wrapper as TElement).children.push(child);
+                }
+              }
+              node.children = children;
+            }
+            node.children.forEach(assign);
+          }
+          else if (isTextBlock(node)) {
+            // A text block has one owner. Remove imported block wrappers
+            // before allocating any native text identities.
+            const inline = (children: Descendant[]): Descendant[] => children.flatMap((child) => isBlock(child) ? inline(child.children) : [child]);
+            node.children = inline(node.children);
+          }
         };
         const parent = op.path.length > 1 && blockAt(this.editor.children, op.path.slice(0, -1));
         assign(op.node);
         const proposal = parent && parent.node.quarryProposal ? String(parent.node.quarryProposal) : this.insertingProposal;
         if (proposal) {
-          this.assignProposedTree(op.node, proposal); this.proposedStructures.add(proposal); return;
+          this.assignProposedTree(op.node, proposal); this.insertProposedTree(op.node, op.path, proposal); return;
         }
         if (this.options.mode?.() === 'suggesting') { this.structureChanged = true; return; }
         this.insertTree(op.node, op.path);
@@ -588,7 +655,11 @@ export class PlateDocumentAdapter {
     }
     const node = nodeAt(this.editor.children, op.path);
     if (isBlock(node) && node.quarryProposal) {
-      if (op.type === 'remove_node' || op.type === 'move_node') { this.proposedStructures.add(String(node.quarryProposal)); return; }
+      if (op.type === 'remove_node') {
+        this.tx().apply([this.content({ op: 'edit_proposed_blocks', proposal: String(node.quarryProposal), action: { op: 'delete', block: String(node.quarryProposedBlock) } })]);
+        this.proposedStructureChanged = true; return;
+      }
+      if (op.type === 'move_node') return;
       if (op.type === 'split_node') {
         const id = crypto.randomUUID();
         op.properties.id = id; op.properties.quarryProposedBlock = id;
@@ -596,8 +667,8 @@ export class PlateDocumentAdapter {
           const offset = node.children.slice(0, op.position).reduce((sum, child) => sum + inlineText(child).length, 0);
           const proposal = String(node.quarryProposal), block = String(node.quarryProposedBlock);
           this.tx().apply([this.content({ op: 'split_block', proposal, block, at: this.tx().proposedBlockPoint(proposal, block, offset), new_block: id })]);
-        } else op.properties.quarryNewProposedBlock = true;
-        this.proposedStructures.add(String(node.quarryProposal)); return;
+        } else this.tx().apply([this.content({ op: 'edit_proposed_blocks', proposal: String(node.quarryProposal), action: { op: 'split_container', block: String(node.quarryProposedBlock), at: op.position, new_block: id } })]);
+        this.proposedStructureChanged = true; return;
       }
       if (op.type === 'merge_node') {
         const leftPath = [...op.path]; leftPath[leftPath.length - 1]--;
@@ -606,11 +677,17 @@ export class PlateDocumentAdapter {
         if (isTextBlock(node) && isTextBlock(left)) {
           this.tx().apply([this.content({ op: 'join_blocks', proposal: String(node.quarryProposal), left: String(left.quarryProposedBlock), right: String(node.quarryProposedBlock) })]);
         } else if (isTextBlock(node) || isTextBlock(left)) throw new Error('Join proposed blocks with compatible content');
-        this.proposedStructures.add(String(node.quarryProposal)); return;
+        else this.tx().apply([this.content({ op: 'edit_proposed_blocks', proposal: String(node.quarryProposal), action: { op: 'join_containers', left: String(left.quarryProposedBlock), right: String(node.quarryProposedBlock) } })]);
+        this.proposedStructureChanged = true; return;
       }
       if (op.type !== 'set_node') throw new Error('Change the proposed text before accepting its structure');
       if (op.newProperties.id && op.newProperties.id !== node.id) op.newProperties.id = node.id;
       const next = { ...node, ...op.newProperties };
+      // Slate records removed keys in properties without repeating them in
+      // newProperties. Retaining them would restore list membership on a heading.
+      for (const key of Object.keys({ ...op.properties, ...op.newProperties })) {
+        if (op.newProperties[key] == null) delete next[key];
+      }
       this.tx().apply([this.content({ op: 'set_block', proposal: String(node.quarryProposal), block: String(node.quarryProposedBlock), kind: next.type, attrs: blockAttrs(next) })]);
       return;
     }
@@ -620,6 +697,10 @@ export class PlateDocumentAdapter {
     if (op.type === 'remove_node') {
       if (isBlock(node)) {
         if (this.options.mode?.() === 'suggesting') this.proposedDeletes.add(String(node.id));
+        else if (this.nativeIds.has(String(node.id))) {
+          this.tx().apply([this.content({ op: 'delete_block', block: String(node.id) })]);
+          for (const { node: removed } of flattenBlocks([node])) this.nativeIds.delete(String(removed.id));
+        }
         this.structureChanged = true; return;
       }
       const at = this.inlineOffset(op.path); const text = ElementApi.isElement(node) && node.type === 'quarry_proposal' ? node.children.map(inlineText).join('') : inlineText(node);
@@ -642,6 +723,12 @@ export class PlateDocumentAdapter {
       }
       if (isBlock(node)) {
         if (op.newProperties.id && op.newProperties.id !== node.id) op.newProperties.id = node.id;
+        if (this.options.mode?.() !== 'suggesting') {
+          this.ensure(node, op.path);
+          const next = { ...node, ...op.newProperties };
+          for (const key of Object.keys({ ...op.properties, ...op.newProperties })) if (op.newProperties[key] == null) delete next[key];
+          this.tx().apply([this.content({ op: 'set_block', block: String(node.id), kind: next.type, attrs: blockAttrs(next) })]);
+        }
         this.structureChanged = true; return;
       }
       const at = this.inlineOffset(op.path); const length = inlineText(node).length;
@@ -660,9 +747,7 @@ export class PlateDocumentAdapter {
         this.tx().apply([this.content({ op: 'split_block', block: String(node.id), at: this.tx().point(String(node.id), offset), new_block: id })]);
         this.nativeIds.add(id); this.dirty.add(String(node.id)); this.dirty.add(id);
       } else {
-        const parent = this.tx().block(String(node.id)).block.parent;
-        this.tx().apply([this.content({ op: 'insert_block', block: { id, kind: node.type, attrs: blockAttrs(node), parent, position: op.path.at(-1)! + 1, text: '' } }),
-          ...node.children.slice(op.position).filter(isBlock).map((child): Command => (this.content({ op: 'move_block', block: String(child.id), parent: id, before: null })))]);
+        this.tx().apply([this.content({ op: 'split_container', block: String(node.id), at: op.position, new_block: id })]);
         this.nativeIds.add(id);
       }
       this.structureChanged = true; return;
@@ -676,30 +761,38 @@ export class PlateDocumentAdapter {
       if (isTextBlock(node) && isTextBlock(left)) {
         this.tx().apply([this.content({ op: 'join_blocks', left: String(left.id), right: String(node.id) })]);
         this.dirty.add(String(left.id)); this.nativeIds.delete(String(node.id));
-      } else this.tx().apply([...node.children.filter(isBlock).map((child): Command => (this.content({ op: 'move_block', block: String(child.id), parent: String(left.id), before: null }))), this.content({ op: 'delete_block', block: String(node.id) })]);
+      } else {
+        this.tx().apply([this.content({ op: 'join_blocks', left: String(left.id), right: String(node.id) })]);
+        this.nativeIds.delete(String(node.id));
+      }
       this.structureChanged = true; return;
     }
     if (op.type === 'move_node') {
       if (isBlock(node)) { this.structureChanged = true; return; }
+      if (!inlineText(node)) return;
       // Wrapping/unwrapping a link moves leaves without moving characters.
       // Cross-block leaf moves are explicit ownership transfers.
       const from = this.inlineOffset(op.path);
       const parentPath = op.newPath.slice(0, -1); const parent = nodeAt(this.editor.children, parentPath);
       if (!ElementApi.isElement(parent)) throw new Error('Invalid inline move');
       const to = this.inlineOffset(parentPath);
-      to.offset += parent.children.slice(0, op.newPath.at(-1)!).reduce((sum, child) => sum + inlineText(child).length, 0);
+      const sameParent = op.path.slice(0, -1).join('.') === parentPath.join('.');
+      // Slate's sibling destination is indexed after removing the moving
+      // leaf. Address that position in the native version before the move.
+      const index = op.newPath.at(-1)! + (sameParent && op.newPath.at(-1)! > op.path.at(-1)! ? 1 : 0);
+      const preceding = parent.children.slice(0, index).reduce((sum, child) => sum + inlineText(child).length, 0);
+      to.offset += preceding; if (to.blockOffset !== undefined) to.blockOffset += preceding;
       const length = inlineText(node).length;
       this.markDirty(from); this.markDirty(to);
-      if (from.block === to.block && (to.offset === from.offset || to.offset === from.offset + length)) return;
+      if (from.block === to.block && from.proposedBlock === to.proposedBlock && (to.offset === from.offset || to.offset === from.offset + length)) return;
       if (length) {
-        if (from.proposal || to.proposal) throw new Error('Suggestion text cannot move to another text owner');
         this.moveText(from, to, length);
       }
     }
   }
   private assignProposedTree(node: TElement, proposal: string) {
     const id = crypto.randomUUID(); node.id = id; node.quarryProposedBlock = id;
-    node.quarryProposal = proposal; node.quarryNewProposedBlock = true;
+    node.quarryProposal = proposal;
     if (blockKinds.get(node.type)!.content === 'container') for (const child of node.children) if (isBlock(child)) this.assignProposedTree(child, proposal);
   }
   private insertTree(node: TElement, path: Path, parentId?: string) {
@@ -723,22 +816,35 @@ export class PlateDocumentAdapter {
       node.children.forEach((child) => format(child));
     }
   }
-  private moveText(from: { block: string; offset: number }, to: { block: string; offset: number }, length: number) {
-    const tx = this.tx(); const span = crypto.randomUUID(), tail = crypto.randomUUID(), destinationTail = crypto.randomUUID();
-    const destination = tx.point(to.block, to.offset);
-    tx.apply([this.content({ op: 'split_block', block: from.block, at: tx.point(from.block, from.offset), new_block: span })]);
-    tx.apply([this.content({ op: 'split_block', block: span, at: tx.point(span, length), new_block: tail }), this.content({ op: 'join_blocks', left: from.block, right: tail })]);
-    tx.apply([this.content({ op: 'split_block', block: to.block, at: destination, new_block: destinationTail }),
-      this.content({ op: 'move_block', block: span, parent: tx.block(to.block).block.parent, before: destinationTail }),
-      this.content({ op: 'join_blocks', left: to.block, right: span }), this.content({ op: 'join_blocks', left: to.block, right: destinationTail })]);
-    this.dirty.add(from.block); this.dirty.add(to.block); this.structureChanged = true;
+  private moveText(from: NativeOffset, to: NativeOffset, length: number) {
+    const tx = this.tx();
+    const end = { ...from, offset: from.offset + length, blockOffset: from.blockOffset === undefined ? undefined : from.blockOffset + length };
+    tx.apply([this.content({ op: 'move_text', block: from.proposedBlock ?? from.block, proposal: from.proposal ? from.block : null,
+      start: this.nativePoint(from), end: this.nativePoint(end), to: this.nativePoint(to) })]);
+    this.markDirty(from); this.markDirty(to);
+  }
+  private moveCanonicalBlock(id: string) {
+    const tree = flattenBlocks(this.editor.children, true);
+    const entry = tree.find(({ node }) => node.id === id);
+    if (!entry || !this.nativeIds.has(id)) return;
+    const next = tree.find(({ node, parent, position }) => parent === entry.parent && position > entry.position && this.nativeIds.has(String(node.id)));
+    this.tx().apply([this.content({ op: 'move_block', block: id, parent: entry.parent, before: next ? String(next.node.id) : null })]);
+  }
+  private applySplitProperties(node: TElement) {
+    const proposal = node.quarryProposal ? String(node.quarryProposal) : undefined;
+    const id = String(node.quarryProposedBlock ?? node.id);
+    if (!proposal && !this.nativeIds.has(id)) return;
+    const current = proposal ? this.tx().view().proposals.find((view) => view.proposal.id === proposal)?.blocks.find((view) => view.block.id === id)?.block : this.tx().block(id).block;
+    if (!current) return;
+    const attrs = blockAttrs(node);
+    if (current.kind !== node.type || JSON.stringify(current.attrs) !== JSON.stringify(attrs)) this.tx().apply([this.content({ op: 'set_block', block: id, proposal, kind: node.type, attrs })]);
   }
   flush() {
     const tx = this.transaction;
     if (!tx || this.presenting || this.disposed) return;
     try {
-      const updatedProposals = this.reconcileProposedStructures();
-      const proposed = this.structureChanged ? this.reconcileStructure() : [];
+      const updatedProposals = this.proposedStructureChanged;
+      const proposed = this.structureChanged ? this.finishBlockEdits() : [];
       for (const { node } of flattenBlocks(this.editor.children)) {
         if (!this.dirty.has(String(node.id)) || !isTextBlock(node)) continue;
         if (tx.block(String(node.id)).text !== blockText(node)) throw new Error('Slate text does not match its native commands');
@@ -764,7 +870,7 @@ export class PlateDocumentAdapter {
         tx.apply([this.content({ op: 'format', ...change }, this.editMode(id))]);
       }
       this.formatProposals.clear();
-      this.transaction = undefined; this.dirty.clear(); this.dirtyProposals.clear(); this.structureChanged = false; this.proposedMoves.clear(); this.proposedDeletes.clear(); this.proposedStructures.clear();
+      this.transaction = undefined; this.dirty.clear(); this.dirtyProposals.clear(); this.structureChanged = false; this.proposedMoves.clear(); this.proposedDeletes.clear(); this.proposedStructureChanged = false;
       if (!tx.request.commands.length) { tx.abort(); return; }
       const batch = tx.finish(this.compositionGroup ?? this.group); this.options.changed(batch);
       this.nativeIds = new Set(this.model.view().blocks.map((view) => view.block.id));
@@ -776,39 +882,36 @@ export class PlateDocumentAdapter {
     } catch (error) { this.transaction = tx; this.fail(error); }
     finally { this.options.pending?.(false); }
   }
-  private reconcileProposedStructures(): boolean {
-    if (!this.proposedStructures.size) return false;
-    const all = flattenBlocks(this.editor.children), byId = new Map(all.map((item) => [String(item.node.id), item]));
-    for (const id of this.proposedStructures) {
-      const view = this.tx().view().proposals.find((view) => view.proposal.id === id)!;
-      if (view.proposal.action.kind !== 'insert_blocks') throw new Error('This suggestion does not contain blocks');
-      const tree = all.filter(({ node }) => node.quarryProposal === id);
-      if (!tree.length) { this.tx().apply([{ op: 'reject_proposal', id }]); this.dirtyProposals.delete(id); continue; }
-      const existing = new Set(view.blocks.map(({ block }) => block.id));
-      const positions = new Map<string | null, number>();
-      const placements = tree.map(({ node, parent, path }) => {
-        const container = parent && byId.get(parent)?.node;
-        const internalParent = container && container.quarryProposal === id ? String(container.quarryProposedBlock) : null;
-        if (!internalParent) {
-          if (parent !== view.proposal.action.parent) throw new Error('Move proposed blocks within their suggestion');
-          const siblings = path.length > 1 ? (nodeAt(this.editor.children, path.slice(0, -1)) as TElement).children : this.editor.children;
-          const next = siblings.slice(path.at(-1)! + 1).find((node) => isBlock(node) && !node.quarryProposal && !this.scaffolds.has(String(node.id)));
-          if ((next?.id ?? null) !== view.proposal.action.before) throw new Error('Move proposed blocks within their suggestion');
-        }
-        const position = positions.get(internalParent) ?? 0; positions.set(internalParent, position + 1);
-        const block = String(node.quarryProposedBlock);
-        return existing.has(block) ? { kind: 'existing' as const, block, parent: internalParent, position }
-          : { kind: 'new' as const, block: { id: block, parent: internalParent, position, kind: node.type, attrs: blockAttrs(node), text: isTextBlock(node) ? blockText(node) : '' } };
-      });
-      this.tx().apply([this.content({ op: 'set_proposed_structure', proposal: id, blocks: placements })]);
-      const updated = this.tx().view().proposals.find((view) => view.proposal.id === id)!;
-      this.present(() => tree.forEach(({ node, path }) => {
-        const index = updated.blocks.findIndex(({ block }) => block.id === node.quarryProposedBlock);
-        this.editor.tf.setNodes({ quarryNewProposedBlock: null, quarryProposalOrder: index, quarrySources: updated.blocks[index].block.segments.map((segment) => segment.source) }, { at: path });
-      }));
-      this.dirtyProposals.add(id);
+  private proposedPlacement(path: Path, proposal: string, afterMove = false) {
+    const container = path.length > 1 ? blockAt(this.editor.children, path.slice(0, -1))?.node : undefined;
+    const parent = container?.quarryProposal === proposal ? String(container.quarryProposedBlock) : null;
+    const siblings = path.length > 1 ? (nodeAt(this.editor.children, path.slice(0, -1)) as TElement).children : this.editor.children;
+    const following = siblings.slice(path.at(-1)! + (afterMove ? 1 : 0));
+    const next = following.find((node) => isBlock(node) && node.quarryProposal === proposal);
+    if (!parent) {
+      const view = this.tx().view().proposals.find((view) => view.proposal.id === proposal)!;
+      const externalParent = container ? String(container.id) : null;
+      const externalNext = following.find((node) => isBlock(node) && !node.quarryProposal && !this.scaffolds.has(String(node.id)));
+      if (externalParent !== view.proposal.action.parent || (externalNext?.id ?? null) !== view.proposal.action.before) throw new Error('Move proposed blocks within their suggestion');
     }
-    return true;
+    return { parent, before: next ? String(next.quarryProposedBlock) : null };
+  }
+  private moveProposedBlock(id: string) {
+    const entry = flattenBlocks(this.editor.children).find(({ node }) => node.id === id);
+    if (!entry) throw new Error('Missing proposed move target');
+    const proposal = String(entry.node.quarryProposal);
+    const placement = this.proposedPlacement(entry.path, proposal, true);
+    this.tx().apply([this.content({ op: 'edit_proposed_blocks', proposal, action: { op: 'move', block: String(entry.node.quarryProposedBlock), ...placement } })]);
+    this.proposedStructureChanged = true;
+  }
+  private insertProposedTree(node: TElement, path: Path, proposal: string) {
+    const placement = this.proposedPlacement(path, proposal);
+    const blocks = flattenBlocks([node]).map(({ node, parent, position }) => ({
+      id: String(node.quarryProposedBlock), kind: node.type, attrs: blockAttrs(node), parent, position,
+      text: isTextBlock(node) ? blockText(node) : '',
+    }));
+    this.tx().apply([this.content({ op: 'edit_proposed_blocks', proposal, action: { op: 'insert', ...placement, blocks } })]);
+    this.dirtyProposals.add(proposal); this.proposedStructureChanged = true;
   }
   private flushProposals() {
     if (!this.dirtyProposals.size) return;
@@ -840,7 +943,7 @@ export class PlateDocumentAdapter {
     };
     visit(this.editor.children);
   }
-  private reconcileStructure(): string[] {
+  private finishBlockEdits(): string[] {
     const tx = this.tx();
     const blocks = flattenBlocks(this.editor.children, true).filter(({ node }) => !(this.scaffolds.has(String(node.id)) && !blockText(node)));
     if (this.options.mode?.() === 'suggesting') {
@@ -918,30 +1021,17 @@ export class PlateDocumentAdapter {
       }
       return ids;
     }
-    const ids = new Set(blocks.map(({ node }) => String(node.id)));
-    for (const { node, path } of blocks) this.ensure(node, path);
-    for (const { node } of blocks) {
-      const current = tx.block(String(node.id)).block; const attrs = blockAttrs(node);
-      if (current.kind !== node.type || JSON.stringify(current.attrs) !== JSON.stringify(attrs)) tx.apply([this.content({ op: 'set_block', block: String(node.id), kind: node.type, attrs })]);
-    }
-    // Parents precede children in the final tree. Reparent first, then order.
-    for (const { node, parent } of blocks) if (tx.block(String(node.id)).block.parent !== parent) tx.apply([this.content({ op: 'move_block', block: String(node.id), parent, before: null })]);
-    const before = new Map<string | null, string>();
-    for (const { node, parent } of [...blocks].reverse()) {
-      const id = String(node.id); const next = before.get(parent) ?? null;
-      const siblings = tx.view().blocks.filter((view) => view.block.parent === parent);
-      const index = siblings.findIndex((view) => view.block.id === id);
-      if ((siblings[index + 1]?.block.id ?? null) !== next) tx.apply([this.content({ op: 'move_block', block: id, parent, before: next })]);
-      before.set(parent, id);
-    }
-    for (const view of tx.view().blocks) if (!ids.has(view.block.id)) {
-      if (!tx.block(view.block.id).block.deleted) tx.apply([this.content({ op: 'delete_block', block: view.block.id })]);
-    }
+    // Structural operations have already run in order. This is a conformance
+    // check, never a second source of canonical mutations.
+    const native = tx.view().blocks;
+    const actual = native.map(({ block }) => [block.id, block.kind, block.parent]);
+    const expected = blocks.map(({ node, parent }) => [String(node.id), node.type, parent]);
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error('Slate structure does not match its native commands');
     return [];
   }
   private fail(error: unknown) {
     this.failedTurn = true; this.endIntent();
-    this.transaction?.abort(); this.transaction = undefined; this.dirty.clear(); this.dirtyProposals.clear(); this.formatProposals.clear(); this.structureChanged = false; this.proposedMoves.clear(); this.proposedDeletes.clear(); this.proposedStructures.clear();
+    this.transaction?.abort(); this.transaction = undefined; this.dirty.clear(); this.dirtyProposals.clear(); this.formatProposals.clear(); this.structureChanged = false; this.proposedMoves.clear(); this.proposedDeletes.clear(); this.proposedStructureChanged = false;
     this.nativeIds = new Set(this.model.view().blocks.map((view) => view.block.id));
     this.options.pending?.(false);
     this.refresh(); this.options.error(error);

@@ -479,6 +479,7 @@ pub fn document_review_projection(d: &Document) -> Result<Vec<BlockReviewItem>> 
                 }
             }
             ProposalAction::UpdateBlock { .. }
+            | ProposalAction::ConvertBlock { .. }
             | ProposalAction::DeleteBlock { .. }
             | ProposalAction::MoveBlock { .. } => {
                 if item.block_id.is_empty() {

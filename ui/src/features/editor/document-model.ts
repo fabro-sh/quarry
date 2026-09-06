@@ -1,6 +1,6 @@
 import init, { NativeDocument, NativeCommandBuilder } from '../../generated/document/quarry_document';
 import type { Command, CommandRequest } from '../../api/generated/schema/types.gen';
-export type { Command, CommandRequest, EditAction, EditMode } from '../../api/generated/schema/types.gen';
+export type { BlockConversion, Command, CommandRequest, EditAction, EditMode } from '../../api/generated/schema/types.gen';
 
 export interface TextPoint { source: string; cursor: string }
 export interface TextRange { source: string; start: string; end: string }
@@ -24,7 +24,7 @@ export interface CommentView {
   target: ReviewTarget;
 }
 export interface ProposalView {
-  proposal: { id: string; author: string; body: string; action: { kind: 'text' | 'format' | 'update_block' | 'move_block' | 'delete_block' | 'insert_blocks' | 'unavailable'; [key: string]: unknown }; state: 'open' | 'accepted' | 'rejected' | 'closed'; metadata: ReviewMetadata };
+  proposal: { id: string; author: string; body: string; action: { kind: 'text' | 'format' | 'update_block' | 'convert_block' | 'move_block' | 'delete_block' | 'insert_blocks' | 'unavailable'; [key: string]: unknown }; state: 'open' | 'accepted' | 'rejected' | 'closed'; metadata: ReviewMetadata };
   blocks: BlockView[]; text: string; runs: TextRun[]; target: ReviewTarget; acceptance_error: string | null;
 }
 export interface DocumentView {
@@ -199,6 +199,7 @@ export class DocumentTransaction {
   private closed = false;
   constructor(private readonly owner: DocumentModel, private readonly native: NativeCommandBuilder, readonly request: CommandRequest) {}
   view(): DocumentView { return this.projection ??= JSON.parse(this.native.view()); }
+  locate(point: TextPoint): ResolvedPoint | null { return JSON.parse(this.native.locate_point(JSON.stringify(point))); }
   block(id: string): BlockView { return JSON.parse(this.native.block_view(id)); }
   point(block: string, offset: number): TextPoint { return JSON.parse(this.native.point(block, offset)); }
   selection(block: string, start: number, end: number): TextRange[] { return JSON.parse(this.native.selection(block, start, end)); }

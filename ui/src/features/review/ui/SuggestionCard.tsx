@@ -79,6 +79,10 @@ function blockLabel(kind: unknown, attrs: Record<string, unknown>): string {
 
 function BlockUpdatePreview({ view }: { view: ProposalView }) {
   const action = view.proposal.action;
+  if (action.kind === 'convert_block') {
+    const target = action.target as { kind: string; list?: { style: string } };
+    return <p className="mt-2 text-xs text-muted">Convert to {blockLabel(target.kind, { listStyleType: target.list?.style }).toLowerCase()}</p>;
+  }
   if (action.kind !== 'update_block') return null;
   const before = action.expected_attrs as Record<string, unknown>;
   const after = action.attrs as Record<string, unknown>;
@@ -108,10 +112,11 @@ export function SuggestionCard({ view, children, onAccept, onReject }: Suggestio
   };
   const moveSummary = proposal.action.kind === 'move_block'
     ? `${blockTitle(proposal.action.block)} → ${proposal.action.before ? `before ${blockTitle(proposal.action.before)}` : proposal.action.parent ? `end of ${blockTitle(proposal.action.parent)}` : 'end of document'}` : '';
+  const conversion = proposal.action.kind === 'convert_block' ? proposal.action.target as { kind: string; list?: { style: string } } : undefined;
   const suggestion = {
     suggestionId: id, userId: proposal.author, createdAt: proposal.metadata.created_at,
-    type: proposal.action.kind === 'move_block' ? 'move' : proposal.action.kind === 'format' || proposal.action.kind === 'update_block' ? 'update' : proposal.action.kind === 'delete_block' || !view.text ? 'remove' : original ? 'replace' : 'insert',
-    text: original, newText: moveSummary || (proposal.action.kind === 'format' ? `${proposal.action.value === null || proposal.action.value === false ? 'Remove' : 'Apply'} ${proposal.action.name}` : proposal.action.kind === 'update_block' ? `Change ${blockLabel(proposal.action.block_kind, proposal.action.attrs as Record<string, unknown>).toLowerCase()}` : view.text),
+    type: proposal.action.kind === 'move_block' ? 'move' : proposal.action.kind === 'format' || proposal.action.kind === 'update_block' || proposal.action.kind === 'convert_block' ? 'update' : proposal.action.kind === 'delete_block' || !view.text ? 'remove' : original ? 'replace' : 'insert',
+    text: original, newText: (conversion ? `Change ${blockLabel(conversion.kind, { listStyleType: conversion.list?.style }).toLowerCase()}` : '') || moveSummary || (proposal.action.kind === 'format' ? `${proposal.action.value === null || proposal.action.value === false ? 'Remove' : 'Apply'} ${proposal.action.name}` : proposal.action.kind === 'update_block' ? `Change ${blockLabel(proposal.action.block_kind, proposal.action.attrs as Record<string, unknown>).toLowerCase()}` : view.text),
   };
   const [editingBody, setEditingBody] = useState(false);
   const ref = useRef<HTMLDivElement>(null);

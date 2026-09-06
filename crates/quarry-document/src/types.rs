@@ -166,6 +166,11 @@ pub enum ProposalAction {
         expected_kind: String,
         expected_attrs: BTreeMap<String, serde_json::Value>,
     },
+    ConvertBlock {
+        block: String,
+        target: crate::BlockConversion,
+        expected: Vec<Block>,
+    },
     MoveBlock {
         block: String,
         parent: Option<String>,

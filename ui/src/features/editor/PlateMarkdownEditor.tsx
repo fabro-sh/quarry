@@ -22,7 +22,6 @@ import {
   UnderlinePlugin,
 } from '@platejs/basic-nodes/react';
 import { CodeBlockPlugin, CodeLinePlugin, CodeSyntaxPlugin } from '@platejs/code-block/react';
-import { insertEmptyCodeBlock, toggleCodeBlock } from '@platejs/code-block';
 import { DndPlugin, useDraggable, useDropLine } from '@platejs/dnd';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
@@ -41,14 +40,12 @@ import {
 } from '@platejs/link/react';
 import {
   ListPlugin,
-  useIndentTodoToolBarButton,
   useIndentTodoToolBarButtonState,
-  useListToolbarButton,
   useListToolbarButtonState,
   useTodoListElement,
   useTodoListElementState,
 } from '@platejs/list/react';
-import { isOrderedList, toggleList } from '@platejs/list';
+import { isOrderedList } from '@platejs/list';
 import { MarkdownPlugin } from '@platejs/markdown';
 import {
   flip,
@@ -102,6 +99,7 @@ import {
   PathApi,
   TrailingBlockPlugin,
   type Descendant,
+  type SlateEditor,
   type TCodeBlockElement,
   type TElement,
   type TLinkElement,
@@ -154,22 +152,19 @@ import type { EditorMode } from './editor-types';
 import { NativeProposalPlugin, NativeReviewPlugin, useReviewDecoration } from './plate-review-decoration';
 
 const autoformatRules: AutoformatRule[] = [
-  { match: '# ', mode: 'block', type: KEYS.h1 },
-  { match: '## ', mode: 'block', type: KEYS.h2 },
-  { match: '### ', mode: 'block', type: KEYS.h3 },
-  { match: '#### ', mode: 'block', type: KEYS.h4 },
-  { match: '##### ', mode: 'block', type: KEYS.h5 },
-  { match: '###### ', mode: 'block', type: KEYS.h6 },
-  { match: '> ', mode: 'block', type: KEYS.blockquote },
+  { match: '# ', mode: 'block', type: KEYS.h1, format: (editor) => applyBlockType(editor, KEYS.h1) },
+  { match: '## ', mode: 'block', type: KEYS.h2, format: (editor) => applyBlockType(editor, KEYS.h2) },
+  { match: '### ', mode: 'block', type: KEYS.h3, format: (editor) => applyBlockType(editor, KEYS.h3) },
+  { match: '#### ', mode: 'block', type: KEYS.h4, format: (editor) => applyBlockType(editor, KEYS.h4) },
+  { match: '##### ', mode: 'block', type: KEYS.h5, format: (editor) => applyBlockType(editor, KEYS.h5) },
+  { match: '###### ', mode: 'block', type: KEYS.h6, format: (editor) => applyBlockType(editor, KEYS.h6) },
+  { match: '> ', mode: 'block', type: KEYS.blockquote, format: (editor) => applyBlockType(editor, KEYS.blockquote) },
   {
     match: '```',
     mode: 'block',
     type: KEYS.codeBlock,
     format: (editor) => {
-      insertEmptyCodeBlock(editor, {
-        defaultType: KEYS.p,
-        insertNodesOptions: { select: true },
-      });
+      applyBlockType(editor, KEYS.codeBlock);
     },
   },
   {
@@ -177,7 +172,7 @@ const autoformatRules: AutoformatRule[] = [
     mode: 'block',
     type: 'list',
     format: (editor) => {
-      toggleList(editor, { listStyleType: KEYS.ul });
+      turnIntoList(editor, KEYS.ul);
     },
   },
   {
@@ -186,10 +181,7 @@ const autoformatRules: AutoformatRule[] = [
     mode: 'block',
     type: 'list',
     format: (editor, { matchString }) => {
-      toggleList(editor, {
-        listRestartPolite: Number(matchString) || 1,
-        listStyleType: KEYS.ol,
-      });
+      turnIntoList(editor, KEYS.ol, undefined, Number.parseInt(matchString, 10) || 1);
     },
   },
   {
@@ -198,8 +190,7 @@ const autoformatRules: AutoformatRule[] = [
     mode: 'block',
     type: 'list',
     format: (editor) => {
-      toggleList(editor, { listStyleType: KEYS.listTodo });
-      editor.tf.setNodes({ checked: false, listStyleType: KEYS.listTodo });
+      turnIntoList(editor, KEYS.listTodo, false);
     },
   },
   {
@@ -207,8 +198,7 @@ const autoformatRules: AutoformatRule[] = [
     mode: 'block',
     type: 'list',
     format: (editor) => {
-      toggleList(editor, { listStyleType: KEYS.listTodo });
-      editor.tf.setNodes({ checked: true, listStyleType: KEYS.listTodo });
+      turnIntoList(editor, KEYS.listTodo, true);
     },
   },
   { match: '***', mode: 'mark', type: [KEYS.bold, KEYS.italic] },
@@ -387,6 +377,10 @@ export function PlateMarkdownEditor({ model, review, mode, options, onReady, onC
       if (!editor.api.isComposing()) documentAdapter(editor)?.captureInputSelection();
     },
     onKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.altKey && /^Digit[0-6]$/.test(event.code)) {
+        event.preventDefault(); documentAdapter(editor)?.captureInputSelection();
+        applyBlockType(editor, event.code === 'Digit0' ? KEYS.p : `h${event.code.slice(-1)}`); return true;
+      }
       if (/^(Arrow|Home$|End$|PageUp$|PageDown$)/.test(event.key)) documentAdapter(editor)?.endIntent();
       if ((event.metaKey || event.ctrlKey) && !event.altKey && (event.key.toLowerCase() === 'z' || !event.metaKey && event.key.toLowerCase() === 'y')) {
         event.preventDefault(); documentAdapter(editor)?.history(event.shiftKey || event.key.toLowerCase() === 'y'); return true;
@@ -683,7 +677,7 @@ function LinkOpenButton() {
 
 function TodoListButton({ label, children }: { label: string; children: ReactNode }) {
   const state = useIndentTodoToolBarButtonState({ nodeType: KEYS.listTodo });
-  const { props } = useIndentTodoToolBarButton(state);
+  const editor = useEditorRef();
   return (
     <button
       aria-label={label}
@@ -693,7 +687,7 @@ function TodoListButton({ label, children }: { label: string; children: ReactNod
         state.pressed && 'bg-well text-ink'
       )}
       onMouseDown={(event) => event.preventDefault()}
-      onClick={() => props.onClick()}
+      onClick={() => turnIntoList(editor, KEYS.listTodo)}
       title={label}
       type="button"
     >
@@ -712,7 +706,7 @@ function ListButton({
   children: ReactNode;
 }) {
   const state = useListToolbarButtonState({ nodeType });
-  const { props } = useListToolbarButton(state);
+  const editor = useEditorRef();
   return (
     <button
       aria-label={label}
@@ -722,7 +716,7 @@ function ListButton({
         state.pressed && 'bg-well text-ink'
       )}
       onMouseDown={(event) => event.preventDefault()}
-      onClick={() => props.onClick()}
+      onClick={() => turnIntoList(editor, nodeType)}
       title={label}
       type="button"
     >
@@ -836,30 +830,11 @@ const TURN_INTO_ITEMS = [
   { icon: Table, label: 'Table', value: 'table' },
 ];
 
-function setBlockType(editor: PlateEditor, type: string) {
-  editor.tf.withoutNormalizing(() => {
-    for (const [node, path] of editor.api.blocks<TElement>({ mode: 'lowest' })) {
-      if (node.type === type) continue;
-      const adapter = documentAdapter(editor);
-      if (adapter?.options.mode?.() === 'suggesting') adapter.updateBlock(String(node.id), type, blockAttrs(node));
-      else editor.tf.setNodes({ type }, { at: path });
-    }
-  });
-}
-
-// Convert the current selection's block(s) to `type`, handling the code-block
-// wrap/unwrap (a code block holds code_line children, so it can't be a plain
-// setNodes). Used by both the floating toolbar and the block handle menu.
-function applyBlockType(editor: PlateEditor, type: string) {
-  const inCodeBlock = editor.api.some({ match: { type: editor.getType(KEYS.codeBlock) } });
-  if (type === KEYS.codeBlock) {
-    if (!inCodeBlock) toggleCodeBlock(editor);
-  } else if (inCodeBlock) {
-    toggleCodeBlock(editor);
-    if (type !== KEYS.p) setBlockType(editor, type);
-  } else {
-    setBlockType(editor, type);
-  }
+// User conversions are interpreted by the native engine, including code
+// wrapping, attribute inheritance, review decisions, and source identity.
+export function applyBlockType(editor: SlateEditor, type: string) {
+  const ids = [...editor.api.blocks<TElement>({ mode: 'lowest' })].map(([node]) => String(node.id));
+  documentAdapter(editor)?.convertBlocks(ids, { kind: type });
 }
 
 // A Mermaid diagram is an atomic void block; the current block's text seeds the
@@ -1082,12 +1057,12 @@ function cloneWithoutIds(node: Descendant): Descendant {
   return { ...rest, type: node.type, children: node.children.map(cloneWithoutIds) };
 }
 
-// Normalize to a paragraph first (unwrap code, drop heading), then toggle the
-// list — so any block can become a list cleanly.
-function turnIntoList(editor: PlateEditor, listStyleType: string, checked?: boolean) {
-  applyBlockType(editor, KEYS.p);
-  toggleList(editor, { listStyleType });
-  if (checked !== undefined) editor.tf.setNodes({ checked, listStyleType });
+export function turnIntoList(editor: SlateEditor, listStyleType: string, checked?: boolean, start?: number) {
+  const entries = [...editor.api.blocks<TElement>({ mode: 'lowest' })];
+  const togglesOff = checked === undefined && start === undefined && entries.every(([node]) => node.listStyleType === listStyleType);
+  documentAdapter(editor)?.convertBlocks(entries.map(([node]) => String(node.id)), {
+    kind: KEYS.p, ...(togglesOff ? {} : { list: { style: listStyleType, checked, start } }),
+  });
 }
 
 const BLOCK_TURN_INTO: ReadonlyArray<{

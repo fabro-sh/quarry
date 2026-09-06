@@ -241,6 +241,11 @@ export type Block = {
     segments: Array<SegmentRef>;
 };
 
+export type BlockConversion = {
+    kind: string;
+    list?: (null | ListFormat);
+};
+
 export type BlockLinkRangePayload = {
     end: number;
     start: number;
@@ -378,6 +383,17 @@ export type Command = {
     op: 'join_blocks';
     right: string;
 } | {
+    left: string;
+    op: 'join_containers';
+    right: string;
+} | {
+    block: string;
+    end: TextPoint;
+    op: 'move_text';
+    proposal?: (string) | null;
+    start: TextPoint;
+    to: TextPoint;
+} | {
     block: string;
     op: 'delete_block';
 } | {
@@ -387,6 +403,21 @@ export type Command = {
     block: string;
     kind: string;
     op: 'set_block';
+} | {
+    block: string;
+    op: 'convert_block';
+    target: BlockConversion;
+} | {
+    block: string;
+    op: 'convert_proposed_block';
+    proposal: string;
+    target: BlockConversion;
+} | {
+    author: string;
+    block: string;
+    id: string;
+    op: 'propose_block_conversion';
+    target: BlockConversion;
 } | {
     at: TextPoint;
     op: 'insert_text';
@@ -749,6 +780,11 @@ export type EditAction = {
     ranges: Array<TextRange>;
     text: string;
 } | {
+    anchor: TextPoint;
+    focus: TextPoint;
+    op: 'replace_selection';
+    text: string;
+} | {
     name: string;
     op: 'format';
     ranges: Array<TextRange>;
@@ -761,6 +797,11 @@ export type EditAction = {
     kind: string;
     op: 'set_block';
     proposal?: (string) | null;
+} | {
+    block: string;
+    op: 'convert_block';
+    proposal?: (string) | null;
+    target: BlockConversion;
 } | {
     before?: (string) | null;
     block: string;
@@ -786,8 +827,24 @@ export type EditAction = {
     proposal?: (string) | null;
     right: string;
 } | {
+    at: number;
+    block: string;
+    new_block: string;
+    op: 'split_container';
+} | {
+    block: string;
+    end: TextPoint;
+    op: 'move_text';
+    proposal?: (string) | null;
+    start: TextPoint;
+    to: TextPoint;
+} | {
     blocks: Array<ProposedBlockPlacement>;
     op: 'set_proposed_structure';
+    proposal: string;
+} | {
+    action: ProposedBlockEdit;
+    op: 'edit_proposed_blocks';
     proposal: string;
 };
 
@@ -894,6 +951,13 @@ export type LinkCollection = {
     path: string;
 };
 
+export type ListFormat = {
+    checked?: (boolean) | null;
+    indent?: (number) | null;
+    start?: (number) | null;
+    style: string;
+};
+
 export type MoveRequest = {
     to_path: string;
 };
@@ -947,6 +1011,11 @@ export type ProposalAction = {
     expected_kind: string;
     kind: 'update_block';
 } | {
+    block: string;
+    expected: Array<Block>;
+    kind: 'convert_block';
+    target: BlockConversion;
+} | {
     before?: (string) | null;
     block: string;
     expected_before?: (string) | null;
@@ -987,6 +1056,36 @@ export type ProposalView = {
     target: ResolvedTarget;
     text: string;
 };
+
+export type ProposedBlockEdit = {
+    before?: (string) | null;
+    blocks: Array<SeedBlock>;
+    op: 'insert';
+    parent?: (string) | null;
+} | {
+    before?: (string) | null;
+    block: string;
+    op: 'move';
+    parent?: (string) | null;
+} | {
+    block: string;
+    op: 'delete';
+} | {
+    at: number;
+    block: string;
+    new_block: string;
+    op: 'split_container';
+} | {
+    left: string;
+    op: 'join_containers';
+    right: string;
+};
+
+export namespace ProposedBlockEdit {
+    export enum op {
+        INSERT = 'insert'
+    }
+}
 
 /**
  * A proposed tree can retain existing characters or introduce a new block.

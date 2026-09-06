@@ -9,7 +9,10 @@
 mod block_capabilities;
 mod builder;
 mod commands;
+mod conversion;
 mod edit;
+mod editing_proposals;
+mod editing_structure;
 mod error;
 mod projection;
 mod request;
@@ -22,7 +25,9 @@ mod undo;
 pub use block_capabilities::*;
 pub use builder::CommandBuilder;
 pub use commands::Command;
+pub use conversion::{BlockConversion, ListFormat};
 pub use edit::{EditAction, EditMode};
+pub use editing_proposals::ProposedBlockEdit;
 pub use error::{DocumentError, Result};
 pub use request::{CommandBatch, CommandRequest, DocumentActor};
 pub use schema::INLINE_BOOLEAN_MARKS;
@@ -281,10 +286,8 @@ impl Document {
         self.atomic(|candidate| {
             let sources = candidate.root_map(SOURCES)?;
             let blocks = candidate.root_map(BLOCKS)?;
-            candidate.crdt.update_diff_cursor();
+            let previous = candidate.heads();
             candidate.crdt.load_incremental(bytes)?;
-            let patches = candidate.crdt.diff_incremental();
-            candidate.crdt.reset_diff_cursor();
             if !candidate.contains_history(heads)
                 || !candidate.crdt.get_missing_deps(&[]).is_empty()
             {
@@ -299,33 +302,45 @@ impl Document {
                     ));
                 }
             }
-            for patch in patches {
-                if patch.obj == blocks || patch.path.iter().any(|(object, _)| *object == blocks) {
-                    *candidate
-                        .block_cache
-                        .get_mut()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-                }
-                if patch.obj == sources {
-                    match &patch.action {
-                        automerge::PatchAction::PutMap { key, .. }
-                        | automerge::PatchAction::DeleteMap { key } => {
-                            candidate.invalidate_source(key)
-                        }
-                        _ => candidate
-                            .segments
-                            .get_mut()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .clear(),
-                    }
-                }
-                for (object, property) in patch.path {
-                    if object == sources
-                        && let automerge::Prop::Map(source) = property
+            // Invalidate from the operations that entered native history.
+            // Display patches are not a complete object-change inventory:
+            // Automerge 0.11 can combine marks on different text objects into
+            // one patch, leaving another source's derived text stale.
+            let mut objects = std::collections::BTreeSet::new();
+            let mut changed_sources = std::collections::BTreeSet::new();
+            let sources_id = sources.to_string();
+            for change in candidate.crdt.get_changes(&previous) {
+                for operation in change.decode().operations {
+                    let object = operation.obj.to_string();
+                    if object == sources_id
+                        && let automerge::legacy::Key::Map(key) = operation.key
                     {
-                        candidate.invalidate_source(&source);
+                        changed_sources.insert(key.to_string());
+                    }
+                    objects.insert(object);
+                }
+            }
+            let mut changed_blocks = false;
+            for object in objects {
+                let object = candidate.crdt.import_obj(&object)?;
+                changed_blocks |= object == blocks;
+                for parent in candidate.crdt.parents(&object)? {
+                    changed_blocks |= parent.obj == blocks;
+                    if parent.obj == sources
+                        && let automerge::Prop::Map(source) = parent.prop
+                    {
+                        changed_sources.insert(source);
                     }
                 }
+            }
+            if changed_blocks {
+                *candidate
+                    .block_cache
+                    .get_mut()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+            }
+            for source in changed_sources {
+                candidate.invalidate_source(&source);
             }
             Ok(())
         })

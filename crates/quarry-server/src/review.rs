@@ -337,7 +337,11 @@ fn native_review_response(
             .proposal(&proposal.id)
             .map_err(crate::document_engine::document_error)?
             .action;
-        if matches!(action, quarry_document::ProposalAction::UpdateBlock { .. }) {
+        if matches!(
+            action,
+            quarry_document::ProposalAction::UpdateBlock { .. }
+                | quarry_document::ProposalAction::ConvertBlock { .. }
+        ) {
             proposal.kind = AgentSuggestionKind::BlockUpdate;
         }
         if matches!(action, quarry_document::ProposalAction::Format { .. }) {
