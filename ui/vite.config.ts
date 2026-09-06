@@ -28,6 +28,7 @@ export default defineConfig({
     proxy: {
       '/v1': {
         target: quarryApiOrigin,
+        ws: true,
       },
       '/quarry.SKILL.md': {
         target: quarryApiOrigin,

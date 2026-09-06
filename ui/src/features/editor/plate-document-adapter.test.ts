@@ -317,3 +317,18 @@ test('pending Bold formatting applies to newly proposed typing and one undo remo
     expect(t.model.view().proposals.find((view) => view.proposal.id === proposal.proposal.id)?.text).toBe('NEW');
   } finally { t.close(); }
 });
+
+test('unflushed Slate operations report pending work until the native batch is handed off', () => {
+  const model = DocumentModel.fromMarkdown('TARGET');
+  const editor = createSlateEditor({ nodeId: nativeNodeIdOptions, value: projectPlate(model.view()), plugins: [BaseParagraphPlugin] });
+  const order: string[] = [];
+  const adapter = new PlateDocumentAdapter(editor, model, { pending: (pending) => order.push(pending ? 'pending' : 'settled'),
+    changed: (batch) => { expect(batch.requests.length).toBeGreaterThan(0); order.push('queued'); }, error: (error) => { throw error; } });
+  try {
+    editor.tf.apply({ type: 'insert_text', path: [0, 0], offset: 0, text: 'Local ' });
+    expect(order).toEqual(['pending']);
+    adapter.flush();
+    expect(order).toEqual(['pending', 'queued', 'settled']);
+    expect(model.view().blocks[0].text).toBe('Local TARGET');
+  } finally { adapter.dispose(); model.dispose(); }
+});

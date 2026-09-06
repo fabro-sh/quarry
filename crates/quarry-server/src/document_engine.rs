@@ -103,19 +103,24 @@ pub(crate) async fn commands_by_id(
 
 #[utoipa::path(get, path = "/v1/libraries/{library}/documents-by-id/{document_id}/events/stream",
     params(("library" = String, Path), ("document_id" = String, Path), ("token" = Option<String>, Query)),
-    responses((status = 200, description = "Native document events")))]
+    responses((status = 200, description = "Native document events"), (status = 101, description = "Read-only JSON event WebSocket for same-origin browsers")))]
 pub(crate) async fn events_by_id(
     axum::extract::State(state): axum::extract::State<AppState>,
     axum::extract::Path((library, id)): axum::extract::Path<(String, String)>,
     axum::extract::Query(query): axum::extract::Query<AccessQuery>,
+    transport: crate::event_transport::EventTransport,
 ) -> Result<Response, ApiError> {
     use axum::response::IntoResponse;
     library_document(&state, &library, &id, &query, false).await?;
-    Ok(
-        crate::sse::events_for_native_document(&state.store, &library, id, state.shutdown_token())
-            .await?
-            .into_response(),
+    Ok(crate::sse::events_for_native_document(
+        &state.store,
+        &library,
+        id,
+        state.shutdown_token(),
+        transport,
     )
+    .await?
+    .into_response())
 }
 
 #[utoipa::path(post, path = "/v1/libraries/{library}/documents-by-id/{document_id}/transactions",

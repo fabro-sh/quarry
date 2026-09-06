@@ -15,7 +15,7 @@ function authority() {
   model.edit((draft) => draft.apply([{ op: 'insert_block', block: { id: 'p', kind: 'p', parent: null, position: 0, attrs: {}, text: 'TARGET' } }]));
   let offline = false; let status = 200; let commits = 0;
   const receipts = new Set<string>(); const urls: string[] = [];
-  vi.stubGlobal('EventSource', class { addEventListener() {} close() {} });
+  vi.stubGlobal('WebSocket', class { close() {} });
   vi.stubGlobal('fetch', vi.fn(async (url: string, options?: RequestInit) => {
     urls.push(url);
     if (offline) throw new TypeError('Network unavailable');
@@ -172,11 +172,11 @@ test('Saved never describes an older drain when a new edit finishes storage duri
   try {
     session.onStatus = (value) => statuses.push({ state: value.state, commits: server.commits() });
     session.start(); await caching;
+    statuses.length = 0; // Opening an unchanged document is already Saved.
     session.enqueue(session.model.edit((draft) => draft.apply([{ op: 'insert_text', at: draft.model.point('p', 0), text: 'New ' }])));
     await waitFor(async () => expect((await outbox.list(id)).filter((entry) => entry.state === 'pending')).toHaveLength(1));
-    release();
     await waitFor(() => expect(statuses.at(-1)).toEqual({ state: 'saved', commits: 1 }));
-    expect(statuses.filter((value) => value.state === 'saved')).toEqual([{ state: 'saved', commits: 1 }]);
+    expect(statuses.filter((value) => value.state === 'saved').every((value) => value.commits === 1)).toBe(true);
     expect(server.model.view().blocks[0].text).toBe('New TARGET');
   } finally { release(); await session.close(); session.model.dispose(); outbox.close(); server.model.dispose(); }
 });
@@ -243,17 +243,18 @@ test('closing a session cancels an unfinished state read without waiting for the
   } finally { await session.close(); session.model.dispose(); server.model.dispose(); }
 });
 
-test('page navigation lets an in-flight durable command finish and does not publish it twice', async () => {
+test('page navigation cancels an attempt and retries the exact durable command without a second commit', async () => {
   const server = authority(); const id = server.model.view().document_id;
   const session = await DocumentSession.open('/document', id, 'Reviewer', 'tab');
   const statuses: SessionStatus[] = [];
   const fetch = globalThis.fetch;
   let release!: () => void; let sent = false; let cancelled = false; let posts = 0;
+  const bodies: string[] = [];
   const gate = new Promise<void>((resolve) => { release = resolve; });
   vi.stubGlobal('fetch', vi.fn(async (...args: Parameters<typeof fetch>) => {
     const response = await fetch(...args);
     if (String(args[0]).includes('/document-commands')) {
-      posts++; sent = true;
+      posts++; sent = true; bodies.push(String(args[1]?.body));
       args[1]?.signal?.addEventListener('abort', () => { cancelled = true; });
       await gate;
     }
@@ -265,13 +266,175 @@ test('page navigation lets an in-flight durable command finish and does not publ
     session.enqueue(session.model.edit((draft) => draft.apply([{ op: 'insert_text', at: draft.model.point('p', 0), text: 'Local ' }])));
     await waitFor(() => expect(sent).toBe(true));
     window.dispatchEvent(new Event('pagehide'));
-    expect(cancelled).toBe(false);
+    expect(cancelled).toBe(true);
     window.dispatchEvent(new Event('pageshow'));
     release();
     await waitFor(() => expect(statuses.at(-1)?.state).toBe('saved'));
     expect(statuses.some((value) => value.state === 'save_failed')).toBe(false);
-    expect(posts).toBe(1); expect(server.commits()).toBe(1);
+    expect(posts).toBe(2); expect(bodies[1]).toBe(bodies[0]); expect(server.commits()).toBe(1);
     expect(session.model.view()).toEqual(server.model.view());
     expect(session.model.view().blocks[0].text).toBe('Local TARGET');
   } finally { release(); await session.close(); session.model.dispose(); server.model.dispose(); }
+});
+
+const fastTiming = { requestTimeoutMs: 300, retryMs: 30, pollMs: 100, deliveryDelayMs: 10 };
+
+test('a held refresh cannot block delivery or turn an acknowledged save into a failure', async () => {
+  const server = authority(), id = server.model.view().document_id;
+  const session = await DocumentSession.open('/document', id, 'Writer', 'tab');
+  const outbox = await DocumentOutbox.open(), fetch = globalThis.fetch;
+  let failRead!: () => void, reading = false;
+  const heldRead = new Promise<Response>((resolve) => { failRead = () => resolve(Response.json({ message: 'Refresh unavailable' }, { status: 503 })); });
+  vi.stubGlobal('fetch', vi.fn((...args: Parameters<typeof fetch>) => {
+    if (String(args[0]).includes('/document-state')) { reading = true; return heldRead; }
+    return fetch(...args);
+  }));
+  let status: SessionStatus | undefined; session.onStatus = (value) => { status = value; };
+  try {
+    session.start(); await waitFor(() => expect(reading).toBe(true));
+    session.enqueue(session.model.edit((draft) => draft.apply([{ op: 'insert_text', at: draft.model.point('p', 0), text: 'Local ' }])));
+    await waitFor(() => expect(server.commits()).toBe(1));
+    await waitFor(() => expect(status?.state).toBe('saved'));
+    expect(await outbox.list(id)).toEqual([]); expect(status?.sync).toBe('refreshing');
+    failRead(); await waitFor(() => expect(status?.sync).toBe('reconnecting'));
+    expect(status?.state).toBe('saved'); expect(status?.blocked).toBe(false);
+    expect(server.model.view().blocks[0].text).toBe('Local TARGET');
+  } finally { failRead(); await session.close(); session.model.dispose(); outbox.close(); server.model.dispose(); }
+});
+
+test('buffered editor work and delayed local persistence prevent Saved until acknowledgement', async () => {
+  const server = authority(), id = server.model.view().document_id;
+  const session = await DocumentSession.open('/document', id, 'Writer', 'tab', undefined, fastTiming);
+  let status: SessionStatus | undefined; session.onStatus = (value) => { status = value; };
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; }), add = DocumentOutbox.prototype.add;
+  vi.spyOn(DocumentOutbox.prototype, 'add').mockImplementationOnce(async function (this: DocumentOutbox, entry, cache) { await gate; return add.call(this, entry, cache); });
+  try {
+    session.setBufferedEdit(true); session.start();
+    await waitFor(() => expect(status?.sync).toBe('current'));
+    expect(status?.state).toBe('saving'); expect(server.commits()).toBe(0);
+    session.enqueue(session.model.edit((draft) => draft.apply([{ op: 'insert_text', at: draft.model.point('p', 0), text: 'Local ' }])));
+    session.setBufferedEdit(false);
+    expect(status?.state).toBe('saving'); expect(server.commits()).toBe(0);
+    release(); await waitFor(() => expect(status?.state).toBe('saved'));
+    expect(server.commits()).toBe(1);
+  } finally { release(); await session.close(); session.model.dispose(); server.model.dispose(); }
+});
+
+test('periodic refresh recovers silent notification loss without affecting save state', async () => {
+  const server = authority(), id = server.model.view().document_id;
+  const session = await DocumentSession.open('/document', id, 'Writer', 'tab', undefined, fastTiming);
+  const statuses: SessionStatus[] = []; session.onStatus = (value) => statuses.push(value);
+  try {
+    session.start(); await waitFor(() => expect(statuses.at(-1)?.sync).toBe('current'));
+    server.model.edit((draft) => draft.apply([{ op: 'insert_text', at: draft.model.point('p', 0), text: 'Remote ' }]));
+    // No event, online signal, or local edit wakes this session.
+    await waitFor(() => expect(session.model.view()).toEqual(server.model.view()));
+    expect(statuses.every((status) => status.state === 'saved')).toBe(true);
+  } finally { await session.close(); session.model.dispose(); server.model.dispose(); }
+});
+
+test('a timed-out acknowledgement retries its original envelope before newly queued edits', async () => {
+  const server = authority(), id = server.model.view().document_id;
+  const session = await DocumentSession.open('/document', id, 'Writer', 'tab', undefined, fastTiming);
+  const fetch = globalThis.fetch, bodies: string[] = [];
+  let sent!: () => void; const committed = new Promise<void>((resolve) => { sent = resolve; });
+  vi.stubGlobal('fetch', vi.fn(async (...args: Parameters<typeof fetch>) => {
+    const response = await fetch(...args);
+    if (String(args[0]).includes('/document-commands')) {
+      bodies.push(String(args[1]?.body));
+      if (bodies.length === 1) { sent(); return new Promise<Response>(() => {}); }
+    }
+    return response;
+  }));
+  let status: SessionStatus | undefined; session.onStatus = (value) => { status = value; };
+  try {
+    session.start();
+    session.enqueue(session.model.edit((draft) => draft.apply([{ op: 'insert_text', at: draft.model.point('p', 0), text: 'First ' }])));
+    await committed;
+    session.enqueue(session.model.edit((draft) => draft.apply([{ op: 'insert_text', at: draft.model.point('p', 0), text: 'Second ' }])));
+    await waitFor(() => expect(status?.state).toBe('saved'), { timeout: 3000 });
+    expect(bodies).toHaveLength(3); expect(bodies[1]).toBe(bodies[0]); expect(bodies[2]).not.toBe(bodies[0]);
+    expect(server.commits()).toBe(2); expect(server.model.view().blocks[0].text).toBe('Second First TARGET');
+  } finally { await session.close(); session.model.dispose(); server.model.dispose(); }
+});
+
+test('closing the delivering tab releases an uncertain attempt for another session to replay', async () => {
+  const server = authority(), id = server.model.view().document_id;
+  const first = await DocumentSession.open('/document', id, 'Writer', 'one', undefined, fastTiming);
+  const second = await DocumentSession.open('/document', id, 'Writer', 'two', undefined, fastTiming);
+  const fetch = globalThis.fetch, bodies: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (...args: Parameters<typeof fetch>) => {
+    const response = await fetch(...args);
+    if (String(args[0]).includes('/document-commands')) {
+      bodies.push(String(args[1]?.body));
+      if (bodies.length === 1) return new Promise<Response>(() => {});
+    }
+    return response;
+  }));
+  let status: SessionStatus | undefined; second.onStatus = (value) => { status = value; };
+  try {
+    first.start();
+    first.enqueue(first.model.edit((draft) => draft.apply([{ op: 'insert_text', at: draft.model.point('p', 0), text: 'Persisted ' }])));
+    await waitFor(() => expect(bodies).toHaveLength(1)); await first.close();
+    second.start(); await waitFor(() => expect(bodies).toHaveLength(2));
+    await waitFor(() => expect(status?.state).toBe('saved'));
+    expect(bodies[1]).toBe(bodies[0]); expect(server.commits()).toBe(1);
+    await waitFor(() => expect(second.model.view()).toEqual(server.model.view()));
+  } finally { await first.close(); await second.close(); first.model.dispose(); second.model.dispose(); server.model.dispose(); }
+});
+
+test('a stale response from before an explicit reset cannot restore old metadata or state', async () => {
+  const server = authority(), id = server.model.view().document_id;
+  const session = await DocumentSession.open('/document', id, 'Writer', 'tab', undefined, fastTiming);
+  const fetch = globalThis.fetch;
+  let release!: () => void, held = false;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  vi.stubGlobal('fetch', vi.fn(async (...args: Parameters<typeof fetch>) => {
+    const response = await fetch(...args);
+    if (String(args[0]).includes('/document-state')) {
+      const payload = await response.json();
+      if (!held) { held = true; await gate; return Response.json({ ...payload, metadata: { label: 'old' } }); }
+      return Response.json({ ...payload, metadata: { label: 'new' } });
+    }
+    return response;
+  }));
+  try {
+    session.start(); await waitFor(() => expect(held).toBe(true));
+    server.model.edit((draft) => draft.apply([{ op: 'insert_text', at: draft.model.point('p', 0), text: 'Remote ' }]));
+    await session.useSavedVersion(); release();
+    await waitFor(() => expect(session.metadata).toEqual({ label: 'new' }));
+    expect(session.model.view()).toEqual(server.model.view());
+  } finally { release(); await session.close(); session.model.dispose(); server.model.dispose(); }
+});
+
+test('seeing the committed history cannot acknowledge a command with the wrong receipt identity', async () => {
+  const server = authority(), id = server.model.view().document_id;
+  const session = await DocumentSession.open('/document', id, 'Writer', 'tab', undefined, fastTiming);
+  const outbox = await DocumentOutbox.open(), fetch = globalThis.fetch, bodies: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  vi.stubGlobal('fetch', vi.fn(async (...args: Parameters<typeof fetch>) => {
+    const response = await fetch(...args);
+    if (String(args[0]).includes('/document-commands')) {
+      bodies.push(String(args[1]?.body));
+      if (bodies.length === 1) return Response.json({ request_id: 'another-request' });
+      await gate;
+    }
+    return response;
+  }));
+  let status: SessionStatus | undefined; session.onStatus = (value) => { status = value; };
+  try {
+    session.start();
+    session.enqueue(session.model.edit((draft) => draft.apply([{ op: 'insert_text', at: draft.model.point('p', 0), text: 'Kept ' }])));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(status?.state).not.toBe('saved');
+    expect((await outbox.list(id)).filter((entry) => entry.state === 'pending')).toHaveLength(1);
+    expect(server.commits()).toBe(1);
+    expect(bodies[1]).toBe(bodies[0]);
+    release();
+    await waitFor(() => expect(status?.state).toBe('saved'));
+    expect(await outbox.list(id)).toHaveLength(0);
+    expect(server.commits()).toBe(1);
+  } finally { release(); await session.close(); outbox.close(); session.model.dispose(); server.model.dispose(); }
 });

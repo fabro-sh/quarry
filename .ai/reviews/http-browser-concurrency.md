@@ -1,5 +1,7 @@
 # HTTP, Git, FUSE and browser concurrency
 
+This report records the concurrency work in `cf2dfc9`. Later deletion-suggestion changes and their validation are covered in [Adjacent deletion suggestions](suggesting-adjacent-deletions.md).
+
 This records the completed concurrency checks for the current candidate. It does not certify the complete Plate restoration or every filesystem editing pattern.
 
 ## Defects reproduced and corrected

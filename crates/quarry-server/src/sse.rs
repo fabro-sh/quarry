@@ -1,14 +1,13 @@
+use crate::event_transport::{EventTransport, event_response};
 use crate::headers::etag;
 use crate::presence::PresenceStreamGuard;
 use crate::{ApiError, AppState};
 use axum::extract::{Query, State};
-use axum::response::sse::{Event, KeepAlive, Sse};
-use futures_util::{Stream, stream};
+use axum::response::Response;
+use futures_util::stream;
 use quarry_storage::{DocumentScopeRef, QuarryStore, StoreEvent, StoreEventKind};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
-use std::convert::Infallible;
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Deserialize)]
@@ -20,18 +19,20 @@ pub(crate) struct EventsQuery {
     get,
     path = "/v1/events",
     params(("library" = String, Query)),
-    responses((status = 200, description = "Server-sent event stream"))
+    responses((status = 200, description = "Server-sent event stream"), (status = 101, description = "Read-only JSON event WebSocket for same-origin browsers"))
 )]
 pub(crate) async fn events(
     State(state): State<AppState>,
     Query(query): Query<EventsQuery>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>> + use<>>, ApiError> {
+    transport: EventTransport,
+) -> Result<Response, ApiError> {
     events_for_library(
         &state.store,
         &query.library,
         None,
         None,
         state.shutdown_token(),
+        transport,
     )
     .await
 }
@@ -42,7 +43,8 @@ pub(crate) async fn events_for_library(
     document_path: Option<String>,
     presence_guard: Option<PresenceStreamGuard>,
     shutdown: CancellationToken,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>> + use<>>, ApiError> {
+    transport: EventTransport,
+) -> Result<Response, ApiError> {
     let library = store.get_library(library).await?;
     tracing::debug!(
         event = "sse.stream.opened",
@@ -105,9 +107,8 @@ pub(crate) async fn events_for_library(
                                     origin_id = store_event.origin_id().unwrap_or(""),
                                     "SSE event sent"
                                 );
-                                let event = Event::default().event(event_type).data(payload.to_string());
                                 return Some((
-                                    Ok(event),
+                                    Ok(payload),
                                     (
                                         receiver,
                                         library_id,
@@ -133,9 +134,8 @@ pub(crate) async fn events_for_library(
                                     "library": library_slug,
                                     "skipped": skipped
                                 });
-                                let event = Event::default().event(event_type).data(payload.to_string());
                                 return Some((
-                                    Ok(event),
+                                    Ok(payload),
                                     (
                                         receiver,
                                         library_id,
@@ -161,11 +161,7 @@ pub(crate) async fn events_for_library(
             }
         },
     );
-    Ok(Sse::new(stream).keep_alive(
-        KeepAlive::new()
-            .interval(Duration::from_secs(15))
-            .text("keepalive"),
-    ))
+    Ok(event_response(stream, transport))
 }
 
 pub(crate) async fn events_for_tmp_document(
@@ -174,7 +170,8 @@ pub(crate) async fn events_for_tmp_document(
     document_id: String,
     presence_guard: Option<PresenceStreamGuard>,
     shutdown: CancellationToken,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>> + use<>>, ApiError> {
+    transport: EventTransport,
+) -> Result<Response, ApiError> {
     tracing::debug!(
         event = "sse.stream.opened",
         scope = %"tmp",
@@ -217,9 +214,8 @@ pub(crate) async fn events_for_tmp_document(
                                     &store_event,
                                     StoreEventPayloadMode::OmitPaths,
                                 );
-                                let event = Event::default().event(event_type).data(payload.to_string());
                                 return Some((
-                                    Ok(event),
+                                    Ok(payload),
                                     (
                                         store_receiver,
                                         document_path,
@@ -243,9 +239,8 @@ pub(crate) async fn events_for_tmp_document(
                                     "library": "tmp",
                                     "skipped": skipped
                                 });
-                                let event = Event::default().event(event_type).data(payload.to_string());
                                 return Some((
-                                    Ok(event),
+                                    Ok(payload),
                                     (
                                         store_receiver,
                                         document_path,
@@ -262,11 +257,7 @@ pub(crate) async fn events_for_tmp_document(
             }
         },
     );
-    Ok(Sse::new(stream).keep_alive(
-        KeepAlive::new()
-            .interval(Duration::from_secs(15))
-            .text("keepalive"),
-    ))
+    Ok(event_response(stream, transport))
 }
 
 fn event_matches_document_filter(event: &StoreEvent, document_path: Option<&str>) -> bool {
@@ -283,7 +274,8 @@ pub(crate) async fn events_for_native_document(
     library: &str,
     document_id: String,
     shutdown: CancellationToken,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>> + use<>>, ApiError> {
+    transport: EventTransport,
+) -> Result<Response, ApiError> {
     let library = store.get_library(library).await?;
     let stream = stream::unfold(
         (store.subscribe_events(), library.id, document_id, shutdown),
@@ -296,11 +288,10 @@ pub(crate) async fn events_for_native_document(
                         let event = match result {
                             Ok(event) if event.library_id() == library && event.doc_id() == Some(document.as_str()) => {
                                 let kind = store_event_type(&event);
-                                let payload = store_event_payload("", &kind, &event, StoreEventPayloadMode::OmitPaths);
-                                Event::default().event(kind).data(payload.to_string())
+                                store_event_payload("", &kind, &event, StoreEventPayloadMode::OmitPaths)
                             }
                             Ok(_) => continue,
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => Event::default().event("stream.lagged").data("{}"),
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => serde_json::json!({"type": "stream.lagged"}),
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
                         };
                         return Some((Ok(event), (receiver, library, document, shutdown)));
@@ -309,11 +300,7 @@ pub(crate) async fn events_for_native_document(
             }
         },
     );
-    Ok(Sse::new(stream).keep_alive(
-        KeepAlive::new()
-            .interval(Duration::from_secs(15))
-            .text("keepalive"),
-    ))
+    Ok(event_response(stream, transport))
 }
 
 pub(crate) fn store_event_type(event: &StoreEvent) -> String {

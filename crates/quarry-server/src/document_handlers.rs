@@ -137,7 +137,7 @@ pub(crate) async fn document_block_transactions_openapi() {}
     get,
     path = "/v1/libraries/{library}/documents/{path}/events/stream",
     params(("library" = String, Path), ("path" = String, Path)),
-    responses((status = 200, description = "Document-scoped server-sent event stream"), (status = 404, body = ApiErrorResponse))
+    responses((status = 200, description = "Document-scoped server-sent event stream"), (status = 101, description = "Read-only JSON event WebSocket for same-origin browsers"), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -311,6 +311,7 @@ pub(crate) async fn get_document(
     Query(query): Query<DocumentGetQuery>,
     Path((library, path)): Path<(String, String)>,
     headers: HeaderMap,
+    transport: crate::event_transport::EventTransport,
 ) -> Result<Response, ApiError> {
     let (document_path, subresource) = parse_document_subresource(&path);
     match subresource {
@@ -393,6 +394,14 @@ pub(crate) async fn get_document(
             );
         }
         DocumentSubResource::EventsStream => {
+            crate::document_engine::library_path_access(
+                &state,
+                &library,
+                document_path,
+                query.token.clone(),
+                false,
+            )
+            .await?;
             let document = state.store.head_document(&library, document_path).await?;
             let presence_guard = optional_header(&headers, "x-agent-id")?.map(|agent_id| {
                 PresenceStreamGuard::open(
@@ -409,6 +418,7 @@ pub(crate) async fn get_document(
                 Some(document_path.to_string()),
                 presence_guard,
                 state.shutdown_token(),
+                transport,
             )
             .await?
             .into_response());

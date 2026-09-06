@@ -22,6 +22,174 @@ fn seed() -> Document {
 }
 
 #[test]
+fn extending_deletion_preserves_identity_comments_unicode_and_undo() {
+    let mut d = Document::from_blocks(&[block("a", "😀TARGET tail", 0)]).unwrap();
+    d.propose_replacement(
+        "remove",
+        "Reviewer",
+        "a",
+        &d.point("a", 5).unwrap(),
+        &d.selection("a", 5, 8).unwrap(),
+        "",
+    )
+    .unwrap();
+    d.add_comment(
+        "c",
+        "Agent",
+        "Keep discussion",
+        &d.selection("a", 2, 8).unwrap(),
+    )
+    .unwrap();
+    d.reply_comment("reply", "remove", "Agent", "Why remove?")
+        .unwrap();
+    let before = d.heads();
+    d.continue_text_proposal(
+        "remove",
+        "Reviewer",
+        &d.point("a", 0).unwrap(),
+        &d.selection("a", 0, 5).unwrap(),
+        "",
+    )
+    .unwrap();
+    let after = d.heads();
+    assert_eq!(d.block_view("a").unwrap().text, "😀TARGET tail");
+    assert_eq!(
+        d.proposal_target("remove").unwrap().attachments[0].quote,
+        "😀TARGET"
+    );
+    assert_eq!(d.proposals().unwrap().len(), 1);
+    let mut loaded = Document::load(&d.save()).unwrap();
+    loaded.accept_proposal("remove").unwrap();
+    assert_eq!(loaded.block_view("a").unwrap().text, " tail");
+    assert_eq!(
+        loaded.comment("reply").unwrap().parent_id.as_deref(),
+        Some("remove")
+    );
+    d.revert(&before, &after).unwrap();
+    assert_eq!(
+        d.proposal_target("remove").unwrap().attachments[0].quote,
+        "GET"
+    );
+    assert_eq!(
+        d.comment_target("c").unwrap().attachments[0].quote,
+        "TARGET"
+    );
+}
+
+#[test]
+fn deletion_extension_rejects_nonadjacent_overlap_other_author_and_decided_proposals_atomically() {
+    let mut d = seed();
+    d.propose_replacement(
+        "remove",
+        "Reviewer",
+        "a",
+        &d.point("a", 10).unwrap(),
+        &d.selection("a", 10, 13).unwrap(),
+        "",
+    )
+    .unwrap();
+    for (author, ranges) in [
+        ("Other", d.selection("a", 7, 10).unwrap()),
+        ("Reviewer", d.selection("a", 0, 3).unwrap()),
+        ("Reviewer", d.selection("a", 9, 11).unwrap()),
+        ("Reviewer", d.selection("b", 0, 3).unwrap()),
+        ("Reviewer", vec![]),
+    ] {
+        let before = d.heads();
+        assert!(
+            d.continue_text_proposal("remove", author, &d.point("a", 7).unwrap(), &ranges, "")
+                .is_err()
+        );
+        assert_eq!(d.heads(), before);
+    }
+    d.reject_proposal("remove").unwrap();
+    let before = d.heads();
+    assert!(
+        d.continue_text_proposal(
+            "remove",
+            "Reviewer",
+            &d.point("a", 7).unwrap(),
+            &d.selection("a", 7, 10).unwrap(),
+            ""
+        )
+        .is_err()
+    );
+    assert_eq!(d.heads(), before);
+}
+
+#[test]
+fn delayed_deletion_extension_keeps_concurrent_prefix_and_comment_but_rejects_changed_targets() {
+    use quarry_document::Command;
+    let mut base = seed();
+    base.propose_replacement(
+        "remove",
+        "Reviewer",
+        "a",
+        &base.point("a", 10).unwrap(),
+        &base.selection("a", 10, 13).unwrap(),
+        "",
+    )
+    .unwrap();
+    let heads = base.heads();
+    let command = Command::ContinueTextProposal {
+        at: base.point("a", 7).unwrap(),
+        text: String::new(),
+        id: "remove".into(),
+        author: "Reviewer".into(),
+        ranges: base.selection("a", 7, 10).unwrap(),
+    };
+    let mut d = base.fork();
+    d.insert_text(&d.point("a", 0).unwrap(), "Before TARGET ")
+        .unwrap();
+    d.add_comment(
+        "late",
+        "Agent",
+        "Original",
+        &d.selection("a", 21, 27).unwrap(),
+    )
+    .unwrap();
+    d.propose_insertion(
+        "unrelated",
+        "Agent",
+        "b",
+        &d.point("b", 0).unwrap(),
+        "Review ",
+    )
+    .unwrap();
+    d.apply_at(&heads, std::slice::from_ref(&command)).unwrap();
+    assert_eq!(
+        d.proposal_target("remove").unwrap().attachments[0].start,
+        21
+    );
+    d.accept_proposal("remove").unwrap();
+    assert_eq!(
+        d.block_view("a").unwrap().text,
+        "Before TARGET Before  after."
+    );
+    assert_eq!(d.comment("late").unwrap().original_quote, "TARGET");
+    for changed in ["text", "addition", "decision", "extension"] {
+        let mut d = base.fork();
+        match changed {
+            "text" => d.insert_text(&d.point("a", 11).unwrap(), "NEW").unwrap(),
+            "addition" => d.insert_text(&d.point("a", 8).unwrap(), "NEW").unwrap(),
+            "decision" => d.reject_proposal("remove").unwrap(),
+            _ => d
+                .continue_text_proposal(
+                    "remove",
+                    "Reviewer",
+                    &d.point("a", 13).unwrap(),
+                    &d.selection("a", 13, 14).unwrap(),
+                    "",
+                )
+                .unwrap(),
+        }
+        let before = d.heads();
+        assert!(d.apply_at(&heads, std::slice::from_ref(&command)).is_err());
+        assert_eq!(d.heads(), before);
+    }
+}
+
+#[test]
 fn proposed_split_join_preserve_unicode_targets_and_exact_selection_owners() {
     let mut d = seed();
     d.propose_blocks(

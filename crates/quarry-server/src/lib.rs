@@ -7,6 +7,9 @@ mod document_authority;
 mod document_engine;
 mod document_handlers;
 mod error;
+mod event_transport;
+#[cfg(all(test, any(feature = "lib-documents", feature = "tmp-documents")))]
+mod event_transport_tests;
 mod gateway;
 #[cfg(feature = "lib-documents")]
 mod git_handlers;

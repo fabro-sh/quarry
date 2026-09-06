@@ -13,6 +13,10 @@ use std::collections::BTreeMap;
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub enum Command {
+    Edit {
+        mode: crate::EditMode,
+        action: crate::EditAction,
+    },
     Revert {
         before: Vec<String>,
         after: Vec<String>,
@@ -99,6 +103,13 @@ pub enum Command {
         name: String,
         value: serde_json::Value,
     },
+    ContinueTextProposal {
+        id: String,
+        author: String,
+        at: TextPoint,
+        ranges: Vec<TextRange>,
+        text: String,
+    },
     ProposeBlockUpdate {
         id: String,
         author: String,
@@ -173,11 +184,34 @@ impl Command {
                 | Self::DeleteText { .. }
                 | Self::Format { .. }
                 | Self::AddComment { .. }
+                | Self::ContinueTextProposal { .. }
+                | Self::ProposeInsertion { .. }
+                | Self::ProposeReplacement { .. }
+                | Self::ProposeFormat { .. }
         )
     }
 }
 
 impl Document {
+    /// Execute on the original version while collecting the native operations
+    /// used for delayed-write validation. Expansion is sequential, so later
+    /// intents can address sources created earlier in the same request.
+    pub(crate) fn apply_expanded(&mut self, commands: &[Command]) -> Result<Vec<Command>> {
+        self.atomic(|candidate| {
+            let mut expanded = Vec::new();
+            for command in commands {
+                let lowered = match command {
+                    Command::Edit { mode, action } => candidate.edit_commands(mode, action)?,
+                    command => vec![command.clone()],
+                };
+                for command in lowered {
+                    candidate.apply_one(&command)?;
+                    expanded.push(command);
+                }
+            }
+            Ok(expanded)
+        })
+    }
     /// All-or-nothing batch; no earlier command leaks when a later one fails.
     pub fn apply(&mut self, commands: &[Command]) -> Result<()> {
         self.atomic(|candidate| {
@@ -203,15 +237,16 @@ impl Document {
             return Err(DocumentError::Conflict("Missing document version".into()));
         }
         let mut branch = self.fork_at(base)?;
-        self.validate_command_base(&branch, commands)?;
-        branch.apply(commands)?;
+        let original = branch.fork();
+        let expanded = branch.apply_expanded(commands)?;
+        self.validate_command_base(&original, &expanded)?;
         // An ID added independently after the supplied base cannot be reused.
         for command in commands {
             if let Command::AddComment { id, .. } = command {
                 self.require_new(crate::COMMENTS, id)?;
             }
         }
-        self.merge(&branch)
+        self.merge_edited_branch(&branch, &expanded)
     }
 
     /// An intervening keystroke does not make a split or move ambiguous.
@@ -219,6 +254,32 @@ impl Document {
     /// intervening review edits, and validate their targets on current text.
     pub(crate) fn validate_command_base(&self, base: &Self, commands: &[Command]) -> Result<()> {
         for command in commands {
+            if let Command::ContinueTextProposal { id, ranges, .. } = command {
+                if let Ok(original) = base.proposal(id) {
+                    if self.proposal(id)? != original {
+                        return Err(DocumentError::Conflict(
+                            "Suggestion changed; read it again before continuing".into(),
+                        ));
+                    }
+                    self.validate_proposal_acceptance(id)?;
+                } else {
+                    self.require_new_review(id)?;
+                }
+                self.validate_review_ranges(base, ranges)?;
+            }
+            match command {
+                Command::ProposeInsertion { id, .. }
+                | Command::ProposeReplacement { id, .. }
+                | Command::ProposeFormat { id, .. } => self.require_new_review(id)?,
+                _ => {}
+            }
+            match command {
+                Command::ProposeReplacement { ranges, .. }
+                | Command::ProposeFormat { ranges, .. } => {
+                    self.validate_review_ranges(base, ranges)?
+                }
+                _ => {}
+            }
             if let Command::InsertText { at, .. } = command
                 && base.locate_point(at).ok().flatten().is_some()
                 && self.locate_point(at)?.is_none()
@@ -269,8 +330,62 @@ impl Document {
         self.fork().apply(commands)
     }
 
+    fn validate_review_ranges(&self, base: &Self, ranges: &[TextRange]) -> Result<()> {
+        for range in ranges {
+            // References created earlier in this same request do not exist in
+            // its base. Their final targets are checked after the private merge.
+            if let Ok(original) = base.capture_target(std::slice::from_ref(range))
+                && self.capture_target(std::slice::from_ref(range))? != original
+            {
+                return Err(DocumentError::Conflict(
+                    "Suggestion target changed; read it again before proposing".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn merge_edited_branch(
+        &mut self,
+        branch: &Self,
+        commands: &[Command],
+    ) -> Result<()> {
+        let mut candidate = self.fork();
+        candidate.merge(branch)?;
+        for command in commands {
+            let id = match command {
+                Command::ProposeInsertion { id, .. }
+                | Command::ProposeReplacement { id, .. }
+                | Command::ProposeFormat { id, .. }
+                | Command::ContinueTextProposal { id, .. } => id,
+                _ => continue,
+            };
+            // A decision later in this request may already have closed it.
+            // Verify every proposal that was valid on the declared base remains
+            // valid with concurrent work. Failed merges publish nothing.
+            if branch.validate_proposal_acceptance(id).is_ok() {
+                candidate.validate_proposal_acceptance(id)?;
+            }
+        }
+        *self = candidate;
+        Ok(())
+    }
+
     pub(crate) fn apply_one(&mut self, command: &Command) -> Result<()> {
         match command {
+            Command::Edit { mode, action } => {
+                for command in self.edit_commands(mode, action)? {
+                    self.apply_one(&command)?;
+                }
+                Ok(())
+            }
+            Command::ContinueTextProposal {
+                id,
+                author,
+                at,
+                ranges,
+                text,
+            } => self.continue_text_proposal(id, author, at, ranges, text),
             Command::Revert { before, after } => {
                 let parse = |heads: &[String]| {
                     heads

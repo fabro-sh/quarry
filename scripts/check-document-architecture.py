@@ -23,6 +23,10 @@ for path in ['crates/quarry-collab-codec', 'crates/quarry-server/src/session.rs'
              *[f'ui/src/features/editor/{name}' for name in ['document-editor.ts', 'document-editor.css', 'document-editor.test.ts', 'document-schema.ts', 'document-clipboard.ts', 'document-node-views.ts', 'document-preview.ts', 'document-tool-menu.tsx']]]:
     if (root / path).exists() and ((root / path).is_file() or any((root / path).rglob('*'))):
         failures.append(f'{path}: retired module exists')
+adapter = root / 'ui/src/features/editor/plate-document-adapter.ts'
+for line, text in enumerate(adapter.read_text().splitlines(), 1):
+    if re.search(r"op: ['\"](?:propose_|continue_text_proposal|extend_deletion_proposal)", text):
+        failures.append(f'{adapter.relative_to(root)}:{line}: proposal meaning belongs to the native edit interpreter')
 manifest = json.loads((root / 'ui/package.json').read_text())
 if not (root / 'crates/quarry-document').is_dir() or 'document:build' not in manifest['scripts']:
     failures.append('native document engine is missing')

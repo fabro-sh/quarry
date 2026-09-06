@@ -21,8 +21,12 @@ function server() {
       { op: 'propose_insertion', id: 'proposal', author: 'Agent', block: 'a', at: draft.model.point('a', 0), text: 'APPROVED ' }]);
   });
   const requests: DocumentBatch[] = []; const receipts = new Set<string>();
-  const streams: EventTarget[] = [];
-  vi.stubGlobal('EventSource', class extends EventTarget { constructor() { super(); streams.push(this); } close() {} });
+  const streams: Array<{ onmessage?: (event: MessageEvent) => void }> = [];
+  vi.stubGlobal('WebSocket', class {
+    onmessage?: (event: MessageEvent) => void;
+    constructor() { streams.push(this); }
+    close() {}
+  });
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     if (url.endsWith('/document-state')) return Response.json({ format: 'automerge', document_clock: String(requests.length), bytes: Array.from(authority.save()) });
     if (url.endsWith('/document-commands')) {
@@ -33,7 +37,7 @@ function server() {
     throw new Error('Unexpected document request');
   }));
   const collab = { documentId: authority.view().document_id, sessionId: crypto.randomUUID(), onSaveStateChange: vi.fn() };
-  return { authority, collab, requests, changed() { for (const stream of streams) stream.dispatchEvent(new Event('doc.changed')); } };
+  return { authority, collab, requests, changed() { for (const stream of streams) stream.onmessage?.(new MessageEvent('message', { data: '{"type":"doc.changed"}' })); } };
 }
 
 test('the native page saves review decisions and replies through the durable command session', async () => {

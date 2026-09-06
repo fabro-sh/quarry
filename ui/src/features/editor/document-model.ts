@@ -1,6 +1,6 @@
 import init, { NativeDocument, NativeCommandBuilder } from '../../generated/document/quarry_document';
 import type { Command, CommandRequest } from '../../api/generated/schema/types.gen';
-export type { Command, CommandRequest } from '../../api/generated/schema/types.gen';
+export type { Command, CommandRequest, EditAction, EditMode } from '../../api/generated/schema/types.gen';
 
 export interface TextPoint { source: string; cursor: string }
 export interface TextRange { source: string; start: string; end: string }

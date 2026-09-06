@@ -33,6 +33,89 @@ fn scopes() -> Vec<bool> {
 }
 
 #[tokio::test]
+async fn edit_intents_replay_once_across_agent_review_and_restart() {
+    use quarry_document::{EditAction, EditMode};
+    for tmp in scopes() {
+        for together in [false, true] {
+            let fixture = Fixture::new(tmp, "Before TARGET after.\n\nElsewhere.\n").await;
+            let (_, base) = fixture.state().await;
+            let block = first(&base);
+            let mut builder = base.command_builder("intent-start", "now").unwrap();
+            builder
+                .push(vec![Command::Edit {
+                    mode: EditMode::Suggest {
+                        id: "deletion".into(),
+                        author: "Reviewer".into(),
+                    },
+                    action: EditAction::ReplaceText {
+                        at: base.point(&block, 10).unwrap(),
+                        ranges: base.selection(&block, 10, 13).unwrap(),
+                        text: String::new(),
+                    },
+                }])
+                .unwrap();
+            if !together {
+                let (local, command) = builder.finish().unwrap();
+                fixture.send(json!({"request_id":"start-envelope", "actor":{"kind":"browser"}, "requests":[command]})).await;
+                builder = local.command_builder("intent-continue", "now").unwrap();
+            }
+            builder
+                .push(vec![Command::Edit {
+                    mode: EditMode::Continue {
+                        id: "deletion".into(),
+                        author: "Reviewer".into(),
+                    },
+                    action: EditAction::ReplaceText {
+                        at: base.point(&block, 7).unwrap(),
+                        ranges: base.selection(&block, 7, 10).unwrap(),
+                        text: String::new(),
+                    },
+                }])
+                .unwrap();
+            let (_, command) = builder.finish().unwrap();
+            let payload = json!({"request_id":"pending-envelope", "actor":{"kind":"browser"}, "requests":[command]});
+            let (read, document) = fixture.state().await;
+            post(&fixture.app, &format!("{}/transactions", fixture.url), json!({
+                "client_tx_id":"agent-review", "base_clock":read["document_clock"], "actor":{"kind":"agent","label":"Agent"},
+                "ops":[{"op":"suggestion.add", "block_id":document.blocks().unwrap()[1].id, "start":0, "end":9, "replacement":"Other"},
+                    {"op":"comment.add", "block_id":block, "start":7, "end":13, "body":"Keep the original discussion"}]
+            }), StatusCode::OK).await;
+            let ack = fixture.send(payload.clone()).await;
+            let saved = fixture.consistent().await;
+            assert_eq!(saved.proposals().unwrap().len(), 2);
+            assert_eq!(
+                saved.proposal_target("deletion").unwrap().attachments[0].quote,
+                "TARGET"
+            );
+            assert_eq!(
+                saved.block_view(&block).unwrap().text,
+                "Before TARGET after."
+            );
+            assert_eq!(
+                saved
+                    .comment_target(&saved.comments().unwrap()[0].id)
+                    .unwrap()
+                    .attachments[0]
+                    .quote,
+                "TARGET"
+            );
+            let restarted = quarry_server::router(fixture.store.clone());
+            assert_eq!(
+                post(
+                    &restarted,
+                    &format!("{}/document-commands", fixture.url),
+                    payload,
+                    StatusCode::OK
+                )
+                .await,
+                ack
+            );
+            assert_eq!(fixture.state().await.1.heads(), saved.heads());
+        }
+    }
+}
+
+#[tokio::test]
 async fn whole_file_http_saves_require_the_writers_read_version() {
     for tmp in scopes() {
         let fixture = Fixture::new(

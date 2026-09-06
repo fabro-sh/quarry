@@ -379,7 +379,15 @@ export function PlateMarkdownEditor({ model, review, mode, options, onReady, onC
   const editor = usePlateEditor({ plugins: plateMarkdownPlugins as never, chunking: { chunkSize: 50 }, value: initialValue, nodeId: nativeNodeIdOptions }, [model]);
   const decorate = useReviewDecoration(model, editor, review.draftTarget);
   const inputHandlers = useMemo(() => ({
+    onPointerDown() { documentAdapter(editor)?.endIntent(); },
+    onDOMBeforeInput() {
+      // Slate can defer selectionchange while finishing a render. Without
+      // this read, it may treat ordinary typing as a temporary target-range
+      // edit and restore the caret to the previous paragraph after one key.
+      if (!editor.api.isComposing()) documentAdapter(editor)?.captureInputSelection();
+    },
     onKeyDown(event: KeyboardEvent) {
+      if (/^(Arrow|Home$|End$|PageUp$|PageDown$)/.test(event.key)) documentAdapter(editor)?.endIntent();
       if ((event.metaKey || event.ctrlKey) && !event.altKey && (event.key.toLowerCase() === 'z' || !event.metaKey && event.key.toLowerCase() === 'y')) {
         event.preventDefault(); documentAdapter(editor)?.history(event.shiftKey || event.key.toLowerCase() === 'y'); return true;
       }
@@ -389,6 +397,7 @@ export function PlateMarkdownEditor({ model, review, mode, options, onReady, onC
     },
     onCompositionStart() {
       clearTimeout(compositionEnd.current); current.current.onCompositionChange(true);
+      documentAdapter(editor)?.captureInputSelection();
       documentAdapter(editor)?.setComposing(true);
       if (editor.selection && RangeApi.isExpanded(editor.selection)) {
         // Finish the selected-text deletion before the browser starts changing
@@ -415,6 +424,7 @@ export function PlateMarkdownEditor({ model, review, mode, options, onReady, onC
     const cleanup = current.current.onReady(adapter);
     return () => { cleanup?.(); adapter.dispose(); };
   }, [editor, model]);
+  useLayoutEffect(() => { documentAdapter(editor)?.endIntent(); }, [editor, mode]);
   return <ReviewHighlightsContext.Provider value={highlights}><WikiLinkProvider value={wikiLink}><ImageProvider value={image}>
     <Plate editor={editor} readOnly={mode === 'viewing'}>
       <SourceDraftRecovery editor={editor} />

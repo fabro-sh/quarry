@@ -73,15 +73,17 @@ test('conflict decisions replay the same body after a lost response', async () =
 });
 
 
-function typing(id: string, before: string, after: string, source = 'text'): OutboxEntry {
+function typing(id: string, before: string, after: string, source = 'text', intent = true): OutboxEntry {
   const base = entry('doc', id);
   return { ...base, kind: 'native', attempted: false, heads: [after], draft: new TextEncoder().encode(after),
-    envelope: { request_id: id, actor: base.envelope.actor, requests: [{ request_id: id + '_0', base: [before], at: '', commands: [{ op: 'insert_text', at: { source, cursor: 'cursor' }, text: id }] }] } };
+    envelope: { request_id: id, actor: base.envelope.actor, requests: [{ request_id: id + '_0', base: [before], at: '', commands: [intent
+      ? { op: 'edit', mode: { kind: 'direct' }, action: { op: 'insert_text', at: { source, cursor: 'cursor' }, text: id } }
+      : { op: 'insert_text', at: { source, cursor: 'cursor' }, text: id }] }] } };
 }
 
-test('rapid causal typing commits one immutable delivery before transport and replays it after a lost response', async () => {
+test.each([false, true])('rapid causal typing commits one immutable delivery and replays it after a lost response (edit intent: %s)', async (intent) => {
   const name = crypto.randomUUID(); let box = await DocumentOutbox.open(name);
-  for (let n = 0; n < 40; n++) await box.add(typing('key' + n, 'head' + n, 'head' + (n + 1)));
+  for (let n = 0; n < 40; n++) await box.add(typing('key' + n, 'head' + n, 'head' + (n + 1), 'text', intent));
   const envelopes: unknown[] = [];
   await expect(drainDocumentOutbox(box, 'doc', async (entry) => { envelopes.push(entry.envelope); throw new Error('Response lost after durable commit'); })).rejects.toThrow('Response lost');
   const rows = await box.list('doc'); expect(rows).toHaveLength(1); expect(rows[0].attempted).toBe(true);
@@ -93,6 +95,25 @@ test('rapid causal typing commits one immutable delivery before transport and re
   await drainDocumentOutbox(box, 'doc', async (entry) => { envelopes.push(entry.envelope); });
   expect(envelopes[1]).toEqual(envelopes[0]); expect(envelopes).toHaveLength(3);
   expect(await box.list('doc')).toEqual([]); box.close();
+});
+
+test('one delivery preserves separate suggestion identities and explicit continuations', async () => {
+  const box = await DocumentOutbox.open(crypto.randomUUID());
+  try {
+    const original = [typing('new', 'base', 'one'), typing('continue', 'one', 'two'), typing('separate', 'two', 'three')];
+    for (const [index, item] of original.entries()) {
+      if (item.kind !== 'native') throw new Error('Expected native edit');
+      item.envelope.requests[0].commands = [{ op: 'edit',
+        mode: { kind: index === 1 ? 'continue' : 'suggest', id: index === 2 ? 'separate' : 'first', author: 'Reviewer' },
+        action: { op: 'replace_text', at: { source: 'text', cursor: 'cursor' }, ranges: [{ source: 'text', start: 'start', end: 'end' }], text: '' } }];
+      await box.add(item);
+    }
+    const claimed = await box.claimNext('doc');
+    if (claimed?.kind !== 'native') throw new Error('Expected native delivery');
+    expect(claimed.envelope.requests).toEqual(original.flatMap((item) => item.kind === 'native' ? item.envelope.requests : []));
+    expect(await box.list('doc')).toHaveLength(1);
+    expect((await box.claimNext('doc'))?.envelope).toEqual(claimed.envelope);
+  } finally { box.close(); }
 });
 
 test('concurrent tab claims cannot replace an attempted delivery or combine unrelated sources and branches', async () => {

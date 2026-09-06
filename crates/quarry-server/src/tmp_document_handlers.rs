@@ -283,7 +283,7 @@ pub(crate) async fn tmp_document_block_transactions_openapi() {}
     get,
     path = "/v1/tmp/documents/{secret}/events/stream",
     params(("secret" = String, Path)),
-    responses((status = 200, description = "Tmp document-scoped server-sent event stream"), (status = 404, body = ApiErrorResponse))
+    responses((status = 200, description = "Tmp document-scoped server-sent event stream"), (status = 101, description = "Read-only JSON event WebSocket for same-origin browsers"), (status = 404, body = ApiErrorResponse))
 )]
 #[expect(
     dead_code,
@@ -351,6 +351,7 @@ pub(crate) async fn get_tmp_document(
     Query(query): Query<TmpDocumentGetQuery>,
     Path(path): Path<String>,
     headers: HeaderMap,
+    transport: crate::event_transport::EventTransport,
 ) -> Result<Response, ApiError> {
     let (document_path, subresource) = parse_tmp_document_subresource(&path);
     match subresource {
@@ -434,6 +435,7 @@ pub(crate) async fn get_tmp_document(
                 document_id.to_string(),
                 presence_guard,
                 state.shutdown_token(),
+                transport,
             )
             .await?
             .into_response());

@@ -353,6 +353,10 @@ export type CollabInviteToken = {
  * callers must retain that version when submitting delayed text/review edits.
  */
 export type Command = {
+    action: EditAction;
+    mode: EditMode;
+    op: 'edit';
+} | {
     after: Array<string>;
     before: Array<string>;
     op: 'revert';
@@ -441,6 +445,13 @@ export type Command = {
     ranges: Array<TextRange>;
     value: unknown;
 } | {
+    at: TextPoint;
+    author: string;
+    id: string;
+    op: 'continue_text_proposal';
+    ranges: Array<TextRange>;
+    text: string;
+} | {
     attrs: {
         [key: string]: unknown;
     };
@@ -511,7 +522,7 @@ export type Command = {
 
 export namespace Command {
     export enum op {
-        REVERT = 'revert'
+        EDIT = 'edit'
     }
 }
 
@@ -721,6 +732,88 @@ export type DocumentView = {
 };
 
 export type DryRunValue = '1' | 'true' | 'yes' | '0' | 'false' | 'no';
+
+export type EditAction = {
+    at: TextPoint;
+    op: 'insert_text';
+    text: string;
+} | {
+    op: 'delete_text';
+    ranges: Array<TextRange>;
+} | {
+    block: SeedBlock;
+    op: 'insert_block';
+} | {
+    at: TextPoint;
+    op: 'replace_text';
+    ranges: Array<TextRange>;
+    text: string;
+} | {
+    name: string;
+    op: 'format';
+    ranges: Array<TextRange>;
+    value: unknown;
+} | {
+    attrs: {
+        [key: string]: unknown;
+    };
+    block: string;
+    kind: string;
+    op: 'set_block';
+    proposal?: (string) | null;
+} | {
+    before?: (string) | null;
+    block: string;
+    op: 'move_block';
+    parent?: (string) | null;
+} | {
+    block: string;
+    op: 'delete_block';
+} | {
+    before?: (string) | null;
+    blocks: Array<SeedBlock>;
+    op: 'insert_blocks';
+    parent?: (string) | null;
+} | {
+    at: TextPoint;
+    block: string;
+    new_block: string;
+    op: 'split_block';
+    proposal?: (string) | null;
+} | {
+    left: string;
+    op: 'join_blocks';
+    proposal?: (string) | null;
+    right: string;
+} | {
+    blocks: Array<ProposedBlockPlacement>;
+    op: 'set_proposed_structure';
+    proposal: string;
+};
+
+export namespace EditAction {
+    export enum op {
+        INSERT_TEXT = 'insert_text'
+    }
+}
+
+export type EditMode = {
+    kind: 'direct';
+} | {
+    author: string;
+    id: string;
+    kind: 'suggest';
+} | {
+    author: string;
+    id: string;
+    kind: 'continue';
+};
+
+export namespace EditMode {
+    export enum kind {
+        DIRECT = 'direct'
+    }
+}
 
 export type GitExportRequest = {
     branch?: (string) | null;

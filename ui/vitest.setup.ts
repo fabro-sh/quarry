@@ -1,5 +1,8 @@
 import '@testing-library/jest-dom/vitest';
 
+// UI unit tests must opt into a mock socket; they never contact a real server.
+beforeEach(() => { vi.stubGlobal('WebSocket', undefined); });
+
 if (typeof globalThis.localStorage?.getItem !== 'function') {
   const memory = new Map<string, string>();
   const storage: Storage = {

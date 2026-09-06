@@ -1,0 +1,120 @@
+{
+  "git_head": "cf2dfc9caaaeaeb62d8763d9d5990f15b43bf456",
+  "working_tree_changes": true,
+  "native": {
+    "passed": 617,
+    "failed": 0,
+    "log": "target/shared-editing/workspace-complete.log"
+  },
+  "ui": {
+    "passed": 209,
+    "failed": 0,
+    "log": "target/shared-editing/ui-verified.log"
+  },
+  "browser": {
+    "passed": 173,
+    "failed": 0,
+    "skipped": 4,
+    "log": "target/shared-editing/browser-final.log"
+  },
+  "chrome_latency": {
+    "passed": 6,
+    "failed": 0,
+    "scenarios": [
+      {
+        "metric": "QUARRY_CHROME_CURRENT",
+        "browser_version": "152.0.7977.77",
+        "markdown_bytes": 114814,
+        "block_index": 0,
+        "keys": 100,
+        "p50_key_to_frame_ms": 6.900000095367432,
+        "p95_key_to_frame_ms": 13.599999904632568,
+        "max_frame_gap_ms": 11.865999999999985
+      },
+      {
+        "metric": "QUARRY_CHROME_PUBLICATION",
+        "keys": 100,
+        "requests": 3,
+        "typing_and_save_ms": 2713
+      },
+      {
+        "metric": "QUARRY_CHROME_CURRENT",
+        "browser_version": "152.0.7977.77",
+        "markdown_bytes": 114814,
+        "block_index": 700,
+        "keys": 100,
+        "p50_key_to_frame_ms": 7.900000095367432,
+        "p95_key_to_frame_ms": 10,
+        "max_frame_gap_ms": 17.100000000000023
+      },
+      {
+        "metric": "QUARRY_CHROME_PUBLICATION",
+        "keys": 100,
+        "requests": 3,
+        "typing_and_save_ms": 2810
+      },
+      {
+        "metric": "QUARRY_CHROME_CURRENT",
+        "browser_version": "152.0.7977.77",
+        "markdown_bytes": 114814,
+        "block_index": 1400,
+        "keys": 100,
+        "p50_key_to_frame_ms": 8.699999809265137,
+        "p95_key_to_frame_ms": 11.200000286102295,
+        "max_frame_gap_ms": 14.5
+      },
+      {
+        "metric": "QUARRY_CHROME_PUBLICATION",
+        "keys": 100,
+        "requests": 3,
+        "typing_and_save_ms": 2881
+      },
+      {
+        "metric": "QUARRY_CHROME_CONCURRENT",
+        "browser_version": "152.0.7977.77",
+        "block_index": 0,
+        "p95_key_to_frame_ms": 9.5,
+        "max_frame_gap_ms": 16.700000000000045,
+        "keys": 400,
+        "remote_at_key": 56,
+        "max_frame_index": 2
+      },
+      {
+        "metric": "QUARRY_CHROME_CONCURRENT",
+        "browser_version": "152.0.7977.77",
+        "block_index": 1400,
+        "p95_key_to_frame_ms": 10.5,
+        "max_frame_gap_ms": 16.699999999999818,
+        "keys": 400,
+        "remote_at_key": 51,
+        "max_frame_index": 851
+      },
+      {
+        "metric": "QUARRY_CHROME_SUGGESTING",
+        "action": "typing",
+        "keys": 100,
+        "browser_version": "152.0.7977.77",
+        "p95_key_to_frame_ms": 13.199999809265137,
+        "max_frame_gap_ms": 26.532000286102402
+      },
+      {
+        "metric": "QUARRY_CHROME_SUGGESTING",
+        "action": "deletion",
+        "keys": 60,
+        "browser_version": "152.0.7977.77",
+        "p95_key_to_frame_ms": 15,
+        "max_frame_gap_ms": 17.699999999999818
+      }
+    ],
+    "log": "target/shared-editing/chrome-latency.log"
+  },
+  "qa": {
+    "server_pid": 55057,
+    "blocks_preserved": true,
+    "review_preserved": true
+  },
+  "source_hash_manifest": "target/shared-editing/tested-build-hashes.json",
+  "wasm_sha256": "cc531613e46ff7d493395bc291e8503c1432c1c731e5fd6afe23f4d96b08f52b",
+  "server_sha256": "0769488cb1a396b396d47194ed561de9a351b596e4de3337ffeb7bbe9256d4e6",
+  "report": ".ai/reviews/shared-editing-intents.md"
+}

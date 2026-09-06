@@ -1,0 +1,194 @@
+{
+  "base_commit": "cf2dfc9",
+  "functional_status": "passed",
+  "performance_status": "nine_measured_runs_passed_two_initial_unexplained_failures",
+  "sources": {
+    "crates/quarry-document/src/commands.rs": "243eca39637d90894a3af9d9d3b312d2cedfdd20ec886addd0eb16e130a4cbd0",
+    "crates/quarry-document/src/review.rs": "82b000c9bae7b3c8bef63418717ef666ebc16b40ca6ae980639cb2c37418c882",
+    "crates/quarry-document/tests/review.rs": "de6ffbde4d64b27ddbb884d04d2ea7f5311ed67daf450143bcc8e60b4b87ca25",
+    "ui/src/features/editor/plate-document-adapter.ts": "9c5c6bae8f1170762eaa4bde1b3a7fd798a4226aa423d9be6f21854b2d6727df",
+    "ui/src/features/editor/plate-document-projection.ts": "027ff967d6f34d771742531a4a3e9582685a33c0eec7d12694ccea95d6a94d35",
+    "ui/src/features/editor/plate-native-conformance.test.ts": "a687e407e9f01496237dbdd55c67db7ce0a8efa607398b91dddf86da7d934fc5",
+    "ui/tests/live-suggested-deletion.spec.ts": "e088489baf13462e1ba3c52df864a6e85c2d5997f08fe34cfc92d8d89a34a974",
+    "ui/src/api/generated/openapi.json": "0c20d1640084ed33f961d9fe64d20da15fce58337996d7a440761852b6188da3",
+    "ui/src/api/generated/schema/types.gen.ts": "fb212d2d41b7630e5239377fce100ad5bd17424d96d510c1ff454d6e7b6574cd"
+  },
+  "evidence": {
+    "reproduced_deletion_failures": {
+      "path": "target/suggest-delete-baseline.log",
+      "sha256": "2aa7275c86765e543814622061b6e71dd0793071af4a5f476c7f0f541973b790"
+    },
+    "reproduced_unrelated_review_conflict": {
+      "path": "target/suggest-delete-unrelated-review-baseline.log",
+      "sha256": "a9717c6f856c4a5ae750fb7cea05f1b8b3de2be09946a30d105f913362376275"
+    },
+    "workspace_before_final_guard": {
+      "path": "target/suggest-delete-workspace.log",
+      "sha256": "c61bfc936b753d9350cbfb330612c8c6f5855e9b173a9aa3e5389df6d2a9d4e1"
+    },
+    "final_native_engine": {
+      "path": "target/suggest-delete-native-final.log",
+      "sha256": "39f09629682fb6f9853a78dc07587d68c8b1b2d95fda3def6c410623fd5b3fb4"
+    },
+    "workspace_clippy_before_final_guard": {
+      "path": "target/suggest-delete-clippy.log",
+      "sha256": "cc229c124d0757552d093ec649f956aa5852bd2c68b24f825138e0fa88c4d417"
+    },
+    "final_native_clippy": {
+      "path": "target/suggest-delete-clippy-final.log",
+      "sha256": "c4fdc1fd1fd804e2d0145dcea1e4ae0025a675da47a26ac5e68e6f54bf091cad"
+    },
+    "final_ui": {
+      "path": "target/suggest-delete-ui-concurrency-final.log",
+      "sha256": "a446c521a49a15593873342e2dab4f334d7a2b796acaf119e94502b0a4dbf58d"
+    },
+    "final_build": {
+      "path": "target/suggest-delete-build-final.log",
+      "sha256": "bcf75596ebc7dae92a100dc46d5849adf1a061a5a5afd4ae846f9c0ebc7473cb"
+    },
+    "final_release": {
+      "path": "target/suggest-delete-release-final.log",
+      "sha256": "074bcafa7a8f83be995eda43e15ad5bc4b533ee732b29b73eca40de7d11188c0"
+    },
+    "broad_browsers_before_final_guard": {
+      "path": "target/suggest-delete-browsers.log",
+      "sha256": "1a54d80c66c77630e7eaee1c690d6262f11f88025d3962e7183b1166246de544"
+    },
+    "final_deletion_browsers": {
+      "path": "target/suggest-delete-browser-final.log",
+      "sha256": "a662b2a6b4a5cb42777c94d42d3e86bbf5406cee94e4be333dee89624de1147c"
+    },
+    "chrome_initial": {
+      "path": "target/suggest-delete-chrome-performance.log",
+      "sha256": "c7fb71ab65472b75add588c46c0c75079adbdd86cac911d158acb67f5f97003f"
+    },
+    "chrome_rechecks": {
+      "path": "target/suggest-delete-chrome-recheck.log",
+      "sha256": "7e17cc669488eb88916d0b005ed26e38c367d5770dcefcdf315b277d5c063f30"
+    },
+    "qa_update": {
+      "path": "target/suggest-delete-qa-final.log",
+      "sha256": "592d3019d9a49e392c61c4e51af3fda95bf14976f2e14e61ca6cfbfed68c27dc"
+    }
+  },
+  "release_sha256": "89685b4f51e0b903329486f1c644a52ebaa973537efb32a6032e6e1ee0d95295",
+  "counts": {
+    "workspace_before_final_guard": 609,
+    "final_native_engine": 59,
+    "final_ui": 199,
+    "broad_browsers_before_final_guard": 164,
+    "broad_browser_skips": 4,
+    "final_deletion_browsers": 12
+  },
+  "chrome": {
+    "metrics": [
+      {
+        "kind": "current",
+        "browser_version": "152.0.7977.77",
+        "markdown_bytes": 114814,
+        "block_index": 1400,
+        "keys": 100,
+        "p50_key_to_frame_ms": 8.699999809265137,
+        "p95_key_to_frame_ms": 10.700000286102295,
+        "max_frame_gap_ms": 9.299999999999955
+      },
+      {
+        "kind": "concurrent",
+        "browser_version": "152.0.7977.77",
+        "block_index": 0,
+        "p95_key_to_frame_ms": 10,
+        "max_frame_gap_ms": 9.465999713897645,
+        "keys": 400,
+        "remote_at_key": 57,
+        "max_frame_index": 0
+      },
+      {
+        "kind": "concurrent",
+        "browser_version": "152.0.7977.77",
+        "block_index": 1400,
+        "p95_key_to_frame_ms": 13.5,
+        "max_frame_gap_ms": 22.23200028610222,
+        "keys": 400,
+        "remote_at_key": 65,
+        "max_frame_index": 0
+      },
+      {
+        "kind": "current",
+        "browser_version": "152.0.7977.77",
+        "markdown_bytes": 114814,
+        "block_index": 0,
+        "keys": 100,
+        "p50_key_to_frame_ms": 7.300000190734863,
+        "p95_key_to_frame_ms": 11.100000381469727,
+        "max_frame_gap_ms": 16.100000000000023
+      },
+      {
+        "kind": "current",
+        "browser_version": "152.0.7977.77",
+        "markdown_bytes": 114814,
+        "block_index": 700,
+        "keys": 100,
+        "p50_key_to_frame_ms": 8.099999904632568,
+        "p95_key_to_frame_ms": 10.799999713897705,
+        "max_frame_gap_ms": 9.399999999999864
+      },
+      {
+        "kind": "current",
+        "browser_version": "152.0.7977.77",
+        "markdown_bytes": 114814,
+        "block_index": 0,
+        "keys": 100,
+        "p50_key_to_frame_ms": 7.5,
+        "p95_key_to_frame_ms": 10.300000190734863,
+        "max_frame_gap_ms": 16.399999999999977
+      },
+      {
+        "kind": "current",
+        "browser_version": "152.0.7977.77",
+        "markdown_bytes": 114814,
+        "block_index": 700,
+        "keys": 100,
+        "p50_key_to_frame_ms": 8.100000381469727,
+        "p95_key_to_frame_ms": 10.5,
+        "max_frame_gap_ms": 9.299999999999955
+      },
+      {
+        "kind": "current",
+        "browser_version": "152.0.7977.77",
+        "markdown_bytes": 114814,
+        "block_index": 0,
+        "keys": 100,
+        "p50_key_to_frame_ms": 7.400000095367432,
+        "p95_key_to_frame_ms": 11.300000190734863,
+        "max_frame_gap_ms": 10.765999713897713
+      },
+      {
+        "kind": "current",
+        "browser_version": "152.0.7977.77",
+        "markdown_bytes": 114814,
+        "block_index": 700,
+        "keys": 100,
+        "p50_key_to_frame_ms": 8.199999809265137,
+        "p95_key_to_frame_ms": 11,
+        "max_frame_gap_ms": 9.299999999999955
+      }
+    ],
+    "initial_failed_cases": [
+      "editor did not appear",
+      "only 14 of 100 intended characters appeared in the selected paragraph"
+    ],
+    "failed_cases_rechecks": {
+      "passed": 6,
+      "failed": 0
+    },
+    "p95_max_ms": 13.5,
+    "frame_gap_max_ms": 22.23200028610222
+  },
+  "qa": {
+    "port": 7836,
+    "pid": 47640,
+    "blocks_preserved": true,
+    "review_preserved": true
+  },
+  "scope": "Adjacent same-author deletions within one text block; existing separate suggestions are not consolidated."
+}

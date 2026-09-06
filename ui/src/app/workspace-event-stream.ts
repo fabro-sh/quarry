@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { subscribeBrowserEvents } from '../lib/browser-events';
 
 export interface BrowserEventPayload {
   readonly type: string;
@@ -28,7 +29,7 @@ interface WorkspaceEventStreamOptions {
   readonly url: string;
 }
 
-/** Owns EventSource and polling-fallback lifetime while callbacks stay current. */
+/** Owns notification and polling-fallback lifetime while callbacks stay current. */
 export function useWorkspaceEventStream({
   enabled,
   eventTypes,
@@ -61,20 +62,17 @@ export function useWorkspaceEventStream({
       pollingTimer = null;
     };
 
-    if (typeof EventSource === 'undefined') {
-      startPolling();
-      return stopPolling;
-    }
-
     onStateChangeRef.current?.('connecting');
-    const source = new EventSource(url);
-    const handleEvent = (event: MessageEvent) => {
-      const payload = parseBrowserEvent(event);
+    const source = subscribeBrowserEvents(url);
+    const handleEvent = (event: Event) => {
+      const payload = parseBrowserEvent(event as MessageEvent);
       if (payload) onEventRef.current(payload);
     };
     for (const eventType of eventTypes) source.addEventListener(eventType, handleEvent);
     source.onopen = () => {
-      stopPolling();
+      // Reconnect and periodic reads recover silently missed notifications.
+      poll();
+      pollingTimer ??= setInterval(poll, pollIntervalMs);
       onStateChangeRef.current?.('open');
     };
     source.onerror = startPolling;

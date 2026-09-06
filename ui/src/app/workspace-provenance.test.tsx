@@ -1,3 +1,4 @@
+import { MockWebSocket } from '../lib/mock-websocket';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig, type SWRConfiguration } from 'swr';
@@ -33,9 +34,9 @@ describe('workspace document mutation provenance', () => {
     stubBrowserOrigin('00000000-0000-4000-8000-000000000001');
     const fetch = vi.fn(provenanceFetch());
     vi.stubGlobal('fetch', fetch);
-    vi.stubGlobal('EventSource', MockEventSource);
+    vi.stubGlobal('WebSocket', MockWebSocket);
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    MockEventSource.instances = [];
+    MockWebSocket.instances = [];
 
     renderApp();
 
@@ -57,14 +58,14 @@ describe('workspace document mutation provenance', () => {
   it('clears the selection when the open document is deleted externally', async () => {
     stubBrowserOrigin('00000000-0000-4000-8000-000000000002');
     vi.stubGlobal('fetch', vi.fn(provenanceFetch()));
-    vi.stubGlobal('EventSource', MockEventSource);
-    MockEventSource.instances = [];
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    MockWebSocket.instances = [];
 
     renderApp();
 
     await openDailyDocument();
     act(() => {
-      MockEventSource.instances[0].emit('doc.deleted', {
+      MockWebSocket.instances[0].emit('doc.deleted', {
         type: 'doc.deleted',
         library: 'provenance-lib',
         path: 'daily.md',
@@ -81,8 +82,8 @@ describe('workspace document mutation provenance', () => {
   it('wires the session-backed editor to the header save state', async () => {
     stubBrowserOrigin('00000000-0000-4000-8000-000000000003');
     vi.stubGlobal('fetch', vi.fn(provenanceFetch()));
-    vi.stubGlobal('EventSource', MockEventSource);
-    MockEventSource.instances = [];
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    MockWebSocket.instances = [];
 
     renderApp();
 
@@ -134,8 +135,8 @@ describe('workspace document mutation provenance', () => {
   it('keeps the selected editor mounted across a document version change', async () => {
     stubBrowserOrigin('00000000-0000-4000-8000-000000000007');
     vi.stubGlobal('fetch', vi.fn(provenanceFetch()));
-    vi.stubGlobal('EventSource', MockEventSource);
-    MockEventSource.instances = [];
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    MockWebSocket.instances = [];
 
     renderApp({ mutate: vi.fn(async () => undefined) });
 
@@ -143,7 +144,7 @@ describe('workspace document mutation provenance', () => {
     const editor = screen.getByLabelText('Document configuration');
 
     act(() => {
-      MockEventSource.instances[0].emit('doc.changed', {
+      MockWebSocket.instances[0].emit('doc.changed', {
         type: 'doc.changed',
         library: 'provenance-lib',
         path: 'daily.md',
@@ -284,35 +285,4 @@ function json(body: unknown, headers: Record<string, string> = {}, status = 200)
     status,
     headers: { 'content-type': 'application/json', ...headers },
   });
-}
-
-class MockEventSource {
-  static instances: MockEventSource[] = [];
-  readonly listeners = new Map<string, Array<(event: MessageEvent) => void>>();
-  onopen: ((event: Event) => void) | null = null;
-  onerror: ((event: Event) => void) | null = null;
-
-  constructor(public readonly url: string) {
-    MockEventSource.instances.push(this);
-    queueMicrotask(() => this.onopen?.(new Event('open')));
-  }
-
-  addEventListener(type: string, listener: (event: MessageEvent) => void) {
-    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
-  }
-
-  removeEventListener(type: string, listener: (event: MessageEvent) => void) {
-    this.listeners.set(
-      type,
-      (this.listeners.get(type) ?? []).filter((existing) => existing !== listener)
-    );
-  }
-
-  close() {}
-
-  emit(type: string, payload: Record<string, unknown>) {
-    for (const listener of this.listeners.get(type) ?? []) {
-      listener(new MessageEvent(type, { data: JSON.stringify(payload) }));
-    }
-  }
 }

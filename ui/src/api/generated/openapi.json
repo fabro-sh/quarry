@@ -47,6 +47,9 @@
           }
         ],
         "responses": {
+          "101": {
+            "description": "Read-only JSON event WebSocket for same-origin browsers"
+          },
           "200": {
             "description": "Server-sent event stream"
           }
@@ -478,6 +481,9 @@
           }
         ],
         "responses": {
+          "101": {
+            "description": "Read-only JSON event WebSocket for same-origin browsers"
+          },
           "200": {
             "description": "Native document events"
           }
@@ -1315,6 +1321,9 @@
           }
         ],
         "responses": {
+          "101": {
+            "description": "Read-only JSON event WebSocket for same-origin browsers"
+          },
           "200": {
             "description": "Document-scoped server-sent event stream"
           },
@@ -3807,6 +3816,9 @@
           }
         ],
         "responses": {
+          "101": {
+            "description": "Read-only JSON event WebSocket for same-origin browsers"
+          },
           "200": {
             "description": "Tmp document-scoped server-sent event stream"
           },
@@ -5541,6 +5553,28 @@
           {
             "type": "object",
             "required": [
+              "mode",
+              "action",
+              "op"
+            ],
+            "properties": {
+              "action": {
+                "$ref": "#/components/schemas/EditAction"
+              },
+              "mode": {
+                "$ref": "#/components/schemas/EditMode"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "edit"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
               "before",
               "after",
               "op"
@@ -6013,6 +6047,43 @@
                 }
               },
               "value": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "author",
+              "at",
+              "ranges",
+              "text",
+              "op"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "author": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "continue_text_proposal"
+                ]
+              },
+              "ranges": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TextRange"
+                }
+              },
+              "text": {
+                "type": "string"
+              }
             }
           },
           {
@@ -7203,6 +7274,392 @@
           "0",
           "false",
           "no"
+        ]
+      },
+      "EditAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "at",
+              "text",
+              "op"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "insert_text"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "ranges",
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "delete_text"
+                ]
+              },
+              "ranges": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TextRange"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "op"
+            ],
+            "properties": {
+              "block": {
+                "$ref": "#/components/schemas/SeedBlock"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "insert_block"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "at",
+              "ranges",
+              "text",
+              "op"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "replace_text"
+                ]
+              },
+              "ranges": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TextRange"
+                }
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "ranges",
+              "name",
+              "value",
+              "op"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "format"
+                ]
+              },
+              "ranges": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TextRange"
+                }
+              },
+              "value": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "kind",
+              "attrs",
+              "op"
+            ],
+            "properties": {
+              "attrs": {
+                "type": "object",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "block": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "set_block"
+                ]
+              },
+              "proposal": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "op"
+            ],
+            "properties": {
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "move_block"
+                ]
+              },
+              "parent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "op"
+            ],
+            "properties": {
+              "block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "delete_block"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "blocks",
+              "op"
+            ],
+            "properties": {
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SeedBlock"
+                }
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "insert_blocks"
+                ]
+              },
+              "parent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "at",
+              "new_block",
+              "op"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "block": {
+                "type": "string"
+              },
+              "new_block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "split_block"
+                ]
+              },
+              "proposal": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "left",
+              "right",
+              "op"
+            ],
+            "properties": {
+              "left": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "join_blocks"
+                ]
+              },
+              "proposal": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "right": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "proposal",
+              "blocks",
+              "op"
+            ],
+            "properties": {
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ProposedBlockPlacement"
+                }
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "set_proposed_structure"
+                ]
+              },
+              "proposal": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "EditMode": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "direct"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "author",
+              "kind"
+            ],
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "suggest"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An explicit continuation, never a search for a nearby review item.",
+            "required": [
+              "id",
+              "author",
+              "kind"
+            ],
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "continue"
+                ]
+              }
+            }
+          }
         ]
       },
       "GitExportRequest": {

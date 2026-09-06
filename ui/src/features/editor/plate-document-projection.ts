@@ -87,7 +87,9 @@ export function projectPlate(document: DocumentView, input = true, locate?: (poi
     const inputAt = siblings.findIndex((node) => node.id === inputBlockId(document));
     siblings.splice(before >= 0 ? before : inputAt >= 0 ? inputAt : siblings.length, 0, ...proposal);
   }
-  const insertions = document.proposals.filter((view) => view.proposal.state === 'open' && view.proposal.action.kind === 'text')
+  // A deletion has no inserted text. An empty inline would trap the caret
+  // inside a different owner and let the next Backspace cross into the body.
+  const insertions = document.proposals.filter((view) => view.proposal.state === 'open' && view.proposal.action.kind === 'text' && view.text.length > 0)
     .map((view) => ({ view, at: locate?.(view.proposal.action.at as TextPoint) }))
     .filter((item) => item.at?.owner.kind === 'block')
     .sort((a, b) => b.at!.offset - a.at!.offset || b.view.proposal.id.localeCompare(a.view.proposal.id));

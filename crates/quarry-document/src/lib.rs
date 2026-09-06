@@ -9,6 +9,7 @@
 mod block_capabilities;
 mod builder;
 mod commands;
+mod edit;
 mod error;
 mod projection;
 mod request;
@@ -21,6 +22,7 @@ mod undo;
 pub use block_capabilities::*;
 pub use builder::CommandBuilder;
 pub use commands::Command;
+pub use edit::{EditAction, EditMode};
 pub use error::{DocumentError, Result};
 pub use request::{CommandBatch, CommandRequest, DocumentActor};
 pub use schema::INLINE_BOOLEAN_MARKS;

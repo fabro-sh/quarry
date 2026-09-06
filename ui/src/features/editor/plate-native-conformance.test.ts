@@ -29,6 +29,7 @@ function fixture(markdown = '😀 See TARGET here.\n\nSee TARGET elsewhere.') {
   let mode: EditorMode = 'editing';
   const adapter = new PlateDocumentAdapter(editor, model, { mode: () => mode, author: () => 'Reviewer', changed: (batch) => batches.push(batch), error: (error) => errors.push(error) });
   const select = (id: string, from: number, to = from) => {
+    adapter.endIntent();
     const anchor = slatePoint(editor.children, id, from), focus = slatePoint(editor.children, id, to);
     expect(anchor).toBeDefined(); expect(focus).toBeDefined(); editor.tf.select({ anchor: anchor!, focus: focus! });
   };
@@ -43,6 +44,216 @@ function fixture(markdown = '😀 See TARGET here.\n\nSee TARGET elsewhere.') {
   const receive = (remote: DocumentModel) => { adapter.flush(); adapter.rememberSelection(); model.merge(remote.save()); adapter.refresh(); };
   return { model, editor, adapter, batches, errors, select, comment, check, receive, setMode(value: EditorMode) { mode = value; }, close() { adapter.dispose(); model.dispose(); } };
 }
+
+test.each(['backward', 'forward'] as const)('adjacent %s deletions form one native proposal and undo group', (direction) => {
+  const t = fixture('Before TARGET after.');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.comment('target', block, 7, 13);
+    t.setMode('suggesting'); t.select(block, direction === 'backward' ? 13 : 7);
+    for (let i = 0; i < 6; i++) {
+      if (direction === 'backward') t.editor.tf.deleteBackward('character');
+      else t.editor.tf.deleteForward('character');
+      t.check();
+    }
+    const proposals = t.model.view().proposals.filter((view) => view.proposal.state === 'open');
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].proposal.action.original_quote).toBe('TARGET');
+    expect(proposals[0].text).toBe('');
+    expect(t.model.view().blocks[0].text).toBe('Before TARGET after.');
+    expect(t.model.view().comments[0].target.attachments[0].quote).toBe('TARGET');
+    const id = proposals[0].proposal.id;
+    t.adapter.history(false); t.check();
+    expect(t.model.view().proposals.filter((view) => view.proposal.state === 'open')).toHaveLength(0);
+    t.adapter.history(true); t.check();
+    expect(t.model.view().proposals.find((view) => view.proposal.id === id)?.proposal.action.original_quote).toBe('TARGET');
+    t.adapter.command([{ op: 'accept_proposal', id }]); t.check();
+    expect(t.model.view().blocks[0].text).toBe('Before  after.');
+    t.adapter.history(false); t.check();
+    expect(t.model.view().comments[0].target.attachments[0].quote).toBe('TARGET');
+  } finally { t.close(); }
+});
+
+test('deleting a selection then backspacing extends the same deletion without a direct canonical edit', () => {
+  const t = fixture('Before TARGET after.');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.setMode('suggesting'); t.select(block, 10, 13);
+    t.editor.tf.deleteFragment(); t.check();
+    const id = t.model.view().proposals[0].proposal.id;
+    for (let i = 0; i < 3; i++) { t.editor.tf.deleteBackward('character'); t.check(); }
+    expect(t.model.view().proposals.filter((view) => view.proposal.state === 'open')).toHaveLength(1);
+    expect(t.model.view().proposals[0].proposal).toMatchObject({ id, action: { original_quote: 'TARGET' } });
+  } finally { t.close(); }
+});
+
+test('typing after a cross-block selection deletion continues one native replacement', () => {
+  const t = fixture('Before TARGET\n\nSECOND after.');
+  try {
+    const [first, second] = t.model.view().blocks;
+    t.comment('first', first.block.id, 7, 13);
+    t.comment('second', second.block.id, 0, 6);
+    t.setMode('suggesting'); t.adapter.endIntent();
+    t.editor.tf.select({ anchor: slatePoint(t.editor.children, first.block.id, 7)!, focus: slatePoint(t.editor.children, second.block.id, 6)! });
+    t.editor.tf.deleteFragment(); t.check();
+    const id = t.model.view().proposals[0].proposal.id;
+    t.editor.tf.insertText('😀New'); t.check();
+    expect(t.model.view().proposals).toHaveLength(1);
+    expect(t.model.view().proposals[0]).toMatchObject({ proposal: { id, action: { original_quote: 'TARGETSECOND' } }, text: '😀New' });
+    expect(t.model.view().blocks.map((block) => block.text)).toEqual(['Before TARGET', 'SECOND after.']);
+    expect(t.model.view().comments.map((view) => view.target.attachments[0].quote)).toEqual(['TARGET', 'SECOND']);
+    t.adapter.command([{ op: 'accept_proposal', id }]); t.check();
+    expect(t.model.view().blocks.map((block) => block.text)).toEqual(['Before 😀New', ' after.']);
+    t.adapter.history(false); t.check();
+    expect(t.model.view().comments.map((view) => view.target.attachments[0].quote)).toEqual(['TARGET', 'SECOND']);
+  } finally { t.close(); }
+});
+
+test('deletion intents respect authors and gaps, and a native reload starts a fresh intent', () => {
+  const t = fixture('Before TARGET after.');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.adapter.command([{ op: 'propose_replacement', id: 'other', author: 'Agent', block,
+      at: t.model.point(block, 10), ranges: t.model.selection(block, 10, 13), text: '' }]);
+    t.setMode('suggesting'); t.select(block, 10);
+    t.editor.tf.deleteBackward('character'); t.check();
+    const own = t.model.view().proposals.find((view) => view.proposal.author === 'Reviewer')!;
+    expect(own.proposal.action.original_quote).toBe('R');
+    expect(t.model.view().proposals.find((view) => view.proposal.id === 'other')?.proposal.action.original_quote).toBe('GET');
+    t.select(block, 3); t.editor.tf.deleteBackward('character'); t.check();
+    expect(t.model.view().proposals.filter((view) => view.proposal.state === 'open')).toHaveLength(3);
+    const loaded = new DocumentModel(t.model.save());
+    const errors: unknown[] = [];
+    const editor = createSlateEditor({ plugins: plateMarkdownPlugins as never, nodeId: nativeNodeIdOptions, value: projectPlate(loaded.view(), true, (point) => loaded.locate(point)) });
+    const adapter = new PlateDocumentAdapter(editor, loaded, { mode: () => 'suggesting', author: () => 'Reviewer', changed: () => {}, error: (error) => errors.push(error) });
+    try {
+      editor.tf.select(slatePoint(editor.children, block, 9)!);
+      editor.tf.deleteBackward('character'); adapter.flush();
+      expect(errors).toEqual([]);
+      expect(loaded.view().proposals.find((view) => view.proposal.id === own.proposal.id)?.proposal.action.original_quote).toBe('R');
+      expect(loaded.view().proposals.filter((view) => view.proposal.state === 'open')).toHaveLength(4);
+    } finally { adapter.dispose(); loaded.dispose(); }
+  } finally { t.close(); }
+});
+
+test.each(['backward', 'forward'] as const)('deletion at an inserted proposal boundary stays a native proposal (%s)', (direction) => {
+  const t = fixture('Before TARGET after.');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.setMode('suggesting'); t.select(block, 7); t.editor.tf.insertText('NEW'); t.check();
+    const id = t.model.view().proposals[0].proposal.id;
+    t.adapter.endIntent(); t.editor.tf.select(slatePoint(t.editor.children, id, direction === 'backward' ? 0 : 3, true)!);
+    if (direction === 'backward') t.editor.tf.deleteBackward('character'); else t.editor.tf.deleteForward('character');
+    t.check();
+    expect(t.model.view().blocks[0].text).toBe('Before TARGET after.');
+    expect(t.model.view().proposals.find((view) => view.proposal.id === id)?.text).toBe('NEW');
+    expect(t.model.view().proposals.find((view) => view.proposal.id !== id)?.proposal.action.original_quote).toBe(direction === 'backward' ? ' ' : 'T');
+  } finally { t.close(); }
+});
+
+test('explicit selection ends continuation even when the caret position does not change', () => {
+  const t = fixture('Before TARGET after.');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.setMode('suggesting'); t.select(block, 13);
+    t.editor.tf.deleteBackward('character'); t.check();
+    const first = t.model.view().proposals[0].proposal.id;
+    t.select(block, 12);
+    t.editor.tf.deleteBackward('character'); t.check();
+    expect(t.model.view().proposals).toHaveLength(2);
+    expect(t.model.view().proposals.find((v) => v.proposal.id === first)?.proposal.action.original_quote).toBe('T');
+    expect(t.model.view().proposals.find((v) => v.proposal.id !== first)?.proposal.action.original_quote).toBe('E');
+  } finally { t.close(); }
+});
+
+test('a repeated selection synchronization keeps the active input intent', () => {
+  const t = fixture('Before TARGET after.');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.setMode('suggesting'); t.select(block, 13);
+    t.editor.tf.deleteBackward('character'); t.check();
+    // Slate flushes its throttled DOM selection before the next input. This
+    // carries no new pointer or navigation action from the user.
+    t.editor.tf.select(t.editor.selection!);
+    t.editor.tf.deleteBackward('character'); t.check();
+    expect(t.model.view().proposals).toHaveLength(1);
+    expect(t.model.view().proposals[0].proposal.action.original_quote).toBe('ET');
+  } finally { t.close(); }
+});
+
+test('suggestion identity survives an undo time boundary and uses independent requests', () => {
+  const t = fixture('Before TARGET after.');
+  const clock = vi.spyOn(Date, 'now'); let now = 10000; clock.mockImplementation(() => now);
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.setMode('suggesting'); t.select(block, 13);
+    t.editor.tf.deleteBackward('character'); t.check();
+    const id = t.model.view().proposals[0].proposal.id;
+    now += 1000;
+    t.editor.tf.deleteBackward('character'); t.check();
+    expect(t.model.view().proposals).toHaveLength(1);
+    expect(t.model.view().proposals[0].proposal.action.original_quote).toBe('ET');
+    expect(new Set(t.batches.flatMap((batch) => batch.requests.map((request) => request.request_id))).size).toBe(2);
+    t.adapter.history(false); t.check();
+    expect(t.model.view().proposals[0].proposal.id).toBe(id);
+    expect(t.model.view().proposals[0].proposal.action.original_quote).toBe('T');
+    t.editor.tf.deleteBackward('character'); t.check();
+    expect(t.model.view().proposals).toHaveLength(2);
+  } finally { clock.mockRestore(); t.close(); }
+});
+
+test('low-level browser text operations use the same native intent as selection deletion', () => {
+  const t = fixture('Before TARGET after.');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.setMode('suggesting'); t.select(block, 13);
+    for (let index = 12; index >= 7; index--) {
+      const point = slatePoint(t.editor.children, block, index)!;
+      t.editor.tf.apply({ type: 'remove_text', path: point.path, offset: point.offset, text: 'Before TARGET after.'[index] });
+      t.check();
+    }
+    expect(t.model.view().proposals).toHaveLength(1);
+    expect(t.model.view().proposals[0].proposal.action.original_quote).toBe('TARGET');
+    expect(t.model.view().blocks[0].text).toBe('Before TARGET after.');
+  } finally { t.close(); }
+});
+
+test('deleting a selection then typing creates one replacement with native proposed-text edits', () => {
+  const t = fixture('Before TARGET after.');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.setMode('suggesting'); t.select(block, 7, 13);
+    t.editor.tf.deleteFragment(); t.check();
+    const id = t.model.view().proposals[0].proposal.id;
+    t.editor.tf.insertText('New'); t.check();
+    t.editor.tf.insertText(' text'); t.check();
+    expect(t.model.view().proposals).toHaveLength(1);
+    expect(t.model.view().proposals[0]).toMatchObject({ proposal: { id, action: { original_quote: 'TARGET' } }, text: 'New text' });
+    t.adapter.command([{ op: 'accept_proposal', id }]); t.check();
+    expect(t.model.view().blocks[0].text).toBe('Before New text after.');
+  } finally { t.close(); }
+});
+
+test('word deletion and block removal use native suggestions without changing canonical owners', () => {
+  const t = fixture('Before TARGET after.\n\nKeep this block.');
+  try {
+    const [first, second] = t.model.view().blocks.map((v) => v.block.id);
+    t.comment('block-comment', second, 0, 4);
+    t.setMode('suggesting'); t.select(first, 13);
+    t.editor.tf.deleteBackward('word'); t.check();
+    expect(t.model.view().proposals[0].proposal.action.original_quote).toBe('TARGET');
+    const entry = t.editor.api.node({ at: [], match: (node) => node.id === second })!;
+    t.editor.tf.removeNodes({ at: entry[1] }); t.check();
+    const proposal = t.model.view().proposals.find((v) => v.proposal.action.kind === 'delete_block')!;
+    expect(proposal.proposal.action.block).toBe(second);
+    expect(t.model.view().blocks).toHaveLength(2);
+    expect(t.model.view().comments[0].target.attachments[0].quote).toBe('Keep');
+    t.adapter.command([{ op: 'accept_proposal', id: proposal.proposal.id }]); t.check();
+    expect(t.model.view().blocks).toHaveLength(1);
+    t.adapter.history(false); t.check();
+    expect(t.model.view().comments[0].target.attachments[0].quote).toBe('Keep');
+  } finally { t.close(); }
+});
 
 test('Plate requests replay identically in Rust, including newly typed text, marks and a split', () => {
   const t = fixture();

@@ -477,7 +477,133 @@ impl Document {
         })
     }
 
-    fn validate_replacement_target(
+    /// Compose only the proposal explicitly named by the caller. Canonical
+    /// additions must touch its current target. Proposed characters stay in
+    /// their original sources, preserving comments and collaborator edits.
+    pub fn continue_text_proposal(
+        &mut self,
+        id: &str,
+        author: &str,
+        at: &TextPoint,
+        ranges: &[TextRange],
+        text: &str,
+    ) -> Result<()> {
+        self.atomic(|d| {
+            let mut proposal = d.proposal(id)?;
+            if proposal.state != ProposalState::Open || proposal.author != author {
+                return Err(DocumentError::Conflict(
+                    "Continue an open suggestion by the same author".into(),
+                ));
+            }
+            let ProposalAction::Text {
+                at: original_at,
+                delete_target,
+                original_quote,
+            } = &proposal.action
+            else {
+                return Err(DocumentError::Invalid(
+                    "This suggestion is not a text edit".into(),
+                ));
+            };
+            if ranges.is_empty() && text.is_empty() {
+                return Err(DocumentError::Invalid(
+                    "A continuation requires an edit".into(),
+                ));
+            }
+            if !delete_target.is_empty() {
+                d.validate_replacement_target(delete_target, original_quote)?;
+            }
+            let position = d
+                .locate_point(at)?
+                .ok_or_else(|| DocumentError::Conflict("Edit position was deleted".into()))?;
+            let original_position = d
+                .locate_point(original_at)?
+                .ok_or_else(|| DocumentError::Conflict("Suggestion position was deleted".into()))?;
+            if position.owner != original_position.owner
+                || !matches!(position.owner, TargetOwner::Block(_))
+            {
+                return Err(DocumentError::Conflict(
+                    "Continue within the suggestion's canonical block".into(),
+                ));
+            }
+            let mut parts = d.resolve_target(delete_target)?.attachments;
+            if parts.is_empty() {
+                parts.push(crate::Attachment {
+                    owner: original_position.owner.clone(),
+                    start: original_position.offset,
+                    end: original_position.offset,
+                    quote: String::new(),
+                });
+            }
+            if ranges.is_empty() {
+                if position.offset != parts[0].start
+                    && (position.owner != parts[parts.len() - 1].owner
+                        || position.offset != parts[parts.len() - 1].end)
+                {
+                    return Err(DocumentError::Conflict(
+                        "Continuation does not touch the suggestion".into(),
+                    ));
+                }
+                // Typing after a selection deletion also works when that
+                // selection crossed blocks. No deletion target is recaptured.
+                d.update_review_time(&mut proposal.metadata);
+                d.put_record(PROPOSALS, id, &proposal)?;
+                return d.append_proposal_text(&proposal, text);
+            }
+            let (added, quote) = d.capture_target(ranges)?;
+            d.validate_replacement_target(&added, &quote)?;
+            let addition = d.resolve_target(&added)?.attachments;
+            if addition.is_empty() || position.offset != addition[0].start {
+                return Err(DocumentError::Conflict(
+                    "Continuation position must start its added range".into(),
+                ));
+            }
+            parts.extend(addition);
+            parts.sort_by_key(|part| (part.start, part.end));
+            if parts.iter().any(|part| part.owner != position.owner)
+                || parts.windows(2).any(|pair| pair[0].end != pair[1].start)
+            {
+                return Err(DocumentError::Conflict(
+                    "Continuation ranges must be adjacent and must not overlap".into(),
+                ));
+            }
+            let TargetOwner::Block(block) = &position.owner else {
+                unreachable!()
+            };
+            let start = parts[0].start;
+            let end = parts[parts.len() - 1].end;
+            let (delete_target, original_quote) =
+                d.capture_target(&d.selection(block, start, end)?)?;
+            proposal.action = ProposalAction::Text {
+                at: d.point(block, start)?,
+                delete_target,
+                original_quote,
+            };
+            d.update_review_time(&mut proposal.metadata);
+            d.put_record(PROPOSALS, id, &proposal)?;
+            d.append_proposal_text(&proposal, text)
+        })
+    }
+
+    fn append_proposal_text(&mut self, proposal: &Proposal, text: &str) -> Result<()> {
+        if text.is_empty() {
+            return Ok(());
+        }
+        let length = proposal.segments.iter().try_fold(0, |length, reference| {
+            Ok::<_, DocumentError>(
+                length
+                    + self
+                        .segment(reference)?
+                        .runs
+                        .iter()
+                        .map(|run| crate::utf16_len(&run.text))
+                        .sum::<usize>(),
+            )
+        })?;
+        self.insert_text(&self.proposal_point(&proposal.id, length)?, text)
+    }
+
+    pub(crate) fn validate_replacement_target(
         &self,
         target: &[TargetFragment],
         original_quote: &str,

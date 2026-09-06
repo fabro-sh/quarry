@@ -59,14 +59,15 @@ impl Document {
         } else {
             self.fork_at(&base)?
         };
-        if base != current {
-            self.validate_command_base(&branch, &request.commands)?;
-        }
+        let validation_base = (base != current).then(|| branch.fork());
         branch.crdt.set_actor(actor);
         branch.command_ids = Some((request.request_id.clone(), 0));
         branch.command_time = Some(request.at.clone());
-        branch.apply(&request.commands)?;
-        for command in &request.commands {
+        let expanded = branch.apply_expanded(&request.commands)?;
+        if let Some(original) = validation_base {
+            self.validate_command_base(&original, &expanded)?;
+        }
+        for command in &expanded {
             if let Command::AddComment { id, .. } = command {
                 self.require_new(crate::COMMENTS, id)?;
             }
@@ -78,7 +79,7 @@ impl Document {
             *self = branch;
             Ok(())
         } else {
-            self.merge(&branch)
+            self.merge_edited_branch(&branch, &expanded)
         }
     }
     pub(crate) fn request_actor(&self, request_id: &str) -> Result<ActorId> {

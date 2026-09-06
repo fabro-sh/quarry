@@ -141,22 +141,25 @@ export async function drainDocumentOutbox(
   outbox: DocumentOutbox,
   documentId: string,
   send: (entry: OutboxEntry) => Promise<void>,
-  changed: () => void = () => {},
+  changed: () => void | Promise<void> = () => {},
+  signal?: AbortSignal,
 ) {
-  // Read remote changes between finite drain passes, even during continuous typing.
+  // Finite passes let other tabs acquire delivery ownership during continuous typing.
   const throughSequence = (await outbox.list(documentId)).at(-1)?.sequence;
   if (throughSequence === undefined) return;
   for (;;) {
+    signal?.throwIfAborted();
     const entry = await outbox.claimNext(documentId, throughSequence);
     if (!entry) break;
     try {
+      signal?.throwIfAborted();
       await send(entry);
       await outbox.remove(entry.sequence!);
-      changed();
+      await changed();
     } catch (error) {
       if (error instanceof DocumentRequestError && [400, 401, 403, 404, 405, 409, 410, 412, 413, 422].includes(error.status)) {
         await outbox.mark(entry, 'failed', error.message);
-        changed();
+        await changed();
       } else throw error;
     }
   }
@@ -169,8 +172,15 @@ function textSource(entry: OutboxEntry): string | undefined {
   for (const request of entry.envelope.requests) {
     if (!request.commands.length) return;
     for (const command of request.commands) {
-      if (command.op === 'insert_text') sources.add(command.at.source);
-      else if (command.op === 'delete_text' || command.op === 'format') for (const range of command.ranges) sources.add(range.source);
+      // Inspect only the addressed sources. Combining delivery envelopes never
+      // changes an edit's mode, proposal ID, request ID, or native base.
+      const action = command.op === 'edit' ? command.action : command;
+      if (action.op === 'insert_text') sources.add(action.at.source);
+      else if (action.op === 'replace_text') {
+        sources.add(action.at.source);
+        for (const range of action.ranges) sources.add(range.source);
+      }
+      else if (action.op === 'delete_text' || action.op === 'format') for (const range of action.ranges) sources.add(range.source);
       else return;
     }
   }

@@ -1,0 +1,170 @@
+{
+  "completed_at": "2026-09-06T14:40:17.622608+00:00",
+  "base_commit": "cf2dfc9caaaeaeb62d8763d9d5990f15b43bf456",
+  "unit_tests_passed": 228,
+  "browser_tests_passed": 197,
+  "browser_tests_skipped": 4,
+  "headed_installed_chrome_latency_tests_passed": 6,
+  "development_proxy_tests_passed": 1,
+  "latency_metrics": [
+    {
+      "scenario": "QUARRY_CHROME_CURRENT",
+      "browser_version": "152.0.7977.77",
+      "markdown_bytes": 114814,
+      "block_index": 0,
+      "keys": 100,
+      "p50_key_to_frame_ms": 7.400000095367432,
+      "p95_key_to_frame_ms": 12.099999904632568,
+      "max_frame_gap_ms": 10.266000190734871
+    },
+    {
+      "scenario": "QUARRY_CHROME_PUBLICATION",
+      "keys": 100,
+      "requests": 3,
+      "typing_and_save_ms": 2826
+    },
+    {
+      "scenario": "QUARRY_CHROME_CURRENT",
+      "browser_version": "152.0.7977.77",
+      "markdown_bytes": 114814,
+      "block_index": 700,
+      "keys": 100,
+      "p50_key_to_frame_ms": 7.900000095367432,
+      "p95_key_to_frame_ms": 11.699999809265137,
+      "max_frame_gap_ms": 16.600000000000023
+    },
+    {
+      "scenario": "QUARRY_CHROME_PUBLICATION",
+      "keys": 100,
+      "requests": 2,
+      "typing_and_save_ms": 2824
+    },
+    {
+      "scenario": "QUARRY_CHROME_CURRENT",
+      "browser_version": "152.0.7977.77",
+      "markdown_bytes": 114814,
+      "block_index": 1400,
+      "keys": 100,
+      "p50_key_to_frame_ms": 8.099999904632568,
+      "p95_key_to_frame_ms": 10.599999904632568,
+      "max_frame_gap_ms": 9.299999999999955
+    },
+    {
+      "scenario": "QUARRY_CHROME_PUBLICATION",
+      "keys": 100,
+      "requests": 3,
+      "typing_and_save_ms": 2815
+    },
+    {
+      "scenario": "QUARRY_CHROME_CONCURRENT",
+      "browser_version": "152.0.7977.77",
+      "block_index": 0,
+      "p95_key_to_frame_ms": 9.5,
+      "max_frame_gap_ms": 16.100000000000023,
+      "keys": 400,
+      "remote_at_key": 63,
+      "max_frame_index": 3
+    },
+    {
+      "scenario": "QUARRY_CHROME_CONCURRENT",
+      "browser_version": "152.0.7977.77",
+      "block_index": 1400,
+      "p95_key_to_frame_ms": 10.899999618530273,
+      "max_frame_gap_ms": 17.399999999999977,
+      "keys": 400,
+      "remote_at_key": 57,
+      "max_frame_index": 2
+    },
+    {
+      "scenario": "QUARRY_CHROME_SUGGESTING",
+      "action": "typing",
+      "keys": 100,
+      "browser_version": "152.0.7977.77",
+      "p95_key_to_frame_ms": 14.300000190734863,
+      "max_frame_gap_ms": 25.09999999999991
+    },
+    {
+      "scenario": "QUARRY_CHROME_SUGGESTING",
+      "action": "deletion",
+      "keys": 60,
+      "browser_version": "152.0.7977.77",
+      "p95_key_to_frame_ms": 15.699999809265137,
+      "max_frame_gap_ms": 17.400000000000546
+    }
+  ],
+  "qa": {
+    "port": 7836,
+    "server_pid": 81566,
+    "blocks_preserved": true,
+    "review_preserved": true,
+    "browser": "152.0.7977.77",
+    "tabs": [
+      {
+        "tab": 1,
+        "status": "Saved",
+        "sockets": 1
+      },
+      {
+        "tab": 2,
+        "status": "Saved",
+        "sockets": 1
+      },
+      {
+        "tab": 3,
+        "status": "Saved",
+        "sockets": 1
+      },
+      {
+        "tab": 4,
+        "status": "Saved",
+        "sockets": 1
+      },
+      {
+        "tab": 5,
+        "status": "Saved",
+        "sockets": 1
+      },
+      {
+        "tab": 6,
+        "status": "Saved",
+        "sockets": 1
+      },
+      {
+        "tab": 7,
+        "status": "Saved",
+        "sockets": 1
+      },
+      {
+        "tab": 8,
+        "status": "Saved",
+        "sockets": 1
+      }
+    ],
+    "errors": [],
+    "httpStreams": 0,
+    "read": {
+      "status": 200,
+      "milliseconds": 1
+    }
+  },
+  "source_sha256": {
+    "ui/src/features/editor/document-delivery.ts": "86418065b5dfa53a8003a3b18354fa8f640a5288ef55c08875a5ec8406531443",
+    "ui/src/features/editor/document-session.ts": "4352838f4f4bda747950e8d1329b0c2a2453a2439c788ef0b5f8b99ab7450720",
+    "ui/src/features/editor/document-request.ts": "ef00f1fc39a9c3713bee7c949b61d17d196cbf6f2533f7c4cff8b8c3ea7b0ff8",
+    "ui/src/features/editor/document-outbox.ts": "0360e195c2858f00c649da33ea275c9a43d924b2373906f52610883c83f06386",
+    "ui/src/features/editor/plate-document-adapter.ts": "c054dca7ca4c2c56354103baff357a38eb3e73a939263492e54414c1a4b8122d",
+    "ui/src/features/editor/DocumentMarkdownEditor.tsx": "5846b819615b4584670009fe6424be92cd8f7c2f13c8951f4d5208007e87885a",
+    "ui/src/lib/browser-events.ts": "1570166025cbcda96d0631f32f07c9fbc9d8262ea655d7df96f399aa27063801",
+    "ui/src/app/workspace-event-stream.ts": "b64d3a516d14edd73d7761694f6c10539215496682389a0e913015af751d32ff",
+    "ui/src/generated/document/quarry_document_bg.wasm": "cc531613e46ff7d493395bc291e8503c1432c1c731e5fd6afe23f4d96b08f52b",
+    "target/cutover/release/quarry": "8e1af25d9e621ddde0e7541e2b1793a0bf6bad3756077703d134a04037defd93",
+    "ui/src/features/editor/document-session.test.ts": "3884fdb1d8043e8a2153e0d069321ff9789b2788043c2b88b5645e0214d3627a",
+    "ui/src/features/editor/document-request.test.ts": "eaf3cbe95713e77023064e19417a368e1adc22a5ef4dde4ead24177ec8977498",
+    "ui/src/features/editor/plate-document-adapter.test.ts": "1d89dec54ca06ab9e85edaf70d82cecd8d68873fa05ed18faaf763e5f1693b1a",
+    "ui/src/lib/browser-events.test.ts": "ed2b4a4442cf843bd1f2516ffd97300814c8ae7a0eab4cd611978167ce2d0278",
+    "ui/tests/live-save-boundary.spec.ts": "936a9ff9ee1bb44e9c95c5868587d2b2fd64215332b447393e6b6056557e582c",
+    "ui/tests/live-multitab-saving.spec.ts": "8c8c0518f436bcc657293a16fa97c0cb41d85cb9861a12c4ae100336a62dc597",
+    "ui/tests/live-performance.spec.ts": "b8ec60eadc700fb7ff93e82506b00c16ef47d0ab78169eaeab5bdb4fbac042a9"
+  },
+  "evidence_directory": "target/save-boundary"
+}

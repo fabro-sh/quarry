@@ -21,7 +21,7 @@ export function DocumentMarkdownEditor(props: Props) {
   const active = useRef<Connection | undefined>(undefined);
   const [connection, setConnection] = useState<Connection>();
   const [document, setDocument] = useState<DocumentView>();
-  const [status, setStatus] = useState<SessionStatus>({ state: 'saving', failed: [] });
+  const [status, setStatus] = useState<SessionStatus>({ state: 'saved', failed: [], blocked: false, sync: 'refreshing', readOnly: false });
   const blocked = useRef(false);
   const [error, setError] = useState('');
   const [peers, setPeers] = useState<DocumentSelection[]>([]);
@@ -128,13 +128,16 @@ export function DocumentMarkdownEditor(props: Props) {
       <button onClick={downloadDraft}>Download draft</button>
       {status.blocked && <button onClick={() => void active.current!.session.useSavedVersion().catch((error) => setError(String(error)))}>Use saved version</button>}
     </div>}
+    {document && (status.sync === 'reconnecting' || status.sync === 'unavailable') && <div role="status" aria-label="Update status" className="border-b border-line px-4 py-2 text-sm text-muted">
+      {status.sync === 'reconnecting' ? 'Reconnecting for updates…' : 'Document updates are unavailable.'}
+    </div>}
     {!document && !error && <p role="status" className="p-8">Loading document…</p>}
     {connection && document && review && <>
       <DocumentArchiveMenu session={connection.session} documentUrl={props.documentUrl} onError={(error) => setError(String(error))} />
       <div className="flex min-h-0 flex-1">
         <div className="quarry-document-body min-h-0 min-w-0 flex-1">
           <PlateMarkdownEditor model={connection.session.model} review={review} mode={blocked.current ? 'viewing' : props.mode} peers={peers} image={props.image} wikiLink={props.wikiLink}
-            options={{ changed, proposed: (id) => { setActiveId(id); current.current.config.onReviewOpen?.(); }, error: (error) => setError(String(error)), selection: (points) => connection.session.setSelection(points), readOnly: () => blocked.current,
+            options={{ changed, pending: connection.session.setBufferedEdit, proposed: (id) => { setActiveId(id); current.current.config.onReviewOpen?.(); }, error: (error) => setError(String(error)), selection: (points) => connection.session.setSelection(points), readOnly: () => blocked.current,
               mode: () => current.current.mode, author: () => current.current.author }}
             onReady={(adapter) => {
               connection.adapter = adapter;

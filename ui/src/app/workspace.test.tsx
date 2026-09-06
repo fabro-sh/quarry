@@ -1,3 +1,4 @@
+import { MockWebSocket } from '../lib/mock-websocket';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
@@ -485,8 +486,8 @@ describe('Quarry Browser workspace', () => {
   });
 
   it('updates the conflict badge when native review events report a decision', async () => {
-    vi.stubGlobal('EventSource', MockEventSource);
-    MockEventSource.instances = [];
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    MockWebSocket.instances = [];
     const secret = '5f1e0d3c2b4a49188c7d6e5f4a3b2c1d';
     window.history.pushState({}, '', `/tmp/${secret}`);
     const openConflict = {
@@ -536,13 +537,13 @@ describe('Quarry Browser workspace', () => {
     const badge = await screen.findByTestId('comments-tab-badge');
     expect(badge).toHaveTextContent('1');
     resolved = true;
-    act(() => { for (const source of MockEventSource.instances) source.emit('doc.changed', { type: 'doc.changed', doc_id: 'tmp-1', path: secret }); });
+    act(() => { for (const source of MockWebSocket.instances) source.emit('doc.changed', { type: 'doc.changed', doc_id: 'tmp-1', path: secret }); });
     await waitFor(() => expect(screen.queryByTestId('comments-tab-badge')).not.toBeInTheDocument());
   });
 
   it('subscribes tmp documents to their event stream and refreshes review from it', async () => {
-    vi.stubGlobal('EventSource', MockEventSource);
-    MockEventSource.instances = [];
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    MockWebSocket.instances = [];
     const secret = '9a8b7c6d5e4f43219a8b7c6d5e4f4321';
     window.history.pushState({}, '', `/tmp/${secret}`);
     let conflicts: Array<Record<string, unknown>> = [];
@@ -578,8 +579,8 @@ describe('Quarry Browser workspace', () => {
     renderApp();
 
     await screen.findByRole('tab', { name: 'Comments' });
-    const stream = MockEventSource.instances.find(
-      (instance) => instance.url === `/v1/tmp/documents/${secret}/events/stream`
+    const stream = MockWebSocket.instances.find(
+      (instance) => instance.url.endsWith(`/v1/tmp/documents/${secret}/events/stream`)
     );
     expect(stream).toBeDefined();
     expect(screen.queryByTestId('comments-tab-badge')).not.toBeInTheDocument();
@@ -1499,18 +1500,18 @@ describe('Quarry Browser workspace', () => {
       return new Response('not found', { status: 404 });
     });
     vi.stubGlobal('fetch', fetch);
-    vi.stubGlobal('EventSource', MockEventSource);
-    MockEventSource.instances = [];
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    MockWebSocket.instances = [];
 
     renderApp();
 
     await userEvent.click(await screen.findByRole('treeitem', { name: /Daily/ }));
     expect(await screen.findByLabelText('Workspace editor')).toHaveTextContent('Initial');
-    expect(MockEventSource.instances[0]?.url).toBe('/v1/events?library=events-lib');
+    expect(MockWebSocket.instances[0]?.url).toBe(new URL('/v1/events?library=events-lib', window.location.href).href.replace(/^http/, 'ws'));
 
     content = '# External';
     act(() => {
-      MockEventSource.instances[0].emit('doc.changed', {
+      MockWebSocket.instances[0].emit('doc.changed', {
         type: 'doc.changed',
         library: 'events-lib',
         path: 'daily.md',
@@ -1521,7 +1522,7 @@ describe('Quarry Browser workspace', () => {
 
     outgoing = [link({ src_path: 'daily.md', target_text: 'Guide', target_path: 'guide.md' })];
     act(() => {
-      MockEventSource.instances[0].emit('library.reindexed', {
+      MockWebSocket.instances[0].emit('library.reindexed', {
         type: 'library.reindexed',
         library: 'events-lib',
       });
@@ -1532,7 +1533,7 @@ describe('Quarry Browser workspace', () => {
     content = '# Git synced';
     openConflicts = [conflict('git-conflict')];
     act(() => {
-      MockEventSource.instances[0].emit('git.sync.completed', {
+      MockWebSocket.instances[0].emit('git.sync.completed', {
         type: 'git.sync.completed',
         library: 'events-lib',
         peer_id: 'peer-main',
@@ -1605,8 +1606,8 @@ describe('Quarry Browser workspace', () => {
       return new Response('not found', { status: 404 });
     });
     vi.stubGlobal('fetch', fetch);
-    vi.stubGlobal('EventSource', MockEventSource);
-    MockEventSource.instances = [];
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    MockWebSocket.instances = [];
     window.history.pushState({}, '', '/lib/cache-lib/documents/daily.md');
 
     renderApp();
@@ -1668,8 +1669,8 @@ describe('Quarry Browser workspace', () => {
       return new Response('not found', { status: 404 });
     });
     vi.stubGlobal('fetch', fetch);
-    vi.stubGlobal('EventSource', MockEventSource);
-    MockEventSource.instances = [];
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    MockWebSocket.instances = [];
 
     renderApp();
 
@@ -1679,7 +1680,7 @@ describe('Quarry Browser workspace', () => {
     content = '# Polled';
     outgoing = [link({ src_path: 'daily.md', target_text: 'Guide', target_path: 'guide.md' })];
     act(() => {
-      MockEventSource.instances[0].onerror?.(new Event('error'));
+      MockWebSocket.instances[0].onerror?.(new Event('error'));
     });
 
     await waitFor(() => expect(screen.getByLabelText('Workspace editor')).toHaveTextContent('Polled'));
@@ -3088,35 +3089,4 @@ function conflict(id: string) {
     discovered_at: '2026-05-28T12:00:00Z',
     resolved_at: null,
   };
-}
-
-class MockEventSource {
-  static instances: MockEventSource[] = [];
-  readonly listeners = new Map<string, Array<(event: MessageEvent) => void>>();
-  onopen: ((event: Event) => void) | null = null;
-  onerror: ((event: Event) => void) | null = null;
-
-  constructor(public readonly url: string) {
-    MockEventSource.instances.push(this);
-    queueMicrotask(() => this.onopen?.(new Event('open')));
-  }
-
-  addEventListener(type: string, listener: (event: MessageEvent) => void) {
-    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
-  }
-
-  removeEventListener(type: string, listener: (event: MessageEvent) => void) {
-    this.listeners.set(
-      type,
-      (this.listeners.get(type) ?? []).filter((existing) => existing !== listener)
-    );
-  }
-
-  close() {}
-
-  emit(type: string, payload: Record<string, unknown>) {
-    for (const listener of this.listeners.get(type) ?? []) {
-      listener(new MessageEvent(type, { data: JSON.stringify(payload) }));
-    }
-  }
 }

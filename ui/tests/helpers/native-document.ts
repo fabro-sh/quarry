@@ -82,6 +82,9 @@ export async function selectRange(page: Page, anchor: { id: string; offset: numb
     const element = document.querySelector(`[data-block-id="${CSS.escape(id)}"],.slate-quarry_proposal[data-suggestion-id="${CSS.escape(id)}"]`)!;
     if (!element) throw new Error(`Missing block ${id}`);
     const editor = element.closest('[contenteditable]') as HTMLElement;
+    // This helper represents a user selection, including a click at the same
+    // caret position. Native selection synchronization alone is not a gesture.
+    element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
     editor.focus();
     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
     const nodes: Text[] = []; let node;

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from 'playwright/test';
 import { writeFileSync } from 'node:fs';
-import { blocks, body, createDocument, openDocument, select, transaction } from './helpers/native-document';
+import { blocks, body, createDocument, openDocument, review, select, transaction } from './helpers/native-document';
 
 // Trace snapshots traverse the full DOM during input and can themselves block
 // a frame. Measure the app without that work; retain JSON metrics and optional
@@ -196,5 +196,56 @@ for (const blockIndex of [0, 1400]) test(`Chrome stays responsive when an agent 
     await user.page.reload(); await expect(paragraph).toHaveText(typed + target.text);
     await expect(body(user.page).locator(`[data-block-id="${initial[700].block_id}"]`)).toHaveText('Agent ' + initial[700].text);
     await expect(body(user.page).locator('[data-comment-id]')).toHaveText('Paragraph'); expect(user.errors).toEqual([]);
+  } finally { await user.context.close(); }
+});
+
+
+test('Chrome keeps Suggesting typing and repeated deletion within the input latency budget', async ({ browser, browserName, request }) => {
+  test.skip(browserName !== 'chromium', 'Chrome input latency requirement');
+  test.setTimeout(180000);
+  const markdown = Array.from({ length: 1400 }, (_, n) => `Paragraph ${n}: ${'content '.repeat(12)}`).join('\n\n');
+  const fixture = await createDocument(request, markdown);
+  const initial = await blocks(request, fixture.url);
+  const user = await openDocument(browser, fixture.path, 'Reviewer');
+  try {
+    await user.page.getByRole('button', { name: 'Document mode', exact: true }).click();
+    await user.page.getByRole('menuitem', { name: 'Suggesting', exact: true }).click();
+    for (const action of ['typing', 'deletion']) {
+      const target = initial[action === 'typing' ? 700 : 1399];
+      const paragraph = body(user.page).locator(`[data-block-id="${target.block_id}"]`);
+      await paragraph.scrollIntoViewIfNeeded();
+      await select(user.page, target.block_id, action === 'typing' ? 0 : 60);
+      await user.page.evaluate(() => {
+        const state = { frameGaps: [] as number[], keyToFrame: [] as number[], running: true, abort: new AbortController() };
+        (window as unknown as { suggestionMetrics: typeof state }).suggestionMetrics = state;
+        let previous = performance.now();
+        const frame = (now: number) => { state.frameGaps.push(now - previous); previous = now; if (state.running) requestAnimationFrame(frame); };
+        requestAnimationFrame(frame);
+        document.addEventListener('keydown', () => { const start = performance.now(); requestAnimationFrame(() => state.keyToFrame.push(performance.now() - start)); }, { capture: true, signal: state.abort.signal });
+      });
+      const keys = action === 'typing' ? 100 : 60;
+      if (action === 'typing') await user.page.keyboard.type('abcdefghij'.repeat(10));
+      else for (let n = 0; n < keys; n++) await user.page.keyboard.press('Backspace');
+      const metrics = await user.page.evaluate(async () => {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        const state = (window as unknown as { suggestionMetrics: { frameGaps: number[]; keyToFrame: number[]; running: boolean; abort: AbortController } }).suggestionMetrics;
+        state.running = false; state.abort.abort();
+        return { frameGaps: state.frameGaps, keyToFrame: state.keyToFrame };
+      });
+      const sorted = [...metrics.keyToFrame].sort((a, b) => a - b);
+      const result = { action, keys, browser_version: browser.version(), p95_key_to_frame_ms: sorted[Math.ceil(keys * .95) - 1], max_frame_gap_ms: Math.max(...metrics.frameGaps) };
+      console.info('QUARRY_CHROME_SUGGESTING', JSON.stringify(result));
+      await test.info().attach(`suggesting-${action}.json`, { body: JSON.stringify({ ...result, ...metrics }), contentType: 'application/json' });
+      expect(metrics.keyToFrame).toHaveLength(keys);
+      expect(result.p95_key_to_frame_ms, JSON.stringify(result)).toBeLessThanOrEqual(20);
+      expect(result.max_frame_gap_ms, JSON.stringify(result)).toBeLessThanOrEqual(50);
+      await expect(user.page.getByLabel('Save status', { exact: true })).toHaveText('Saved', { timeout: 120000 });
+      const suggestions = (await review(request, fixture.url)).suggestions;
+      expect(suggestions).toHaveLength(action === 'typing' ? 1 : 2);
+      if (action === 'typing') expect(suggestions[0].content).toBe('abcdefghij'.repeat(10));
+      else expect(suggestions.some((suggestion) => suggestion.quote === target.text.slice(0, 60))).toBe(true);
+      expect((await blocks(request, fixture.url)).find((block) => block.block_id === target.block_id)?.text).toBe(target.text);
+    }
+    expect(user.errors).toEqual([]);
   } finally { await user.context.close(); }
 });
