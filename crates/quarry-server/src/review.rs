@@ -341,6 +341,9 @@ fn native_review_response(
             action,
             quarry_document::ProposalAction::UpdateBlock { .. }
                 | quarry_document::ProposalAction::ConvertBlock { .. }
+                | quarry_document::ProposalAction::SplitBlock { .. }
+                | quarry_document::ProposalAction::PasteBlocks { .. }
+                | quarry_document::ProposalAction::JoinBlocks { .. }
         ) {
             proposal.kind = AgentSuggestionKind::BlockUpdate;
         }

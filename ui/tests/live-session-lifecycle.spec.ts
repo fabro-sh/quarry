@@ -44,10 +44,11 @@ for (const restoreCachedPage of [false, true]) test(`navigation interrupts a pen
     await expect(body(user.page)).toHaveText(restoreCachedPage ? 'Agent Local TARGET' : 'Local TARGET');
     await expect(body(user.page).locator('[data-comment-id]')).toHaveText('TARGET');
     const events = await user.page.evaluate(() => sessionStorage.getItem('test-read-events'));
-    if (browserName === 'webkit' && !restoreCachedPage) {
-      // WebKit can reject its network request before dispatching pagehide.
-      // In that ordering there is no active read left for the app to abort.
-      expect(events).toMatch(/^(?:abort;|TypeError: Load failed;pagehide;)/);
+    if (!restoreCachedPage) {
+      // A real navigation can tear down the JavaScript realm immediately
+      // after pagehide. The browser still cancels the held fetch, but its
+      // AbortSignal callback is not guaranteed to update sessionStorage.
+      expect(events).toMatch(/^(?:abort;|pagehide;|TypeError: Load failed;pagehide;)/);
     } else expect(events).toMatch(/^abort;/);
     expect(events).toContain('pagehide;');
     await expect(user.page.getByLabel('Save status', { exact: true })).toHaveText('Saved');

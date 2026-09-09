@@ -1,6 +1,6 @@
 //! A thin WebAssembly boundary. Document rules remain in the Rust command
 //! layer; the editor only translates selections and explicit operations.
-use quarry_document::{CommandBuilder, CommandRequest, Document, TextPoint};
+use quarry_document::{CommandBuilder, CommandRequest, Document, TargetOwner, TextPoint};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -23,6 +23,27 @@ impl NativeCommandBuilder {
     }
     pub fn block_view(&self, id: &str) -> Result<String, JsValue> {
         serde_json::to_string(&self.builder.block_view(id).map_err(error)?).map_err(error)
+    }
+    pub fn proposal_view(&self, id: &str) -> Result<String, JsValue> {
+        serde_json::to_string(&self.builder.proposal_view(id).map_err(error)?).map_err(error)
+    }
+    pub fn proposal_views_for_block(&self, block: &str) -> Result<String, JsValue> {
+        serde_json::to_string(
+            &self
+                .builder
+                .proposal_views_for_block(block)
+                .map_err(error)?,
+        )
+        .map_err(error)
+    }
+    pub fn review_markers(&self, kind: &str, id: &str) -> Result<String, JsValue> {
+        serde_json::to_string(
+            &self
+                .builder
+                .review_markers(&owner(kind, id)?)
+                .map_err(error)?,
+        )
+        .map_err(error)
     }
     pub fn push(&mut self, commands: &str) -> Result<(), JsValue> {
         self.builder
@@ -102,6 +123,14 @@ impl NativeCommandBuilder {
 
 fn error(value: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&value.to_string())
+}
+
+fn owner(kind: &str, id: &str) -> Result<TargetOwner, JsValue> {
+    match kind {
+        "block" => Ok(TargetOwner::Block(id.into())),
+        "proposal" => Ok(TargetOwner::Proposal(id.into())),
+        _ => Err(JsValue::from_str("Invalid review owner")),
+    }
 }
 
 #[wasm_bindgen]
@@ -203,6 +232,29 @@ impl NativeDocument {
 
     pub fn view(&self) -> Result<String, JsValue> {
         serde_json::to_string(&self.document.view().map_err(error)?).map_err(error)
+    }
+
+    pub fn proposal_view(&self, id: &str) -> Result<String, JsValue> {
+        serde_json::to_string(&self.document.proposal_view(id).map_err(error)?).map_err(error)
+    }
+
+    pub fn proposal_views_for_block(&self, block: &str) -> Result<String, JsValue> {
+        serde_json::to_string(
+            &self
+                .document
+                .proposal_views_for_block(block)
+                .map_err(error)?,
+        )
+        .map_err(error)
+    }
+    pub fn review_markers(&self, kind: &str, id: &str) -> Result<String, JsValue> {
+        serde_json::to_string(
+            &self
+                .document
+                .review_markers(&owner(kind, id)?)
+                .map_err(error)?,
+        )
+        .map_err(error)
     }
 
     pub fn point(&self, block: &str, offset: usize) -> Result<String, JsValue> {

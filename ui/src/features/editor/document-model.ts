@@ -24,7 +24,7 @@ export interface CommentView {
   target: ReviewTarget;
 }
 export interface ProposalView {
-  proposal: { id: string; author: string; body: string; action: { kind: 'text' | 'format' | 'update_block' | 'convert_block' | 'move_block' | 'delete_block' | 'insert_blocks' | 'unavailable'; [key: string]: unknown }; state: 'open' | 'accepted' | 'rejected' | 'closed'; metadata: ReviewMetadata };
+  proposal: { id: string; author: string; body: string; action: { kind: 'text' | 'format' | 'update_block' | 'convert_block' | 'move_block' | 'split_block' | 'paste_blocks' | 'join_blocks' | 'delete_block' | 'insert_blocks' | 'unavailable'; [key: string]: unknown }; state: 'open' | 'accepted' | 'rejected' | 'closed'; metadata: ReviewMetadata };
   blocks: BlockView[]; text: string; runs: TextRun[]; target: ReviewTarget; acceptance_error: string | null;
 }
 export interface DocumentView {
@@ -82,6 +82,11 @@ export class DocumentModel {
   containsHistory(heads: string[]) { return this.native.contains_history(JSON.stringify(heads)); }
   changesSince(heads: string[]) { return this.native.save_after(JSON.stringify(heads)); }
   view(): DocumentView { return this.projection ??= JSON.parse(this.native.view()); }
+  proposal(id: string): ProposalView { return JSON.parse(this.native.proposal_view(id)); }
+  proposalsForBlock(block: string): ProposalView[] { return JSON.parse(this.native.proposal_views_for_block(block)); }
+  reviewMarkers(owner: Owner): Array<[string, string, number, number]> {
+    return JSON.parse(this.native.review_markers(owner.kind, owner.id));
+  }
   point(block: string, offset: number): TextPoint { return JSON.parse(this.native.point(block, offset)); }
   selection(block: string, start: number, end: number): TextRange[] {
     return JSON.parse(this.native.selection(block, start, end));
@@ -199,6 +204,11 @@ export class DocumentTransaction {
   private closed = false;
   constructor(private readonly owner: DocumentModel, private readonly native: NativeCommandBuilder, readonly request: CommandRequest) {}
   view(): DocumentView { return this.projection ??= JSON.parse(this.native.view()); }
+  proposal(id: string): ProposalView { return JSON.parse(this.native.proposal_view(id)); }
+  proposalsForBlock(block: string): ProposalView[] { return JSON.parse(this.native.proposal_views_for_block(block)); }
+  reviewMarkers(owner: Owner): Array<[string, string, number, number]> {
+    return JSON.parse(this.native.review_markers(owner.kind, owner.id));
+  }
   locate(point: TextPoint): ResolvedPoint | null { return JSON.parse(this.native.locate_point(JSON.stringify(point))); }
   block(id: string): BlockView { return JSON.parse(this.native.block_view(id)); }
   point(block: string, offset: number): TextPoint { return JSON.parse(this.native.point(block, offset)); }

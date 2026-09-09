@@ -29,11 +29,22 @@ export function DocumentMarkdownEditor(props: Props) {
   const [draft, setDraft] = useState<CommentDraft>();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
+  const publishTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const publish = (session: DocumentSession) => {
     const projection = session.model.view(); setDocument(projection);
     current.current.config.onTitleChange?.(projection.blocks.find((view) => view.block.kind === 'h1')?.text ?? null);
   };
+  const schedulePublish = (session: DocumentSession) => {
+    clearTimeout(publishTimer.current);
+    publishTimer.current = setTimeout(() => {
+      publishTimer.current = undefined;
+      if (active.current?.session === session) publish(session);
+    }, 100);
+  };
+  useEffect(() => () => {
+    clearTimeout(publishTimer.current);
+  }, []);
   useEffect(() => {
     let cancelled = false;
     let opened: Connection | undefined;
@@ -77,7 +88,7 @@ export function DocumentMarkdownEditor(props: Props) {
   const changed = (batch: DocumentBatch) => {
     const connection = active.current;
     if (!connection) return;
-    connection.session.enqueue(batch); publish(connection.session);
+    connection.session.enqueue(batch); schedulePublish(connection.session);
   };
   const focusTarget = (target: ReviewTarget) => {
     const adapter = active.current?.adapter;

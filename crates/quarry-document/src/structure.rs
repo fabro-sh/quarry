@@ -381,6 +381,59 @@ impl Document {
                     crate::schema::validate_parent(&view.kind, parent_kind.as_deref())?;
                 }
             }
+            if let ProposalAction::PasteBlocks {
+                block,
+                at,
+                delete_target,
+                delete_ranges,
+                delete_blocks,
+                joins,
+                blocks,
+                ..
+            } = &proposal.action
+            {
+                self.block(block)?;
+                self.resolve_point(at)?;
+                for target in delete_target {
+                    self.target_offsets(target)?;
+                }
+                for range in delete_ranges {
+                    self.resolve_point(&TextPoint {
+                        source: range.source.clone(),
+                        cursor: range.start.clone(),
+                    })?;
+                    self.resolve_point(&TextPoint {
+                        source: range.source.clone(),
+                        cursor: range.end.clone(),
+                    })?;
+                }
+                if delete_blocks.iter().any(|deleted| deleted.block.is_empty())
+                    || joins
+                        .iter()
+                        .any(|join| join.left.is_empty() || join.right.is_empty())
+                {
+                    return Err(DocumentError::Invalid(
+                        "Structural paste proposal has an invalid removal plan".into(),
+                    ));
+                }
+                if blocks.len() < 2 {
+                    return Err(DocumentError::Invalid(
+                        "Structural paste proposal has fewer than two blocks".into(),
+                    ));
+                }
+                let mut ids = BTreeSet::new();
+                for pasted in blocks {
+                    crate::schema::validate_block(pasted, has_text(pasted)?)?;
+                    if pasted.parent.is_some()
+                        || !ids.insert(&pasted.id)
+                        || !crate::carries_inline_content(&pasted.kind)
+                    {
+                        return Err(DocumentError::Invalid(
+                            "Invalid structural paste block".into(),
+                        ));
+                    }
+                }
+            }
             if let ProposalAction::Text {
                 at, delete_target, ..
             } = &proposal.action
@@ -421,6 +474,24 @@ impl Document {
             }
             if let ProposalAction::MoveBlock { block, .. } = &proposal.action {
                 self.block(block)?;
+            }
+            if let ProposalAction::SplitBlock {
+                block,
+                at,
+                new_block,
+            } = &proposal.action
+            {
+                self.block(block)?;
+                self.resolve_point(at)?;
+                if new_block.is_empty() {
+                    return Err(DocumentError::Invalid(
+                        "Split proposal has an empty block ID".into(),
+                    ));
+                }
+            }
+            if let ProposalAction::JoinBlocks { left, right } = &proposal.action {
+                self.block(left)?;
+                self.block(right)?;
             }
             if let ProposalAction::ConvertBlock {
                 block,

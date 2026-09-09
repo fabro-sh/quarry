@@ -5744,6 +5744,58 @@
           {
             "type": "object",
             "required": [
+              "transfer",
+              "anchor",
+              "focus",
+              "op"
+            ],
+            "properties": {
+              "anchor": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "focus": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "cut_selection"
+                ]
+              },
+              "transfer": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "transfer",
+              "at",
+              "new_block",
+              "op"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "new_block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "paste_cut"
+                ]
+              },
+              "transfer": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
               "block",
               "start",
               "end",
@@ -6318,6 +6370,111 @@
                   "string",
                   "null"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "author",
+              "block",
+              "at",
+              "new_block",
+              "op"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "author": {
+                "type": "string"
+              },
+              "block": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "new_block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "propose_block_split"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "author",
+              "block",
+              "at",
+              "focus",
+              "blocks",
+              "op"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "author": {
+                "type": "string"
+              },
+              "block": {
+                "type": "string"
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SeedBlock"
+                }
+              },
+              "focus": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "propose_block_paste"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "author",
+              "left",
+              "right",
+              "op"
+            ],
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "left": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "propose_block_join"
+                ]
+              },
+              "right": {
+                "type": "string"
               }
             }
           },
@@ -7731,6 +7888,39 @@
             "required": [
               "block",
               "at",
+              "focus",
+              "blocks",
+              "op"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "block": {
+                "type": "string"
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SeedBlock"
+                }
+              },
+              "focus": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "paste_blocks"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "at",
               "new_block",
               "op"
             ],
@@ -7846,6 +8036,58 @@
               },
               "to": {
                 "$ref": "#/components/schemas/TextPoint"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "transfer",
+              "anchor",
+              "focus",
+              "op"
+            ],
+            "properties": {
+              "anchor": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "focus": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "cut_selection"
+                ]
+              },
+              "transfer": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "transfer",
+              "at",
+              "new_block",
+              "op"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "new_block": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "paste_cut"
+                ]
+              },
+              "transfer": {
+                "type": "string"
               }
             }
           },
@@ -8311,6 +8553,36 @@
           }
         }
       },
+      "PasteBlockJoin": {
+        "type": "object",
+        "required": [
+          "left",
+          "right"
+        ],
+        "properties": {
+          "left": {
+            "type": "string"
+          },
+          "right": {
+            "type": "string"
+          }
+        }
+      },
+      "PasteDeletedBlock": {
+        "type": "object",
+        "required": [
+          "block",
+          "expected"
+        ],
+        "properties": {
+          "block": {
+            "type": "string"
+          },
+          "expected": {
+            "type": "string"
+          }
+        }
+      },
       "PromoteTmpDocumentRequest": {
         "type": "object",
         "required": [
@@ -8571,6 +8843,116 @@
                   "string",
                   "null"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "block",
+              "at",
+              "new_block",
+              "kind"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "block": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "split_block"
+                ]
+              },
+              "new_block": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Insert copied sibling text blocks at a canonical text position. The\nproposal owns the copied characters; acceptance moves them into the\nsplit destination without copying their native identities again.",
+            "required": [
+              "block",
+              "at",
+              "delete_target",
+              "original_quote",
+              "delete_ranges",
+              "delete_blocks",
+              "joins",
+              "blocks",
+              "kind"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "#/components/schemas/TextPoint"
+              },
+              "block": {
+                "type": "string"
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Block"
+                }
+              },
+              "delete_blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PasteDeletedBlock"
+                }
+              },
+              "delete_ranges": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TextRange"
+                }
+              },
+              "delete_target": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TargetFragment"
+                }
+              },
+              "joins": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PasteBlockJoin"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "paste_blocks"
+                ]
+              },
+              "original_quote": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "left",
+              "right",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "join_blocks"
+                ]
+              },
+              "left": {
+                "type": "string"
+              },
+              "right": {
+                "type": "string"
               }
             }
           },

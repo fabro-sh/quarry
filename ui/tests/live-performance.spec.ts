@@ -114,8 +114,8 @@ async function profileNative(page: Page) {
       const profile: Record<string, { calls: number; ms: number; max: number }> = {};
       (window as unknown as { nativeProfile: unknown }).nativeProfile = profile;
       for (const [prefix, type, names] of [
-        ['', NativeDocument, ['apply', 'view', 'save', 'save_after', 'point', 'selection', 'locate_point', 'merge', 'merge_changes', 'contains_history', 'fork', 'heads', 'command_builder']],
-        ['builder.', NativeCommandBuilder, ['push', 'view', 'block_view', 'point', 'selection', 'finish']],
+        ['', NativeDocument, ['apply', 'view', 'proposal_view', 'proposal_views_for_block', 'save', 'save_after', 'point', 'selection', 'locate_point', 'merge', 'merge_changes', 'contains_history', 'fork', 'heads', 'command_builder']],
+        ['builder.', NativeCommandBuilder, ['push', 'view', 'block_view', 'proposal_view', 'point', 'selection', 'finish']],
       ] as const) for (const name of names) {
         const original = type.prototype[name];
         type.prototype[name] = function (...args: unknown[]) {
@@ -209,6 +209,7 @@ test('Chrome keeps Suggesting typing and repeated deletion within the input late
   const initial = await blocks(request, fixture.url);
   const user = await openDocument(browser, fixture.path, 'Reviewer');
   try {
+    await profileNative(user.page);
     await user.page.getByRole('button', { name: 'Document mode', exact: true }).click();
     await user.page.getByRole('menuitem', { name: 'Suggesting', exact: true }).click();
     for (const action of ['typing', 'deletion']) {
@@ -234,12 +235,15 @@ test('Chrome keeps Suggesting typing and repeated deletion within the input late
         return { frameGaps: state.frameGaps, keyToFrame: state.keyToFrame };
       });
       const sorted = [...metrics.keyToFrame].sort((a, b) => a - b);
-      const result = { action, keys, browser_version: browser.version(), p95_key_to_frame_ms: sorted[Math.ceil(keys * .95) - 1], max_frame_gap_ms: Math.max(...metrics.frameGaps) };
+      const result = { action, keys, browser_version: browser.version(), p95_key_to_frame_ms: sorted[Math.ceil(keys * .95) - 1], max_frame_gap_ms: Math.max(...metrics.frameGaps),
+        nativeProfile: process.env.QUARRY_PROFILE ? await user.page.evaluate(() => (window as unknown as { nativeProfile: unknown }).nativeProfile) : undefined };
       console.info('QUARRY_CHROME_SUGGESTING', JSON.stringify(result));
       await test.info().attach(`suggesting-${action}.json`, { body: JSON.stringify({ ...result, ...metrics }), contentType: 'application/json' });
       expect(metrics.keyToFrame).toHaveLength(keys);
-      expect(result.p95_key_to_frame_ms, JSON.stringify(result)).toBeLessThanOrEqual(20);
-      expect(result.max_frame_gap_ms, JSON.stringify(result)).toBeLessThanOrEqual(50);
+      if (!process.env.QUARRY_PROFILE) {
+        expect(result.p95_key_to_frame_ms, JSON.stringify(result)).toBeLessThanOrEqual(20);
+        expect(result.max_frame_gap_ms, JSON.stringify(result)).toBeLessThanOrEqual(50);
+      }
       await expect(user.page.getByLabel('Save status', { exact: true })).toHaveText('Saved', { timeout: 120000 });
       const suggestions = (await review(request, fixture.url)).suggestions;
       expect(suggestions).toHaveLength(action === 'typing' ? 1 : 2);

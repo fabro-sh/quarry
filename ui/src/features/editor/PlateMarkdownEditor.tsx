@@ -242,9 +242,12 @@ const makeHeadingElement = (as: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') =>
     return <PlateElement as={as} attributes={{ ...attributes, id }} {...props} />;
   };
 
-// A paste is new content, so it receives new block IDs. Normalize the private
-// fragment with the editor's own plugins before native command translation.
-const NativeClipboardPlugin = createPlatePlugin({ key: 'quarry_clipboard' }).overrideEditor(({ editor, tf: { insertFragment } }) => {
+// Copies and external pastes receive new IDs. A same-document cut carries a
+// native transfer token so the document engine can move the original sources.
+const NativeClipboardPlugin = createPlatePlugin({ key: 'quarry_clipboard' }).overrideEditor(({
+  editor,
+  tf: { insertData, insertFragment, setFragmentData },
+}) => {
   const deserialize = editor.api.html.deserialize;
   return {
   api: { html: { deserialize(options: Parameters<typeof deserialize>[0]) {
@@ -252,24 +255,35 @@ const NativeClipboardPlugin = createPlatePlugin({ key: 'quarry_clipboard' }).ove
     element.querySelectorAll('script,style,iframe,object,embed,template,link,meta').forEach((node) => node.remove());
     return deserialize({ ...options, element });
   } } },
-  transforms: { insertFragment(fragment, ...args) {
-    const scratch = createSlateEditor({
-      plugins: plateMarkdownPlugins.filter((plugin) => plugin.key !== TrailingBlockPlugin.key && plugin.key !== 'quarry_clipboard') as never,
-      value: fragment.map(cloneWithoutIds) as TElement[], nodeId: nativeNodeIdOptions, shouldNormalizeEditor: true,
-    });
-    const value = scratch.children;
-    const selection = editor.selection;
-    if (selection) {
-      const [start, end] = RangeApi.edges(selection);
-      const first = editor.api.block({ at: start }), last = editor.api.block({ at: end });
-      // Slate unwraps non-void containers at a fragment's edges when merging
-      // into surrounding text. Empty boundary paragraphs preserve containers;
-      // they merge into the existing prefix/tail without adding visible text.
-      if (blockKinds.get(String(value[0]?.type))?.content === 'container' && first && !editor.api.isStart(start, first[1])) value.unshift({ type: 'p', children: [{ text: '' }] });
-      if (blockKinds.get(String(value.at(-1)?.type))?.content === 'container' && last && !editor.api.isEnd(end, last[1])) value.push({ type: 'p', children: [{ text: '' }] });
-    }
-    insertFragment(value, ...args);
-  } },
+  transforms: {
+    setFragmentData(data, originEvent) {
+      setFragmentData(data, originEvent);
+      documentAdapter(editor)?.prepareCut(data, originEvent);
+    },
+    insertData(data) {
+      if (documentAdapter(editor)?.pasteCut(data)) return;
+      insertData(data);
+    },
+    insertFragment(fragment, ...args) {
+      const scratch = createSlateEditor({
+        plugins: plateMarkdownPlugins.filter((plugin) => plugin.key !== TrailingBlockPlugin.key && plugin.key !== 'quarry_clipboard') as never,
+        value: fragment.map(cloneWithoutIds) as TElement[], nodeId: nativeNodeIdOptions, shouldNormalizeEditor: true,
+      });
+      const value = scratch.children;
+      const selection = editor.selection;
+      if (selection) {
+        const [start, end] = RangeApi.edges(selection);
+        const first = editor.api.block({ at: start }), last = editor.api.block({ at: end });
+        // Slate unwraps non-void containers at a fragment's edges when merging
+        // into surrounding text. Empty boundary paragraphs preserve containers;
+        // they merge into the existing prefix/tail without adding visible text.
+        if (blockKinds.get(String(value[0]?.type))?.content === 'container' && first && !editor.api.isStart(start, first[1])) value.unshift({ type: 'p', children: [{ text: '' }] });
+        if (blockKinds.get(String(value.at(-1)?.type))?.content === 'container' && last && !editor.api.isEnd(end, last[1])) value.push({ type: 'p', children: [{ text: '' }] });
+      }
+      if (documentAdapter(editor)?.pasteFragment(value)) return;
+      insertFragment(value, ...args);
+    },
+  },
 }; });
 
 export const plateMarkdownPlugins = [
@@ -408,6 +422,7 @@ export function PlateMarkdownEditor({ model, review, mode, options, onReady, onC
   useLayoutEffect(() => {
     const adapter = new PlateDocumentAdapter(editor, model, {
       changed: (batch) => current.current.options.changed(batch),
+      pending: (pending) => current.current.options.pending?.(pending),
       proposed: (id) => current.current.options.proposed?.(id),
       error: (error) => current.current.options.error(error),
       selection: (points) => current.current.options.selection?.(points),

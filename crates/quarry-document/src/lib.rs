@@ -11,6 +11,7 @@ mod builder;
 mod commands;
 mod conversion;
 mod edit;
+mod editing_clipboard;
 mod editing_proposals;
 mod editing_structure;
 mod error;

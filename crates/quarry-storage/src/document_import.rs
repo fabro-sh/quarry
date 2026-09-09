@@ -478,10 +478,25 @@ pub fn document_review_projection(d: &Document) -> Result<Vec<BlockReviewItem>> 
                     item.state = BlockReviewState::Orphaned;
                 }
             }
+            ProposalAction::PasteBlocks { original_quote, .. } => {
+                item.quote = Some(original_quote.clone());
+                item.replacement = d
+                    .view()
+                    .map_err(document_error)?
+                    .proposals
+                    .into_iter()
+                    .find(|view| view.proposal.id == proposal.id)
+                    .map(|view| view.text);
+                if item.block_id.is_empty() {
+                    item.state = BlockReviewState::Orphaned;
+                }
+            }
             ProposalAction::UpdateBlock { .. }
             | ProposalAction::ConvertBlock { .. }
             | ProposalAction::DeleteBlock { .. }
-            | ProposalAction::MoveBlock { .. } => {
+            | ProposalAction::MoveBlock { .. }
+            | ProposalAction::SplitBlock { .. }
+            | ProposalAction::JoinBlocks { .. } => {
                 if item.block_id.is_empty() {
                     item.state = BlockReviewState::Orphaned;
                 }

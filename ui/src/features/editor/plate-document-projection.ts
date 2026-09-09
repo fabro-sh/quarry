@@ -89,7 +89,9 @@ export function projectPlate(document: DocumentView, input = true, locate?: (poi
   }
   // A deletion has no inserted text. An empty inline would trap the caret
   // inside a different owner and let the next Backspace cross into the body.
-  const insertions = document.proposals.filter((view) => view.proposal.state === 'open' && view.proposal.action.kind === 'text' && view.text.length > 0)
+  const insertions = document.proposals.filter((view) => view.proposal.state === 'open'
+      && (view.proposal.action.kind === 'text' || view.proposal.action.kind === 'split_block' || view.proposal.action.kind === 'paste_blocks')
+      && view.text.length > 0)
     .map((view) => ({ view, at: locate?.(view.proposal.action.at as TextPoint) }))
     .filter((item) => item.at?.owner.kind === 'block')
     .sort((a, b) => b.at!.offset - a.at!.offset || b.view.proposal.id.localeCompare(a.view.proposal.id));
@@ -103,19 +105,7 @@ export function projectPlate(document: DocumentView, input = true, locate?: (poi
   // External review changes must invalidate only their displayed owners. This
   // derived property makes Slate redraw those blocks without redecorating the
   // entire document. It is excluded from native attributes and copied content.
-  const reviewKeys = new Map<string, ReviewMarker[]>();
-  const add = (owner: Owner, value: ReviewMarker) => {
-    const key = `${owner.kind}:${owner.id}`, entries = reviewKeys.get(key) ?? [];
-    entries.push(value); reviewKeys.set(key, entries);
-  };
-  for (const { comment, target } of document.comments) {
-    if (comment.deleted || comment.parent_id || comment.state !== 'open') continue;
-    for (const part of target.attachments) add(part.owner, ['comment', comment.id, part.start, part.end]);
-  }
-  for (const { proposal, target } of document.proposals) {
-    if (proposal.state !== 'open') continue;
-    for (const part of target.attachments) add(part.owner, [proposal.action.kind, proposal.id, part.start, part.end]);
-  }
+  const reviewKeys = collectReviewKeys(document);
   const annotateReview = (nodes: Descendant[], prefix: Path = []) => {
     for (const [index, node] of nodes.entries()) {
       if (!ElementApi.isElement(node)) continue;
@@ -134,6 +124,23 @@ export function projectPlate(document: DocumentView, input = true, locate?: (poi
   };
   annotateReview(value);
   return value;
+}
+
+export function collectReviewKeys(document: DocumentView) {
+  const reviewKeys = new Map<string, ReviewMarker[]>();
+  const add = (owner: Owner, value: ReviewMarker) => {
+    const key = `${owner.kind}:${owner.id}`, entries = reviewKeys.get(key) ?? [];
+    entries.push(value); reviewKeys.set(key, entries);
+  };
+  for (const { comment, target } of document.comments) {
+    if (comment.deleted || comment.parent_id || comment.state !== 'open') continue;
+    for (const part of target.attachments) add(part.owner, ['comment', comment.id, part.start, part.end]);
+  }
+  for (const { proposal, target } of document.proposals) {
+    if (proposal.state !== 'open') continue;
+    for (const part of target.attachments) add(part.owner, [proposal.action.kind, proposal.id, part.start, part.end]);
+  }
+  return reviewKeys;
 }
 
 function insertInline(children: Descendant[], offset: number, node: TElement): Descendant[] {

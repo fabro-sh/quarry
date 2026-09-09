@@ -45,6 +45,15 @@ function fixture(markdown = '😀 See TARGET here.\n\nSee TARGET elsewhere.') {
   return { model, editor, adapter, batches, errors, select, comment, check, receive, setMode(value: EditorMode) { mode = value; }, close() { adapter.dispose(); model.dispose(); } };
 }
 
+function clipboardData() {
+  const values = new Map<string, string>();
+  return {
+    clearData: (type?: string) => type ? values.delete(type) : values.clear(),
+    getData: (type: string) => values.get(type) ?? '',
+    setData: (type: string, value: string) => { values.set(type, value); },
+  } as unknown as DataTransfer;
+}
+
 test.each(['disc', 'decimal', 'todo'])('converting a %s list item removes list properties and preserves native review', (style) => {
   for (const kind of ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote']) {
     const t = fixture('Before TARGET after.\n\nSecond item.');
@@ -220,6 +229,7 @@ test.each(['backward', 'forward'] as const)('adjacent %s deletions form one nati
     expect(proposals[0].text).toBe('');
     expect(t.model.view().blocks[0].text).toBe('Before TARGET after.');
     expect(t.model.view().comments[0].target.attachments[0].quote).toBe('TARGET');
+    expect(t.editor.children).toEqual(projectPlate(t.model.view(), true, (point) => t.model.locate(point)));
     const id = proposals[0].proposal.id;
     t.adapter.history(false); t.check();
     expect(t.model.view().proposals.filter((view) => view.proposal.state === 'open')).toHaveLength(0);
@@ -229,6 +239,24 @@ test.each(['backward', 'forward'] as const)('adjacent %s deletions form one nati
     expect(t.model.view().blocks[0].text).toBe('Before  after.');
     t.adapter.history(false); t.check();
     expect(t.model.view().comments[0].target.attachments[0].quote).toBe('TARGET');
+  } finally { t.close(); }
+});
+
+test('rapid adjacent deletions finish as one validated frame batch', () => {
+  const t = fixture('Before TARGET after.');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.setMode('suggesting'); t.select(block, 13);
+    for (let index = 0; index < 6; index++) t.editor.tf.deleteBackward('character');
+    expect(t.batches).toHaveLength(0);
+    t.adapter.flush();
+    expect(t.batches).toHaveLength(1);
+    expect(t.batches[0].requests).toHaveLength(1);
+    expect(t.batches[0].requests[0].commands).toHaveLength(6);
+    t.check();
+    expect(t.model.view().proposals).toHaveLength(1);
+    expect(t.model.view().proposals[0].proposal.action.original_quote).toBe('TARGET');
+    expect(t.editor.children).toEqual(projectPlate(t.model.view(), true, (point) => t.model.locate(point)));
   } finally { t.close(); }
 });
 
@@ -855,6 +883,10 @@ test('replacement from a paragraph into a table preserves unselected cell charac
     expect(t.model.view().blocks.find((view) => view.block.id === start)!.text).toBe('Start Replacement');
     expect(t.model.view().blocks.find((view) => view.block.id === inside)!.text).toBe('TARGET');
     expect(t.model.view().comments[0].target.attachments[0]).toMatchObject({ owner: { id: inside }, quote: 'TARGET' });
+    const actualCell = t.editor.api.node<TElement>({ at: [], match: (node) => node.id === inside })![0];
+    const expectedCell = createSlateEditor({ value: projectPlate(t.model.view(), true, (point) => t.model.locate(point)) })
+      .api.node<TElement>({ at: [], match: (node) => node.id === inside })![0];
+    expect(actualCell.quarryReviewKey).toBe(expectedCell.quarryReviewKey);
     expect(t.model.view().blocks.some((view) => view.text === 'Keep')).toBe(true);
     expect(t.model.view().blocks.some((view) => view.text === 'End TARGET')).toBe(true);
     t.adapter.history(false); t.check();
@@ -889,6 +921,12 @@ test('review-only updates invalidate the exact canonical or proposed owner and r
     t.adapter.command([{ op: 'add_comment', id: 'proposal-review', author: 'Reviewer', body: 'Keep', ranges: t.model.selectionFor({ kind: 'proposal', id: 'inline' }, 0, 8) }]); t.check();
     expect(proposalNode()).not.toBe(before);
     expect(proposalNode().quarryReviewKey).toContain('proposal-review');
+    expect(t.editor.children.find((node) => node.id === second)).toBe(untouched);
+    const proposalStart = slatePoint(t.editor.children, 'inline', 0, true)!;
+    t.editor.tf.select(proposalStart); t.editor.tf.insertText('!'); t.check();
+    const projected = projectPlate(t.model.view(), true, (point) => t.model.locate(point));
+    const projectedProposal = createSlateEditor({ value: projected }).api.node<TElement>({ at: [], match: (node) => node.type === 'quarry_proposal' })![0];
+    expect(proposalNode().quarryReviewKey).toBe(projectedProposal.quarryReviewKey);
     expect(t.editor.children.find((node) => node.id === second)).toBe(untouched);
     t.adapter.command([{ op: 'resolve_comment', id: 'proposal-review', resolved: true }]); t.check();
     expect(proposalNode().quarryReviewKey).toBeUndefined();
@@ -1313,5 +1351,296 @@ test('selection replacement can end in the virtual input after repeated undo', (
       t.adapter.history(false); t.check();
       expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Keep TARGET']);
     }
+  } finally { t.close(); }
+});
+
+test('Suggesting Enter creates one structural split decision and keeps late text identity', () => {
+  const t = fixture('Before TARGET after.');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.comment('target', block, 7, 13);
+    t.setMode('suggesting'); t.select(block, 7);
+    t.editor.tf.insertBreak(); t.check();
+    const proposal = t.model.view().proposals[0];
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Before TARGET after.']);
+    expect(proposal).toMatchObject({ text: '\n', proposal: { action: { kind: 'split_block', block } } });
+    t.editor.tf.insertText('New '); t.check();
+    expect(t.model.view().proposals[0].text).toBe('\nNew ');
+    t.adapter.command([{ op: 'insert_text', at: t.model.point(block, 10), text: '!' }]);
+    t.adapter.command([{ op: 'accept_proposal', id: proposal.proposal.id }]); t.check();
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Before ', 'New TAR!GET after.']);
+    expect(t.model.view().comments[0].target.attachments[0]).toMatchObject({ quote: 'TAR!GET', owner: { id: t.model.view().blocks[1].block.id } });
+  } finally { t.close(); }
+});
+
+test('Suggesting Backspace at a paragraph boundary creates one structural join decision', () => {
+  const t = fixture('Left\n\nTARGET right');
+  try {
+    const [left, right] = t.model.view().blocks;
+    t.comment('target', right.block.id, 0, 6);
+    t.setMode('suggesting'); t.select(right.block.id, 0);
+    t.editor.tf.deleteBackward('character'); t.check();
+    const proposal = t.model.view().proposals[0];
+    expect(proposal.proposal.action).toMatchObject({ kind: 'join_blocks', left: left.block.id, right: right.block.id });
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Left', 'TARGET right']);
+    t.adapter.command([{ op: 'insert_text', at: t.model.point(right.block.id, 3), text: '!' }]);
+    t.adapter.command([{ op: 'accept_proposal', id: proposal.proposal.id }]); t.check();
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(['LeftTAR!GET right']);
+    expect(t.model.view().comments[0].target.attachments[0]).toMatchObject({ quote: 'TAR!GET', owner: { id: left.block.id } });
+  } finally { t.close(); }
+});
+
+test('one Suggesting edit spans canonical and proposed text without a decision prerequisite', () => {
+  const t = fixture('Before TARGET after.');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.adapter.command([{ op: 'propose_replacement', id: 'existing', author: 'Agent', block,
+      at: t.model.point(block, 7), ranges: [], text: 'NEW' }]);
+    t.setMode('suggesting'); t.adapter.endIntent();
+    t.editor.tf.select({ anchor: slatePoint(t.editor.children, block, 4)!, focus: slatePoint(t.editor.children, block, 10)! });
+    t.editor.tf.insertText('Changed'); t.check();
+    expect(t.model.view().blocks[0].text).toBe('Before TARGET after.');
+    expect(t.model.view().proposals.find((view) => view.proposal.id === 'existing')?.proposal.state).toBe('rejected');
+    const replacement = t.model.view().proposals.find((view) => view.proposal.id !== 'existing')!;
+    expect(replacement).toMatchObject({ text: 'Changed', acceptance_error: null });
+    t.adapter.command([{ op: 'accept_proposal', id: replacement.proposal.id }]); t.check();
+    expect(t.model.view().blocks[0].text).toBe('BefoChangedGET after.');
+  } finally { t.close(); }
+});
+
+test('one direct edit spans blocks and proposed text without a decision prerequisite', () => {
+  const t = fixture('Before TARGET\n\nSecond END');
+  try {
+    const [first, second] = t.model.view().blocks;
+    t.comment('target', second.block.id, 7, 10);
+    t.adapter.command([{ op: 'propose_replacement', id: 'existing', author: 'Agent', block: first.block.id,
+      at: t.model.point(first.block.id, 7), ranges: [], text: 'NEW' }]);
+    t.editor.tf.select({ anchor: slatePoint(t.editor.children, first.block.id, 4)!, focus: slatePoint(t.editor.children, second.block.id, 6)! });
+    t.editor.tf.insertText('Changed'); t.check();
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(['BefoChanged END']);
+    expect(t.model.view().proposals.find((view) => view.proposal.id === 'existing')?.proposal.state).toBe('rejected');
+    expect(t.model.view().comments[0].target.attachments[0]).toMatchObject({ quote: 'END', owner: { id: first.block.id } });
+    const projected = projectPlate(t.model.view(), true, (point) => t.model.locate(point));
+    expect(t.editor.children[0].quarryReviewKey).toBe(projected[0].quarryReviewKey);
+    expect(t.errors).toEqual([]);
+  } finally { t.close(); }
+});
+
+test('a local text edit advances visible review markers without rebuilding unrelated blocks', () => {
+  const t = fixture('Performance target.\n\nUntouched paragraph.');
+  try {
+    const [first] = t.model.view().blocks;
+    t.comment('target', first.block.id, 0, 11);
+    const untouched = t.editor.children[1];
+    t.select(first.block.id, 0); t.editor.tf.insertText('!'); t.check();
+    expect(t.editor.children).toEqual(projectPlate(t.model.view(), true, (point) => t.model.locate(point)));
+    expect(t.editor.children[1]).toBe(untouched);
+  } finally { t.close(); }
+});
+
+test('same-document cut and paste moves native comment identity through the clipboard token', () => {
+  const t = fixture('AA TARGET ZZ\n\ndest');
+  try {
+    const [source, destination] = t.model.view().blocks;
+    t.comment('target', source.block.id, 3, 9);
+    t.select(source.block.id, 3, 9);
+    const data = clipboardData();
+    t.adapter.prepareCut(data, 'cut');
+    t.editor.tf.deleteFragment(); t.check();
+    expect(t.model.view().blocks[0].text).toBe('AA  ZZ');
+    expect(t.model.view().comments[0].target.state).toBe('hidden');
+    t.select(destination.block.id, 4);
+    expect(t.adapter.pasteCut(data)).toBe(true); t.check();
+    expect(t.model.view().blocks[1].text).toBe('destTARGET');
+    expect(t.model.view().comments[0].target).toMatchObject({ state: 'attached', attachments: [{ quote: 'TARGET', owner: { id: destination.block.id } }] });
+    expect(t.adapter.pasteCut(data)).toBe(false);
+    expect(t.errors).toEqual([]);
+  } finally { t.close(); }
+});
+
+test('a cut token cannot transfer identity to another document', () => {
+  const source = fixture('TARGET');
+  const destination = fixture('Destination');
+  try {
+    source.select(source.model.view().blocks[0].block.id, 0, 6);
+    const data = clipboardData();
+    source.adapter.prepareCut(data, 'cut');
+    source.editor.tf.deleteFragment(); source.check();
+    destination.select(destination.model.view().blocks[0].block.id, 0);
+    expect(destination.adapter.pasteCut(data)).toBe(false);
+    expect(destination.model.view().blocks[0].text).toBe('Destination');
+  } finally { source.close(); destination.close(); }
+});
+
+test.each([
+  ['paragraph into paragraph middle', 'Copy one', 0, 'Copy one', 8, 'Destination here.', 12],
+  ['paragraph into list middle', 'Copy one', 0, 'Copy one', 8, 'First bullet', 5],
+  ['paragraph into table cell', 'Copy one', 0, 'Copy one', 8, 'Header', 3],
+  ['paragraph into code line', 'Copy one', 0, 'Copy one', 8, 'line one', 4],
+  ['two paragraphs into paragraph start', 'Copy one', 0, 'Copy two', 8, 'Destination here.', 0],
+  ['two paragraphs into paragraph end', 'Copy one', 0, 'Copy two', 8, 'Destination here.', 17],
+  ['two list items into paragraph', 'First bullet', 0, 'Second bullet', 13, 'Destination here.', 12],
+  ['two list items into a list', 'First bullet', 0, 'Second bullet', 13, 'Third bullet', 5],
+  ['two table cells into paragraph start', 'Header', 0, 'Cell', 4, 'Destination here.', 0],
+  ['two table cells into another cell', 'Header', 0, 'Cell', 4, 'Other', 2],
+  ['two code lines into paragraph end', 'line one', 0, 'line two', 8, 'Destination here.', 17],
+  ['two code lines into another code line', 'line one', 0, 'line two', 8, 'line three', 5],
+] as const)('a copied %s Slate fragment pastes with fresh native structure', (_name, firstText, firstOffset, endText, endOffset, destinationText, destinationOffset) => {
+  const t = fixture('Destination here.\n\nCopy one\n\nCopy two\n\n- First bullet\n- Second bullet\n- Third bullet\n\n| Header | Cell |\n| --- | --- |\n| Value | Other |\n\n```\nline one\nline two\nline three\n```');
+  try {
+    const destination = t.model.view().blocks.find((view) => view.text === destinationText)!.block.id;
+    const first = t.model.view().blocks.find((view) => view.text === firstText)!.block.id;
+    const last = t.model.view().blocks.find((view) => view.text === endText)!.block.id;
+    t.select(first, firstOffset);
+    t.editor.tf.select({ anchor: t.editor.selection!.anchor, focus: slatePoint(t.editor.children, last, endOffset)! });
+    const fragment = t.editor.api.fragment();
+    t.select(destination, destinationOffset);
+    t.editor.tf.insertFragment(fragment); t.check();
+  } finally { t.close(); }
+});
+
+test.each([
+  ['one paragraph', 'Copy one', 'Copy one'],
+  ['two paragraphs', 'Copy one', 'Copy two'],
+  ['two list items', 'First bullet', 'Second bullet'],
+] as const)('a copied %s selection pastes into the empty trailing input as one suggestion', (_name, copyFirst, copyLast) => {
+  const t = fixture('Copy one\n\nCopy two\n\n- First bullet\n- Second bullet');
+  try {
+    const id = (text: string) => t.model.view().blocks.find((view) => view.text === text)!.block.id;
+    t.select(id(copyFirst), 0);
+    t.editor.tf.select({ anchor: t.editor.selection!.anchor, focus: slatePoint(t.editor.children, id(copyLast), copyLast.length)! });
+    const fragment = t.editor.api.fragment();
+    t.setMode('suggesting');
+    t.editor.tf.select({ path: [t.editor.children.length - 1, 0], offset: 0 });
+    t.editor.tf.insertFragment(fragment); t.check();
+    expect(t.model.view().proposals.filter((view) => view.proposal.state === 'open')).toHaveLength(1);
+  } finally { t.close(); }
+});
+
+test('a copied rich paragraph becomes one formatted native text proposal', () => {
+  const t = fixture('Destination.\n\n**Bold** and [linked](https://example.com) text.');
+  try {
+    const [destination, source] = t.model.view().blocks;
+    t.comment('source', source.block.id, 0, 4);
+    t.select(source.block.id, 0, source.text.length);
+    const fragment = t.editor.api.fragment();
+    t.setMode('suggesting'); t.select(destination.block.id, 5);
+    t.editor.tf.insertFragment(fragment); t.check();
+    const proposal = t.model.view().proposals.find((view) => view.proposal.action.kind === 'text')!;
+    expect(proposal.text).toBe(source.text);
+    expect(proposal.runs.find((run) => run.text === 'Bold')?.marks.bold).toBe(true);
+    expect(proposal.runs.find((run) => run.text === 'linked')?.marks.link).toBe('https://example.com');
+    expect(t.model.view().comments[0].target.attachments[0]).toMatchObject({ owner: { id: source.block.id }, quote: 'Bold' });
+  } finally { t.close(); }
+});
+
+test('accepting a copied multi-block suggestion preserves pasted formatting and the destination tail identity', () => {
+  const t = fixture('Destination TARGET tail.\n\n**Copy one**\n\n- Copy two');
+  try {
+    const [destination, first, second] = t.model.view().blocks;
+    t.comment('tail', destination.block.id, 12, 18);
+    t.comment('source', first.block.id, 0, first.text.length);
+    t.select(first.block.id, 0);
+    t.editor.tf.select({ anchor: t.editor.selection!.anchor, focus: slatePoint(t.editor.children, second.block.id, second.text.length)! });
+    const fragment = t.editor.api.fragment();
+    t.setMode('suggesting'); t.select(destination.block.id, 12);
+    t.editor.tf.insertFragment(fragment); t.check();
+    const proposal = t.model.view().proposals.find((view) => view.proposal.action.kind === 'paste_blocks')!;
+    expect(proposal.text).toBe('Copy one\nCopy two');
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Destination TARGET tail.', 'Copy one', 'Copy two']);
+    t.adapter.command([{ op: 'insert_text', at: t.model.point(destination.block.id, 15), text: '!' }]);
+    t.adapter.command([{ op: 'accept_proposal', id: proposal.proposal.id }]); t.check();
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Destination Copy one', 'Copy twoTAR!GET tail.', 'Copy one', 'Copy two']);
+    expect(t.model.view().blocks[0].runs.find((run) => run.text === 'Copy one')?.marks.bold).toBe(true);
+    expect(t.model.view().blocks[1].block.attrs.listStyleType).toBe('disc');
+    expect(t.model.view().comments.find((view) => view.comment.id === 'tail')!.target.attachments[0]).toMatchObject({
+      owner: { id: t.model.view().blocks[1].block.id }, quote: 'TAR!GET',
+    });
+    expect(t.model.view().comments.find((view) => view.comment.id === 'source')!.target.attachments[0]).toMatchObject({
+      owner: { id: first.block.id }, quote: 'Copy one',
+    });
+    t.adapter.history(false); t.check();
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Destination TAR!GET tail.', 'Copy one', 'Copy two']);
+  } finally { t.close(); }
+});
+
+test('a multi-block paste replaces a cross-block Suggesting selection as one native decision', () => {
+  const t = fixture('Left TARGET\n\nRemove block\n\nRight KEEP\n\nCopy one\n\nCopy two');
+  try {
+    const [left, , right, first, second] = t.model.view().blocks;
+    t.comment('tail', right.block.id, 6, 10);
+    t.select(first.block.id, 0);
+    t.editor.tf.select({ anchor: t.editor.selection!.anchor, focus: slatePoint(t.editor.children, second.block.id, second.text.length)! });
+    const fragment = t.editor.api.fragment();
+    t.setMode('suggesting');
+    t.editor.tf.select({ anchor: slatePoint(t.editor.children, left.block.id, 5)!, focus: slatePoint(t.editor.children, right.block.id, 6)! });
+    t.editor.tf.insertFragment(fragment); t.check();
+    const proposal = t.model.view().proposals.find((view) => view.proposal.action.kind === 'paste_blocks')!;
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Left TARGET', 'Remove block', 'Right KEEP', 'Copy one', 'Copy two']);
+    t.adapter.command([{ op: 'insert_text', at: t.model.point(right.block.id, 8), text: '!' }]);
+    t.adapter.command([{ op: 'accept_proposal', id: proposal.proposal.id }]); t.check();
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Left Copy one', 'Copy twoKE!EP', 'Copy one', 'Copy two']);
+    expect(t.model.view().comments[0].target.attachments[0]).toMatchObject({
+      owner: { id: t.model.view().blocks[1].block.id }, quote: 'KE!EP',
+    });
+    t.adapter.history(false); t.check();
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Left TARGET', 'Remove block', 'Right KE!EP', 'Copy one', 'Copy two']);
+  } finally { t.close(); }
+});
+
+test.each([
+  ['one paragraph', 'Copy one', 'Copy one'],
+  ['two paragraphs', 'Copy one', 'Copy two'],
+  ['two list items', 'First bullet', 'Second bullet'],
+  ['two table cells', 'Header', 'Cell'],
+  ['two code lines', 'line one', 'line two'],
+] as const)('a copied %s selection pastes into the empty trailing input', (_name, copyFirst, copyLast) => {
+  const t = fixture('Copy one\n\nCopy two\n\n- First bullet\n- Second bullet\n\n| Header | Cell |\n| --- | --- |\n| Value | Other |\n\n```\nline one\nline two\n```');
+  try {
+    const id = (text: string) => t.model.view().blocks.find((view) => view.text === text)!.block.id;
+    t.select(id(copyFirst), 0);
+    t.editor.tf.select({ anchor: t.editor.selection!.anchor, focus: slatePoint(t.editor.children, id(copyLast), copyLast.length)! });
+    const fragment = t.editor.api.fragment();
+    t.editor.tf.select({ path: [t.editor.children.length - 1, 0], offset: 0 });
+    t.editor.tf.insertFragment(fragment); t.check();
+  } finally { t.close(); }
+});
+
+test.each([
+  ['one paragraph', 'Copy one', 'Copy one'],
+  ['two paragraphs', 'Copy one', 'Copy two'],
+  ['two list items', 'First bullet', 'Second bullet'],
+  ['two table cells', 'Header', 'Cell'],
+  ['two code lines', 'line one', 'line two'],
+] as const)('a copied %s selection pastes as native suggestions', (_name, copyFirst, copyLast) => {
+  const t = fixture('Destination here.\n\nCopy one\n\nCopy two\n\n- First bullet\n- Second bullet\n\n| Header | Cell |\n| --- | --- |\n| Value | Other |\n\n```\nline one\nline two\n```');
+  try {
+    const id = (text: string) => t.model.view().blocks.find((view) => view.text === text)!.block.id;
+    t.select(id(copyFirst), 0);
+    t.editor.tf.select({ anchor: t.editor.selection!.anchor, focus: slatePoint(t.editor.children, id(copyLast), copyLast.length)! });
+    const fragment = t.editor.api.fragment();
+    t.setMode('suggesting'); t.select(id('Destination here.'), 12);
+    t.editor.tf.insertFragment(fragment); t.check();
+  } finally { t.close(); }
+});
+
+test.each([
+  ['paragraphs over one paragraph', 'Copy one', 'Copy two', 'First bullet', 3, 'First bullet', 8],
+  ['paragraphs over two list items', 'Copy one', 'Copy two', 'First bullet', 3, 'Second bullet', 8],
+  ['list over two paragraphs', 'First bullet', 'Second bullet', 'Copy one', 3, 'Copy two', 5],
+  ['table cells over two paragraphs', 'Header', 'Cell', 'Copy one', 3, 'Copy two', 5],
+  ['code lines over two paragraphs', 'line one', 'line two', 'Copy one', 3, 'Copy two', 5],
+  ['paragraphs over table cells', 'Copy one', 'Copy two', 'Header', 2, 'Other', 3],
+  ['paragraphs over code lines', 'Copy one', 'Copy two', 'line one', 2, 'line three', 4],
+] as const)('a copied %s selection replaces native structure exactly', (_name, copyFirst, copyLast, replaceFirst, replaceFirstOffset, replaceLast, replaceLastOffset) => {
+  const t = fixture('Copy one\n\nCopy two\n\n- First bullet\n- Second bullet\n\n| Header | Cell |\n| --- | --- |\n| Value | Other |\n\n```\nline one\nline two\nline three\n```');
+  try {
+    const id = (text: string) => t.model.view().blocks.find((view) => view.text === text)!.block.id;
+    t.select(id(copyFirst), 0);
+    t.editor.tf.select({ anchor: t.editor.selection!.anchor, focus: slatePoint(t.editor.children, id(copyLast), copyLast.length)! });
+    const fragment = t.editor.api.fragment();
+    t.select(id(replaceFirst), replaceFirstOffset);
+    t.editor.tf.select({ anchor: t.editor.selection!.anchor, focus: slatePoint(t.editor.children, id(replaceLast), replaceLastOffset)! });
+    t.editor.tf.insertFragment(fragment); t.check();
   } finally { t.close(); }
 });

@@ -5,6 +5,169 @@ use crate::{
 };
 
 impl Document {
+    /// Apply one visible replacement across canonical and proposed owners.
+    /// Existing proposal text changes in place. Canonical text follows the
+    /// caller's edit mode. Every command remains in one atomic request.
+    pub(crate) fn mixed_replacement_commands(
+        &self,
+        mode: &crate::EditMode,
+        at: &TextPoint,
+        text: &str,
+        parts: &[crate::Attachment],
+    ) -> Result<Vec<Command>> {
+        if matches!(mode, crate::EditMode::Continue { .. }) {
+            return Err(DocumentError::Invalid(
+                "A continued suggestion must stay within one text owner".into(),
+            ));
+        }
+        let location = self
+            .locate_point(at)?
+            .ok_or_else(|| DocumentError::Conflict("Edit position is no longer visible".into()))?;
+        let mut canonical = Vec::new();
+        let mut proposed: std::collections::BTreeMap<String, Vec<crate::TextRange>> =
+            Default::default();
+        let mut removed_split_boundaries = std::collections::BTreeSet::new();
+        for part in parts {
+            match &part.owner {
+                TargetOwner::Block(block) => {
+                    canonical.extend(self.selection(block, part.start, part.end)?);
+                }
+                TargetOwner::Proposal(proposal) => {
+                    if part.start == 0
+                        && part.end > 0
+                        && matches!(
+                            self.proposal(proposal)?.action,
+                            crate::ProposalAction::SplitBlock { .. }
+                        )
+                    {
+                        removed_split_boundaries.insert(proposal.clone());
+                    }
+                    proposed
+                        .entry(proposal.clone())
+                        .or_default()
+                        .extend(self.proposal_selection(proposal, part.start, part.end)?);
+                }
+            }
+        }
+        let mut commands = Vec::new();
+        let mut insertion = at.clone();
+        let mut insertion_block = None;
+        let mut insertion_proposal = match &location.owner {
+            TargetOwner::Proposal(id) => Some(id.clone()),
+            TargetOwner::Block(_) => None,
+        };
+        let mut rejected = std::collections::BTreeSet::new();
+        for proposal in proposed.keys() {
+            let action = self.proposal(proposal)?.action;
+            if removed_split_boundaries.contains(proposal) {
+                if insertion_proposal.as_ref() == Some(proposal)
+                    && let crate::ProposalAction::SplitBlock { block, at, .. } = action
+                {
+                    insertion = at;
+                    insertion_block = Some(block);
+                    insertion_proposal = None;
+                }
+                rejected.insert(proposal.clone());
+                commands.push(Command::RejectProposal {
+                    id: proposal.clone(),
+                });
+            }
+        }
+        for (proposal, ranges) in &proposed {
+            if rejected.contains(proposal) {
+                continue;
+            }
+            if insertion_proposal.as_ref() == Some(proposal) {
+                commands.extend(Self::replace_commands(&insertion, ranges, text));
+            } else {
+                commands.push(Command::DeleteText {
+                    ranges: ranges.clone(),
+                });
+            }
+        }
+        match mode {
+            crate::EditMode::Direct => {
+                if matches!(location.owner, TargetOwner::Block(_)) || insertion_block.is_some() {
+                    commands.extend(Self::replace_commands(&insertion, &canonical, text));
+                } else if !canonical.is_empty() {
+                    commands.push(Command::DeleteText { ranges: canonical });
+                }
+            }
+            crate::EditMode::Suggest { id, author } => {
+                if !canonical.is_empty() || insertion_proposal.is_none() && !text.is_empty() {
+                    let (block, insertion) = match &location.owner {
+                        TargetOwner::Block(block) => (block.clone(), insertion.clone()),
+                        TargetOwner::Proposal(_) => {
+                            if let Some(block) = &insertion_block {
+                                (block.clone(), insertion.clone())
+                            } else {
+                                let first = parts
+                                    .iter()
+                                    .find_map(|part| match &part.owner {
+                                        TargetOwner::Block(block) => Some((block, part.start)),
+                                        TargetOwner::Proposal(_) => None,
+                                    })
+                                    .ok_or_else(|| {
+                                        DocumentError::Invalid(
+                                            "Missing canonical replacement target".into(),
+                                        )
+                                    })?;
+                                (first.0.clone(), self.point(first.0, first.1)?)
+                            }
+                        }
+                    };
+                    commands.push(Command::ProposeReplacement {
+                        id: id.clone(),
+                        author: author.clone(),
+                        block,
+                        at: insertion,
+                        ranges: canonical,
+                        text: if insertion_proposal.is_none() {
+                            text.into()
+                        } else {
+                            String::new()
+                        },
+                    });
+                }
+            }
+            crate::EditMode::Continue { .. } => unreachable!(),
+        }
+        for (proposal, ranges) in proposed {
+            if rejected.contains(&proposal) {
+                continue;
+            }
+            let view = self
+                .view()?
+                .proposals
+                .into_iter()
+                .find(|view| view.proposal.id == proposal)
+                .ok_or_else(|| DocumentError::NotFound {
+                    kind: "proposal",
+                    id: proposal.clone(),
+                })?;
+            let removed: usize = ranges
+                .iter()
+                .map(|range| self.range_offsets(range).map(|(start, end)| end - start))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .sum();
+            let replacement = insertion_proposal.as_ref() == Some(&proposal) && !text.is_empty();
+            if removed == crate::utf16_len(&view.text)
+                && !replacement
+                && matches!(
+                    view.proposal.action,
+                    crate::ProposalAction::Text {
+                        ref delete_target,
+                        ..
+                    } if delete_target.is_empty()
+                )
+            {
+                commands.push(Command::RejectProposal { id: proposal });
+            }
+        }
+        Ok(commands)
+    }
+
     pub(crate) fn split_container_commands(
         &self,
         id: &str,

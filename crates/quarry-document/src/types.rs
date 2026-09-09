@@ -178,6 +178,28 @@ pub enum ProposalAction {
         expected_parent: Option<String>,
         expected_before: Option<String>,
     },
+    SplitBlock {
+        block: String,
+        at: TextPoint,
+        new_block: String,
+    },
+    /// Insert copied sibling text blocks at a canonical text position. The
+    /// proposal owns the copied characters; acceptance moves them into the
+    /// split destination without copying their native identities again.
+    PasteBlocks {
+        block: String,
+        at: TextPoint,
+        delete_target: Vec<TargetFragment>,
+        original_quote: String,
+        delete_ranges: Vec<TextRange>,
+        delete_blocks: Vec<PasteDeletedBlock>,
+        joins: Vec<PasteBlockJoin>,
+        blocks: Vec<Block>,
+    },
+    JoinBlocks {
+        left: String,
+        right: String,
+    },
     DeleteBlock {
         block: String,
         /// Exact subtree content when the deletion was proposed. A changed
@@ -189,6 +211,20 @@ pub enum ProposalAction {
         before: Option<String>,
         blocks: Vec<Block>,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+pub struct PasteBlockJoin {
+    pub left: String,
+    pub right: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+pub struct PasteDeletedBlock {
+    pub block: String,
+    pub expected: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

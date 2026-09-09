@@ -829,6 +829,209 @@ impl Document {
         })
     }
 
+    /// A split proposal owns a visible newline plus any text typed after it.
+    /// Acceptance turns that boundary into a real sibling block and transfers
+    /// the added text without copying its native characters.
+    pub fn propose_block_split(
+        &mut self,
+        id: &str,
+        author: &str,
+        block: &str,
+        at: &TextPoint,
+        new_block: &str,
+    ) -> Result<()> {
+        self.atomic(|d| {
+            d.require_new_review(id)?;
+            d.require_new(BLOCKS, new_block)?;
+            let location = d.locate_point(at)?.ok_or_else(|| {
+                DocumentError::Conflict("Split position is no longer visible".into())
+            })?;
+            if location.owner != TargetOwner::Block(block.into())
+                || !crate::carries_inline_content(&d.active_block(block)?.kind)
+            {
+                return Err(DocumentError::Invalid(
+                    "Split a canonical text block at its native position".into(),
+                ));
+            }
+            let segments = vec![d.create_source("\n")?];
+            d.put_record(
+                PROPOSALS,
+                id,
+                &Proposal {
+                    id: id.into(),
+                    author: author.into(),
+                    body: String::new(),
+                    action: ProposalAction::SplitBlock {
+                        block: block.into(),
+                        at: at.clone(),
+                        new_block: new_block.into(),
+                    },
+                    segments,
+                    state: ProposalState::Open,
+                    metadata: d.new_review_metadata(),
+                },
+            )
+        })
+    }
+
+    /// Propose the structural result of pasting sibling text blocks at a text
+    /// caret. Newline segments make the review preview match the final block
+    /// boundaries. Acceptance discards those separators and transfers each
+    /// pasted block's original proposal-owned segments into canonical blocks.
+    pub fn propose_block_paste(
+        &mut self,
+        id: &str,
+        author: &str,
+        block: &str,
+        at: &TextPoint,
+        focus: &TextPoint,
+        seeds: &[SeedBlock],
+    ) -> Result<()> {
+        self.atomic(|d| {
+            d.require_new_review(id)?;
+            if seeds.len() < 2 {
+                return Err(DocumentError::Invalid(
+                    "A structural paste requires at least two text blocks".into(),
+                ));
+            }
+            let location = d.locate_point(at)?.ok_or_else(|| {
+                DocumentError::Conflict("Paste position is no longer visible".into())
+            })?;
+            if location.owner != TargetOwner::Block(block.into())
+                || !crate::carries_inline_content(&d.active_block(block)?.kind)
+            {
+                return Err(DocumentError::Invalid(
+                    "Paste into a canonical text block at its native position".into(),
+                ));
+            }
+            let commands = d.replace_selection_commands(&crate::EditMode::Direct, at, focus, "")?;
+            let mut delete_ranges = Vec::new();
+            let mut delete_blocks = Vec::new();
+            let mut joins = Vec::new();
+            for command in &commands {
+                match command {
+                    crate::Command::DeleteText { ranges } => {
+                        delete_ranges.extend(ranges.iter().cloned());
+                    }
+                    crate::Command::DeleteBlock { block } => {
+                        delete_blocks.push(crate::PasteDeletedBlock {
+                            block: block.clone(),
+                            expected: d.subtree_content(block)?,
+                        });
+                    }
+                    crate::Command::JoinBlocks { left, right } => {
+                        joins.push(crate::PasteBlockJoin {
+                            left: left.clone(),
+                            right: right.clone(),
+                        });
+                    }
+                    _ => {
+                        return Err(DocumentError::Invalid(
+                            "Paste selection requires sibling canonical text blocks".into(),
+                        ));
+                    }
+                }
+            }
+            let (delete_target, original_quote) = d.capture_target(&delete_ranges)?;
+            let mut candidate = d.fork();
+            candidate.apply(&commands)?;
+            let destination = candidate.locate_point(at)?.ok_or_else(|| {
+                DocumentError::Conflict("Paste selection is no longer visible".into())
+            })?;
+            let TargetOwner::Block(destination) = destination.owner else {
+                return Err(DocumentError::Invalid(
+                    "Paste within canonical text blocks".into(),
+                ));
+            };
+            let parent = candidate.active_block(&destination)?.parent;
+            let parent_kind = parent
+                .as_ref()
+                .map(|id| candidate.active_block(id).map(|block| block.kind))
+                .transpose()?;
+            let mut ids = BTreeSet::new();
+            let mut blocks = Vec::new();
+            let mut segments = Vec::new();
+            for (index, seed) in seeds.iter().enumerate() {
+                if seed.parent.is_some() || !crate::carries_inline_content(&seed.kind) {
+                    return Err(DocumentError::Invalid(
+                        "A structural text paste requires sibling text blocks".into(),
+                    ));
+                }
+                if index > 0 {
+                    segments.push(d.create_source("\n")?);
+                    crate::schema::validate_parent(&seed.kind, parent_kind.as_deref())?;
+                }
+                d.require_new(BLOCKS, &seed.id)?;
+                if !ids.insert(seed.id.clone()) {
+                    return Err(DocumentError::Invalid("Repeated pasted block ID".into()));
+                }
+                let reference = d.create_source(&seed.text)?;
+                segments.push(reference.clone());
+                blocks.push(Block {
+                    id: seed.id.clone(),
+                    kind: seed.kind.clone(),
+                    attrs: crate::schema::normalize_attrs(&seed.kind, seed.attrs.clone())?,
+                    parent: None,
+                    position: index,
+                    segments: vec![reference],
+                    deleted: false,
+                });
+            }
+            d.put_record(
+                PROPOSALS,
+                id,
+                &Proposal {
+                    id: id.into(),
+                    author: author.into(),
+                    body: String::new(),
+                    action: ProposalAction::PasteBlocks {
+                        block: block.into(),
+                        at: at.clone(),
+                        delete_target,
+                        original_quote,
+                        delete_ranges,
+                        delete_blocks,
+                        joins,
+                        blocks,
+                    },
+                    segments,
+                    state: ProposalState::Open,
+                    metadata: d.new_review_metadata(),
+                },
+            )
+        })
+    }
+
+    pub fn propose_block_join(
+        &mut self,
+        id: &str,
+        author: &str,
+        left: &str,
+        right: &str,
+    ) -> Result<()> {
+        self.atomic(|d| {
+            d.require_new_review(id)?;
+            let mut candidate = d.fork();
+            candidate.join_blocks(left, right)?;
+            d.put_record(
+                PROPOSALS,
+                id,
+                &Proposal {
+                    id: id.into(),
+                    author: author.into(),
+                    body: String::new(),
+                    action: ProposalAction::JoinBlocks {
+                        left: left.into(),
+                        right: right.into(),
+                    },
+                    segments: Vec::new(),
+                    state: ProposalState::Open,
+                    metadata: d.new_review_metadata(),
+                },
+            )
+        })
+    }
+
     pub fn propose_block_delete(&mut self, id: &str, author: &str, block: &str) -> Result<()> {
         self.atomic(|d| {
             d.require_new_review(id)?;
@@ -1313,11 +1516,54 @@ impl Document {
                 }
             }
             ProposalAction::Format { target, .. } => self.resolve_target(&target),
+            ProposalAction::PasteBlocks {
+                at, delete_target, ..
+            } => {
+                if !delete_target.is_empty() {
+                    return self.resolve_target(&delete_target);
+                }
+                match self.locate_point(&at)? {
+                    Some(point) => Ok(ResolvedTarget {
+                        state: TargetState::Attached,
+                        attachments: vec![crate::Attachment {
+                            owner: point.owner,
+                            start: point.offset,
+                            end: point.offset,
+                            quote: String::new(),
+                        }],
+                    }),
+                    None => Ok(ResolvedTarget {
+                        state: TargetState::Hidden,
+                        attachments: Vec::new(),
+                    }),
+                }
+            }
             ProposalAction::DeleteBlock { block, .. }
             | ProposalAction::UpdateBlock { block, .. }
             | ProposalAction::ConvertBlock { block, .. }
+            | ProposalAction::SplitBlock { block, .. }
             | ProposalAction::MoveBlock { block, .. } => {
                 let block = self.block(&block)?;
+                Ok(ResolvedTarget {
+                    state: if block.deleted {
+                        TargetState::Hidden
+                    } else {
+                        TargetState::Attached
+                    },
+                    attachments: if block.deleted {
+                        Vec::new()
+                    } else {
+                        vec![crate::Attachment {
+                            owner: TargetOwner::Block(block.id),
+                            start: 0,
+                            end: 0,
+                            quote: String::new(),
+                        }]
+                    },
+                })
+            }
+            ProposalAction::JoinBlocks { left, .. } => {
+                let block = self.block(&left)?;
                 Ok(ResolvedTarget {
                     state: if block.deleted {
                         TargetState::Hidden
@@ -1433,6 +1679,141 @@ impl Document {
                     ));
                 }
                 self.validate_block_move(block, parent.as_deref(), before.as_deref())?;
+            }
+            ProposalAction::SplitBlock {
+                block,
+                at,
+                new_block,
+            } => {
+                self.require_new(BLOCKS, new_block)
+                    .map_err(|_| changed("Proposed split block identity is no longer available"))?;
+                let location = self
+                    .locate_point(at)?
+                    .ok_or_else(|| changed("Proposed split position was deleted"))?;
+                if location.owner != TargetOwner::Block(block.clone())
+                    || !crate::carries_inline_content(&self.active_block(block)?.kind)
+                {
+                    return Err(changed("Proposed split target changed"));
+                }
+                let text: String = proposal
+                    .segments
+                    .iter()
+                    .map(|segment| {
+                        self.segment(segment).map(|segment| {
+                            segment
+                                .runs
+                                .into_iter()
+                                .map(|run| run.text)
+                                .collect::<String>()
+                        })
+                    })
+                    .collect::<Result<_>>()?;
+                if !text.starts_with('\n') {
+                    return Err(changed("Proposed split boundary changed"));
+                }
+            }
+            ProposalAction::PasteBlocks {
+                block,
+                at,
+                delete_target,
+                delete_ranges,
+                delete_blocks,
+                joins,
+                blocks,
+                ..
+            } => {
+                for target in delete_target {
+                    self.target_offsets(target)
+                        .map_err(|_| changed("Proposed paste selection changed"))?;
+                }
+                for deleted in delete_blocks {
+                    if self.subtree_content(&deleted.block).as_ref().ok() != Some(&deleted.expected)
+                    {
+                        return Err(changed("A block in the proposed paste selection changed"));
+                    }
+                }
+                let mut commands = Vec::new();
+                if !delete_ranges.is_empty() {
+                    commands.push(crate::Command::DeleteText {
+                        ranges: delete_ranges.clone(),
+                    });
+                }
+                commands.extend(
+                    delete_blocks
+                        .iter()
+                        .map(|deleted| crate::Command::DeleteBlock {
+                            block: deleted.block.clone(),
+                        }),
+                );
+                commands.extend(joins.iter().map(|join| crate::Command::JoinBlocks {
+                    left: join.left.clone(),
+                    right: join.right.clone(),
+                }));
+                let mut candidate = self.fork();
+                candidate
+                    .apply(&commands)
+                    .map_err(|_| changed("Proposed paste selection changed"))?;
+                let location = candidate
+                    .locate_point(at)?
+                    .ok_or_else(|| changed("Proposed paste position was deleted"))?;
+                let TargetOwner::Block(destination) = location.owner else {
+                    return Err(changed("Proposed paste target changed"));
+                };
+                if &destination != block
+                    || !crate::carries_inline_content(&candidate.active_block(block)?.kind)
+                {
+                    return Err(changed("Proposed paste target changed"));
+                }
+                if blocks.len() < 2 {
+                    return Err(changed("Proposed structural paste is incomplete"));
+                }
+                let separators: Vec<_> = proposal
+                    .segments
+                    .iter()
+                    .filter(|reference| {
+                        !blocks
+                            .iter()
+                            .any(|block| block.segments.iter().any(|part| part == *reference))
+                    })
+                    .collect();
+                if separators.len() + 1 != blocks.len()
+                    || separators.iter().any(|reference| {
+                        self.segment(reference)
+                            .map(|segment| {
+                                segment
+                                    .runs
+                                    .iter()
+                                    .map(|run| run.text.as_str())
+                                    .collect::<String>()
+                                    != "\n"
+                            })
+                            .unwrap_or(true)
+                    })
+                {
+                    return Err(changed("Proposed paste block boundary changed"));
+                }
+                let parent = candidate.active_block(block)?.parent;
+                let parent_kind = parent
+                    .as_ref()
+                    .map(|id| candidate.active_block(id).map(|block| block.kind))
+                    .transpose()
+                    .map_err(|_| changed("Proposed paste container changed"))?;
+                for (index, pasted) in blocks.iter().enumerate() {
+                    self.require_proposed_block_identity(pasted)?;
+                    if pasted.parent.is_some() || !crate::carries_inline_content(&pasted.kind) {
+                        return Err(changed("Proposed paste structure changed"));
+                    }
+                    if index > 0 {
+                        crate::schema::validate_parent(&pasted.kind, parent_kind.as_deref())
+                            .map_err(|_| changed("Proposed paste container type changed"))?;
+                    }
+                }
+            }
+            ProposalAction::JoinBlocks { left, right } => {
+                let mut candidate = self.fork();
+                candidate
+                    .join_blocks(left, right)
+                    .map_err(|_| changed("Proposed join target changed"))?;
             }
             ProposalAction::DeleteBlock { block, expected } => {
                 if self.subtree_content(block).as_ref().ok() != Some(expected) {
@@ -1552,6 +1933,91 @@ impl Document {
                     ..
                 } => {
                     d.move_block(block, parent.clone(), before.as_deref())?;
+                }
+                ProposalAction::SplitBlock {
+                    block,
+                    at,
+                    new_block,
+                } => {
+                    let additions_at = d.proposal_point(id, 1)?;
+                    let (_, additions) = d.partition_segments(&proposal.segments, &additions_at)?;
+                    d.split_block(block, at, new_block)?;
+                    if !additions.is_empty() {
+                        let mut next = d.active_block(new_block)?;
+                        next.segments = additions.into_iter().chain(next.segments).collect();
+                        d.put_record(BLOCKS, new_block, &next)?;
+                    }
+                }
+                ProposalAction::PasteBlocks {
+                    block,
+                    at,
+                    delete_ranges,
+                    delete_blocks,
+                    joins,
+                    blocks,
+                    ..
+                } => {
+                    let mut commands = Vec::new();
+                    if !delete_ranges.is_empty() {
+                        commands.push(crate::Command::DeleteText {
+                            ranges: delete_ranges.clone(),
+                        });
+                    }
+                    commands.extend(delete_blocks.iter().map(|deleted| {
+                        crate::Command::DeleteBlock {
+                            block: deleted.block.clone(),
+                        }
+                    }));
+                    commands.extend(joins.iter().map(|join| crate::Command::JoinBlocks {
+                        left: join.left.clone(),
+                        right: join.right.clone(),
+                    }));
+                    d.apply(&commands)?;
+                    let location = d.locate_point(at)?.ok_or_else(|| {
+                        DocumentError::Conflict("Proposed paste position was deleted".into())
+                    })?;
+                    let TargetOwner::Block(destination) = location.owner else {
+                        return Err(DocumentError::Conflict(
+                            "Proposed paste target changed".into(),
+                        ));
+                    };
+                    if &destination != block {
+                        return Err(DocumentError::Conflict(
+                            "Proposed paste target changed".into(),
+                        ));
+                    }
+                    let parent = d.active_block(block)?.parent;
+                    let first = blocks.first().ok_or_else(|| {
+                        DocumentError::Invalid("Proposed structural paste is empty".into())
+                    })?;
+                    let last = blocks.last().expect("checked non-empty paste");
+                    d.split_block(block, at, &last.id)?;
+
+                    let mut left = d.active_block(block)?;
+                    left.segments.extend(first.segments.clone());
+                    d.put_record(BLOCKS, block, &left)?;
+
+                    let mut right = d.active_block(&last.id)?;
+                    right.kind = last.kind.clone();
+                    right.attrs = last.attrs.clone();
+                    right.segments = last
+                        .segments
+                        .iter()
+                        .cloned()
+                        .chain(right.segments)
+                        .collect();
+                    d.put_record(BLOCKS, &right.id, &right)?;
+
+                    for pasted in &blocks[1..blocks.len() - 1] {
+                        let mut middle = pasted.clone();
+                        middle.parent = parent.clone();
+                        middle.position = right.position;
+                        d.put_record(BLOCKS, &middle.id, &middle)?;
+                        d.move_block(&middle.id, parent.clone(), Some(&right.id))?;
+                    }
+                }
+                ProposalAction::JoinBlocks { left, right } => {
+                    d.join_blocks(left, right)?;
                 }
                 ProposalAction::DeleteBlock { block, expected } => {
                     if d.subtree_content(block)? != *expected {

@@ -187,7 +187,9 @@ impl Document {
         };
         let mut proposal: crate::Proposal = serde_json::from_value(record)?;
         proposal.segments = self.expand_segment_refs(version, &proposal.segments)?;
-        if let crate::ProposalAction::InsertBlocks { blocks, .. } = &mut proposal.action {
+        if let crate::ProposalAction::InsertBlocks { blocks, .. }
+        | crate::ProposalAction::PasteBlocks { blocks, .. } = &mut proposal.action
+        {
             for block in blocks {
                 block.segments = self.expand_segment_refs(version, &block.segments)?;
             }

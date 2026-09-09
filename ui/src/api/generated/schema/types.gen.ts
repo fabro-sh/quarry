@@ -387,6 +387,16 @@ export type Command = {
     op: 'join_containers';
     right: string;
 } | {
+    anchor: TextPoint;
+    focus: TextPoint;
+    op: 'cut_selection';
+    transfer: string;
+} | {
+    at: TextPoint;
+    new_block: string;
+    op: 'paste_cut';
+    transfer: string;
+} | {
     block: string;
     end: TextPoint;
     op: 'move_text';
@@ -498,6 +508,27 @@ export type Command = {
     id: string;
     op: 'propose_block_move';
     parent?: (string) | null;
+} | {
+    at: TextPoint;
+    author: string;
+    block: string;
+    id: string;
+    new_block: string;
+    op: 'propose_block_split';
+} | {
+    at: TextPoint;
+    author: string;
+    block: string;
+    blocks: Array<SeedBlock>;
+    focus: TextPoint;
+    id: string;
+    op: 'propose_block_paste';
+} | {
+    author: string;
+    id: string;
+    left: string;
+    op: 'propose_block_join';
+    right: string;
 } | {
     author: string;
     block: string;
@@ -818,6 +849,12 @@ export type EditAction = {
 } | {
     at: TextPoint;
     block: string;
+    blocks: Array<SeedBlock>;
+    focus: TextPoint;
+    op: 'paste_blocks';
+} | {
+    at: TextPoint;
+    block: string;
     new_block: string;
     op: 'split_block';
     proposal?: (string) | null;
@@ -838,6 +875,16 @@ export type EditAction = {
     proposal?: (string) | null;
     start: TextPoint;
     to: TextPoint;
+} | {
+    anchor: TextPoint;
+    focus: TextPoint;
+    op: 'cut_selection';
+    transfer: string;
+} | {
+    at: TextPoint;
+    new_block: string;
+    op: 'paste_cut';
+    transfer: string;
 } | {
     blocks: Array<ProposedBlockPlacement>;
     op: 'set_proposed_structure';
@@ -962,6 +1009,16 @@ export type MoveRequest = {
     to_path: string;
 };
 
+export type PasteBlockJoin = {
+    left: string;
+    right: string;
+};
+
+export type PasteDeletedBlock = {
+    block: string;
+    expected: string;
+};
+
 export type PromoteTmpDocumentRequest = {
     if_match?: (string) | null;
     library: string;
@@ -1022,6 +1079,25 @@ export type ProposalAction = {
     expected_parent?: (string) | null;
     kind: 'move_block';
     parent?: (string) | null;
+} | {
+    at: TextPoint;
+    block: string;
+    kind: 'split_block';
+    new_block: string;
+} | {
+    at: TextPoint;
+    block: string;
+    blocks: Array<Block>;
+    delete_blocks: Array<PasteDeletedBlock>;
+    delete_ranges: Array<TextRange>;
+    delete_target: Array<TargetFragment>;
+    joins: Array<PasteBlockJoin>;
+    kind: 'paste_blocks';
+    original_quote: string;
+} | {
+    kind: 'join_blocks';
+    left: string;
+    right: string;
 } | {
     block: string;
     /**

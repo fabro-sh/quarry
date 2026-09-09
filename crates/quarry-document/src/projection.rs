@@ -38,24 +38,94 @@ impl Document {
             proposals: self
                 .proposals()?
                 .into_iter()
-                .map(|proposal| {
-                    let mut runs = Vec::new();
-                    for reference in &proposal.segments {
-                        runs.extend(self.segment(reference)?.runs);
-                    }
-                    Ok(crate::ProposalView {
-                        blocks: self.proposed_blocks_view(&proposal.id)?,
-                        acceptance_error: self
-                            .validate_proposal_acceptance(&proposal.id)
-                            .err()
-                            .map(|e| e.to_string()),
-                        target: self.proposal_target(&proposal.id)?,
-                        text: runs.iter().map(|r| r.text.as_str()).collect(),
-                        runs,
-                        proposal,
-                    })
-                })
+                .map(|proposal| self.view_proposal(proposal))
                 .collect::<Result<_>>()?,
+        })
+    }
+
+    /// Project one proposal without serializing unrelated document blocks or
+    /// review items. Editors use this for conformance checks on each input.
+    pub fn proposal_view(&self, id: &str) -> Result<crate::ProposalView> {
+        self.view_proposal(self.proposal(id)?)
+    }
+
+    /// Project review proposals attached to one canonical block without
+    /// materializing unrelated blocks, comments, or conflicts.
+    pub fn proposal_views_for_block(&self, block: &str) -> Result<Vec<crate::ProposalView>> {
+        self.proposals()?
+            .into_iter()
+            .map(|proposal| self.view_proposal(proposal))
+            .filter(|view| {
+                view.as_ref().map_or(true, |view| {
+                    view.target.attachments.iter().any(
+                        |part| matches!(&part.owner, crate::TargetOwner::Block(id) if id == block),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// Project the visible review markers for one displayed text owner. This
+    /// lets an editor update a changed block without serializing the document.
+    pub fn review_markers(
+        &self,
+        owner: &crate::TargetOwner,
+    ) -> Result<Vec<(String, String, usize, usize)>> {
+        let mut markers = Vec::new();
+        for comment in self.comments()? {
+            if comment.deleted
+                || comment.parent_id.is_some()
+                || comment.state != crate::DiscussionState::Open
+            {
+                continue;
+            }
+            for part in self.comment_target(&comment.id)?.attachments {
+                if &part.owner == owner {
+                    markers.push(("comment".into(), comment.id.clone(), part.start, part.end));
+                }
+            }
+        }
+        for proposal in self.proposals()? {
+            if proposal.state != crate::ProposalState::Open {
+                continue;
+            }
+            let kind = match &proposal.action {
+                crate::ProposalAction::Unavailable { .. } => "unavailable",
+                crate::ProposalAction::Text { .. } => "text",
+                crate::ProposalAction::Format { .. } => "format",
+                crate::ProposalAction::UpdateBlock { .. } => "update_block",
+                crate::ProposalAction::ConvertBlock { .. } => "convert_block",
+                crate::ProposalAction::MoveBlock { .. } => "move_block",
+                crate::ProposalAction::SplitBlock { .. } => "split_block",
+                crate::ProposalAction::PasteBlocks { .. } => "paste_blocks",
+                crate::ProposalAction::JoinBlocks { .. } => "join_blocks",
+                crate::ProposalAction::DeleteBlock { .. } => "delete_block",
+                crate::ProposalAction::InsertBlocks { .. } => "insert_blocks",
+            };
+            for part in self.proposal_target(&proposal.id)?.attachments {
+                if &part.owner == owner {
+                    markers.push((kind.into(), proposal.id.clone(), part.start, part.end));
+                }
+            }
+        }
+        Ok(markers)
+    }
+
+    fn view_proposal(&self, proposal: crate::Proposal) -> Result<crate::ProposalView> {
+        let mut runs = Vec::new();
+        for reference in &proposal.segments {
+            runs.extend(self.segment(reference)?.runs);
+        }
+        Ok(crate::ProposalView {
+            blocks: self.proposed_blocks_view(&proposal.id)?,
+            acceptance_error: self
+                .validate_proposal_acceptance(&proposal.id)
+                .err()
+                .map(|error| error.to_string()),
+            target: self.proposal_target(&proposal.id)?,
+            text: runs.iter().map(|run| run.text.as_str()).collect(),
+            runs,
+            proposal,
         })
     }
 
@@ -280,7 +350,8 @@ impl Document {
 
     pub fn proposed_blocks_view(&self, id: &str) -> Result<Vec<BlockView>> {
         match self.proposal(id)?.action {
-            crate::ProposalAction::InsertBlocks { blocks, .. } => {
+            crate::ProposalAction::InsertBlocks { blocks, .. }
+            | crate::ProposalAction::PasteBlocks { blocks, .. } => {
                 blocks.into_iter().map(|b| self.view_block(b)).collect()
             }
             _ => Ok(Vec::new()),

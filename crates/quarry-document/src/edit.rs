@@ -77,6 +77,12 @@ pub enum EditAction {
         before: Option<String>,
         blocks: Vec<SeedBlock>,
     },
+    PasteBlocks {
+        block: String,
+        at: TextPoint,
+        focus: TextPoint,
+        blocks: Vec<SeedBlock>,
+    },
     SplitBlock {
         block: String,
         proposal: Option<String>,
@@ -99,6 +105,16 @@ pub enum EditAction {
         start: TextPoint,
         end: TextPoint,
         to: TextPoint,
+    },
+    CutSelection {
+        transfer: String,
+        anchor: TextPoint,
+        focus: TextPoint,
+    },
+    PasteCut {
+        transfer: String,
+        at: TextPoint,
+        new_block: String,
     },
     SetProposedStructure {
         proposal: String,
@@ -194,7 +210,7 @@ impl Document {
                 }
                 // Direct text input stays on the fast source path. There is no
                 // whole-document projection or proposal scan for a keypress.
-                if matches!(mode, EditMode::Direct) {
+                if matches!(mode, EditMode::Direct) && ranges.is_empty() {
                     return Ok(Self::replace_commands(at, ranges, text));
                 }
                 let location = self.locate_point(at)?.ok_or_else(|| {
@@ -202,17 +218,14 @@ impl Document {
                 })?;
                 let (target, _) = self.capture_target(ranges)?;
                 let parts = self.resolve_target(&target)?.attachments;
+                if parts.iter().any(|part| part.owner != location.owner) {
+                    return self.mixed_replacement_commands(mode, at, text, &parts);
+                }
                 match location.owner {
                     TargetOwner::Proposal(id) => {
                         // Selecting proposed text explicitly addresses its owner.
                         // Collaborators edit those characters in place, including
                         // proposals authored by another participant.
-                        if parts
-                            .iter()
-                            .any(|part| part.owner != TargetOwner::Proposal(id.clone()))
-                        {
-                            return Err(DocumentError::Invalid("Replace text within one suggestion; decide intervening suggestions first".into()));
-                        }
                         if let EditMode::Continue { id: expected, .. } = mode
                             && expected != &id
                         {
@@ -221,14 +234,8 @@ impl Document {
                         Self::replace_commands(at, ranges, text)
                     }
                     TargetOwner::Block(block) => {
-                        if parts
-                            .iter()
-                            .any(|part| !matches!(part.owner, TargetOwner::Block(_)))
-                        {
-                            return Err(DocumentError::Invalid(
-                                "Decide intervening suggestions before replacing canonical text"
-                                    .into(),
-                            ));
+                        if matches!(mode, EditMode::Direct) {
+                            return Ok(Self::replace_commands(at, ranges, text));
                         }
                         let Some((id, author)) = suggestion else {
                             return Err(DocumentError::Invalid("Missing suggestion intent".into()));
@@ -441,6 +448,26 @@ impl Document {
                     commands
                 }
             }
+            EditAction::PasteBlocks {
+                block,
+                at,
+                focus,
+                blocks,
+            } => {
+                let Some((id, author)) = suggestion else {
+                    return Err(DocumentError::Invalid(
+                        "A block paste intent requires Suggesting mode".into(),
+                    ));
+                };
+                vec![Command::ProposeBlockPaste {
+                    id: id.clone(),
+                    author: author.clone(),
+                    block: block.clone(),
+                    at: at.clone(),
+                    focus: focus.clone(),
+                    blocks: blocks.clone(),
+                }]
+            }
             EditAction::SplitBlock {
                 block,
                 proposal,
@@ -454,10 +481,14 @@ impl Document {
                         at: at.clone(),
                         new_block: new_block.clone(),
                     }]
-                } else if suggestion.is_some() {
-                    return Err(DocumentError::Invalid(
-                        "Splitting canonical blocks in Suggesting mode is not supported".into(),
-                    ));
+                } else if let Some((id, author)) = suggestion {
+                    vec![Command::ProposeBlockSplit {
+                        id: id.clone(),
+                        author: author.clone(),
+                        block: block.clone(),
+                        at: at.clone(),
+                        new_block: new_block.clone(),
+                    }]
                 } else {
                     vec![Command::SplitBlock {
                         block: block.clone(),
@@ -477,10 +508,13 @@ impl Document {
                         left: left.clone(),
                         right: right.clone(),
                     }]
-                } else if suggestion.is_some() {
-                    return Err(DocumentError::Invalid(
-                        "Joining canonical blocks in Suggesting mode is not supported".into(),
-                    ));
+                } else if let Some((id, author)) = suggestion {
+                    vec![Command::ProposeBlockJoin {
+                        id: id.clone(),
+                        author: author.clone(),
+                        left: left.clone(),
+                        right: right.clone(),
+                    }]
                 } else {
                     if crate::block_capabilities(&self.active_block(left)?.kind)
                         .is_some_and(|kind| kind.content == crate::BlockContentModel::Container)
@@ -524,6 +558,34 @@ impl Document {
                     to: to.clone(),
                 }]
             }
+            EditAction::CutSelection {
+                transfer,
+                anchor,
+                focus,
+            } => {
+                if suggestion.is_some() {
+                    return Err(unsupported());
+                }
+                vec![Command::CutSelection {
+                    transfer: transfer.clone(),
+                    anchor: anchor.clone(),
+                    focus: focus.clone(),
+                }]
+            }
+            EditAction::PasteCut {
+                transfer,
+                at,
+                new_block,
+            } => {
+                if suggestion.is_some() {
+                    return Err(unsupported());
+                }
+                vec![Command::PasteCut {
+                    transfer: transfer.clone(),
+                    at: at.clone(),
+                    new_block: new_block.clone(),
+                }]
+            }
             EditAction::SetProposedStructure { proposal, blocks } => {
                 vec![Command::SetProposedStructure {
                     proposal: proposal.clone(),
@@ -534,7 +596,11 @@ impl Document {
         Ok(commands)
     }
 
-    fn replace_commands(at: &TextPoint, ranges: &[TextRange], text: &str) -> Vec<Command> {
+    pub(crate) fn replace_commands(
+        at: &TextPoint,
+        ranges: &[TextRange],
+        text: &str,
+    ) -> Vec<Command> {
         let mut commands = Vec::new();
         if !ranges.is_empty() {
             commands.push(Command::DeleteText {

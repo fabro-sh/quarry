@@ -299,14 +299,30 @@ fn native_modes_cover_format_and_structure_and_reject_unsupported_actions_atomic
         ProposalAction::Format { .. }
     ));
     assert_eq!(d.block("b").unwrap().kind, "p");
-    let heads = d.heads();
-    let action = Command::Edit {
+    d.apply(&[Command::Edit {
         mode: suggest("split"),
         action: EditAction::SplitBlock {
             block: "a".into(),
             proposal: None,
             at: d.point("a", 9).unwrap(),
             new_block: "new".into(),
+        },
+    }])
+    .unwrap();
+    assert!(matches!(
+        d.proposal("split").unwrap().action,
+        ProposalAction::SplitBlock { .. }
+    ));
+    assert!(d.block("new").is_err());
+    let heads = d.heads();
+    let action = Command::Edit {
+        mode: suggest("move-text"),
+        action: EditAction::MoveText {
+            block: "a".into(),
+            proposal: None,
+            start: d.point("a", 0).unwrap(),
+            end: d.point("a", 1).unwrap(),
+            to: d.point("a", 2).unwrap(),
         },
     };
     assert!(

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::large_stack_arrays,
+    reason = "utoipa expands the command schema into a fixed local array"
+)]
+
 use crate::{Document, DocumentError, Result, SeedBlock, TextPoint, TextRange};
 use automerge::{
     ChangeHash, ScalarValue,
@@ -41,6 +46,16 @@ pub enum Command {
     JoinContainers {
         left: String,
         right: String,
+    },
+    CutSelection {
+        transfer: String,
+        anchor: TextPoint,
+        focus: TextPoint,
+    },
+    PasteCut {
+        transfer: String,
+        at: TextPoint,
+        new_block: String,
     },
     MoveText {
         block: String,
@@ -149,6 +164,27 @@ pub enum Command {
         block: String,
         parent: Option<String>,
         before: Option<String>,
+    },
+    ProposeBlockSplit {
+        id: String,
+        author: String,
+        block: String,
+        at: TextPoint,
+        new_block: String,
+    },
+    ProposeBlockPaste {
+        id: String,
+        author: String,
+        block: String,
+        at: TextPoint,
+        focus: TextPoint,
+        blocks: Vec<SeedBlock>,
+    },
+    ProposeBlockJoin {
+        id: String,
+        author: String,
+        left: String,
+        right: String,
     },
     ProposeBlockDelete {
         id: String,
@@ -438,6 +474,16 @@ impl Document {
                 let commands = self.join_container_commands(left, right)?;
                 self.apply(&commands)
             }
+            Command::CutSelection {
+                transfer,
+                anchor,
+                focus,
+            } => self.cut_selection(transfer, anchor, focus),
+            Command::PasteCut {
+                transfer,
+                at,
+                new_block,
+            } => self.paste_cut(transfer, at, new_block),
             Command::MoveText {
                 block,
                 proposal,
@@ -517,6 +563,27 @@ impl Document {
                 parent,
                 before,
             } => self.propose_block_move(id, author, block, parent.clone(), before.clone()),
+            Command::ProposeBlockSplit {
+                id,
+                author,
+                block,
+                at,
+                new_block,
+            } => self.propose_block_split(id, author, block, at, new_block),
+            Command::ProposeBlockPaste {
+                id,
+                author,
+                block,
+                at,
+                focus,
+                blocks,
+            } => self.propose_block_paste(id, author, block, at, focus, blocks),
+            Command::ProposeBlockJoin {
+                id,
+                author,
+                left,
+                right,
+            } => self.propose_block_join(id, author, left, right),
             Command::ProposeBlockDelete { id, author, block } => {
                 self.propose_block_delete(id, author, block)
             }
