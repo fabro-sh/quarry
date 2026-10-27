@@ -314,12 +314,12 @@ fn incremental_archives_retain_exact_native_state_after_each_edit_and_merge() {
         let point = doc.point("p0", 0).unwrap();
         doc.insert_text(&point, "😀").unwrap();
         let appended = doc.save_after(&heads).unwrap();
-        assert!(!appended.is_empty());
+        assert_ne!(appended, [] as [u8; 0]);
         bytes.extend(appended);
         heads = doc.heads();
         let restored = Document::load(&bytes).unwrap();
         assert_eq!(restored.view().unwrap(), doc.view().unwrap());
-        assert!(doc.save_after(&heads).unwrap().is_empty());
+        assert_eq!(doc.save_after(&heads).unwrap(), [] as [u8; 0]);
         if n % 4 == 0 {
             let mut peer = doc.fork();
             let point = peer.point("p1", 0).unwrap();
