@@ -19,30 +19,56 @@ export async function openDocument(browser: Browser, path: string, author: strin
   const page = await context.newPage();
   const errors: string[] = [];
   const navigationErrors = new NavigationErrors(browser.browserType().name(), new URL(uiOrigin).origin);
+  const traceEnabled = process.env.QUARRY_NAVIGATION_TRACE === '1' && browser.browserType().name() === 'webkit';
+  const trace = (event: string, detail: unknown) => {
+    if (traceEnabled) console.info('QUARRY_NAVIGATION_TRACE', JSON.stringify({ event, at: Date.now(), detail }));
+  };
+  const requestIds = new WeakMap<object, number>();
+  let nextRequestId = 0;
+  const requestId = (request: object) => {
+    if (!requestIds.has(request)) requestIds.set(request, ++nextRequestId);
+    return requestIds.get(request)!;
+  };
   if (browser.browserType().name() === 'webkit') {
-    await page.exposeFunction('__quarryObserveFetch', (event: FetchEvent) => navigationErrors.fetchEvent(event));
+    await page.exposeFunction('__quarryObserveFetch', (event: FetchEvent) => {
+      trace('fetch', event);
+      navigationErrors.fetchEvent(event);
+    });
     await page.addInitScript(installNavigationFetchTracking, {
       origin: new URL(uiOrigin).origin, readPath: DOCUMENT_READ_PATH, binding: '__quarryObserveFetch',
     });
   }
   page.on('request', (request) => {
-    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigationErrors.navigationStarted();
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+      trace('navigation-start', { id: requestId(request), url: request.url() });
+      navigationErrors.navigationStarted();
+    }
     // Playwright populates the start time after the response arrives. Read it
     // lazily; an unknown time conservatively disables the JS-only fallback.
     const startTime = () => { const at = request.timing().startTime; return at > 0 ? at : undefined; };
+    trace('request-start', { id: requestId(request), url: request.url(), method: request.method(), type: request.resourceType(), startTime: startTime() });
     navigationErrors.requestStarted(request, request.url(), request.method(), request.resourceType() === 'fetch', startTime);
   });
-  page.on('requestfinished', (request) => navigationErrors.requestFinished(request));
+  page.on('requestfinished', (request) => {
+    trace('request-finish', { id: requestId(request), url: request.url(), startTime: request.timing().startTime });
+    navigationErrors.requestFinished(request);
+  });
   page.on('requestfailed', (request) => {
     let sameOriginRedirectChain = true;
     for (let redirect: typeof request | null = request; redirect; redirect = redirect.redirectedFrom()) {
       if (new URL(redirect.url()).origin !== new URL(uiOrigin).origin) sameOriginRedirectChain = false;
     }
+    trace('request-failed', { id: requestId(request), url: request.url(), startTime: request.timing().startTime, reason: request.failure()?.errorText, sameOriginRedirectChain });
     navigationErrors.requestFailed(request, request.failure()?.errorText ?? '', sameOriginRedirectChain);
     if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigationErrors.navigationFinished(false);
   });
-  page.on('load', () => navigationErrors.navigationFinished());
+  page.on('load', () => {
+    trace('before-load', { url: page.url(), errors: [...errors] });
+    navigationErrors.navigationFinished();
+    trace('after-load', { url: page.url(), errors: [...errors] });
+  });
   page.on('pageerror', (error) => {
+    trace('page-error', { url: page.url(), name: error.name, message: error.message, stack: error.stack });
     navigationErrors.record(error, errors);
   });
   page.on('console', (message) => {

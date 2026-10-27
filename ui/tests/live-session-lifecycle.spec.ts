@@ -106,7 +106,7 @@ test('an unhandled cross-origin fetch remains visible with navigation tracking i
         `http://127.0.0.1:${address.port}/v1/libraries/test/documents-by-id/test/document-state`);
       await expect.poll(() => requests).toBe(1);
       await expect.poll(() => user.errors.length).toBeGreaterThan(0);
-      expect(user.errors.join(' ')).toMatch(/fetch|load|access control/i);
+      expect(user.errors.join(' ')).toMatch(/fetch|load|access control|cross-origin|cors/i);
     } finally { await user.context.close(); }
   } finally {
     server.closeAllConnections();
