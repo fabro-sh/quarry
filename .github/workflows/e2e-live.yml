@@ -31,6 +31,7 @@ permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
+  QUARRY_RELEASE_SERVER: "1"
 
 jobs:
   e2e-live:
@@ -67,7 +68,7 @@ jobs:
       # Prebuild so the Playwright webServer readiness budget (120s) is not
       # spent compiling; the config's `cargo run` then reuses this build.
       - name: Build quarry server
-        run: cargo build --locked -p quarry --features lib-documents
+        run: cargo build --locked --release -p quarry --features lib-documents
       - name: Install Playwright browsers
         working-directory: ui
         run: bunx playwright install --with-deps chromium firefox webkit

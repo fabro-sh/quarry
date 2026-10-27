@@ -33,6 +33,11 @@ test('workspace create, keyboard rename, search, delete and title refresh use th
     await user.page.getByRole('listbox', { name: 'Search results' }).focus();
     await user.page.keyboard.press('Enter');
     await expect(body(user.page)).toContainText('Workspace text');
+    await user.page.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(user.page.getByRole('textbox', { name: 'Search', exact: true })).toHaveCount(0);
+    await expect(user.page.getByRole('listbox', { name: 'Search results' })).toHaveCount(0);
+    await user.page.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(user.page.getByRole('textbox', { name: 'Search', exact: true })).toHaveValue('');
     expect(user.errors).toEqual([]);
   } finally { await user.context.close(); }
 });

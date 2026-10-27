@@ -48,7 +48,8 @@ for (const restoreCachedPage of [false, true]) test(`navigation interrupts a pen
       // A real navigation can tear down the JavaScript realm immediately
       // after pagehide. The browser still cancels the held fetch, but its
       // AbortSignal callback is not guaranteed to update sessionStorage.
-      expect(events).toMatch(/^(?:abort;|pagehide;|TypeError: Load failed;pagehide;)/);
+      // Other pending metadata fetches can also reject before pagehide.
+      expect(events).toMatch(/^(?:abort;|(?:TypeError: Load failed;)*pagehide;)/);
     } else expect(events).toMatch(/^abort;/);
     expect(events).toContain('pagehide;');
     await expect(user.page.getByLabel('Save status', { exact: true })).toHaveText('Saved');
@@ -64,19 +65,22 @@ test('browser error collection retains access errors on an active page and appli
     await user.page.evaluate(() => {
       const editor = document.querySelector('[aria-label="Plate markdown editor"]')!;
       // An active-page access error must never be hidden by the reload exception.
-      editor.addEventListener('test-error', () => {
-        const message = `Fetch API cannot load ${location.origin}/v1/libraries/test/documents-by-id/test/document-state due to access control checks.`;
-        const error = new Error(message); error.stack = message; throw error;
-      }, { once: true });
-      editor.dispatchEvent(new Event('test-error'));
+      for (const path of ['/v1/libraries/test/documents-by-id/test/document-state', '/v1/libraries/test/documents']) {
+        editor.addEventListener('test-error', () => {
+          const message = `Fetch API cannot load ${location.origin}${path} due to access control checks.`;
+          const error = new Error(message); error.stack = message; throw error;
+        }, { once: true });
+        editor.dispatchEvent(new Event('test-error'));
+      }
     });
-    await expect.poll(() => user.errors.length).toBe(1);
+    await expect.poll(() => user.errors.length).toBe(2);
     await user.page.evaluate(() => {
       window.addEventListener('pagehide', () => { throw new Error('Application teardown failed'); }, { once: true });
     });
     await user.page.reload(); await expect(body(user.page)).toHaveText('TARGET');
-    await expect.poll(() => user.errors.length).toBe(2);
+    await expect.poll(() => user.errors.length).toBe(3);
     expect(user.errors[0]).toContain('due to access control checks.');
-    expect(user.errors[1]).toBe('Application teardown failed');
+    expect(user.errors[1]).toContain('due to access control checks.');
+    expect(user.errors[2]).toBe('Application teardown failed');
   } finally { await user.context.close(); }
 });
