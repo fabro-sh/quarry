@@ -1373,6 +1373,26 @@ test('Suggesting Enter creates one structural split decision and keeps late text
   } finally { t.close(); }
 });
 
+test('typing immediately after Suggesting Enter stays in the structural proposal before its first flush', () => {
+  const t = fixture('Before TARGET after.');
+  try {
+    const block = t.model.view().blocks[0].block.id;
+    t.comment('target', block, 7, 13);
+    t.setMode('suggesting'); t.select(block, 7);
+    t.editor.tf.insertBreak();
+    for (const character of 'New ') t.editor.tf.insertText(character);
+    t.check();
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Before TARGET after.']);
+    expect(t.model.view().proposals).toHaveLength(1);
+    const proposal = t.model.view().proposals[0];
+    expect(proposal).toMatchObject({ text: '\nNew ', proposal: { action: { kind: 'split_block', block } } });
+    t.adapter.command([{ op: 'insert_text', at: t.model.point(block, 10), text: '!' }]);
+    t.adapter.command([{ op: 'accept_proposal', id: proposal.proposal.id }]); t.check();
+    expect(t.model.view().blocks.map((view) => view.text)).toEqual(['Before ', 'New TAR!GET after.']);
+    expect(t.model.view().comments[0].target.attachments[0]).toMatchObject({ quote: 'TAR!GET', owner: { id: t.model.view().blocks[1].block.id } });
+  } finally { t.close(); }
+});
+
 test('Suggesting Backspace at a paragraph boundary creates one structural join decision', () => {
   const t = fixture('Left\n\nTARGET right');
   try {

@@ -505,7 +505,11 @@ export class PlateDocumentAdapter {
     this.present(() => this.editor.tf.apply({ type: 'set_node', path: block.path, properties: { id: block.node.id }, newProperties: { id } }));
   }
   private suggestSelection(text: string, paste?: { runs: PasteRun[]; kind: string; attrs: Attributes }): boolean {
-    if (this.options.mode?.() !== 'suggesting' || !this.editor.selection || this.presenting) return false;
+    if (this.options.mode?.() !== 'suggesting' || this.presenting) return false;
+    // A structural edit first creates a temporary Slate block. Publish and
+    // project its native proposal before interpreting the next input's owner.
+    if (this.structuralSelection) this.flush();
+    if (!this.editor.selection) return false;
     const selection = this.editor.selection;
     const anchor = textOffset(this.editor.children, selection.anchor), focus = textOffset(this.editor.children, selection.focus);
     if (anchor.proposal && focus.proposal && anchor.block === focus.block && anchor.proposedBlock === focus.proposedBlock) return false;
