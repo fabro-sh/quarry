@@ -731,7 +731,7 @@ fn cli_put_markdown_reconciles_and_raw_bytes_round_trip() -> anyhow::Result<()> 
         })
     };
     let ids_before = block_ids(&runtime)?;
-    assert!(!ids_before.is_empty());
+    assert_ne!(ids_before, [] as [String; 0]);
     std::fs::write(&markdown, "# Title\n\nAlpha, edited.\n").context("write edited markdown")?;
     run_quarry_with_root(
         root_str,
