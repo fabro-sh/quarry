@@ -408,12 +408,12 @@ async fn projection_renames_unlinks_and_removes_empty_directories() -> anyhow::R
             .await
             .is_err()
     );
-    assert!(
+    assert_eq!(
         projection
             .list_dir("")
             .await
-            .context("list projection root")?
-            .is_empty()
+            .context("list projection root")?,
+        [] as [quarry_fuse::FuseDirEntry; 0]
     );
     Ok(())
 }

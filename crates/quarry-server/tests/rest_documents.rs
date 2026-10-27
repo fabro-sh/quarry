@@ -714,11 +714,12 @@ async fn agent_events_pending_and_ack_expose_sparse_event_signals() -> anyhow::R
         .context("read pending events after ack")?;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response_json(response).await;
-    assert!(
+    assert_eq!(
         body["events"]
             .as_array()
             .context("post-ack pending events response should include events array")?
-            .is_empty()
+            .as_slice(),
+        [] as [serde_json::Value; 0]
     );
     Ok(())
 }
@@ -1144,7 +1145,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
     let edges = body["edges"]
         .as_array()
         .context("folder graph should expose edges")?;
-    assert!(!nodes.is_empty());
+    assert_ne!(nodes.as_slice(), [] as [serde_json::Value; 0]);
     assert!(nodes.iter().all(|node| {
         node["path"]
             .as_str()
@@ -1177,7 +1178,7 @@ transaction: quarry_storage::TransactionMetadata::default(),
     let edges = body["edges"]
         .as_array()
         .context("tag graph should expose edges")?;
-    assert!(!edges.is_empty());
+    assert_ne!(edges.as_slice(), [] as [serde_json::Value; 0]);
     assert!(
         edges
             .iter()
