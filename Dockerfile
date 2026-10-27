@@ -64,6 +64,7 @@ RUN apt-get update \
       curl \
       gosu \
       tini \
+ && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge '20250419~deb12u2' \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --gid 1000 quarry \
  && useradd --uid 1000 --gid quarry --home-dir /var/quarry --shell /usr/sbin/nologin --no-create-home quarry \

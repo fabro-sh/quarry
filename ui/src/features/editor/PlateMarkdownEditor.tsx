@@ -474,7 +474,15 @@ function FloatingFormatToolbar({
   // Inline void chips have native text even though Slate's string is empty.
   const selectedNativeText = useEditorSelector((editor) => editor.selection && editor.api.isExpanded()
     ? editor.api.string() || (selectedText(editor.children, editor.selection).length ? 'selected' : '') : '', []);
-  const { hidden, props, ref } = useFloatingToolbar({ ...state, selectionText: selectedNativeText });
+  // Plate calls floating.update from an editor selector, which can run during
+  // React rendering. Reposition after commit instead of updating another store
+  // while a component is rendering.
+  const selection = useEditorSelector((editor) => editor.selection, []);
+  const value = useEditorSelector((editor) => editor.children, []);
+  const ignoreRenderUpdate = useCallback(() => {}, []);
+  const { hidden, props, ref } = useFloatingToolbar({ ...state,
+    floating: { ...state.floating, update: ignoreRenderUpdate }, selectionText: selectedNativeText });
+  useLayoutEffect(() => { void state.floating.update?.(); }, [state.floating.update, selection, value]);
   useEffect(() => {
     if (!commenting) return;
     // The selection remains the comment's target. Keep its formatting popup
@@ -1132,6 +1140,7 @@ function BlockActionsMenu({
   onClose: () => void;
   rect: { left: number; top: number };
 }) {
+  const [turnIntoOpen, setTurnIntoOpen] = useState(false);
   return createPortal(
     <div className="fixed inset-0 z-50" onMouseDown={onClose}>
       <div
@@ -1141,15 +1150,18 @@ function BlockActionsMenu({
         role="menu"
         style={{ left: rect.left, top: rect.top }}
       >
-        <div className="group/turninto relative">
-          <button className={cn(blockMenuItem, 'justify-between')} role="menuitem" type="button">
+        <div className="relative" onMouseEnter={() => setTurnIntoOpen(true)} onMouseLeave={() => setTurnIntoOpen(false)}>
+          <button className={cn(blockMenuItem, 'justify-between')} role="menuitem" type="button"
+            aria-haspopup="menu" aria-expanded={turnIntoOpen}
+            onClick={() => setTurnIntoOpen(true)}
+            onKeyDown={(event) => { if (event.key === 'ArrowRight') { event.preventDefault(); setTurnIntoOpen(true); } }}>
             <span className="flex items-center gap-2">
               <Type className="shrink-0 text-muted" size={15} />
               Turn into
             </span>
             <ChevronRight className="shrink-0 text-muted" size={14} />
           </button>
-          <div className="absolute -top-1 left-full z-50 hidden min-w-44 rounded-md border border-line bg-raised p-1 shadow-lg group-hover/turninto:block">
+          {turnIntoOpen && <div className="absolute -top-1 left-full z-50 min-w-44 rounded-md border border-line bg-raised p-1 shadow-lg" role="menu" aria-label="Turn into">
             {BLOCK_TURN_INTO.map((item) => (
               <button
                 className={blockMenuItem}
@@ -1165,7 +1177,7 @@ function BlockActionsMenu({
                 {item.label}
               </button>
             ))}
-          </div>
+          </div>}
         </div>
         <div className="my-1 h-px bg-line" />
         <button
