@@ -51,7 +51,7 @@ for (const restoreCachedPage of [false, true]) test(`navigation interrupts a pen
       // A real navigation can tear down the JavaScript realm immediately
       // after pagehide. The browser still cancels the held fetch, but its
       // AbortSignal callback is not guaranteed to update sessionStorage.
-      expect(events).toMatch(/^(?:abort;|pagehide;|TypeError: Load failed;pagehide;)/);
+      expect(events).toMatch(/^(?:abort;|pagehide;|TypeError: (?:Load failed|Failed to fetch);pagehide;)/);
     } else expect(events).toMatch(/^abort;/);
     expect(events).toContain('pagehide;');
     await expect(user.page.getByLabel('Save status', { exact: true })).toHaveText('Saved');
