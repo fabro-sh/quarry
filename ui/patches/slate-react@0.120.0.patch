@@ -1,20 +1,5 @@
-diff --git a/node_modules/slate-react/.bun-tag-3123c666f0d892f0 b/.bun-tag-3123c666f0d892f0
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/slate-react/.bun-tag-603a4b3a7fbe6888 b/.bun-tag-603a4b3a7fbe6888
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/slate-react/.bun-tag-9ef69f0d79193eb7 b/.bun-tag-9ef69f0d79193eb7
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/slate-react/.bun-tag-d0103f6c576afcdb b/.bun-tag-d0103f6c576afcdb
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/slate-react/.bun-tag-d65b6c81b9489302 b/.bun-tag-d65b6c81b9489302
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/index.es.js b/dist/index.es.js
-index 3159686e1db93f7992a1940c8b32843af558f4bf..b406cd0b852d522b362adb929d647d47beb28719 100644
+index 3159686e1db93f7992a1940c8b32843af558f4bf..9ddee1f33745a585c5156367a739edb3e54a5d13 100644
 --- a/dist/index.es.js
 +++ b/dist/index.es.js
 @@ -1920,7 +1920,6 @@ var reconcileChildren = (editor, _ref) => {
@@ -104,8 +89,37 @@ index 3159686e1db93f7992a1940c8b32843af558f4bf..b406cd0b852d522b362adb929d647d47
    }), /*#__PURE__*/React.createElement(Children, {
      decorations: decorations,
      node: editor,
+@@ -3927,7 +3940,11 @@ var Slate = props => {
+     setIsFocused(ReactEditor.isFocused(editor));
+   }, [editor]);
+   useIsomorphicLayoutEffect(() => {
+-    var fn = () => setIsFocused(ReactEditor.isFocused(editor));
++    var focusTimer;
++    var fn = () => {
++      clearTimeout(focusTimer);
++      focusTimer = setTimeout(() => setIsFocused(ReactEditor.isFocused(editor)), 0);
++    };
+     if (REACT_MAJOR_VERSION >= 17) {
+       // In React >= 17 onFocus and onBlur listen to the focusin and focusout events during the bubbling phase.
+       // Therefore in order for <Editable />'s handlers to run first, which is necessary for ReactEditor.isFocused(editor)
+@@ -3935,6 +3952,7 @@ var Slate = props => {
+       document.addEventListener('focusin', fn);
+       document.addEventListener('focusout', fn);
+       return () => {
++        clearTimeout(focusTimer);
+         document.removeEventListener('focusin', fn);
+         document.removeEventListener('focusout', fn);
+       };
+@@ -3942,6 +3960,7 @@ var Slate = props => {
+       document.addEventListener('focus', fn, true);
+       document.addEventListener('blur', fn, true);
+       return () => {
++        clearTimeout(focusTimer);
+         document.removeEventListener('focus', fn, true);
+         document.removeEventListener('blur', fn, true);
+       };
 diff --git a/dist/index.js b/dist/index.js
-index f15948f7f98cd78615ec9ddc8c24e10be88cea28..aac99308e9113b16ef6655de38ce9c9024b216db 100644
+index f15948f7f98cd78615ec9ddc8c24e10be88cea28..2668885b00075ab477816e0e4764045ba5b9848f 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -2237,7 +2237,6 @@ var reconcileChildren = function reconcileChildren(editor, _ref) {
@@ -195,3 +209,32 @@ index f15948f7f98cd78615ec9ddc8c24e10be88cea28..aac99308e9113b16ef6655de38ce9c90
    }), /*#__PURE__*/React.createElement(Children, {
      decorations: decorations,
      node: editor,
+@@ -4377,8 +4390,10 @@ var Slate = function Slate(props) {
+     setIsFocused(ReactEditor.isFocused(editor));
+   }, [editor]);
+   useIsomorphicLayoutEffect(function () {
+-    var fn = function fn() {
+-      return setIsFocused(ReactEditor.isFocused(editor));
++    var focusTimer;
++    var fn = () => {
++      clearTimeout(focusTimer);
++      focusTimer = setTimeout(() => setIsFocused(ReactEditor.isFocused(editor)), 0);
+     };
+     if (REACT_MAJOR_VERSION >= 17) {
+       // In React >= 17 onFocus and onBlur listen to the focusin and focusout events during the bubbling phase.
+@@ -4387,6 +4402,7 @@ var Slate = function Slate(props) {
+       document.addEventListener('focusin', fn);
+       document.addEventListener('focusout', fn);
+       return function () {
++        clearTimeout(focusTimer);
+         document.removeEventListener('focusin', fn);
+         document.removeEventListener('focusout', fn);
+       };
+@@ -4394,6 +4410,7 @@ var Slate = function Slate(props) {
+       document.addEventListener('focus', fn, true);
+       document.addEventListener('blur', fn, true);
+       return function () {
++        clearTimeout(focusTimer);
+         document.removeEventListener('focus', fn, true);
+         document.removeEventListener('blur', fn, true);
+       };

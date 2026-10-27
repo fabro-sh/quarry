@@ -11,7 +11,7 @@ export async function createDocument(request: APIRequestContext, markdown: strin
   expect(put.ok(), await put.text()).toBe(true);
   return { library, url, path: `/lib/${library}/documents/doc.md` };
 }
-export async function openDocument(browser: Browser, path: string, author: string) {
+export async function openDocument(browser: Browser, path: string, author: string, readyTimeout = 10000) {
   const context = await browser.newContext();
   await context.addInitScript((name) => localStorage.setItem('quarry:author', name), author);
   // Preserve the caller stack for React render warnings in CI failure output.
@@ -45,7 +45,7 @@ export async function openDocument(browser: Browser, path: string, author: strin
     errors.push(message.text());
   });
   await page.goto(`${uiOrigin}${path}`);
-  await expect(body(page)).toBeVisible();
+  await expect(body(page)).toBeVisible({ timeout: readyTimeout });
   await expect(page.getByLabel('Save status', { exact: true })).toHaveText('Saved', { timeout: 20000 });
   return { context, page, errors };
 }

@@ -51,7 +51,13 @@ class BrowserEventConnection extends EventTarget {
           if (typeof payload !== 'object' || !payload || !('type' in payload) || typeof payload.type !== 'string') return;
           // Only document notifications can trigger named subscribers.
           if (!/^(doc\.|directory\.|links\.|conflict\.|library\.|git\.|stream\.)/.test(payload.type)) return;
-          this.dispatchEvent(new MessageEvent('notification', { data: payload }));
+          // Native callbacks can arrive during a browser's nested event loop.
+          // Notify React consumers after the current rendering task finishes.
+          setTimeout(() => {
+            if (this.socket === socket && !this.closed && !this.suspended) {
+              this.dispatchEvent(new MessageEvent('notification', { data: payload }));
+            }
+          }, 0);
         } catch { /* A malformed notification never changes document state. */ }
       };
       socket.onerror = socket.onclose = () => this.unavailable(socket);
