@@ -13,10 +13,6 @@ for (const restoreCachedPage of [false, true]) test(`navigation interrupts a pen
     await select(user.page, target.block_id, 0);
     await user.page.keyboard.type('Local ');
     await expect(user.page.getByLabel('Save status', { exact: true })).toHaveText('Saved');
-    await user.page.route(/\/document-state(?:\?|$)/, async (route) => {
-      if (!held) { held = true; await gate; }
-      await route.continue().catch(() => {}); // The held request belongs to the page that was unloaded.
-    });
     await user.page.evaluate(() => {
       const record = (event: string) => sessionStorage.setItem('test-read-events', (sessionStorage.getItem('test-read-events') ?? '') + event + ';');
       window.addEventListener('pagehide', () => record('pagehide'));
@@ -27,8 +23,14 @@ for (const restoreCachedPage of [false, true]) test(`navigation interrupts a pen
         }
         return fetch(input, options).catch((error) => { record(String(error)); throw error; });
       };
-      window.dispatchEvent(new Event('online'));
     });
+    // Install the signal observer before holding a read. A background refresh
+    // can start while route registration awaits the browser protocol.
+    await user.page.route(/\/document-state(?:\?|$)/, async (route) => {
+      if (!held) { held = true; await gate; }
+      await route.continue().catch(() => {}); // The held request belongs to the page that was unloaded.
+    });
+    await user.page.evaluate(() => window.dispatchEvent(new Event('online')));
     await expect.poll(() => held).toBe(true);
     if (restoreCachedPage) {
       await user.page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
