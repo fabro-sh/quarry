@@ -85,7 +85,7 @@ test('browser error collection retains access errors on an active page and appli
 });
 
 
-test('an unhandled cross-origin fetch remains visible with navigation tracking installed', async ({ browser, request }) => {
+test('an unhandled cross-origin fetch remains visible to browser error collection', async ({ browser, request }) => {
   let requests = 0;
   const server = createServer((_request, response) => {
     requests++;

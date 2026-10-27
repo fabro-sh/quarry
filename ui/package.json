@@ -72,7 +72,7 @@
     "@vitejs/plugin-react": "5.1.1",
     "fake-indexeddb": "6.2.5",
     "jsdom": "27.2.0",
-    "playwright": "1.57.0",
+    "playwright": "1.64.1",
     "tailwindcss": "4.1.17",
     "typescript": "5.9.3",
     "vite": "7.2.7",
@@ -81,7 +81,6 @@
   "patchedDependencies": {
     "slate-react@0.120.0": "patches/slate-react@0.120.0.patch",
     "@platejs/table@52.0.11": "patches/@platejs%2Ftable@52.0.11.patch",
-    "react-dom@19.2.1": "patches/react-dom@19.2.1.patch",
-    "@radix-ui/react-menu@2.1.16": "patches/@radix-ui%2Freact-menu@2.1.16.patch"
+    "react-dom@19.2.1": "patches/react-dom@19.2.1.patch"
   }
 }
