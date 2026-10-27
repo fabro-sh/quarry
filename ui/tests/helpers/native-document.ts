@@ -1,5 +1,6 @@
 import { expect, type APIRequestContext, type Browser, type Page } from 'playwright/test';
-import { NavigationErrors } from './navigation-errors';
+import { DOCUMENT_READ_PATH, NavigationErrors, type FetchEvent } from './navigation-errors';
+import { installNavigationFetchTracking } from './navigation-fetch';
 
 export const apiOrigin = `http://127.0.0.1:${process.env.QUARRY_LIVE_API_PORT ?? '7832'}`;
 export const uiOrigin = process.env.QUARRY_PRODUCTION_UI === '1' ? apiOrigin : `http://127.0.0.1:${process.env.QUARRY_LIVE_UI_PORT ?? '5174'}`;
@@ -18,17 +19,18 @@ export async function openDocument(browser: Browser, path: string, author: strin
   const page = await context.newPage();
   const errors: string[] = [];
   const navigationErrors = new NavigationErrors(browser.browserType().name(), new URL(uiOrigin).origin);
-  // WebKit cancels old fetches before reporting the next navigation request.
-  // beforeunload captures their identities; the navigation request below must
-  // still confirm that the page really left before any error is discarded.
-  await page.exposeFunction('__quarryNavigationPrepared', () => navigationErrors.navigationPrepared());
-  await page.addInitScript(() => window.addEventListener('beforeunload', () => {
-    const notify = (window as unknown as { __quarryNavigationPrepared(): Promise<void> }).__quarryNavigationPrepared;
-    void notify().catch(() => {});
-  }));
+  if (browser.browserType().name() === 'webkit') {
+    await page.exposeFunction('__quarryObserveFetch', (event: FetchEvent) => navigationErrors.fetchEvent(event));
+    await page.addInitScript(installNavigationFetchTracking, {
+      origin: new URL(uiOrigin).origin, readPath: DOCUMENT_READ_PATH, binding: '__quarryObserveFetch',
+    });
+  }
   page.on('request', (request) => {
     if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigationErrors.navigationStarted();
-    navigationErrors.requestStarted(request, request.url(), request.method(), request.resourceType() === 'fetch');
+    // Playwright populates the start time after the response arrives. Read it
+    // lazily; an unknown time conservatively disables the JS-only fallback.
+    const startTime = () => { const at = request.timing().startTime; return at > 0 ? at : undefined; };
+    navigationErrors.requestStarted(request, request.url(), request.method(), request.resourceType() === 'fetch', startTime);
   });
   page.on('requestfinished', (request) => navigationErrors.requestFinished(request));
   page.on('requestfailed', (request) => {
@@ -37,7 +39,7 @@ export async function openDocument(browser: Browser, path: string, author: strin
       if (new URL(redirect.url()).origin !== new URL(uiOrigin).origin) sameOriginRedirectChain = false;
     }
     navigationErrors.requestFailed(request, request.failure()?.errorText ?? '', sameOriginRedirectChain);
-    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigationErrors.navigationFinished();
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigationErrors.navigationFinished(false);
   });
   page.on('load', () => navigationErrors.navigationFinished());
   page.on('pageerror', (error) => {
