@@ -124,3 +124,27 @@ test('a drag in Suggesting mode keeps canonical order until acceptance and retai
     expect(user.errors).toEqual([]);
   } finally { await user.context.close(); }
 });
+
+test('formatting toolbar follows keyboard-only selection changes without editing', async ({ browser, request }) => {
+  const fixture = await createDocument(request, 'First paragraph with enough text to select.\n\nSecond paragraph with different contents.');
+  const initial = await blocks(request, fixture.url);
+  const user = await openDocument(browser, fixture.path, 'Writer');
+  try {
+    const toolbar = user.page.getByLabel('Formatting', { exact: true });
+    await select(user.page, initial[0].block_id, 0);
+    for (let i = 0; i < 5; i++) await user.page.keyboard.press('Shift+ArrowRight');
+    await expect(toolbar).toBeVisible();
+    const first = (await toolbar.boundingBox())!;
+    await user.page.keyboard.press('ArrowRight');
+    await user.page.keyboard.press('ArrowDown');
+    for (let i = 0; i < 5; i++) await user.page.keyboard.press('Shift+ArrowRight');
+    await expect.poll(() => user.page.evaluate(() => {
+      const selection = window.getSelection();
+      return selection?.anchorNode?.parentElement?.closest('[data-block-id]')?.getAttribute('data-block-id');
+    })).toBe(initial[1].block_id);
+    await expect(toolbar).toBeVisible();
+    await expect.poll(async () => (await toolbar.boundingBox())!.y).toBeGreaterThan(first.y + 10);
+    expect((await blocks(request, fixture.url)).map((entry) => entry.text)).toEqual(initial.map((entry) => entry.text));
+    expect(user.errors).toEqual([]);
+  } finally { await user.context.close(); }
+});

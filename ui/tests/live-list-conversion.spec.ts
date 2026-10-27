@@ -1,5 +1,5 @@
 import { expect, test, type Page } from 'playwright/test';
-import { blocks, body, createDocument, openDocument, review, select, transaction, type Block } from './helpers/native-document';
+import { blocks, body, createDocument, openDocument, review, select, transaction, uiOrigin, type Block } from './helpers/native-document';
 
 const styles = [
   { name: 'bullet', marker: '-', style: 'disc' },
@@ -91,5 +91,49 @@ for (const menu of ['toolbar', 'block actions'] as const) {
       await expect(body(user.page)).toHaveText(first.text);
       expect(user.errors).toEqual([]);
     } finally { await user.context.close(); }
+  });
+}
+
+for (const input of ['keyboard', 'touch'] as const) {
+  test(`block actions converts a list with ${input} input`, async ({ browser, browserName, request }) => {
+    test.skip(input === 'touch' && browserName === 'firefox', 'Firefox does not support touch-enabled contexts');
+    const fixture = await createDocument(request, '- Before TARGET after.');
+    const [first] = await blocks(request, fixture.url);
+    const context = await browser.newContext({ hasTouch: input === 'touch' });
+    await context.addInitScript(() => localStorage.setItem('quarry:author', 'Writer'));
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    try {
+      await page.goto(`${uiOrigin}${fixture.path}`);
+      await expect(page.getByLabel('Save status', { exact: true })).toHaveText('Saved');
+      const block = body(page).locator(`[data-block-id="${first.block_id}"]`);
+      const handle = block.locator('..').getByRole('button', { name: /^(Drag to move block|Block actions)$/ });
+      if (input === 'keyboard') {
+        await handle.focus();
+        await page.keyboard.press('Enter');
+        await expect(handle).toHaveAttribute('aria-expanded', 'true');
+        await expect(page.getByRole('menuitem', { name: 'Turn into', exact: true })).toBeFocused();
+        await page.keyboard.press('Escape');
+        await expect(handle).toBeFocused();
+        await expect(handle).toHaveAttribute('aria-expanded', 'false');
+        await page.keyboard.press('ArrowDown');
+        await expect(page.getByRole('menuitem', { name: 'Turn into', exact: true })).toBeFocused();
+        await page.keyboard.press('ArrowRight');
+        for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowDown');
+        await expect(page.getByRole('menuitem', { name: 'Heading 3', exact: true })).toBeFocused();
+        await page.keyboard.press('Enter');
+      } else {
+        await block.tap();
+        await handle.tap();
+        await page.getByRole('menuitem', { name: 'Turn into', exact: true }).tap();
+        await page.getByRole('menuitem', { name: 'Heading 3', exact: true }).tap();
+      }
+      await expect(body(page).locator(`h3[data-block-id="${first.block_id}"]`)).toHaveText(first.text);
+      await expect(page.getByRole('menu', { name: 'Block actions', exact: true })).toHaveCount(0);
+      await expect(page.getByLabel('Save status', { exact: true })).toHaveText('Saved');
+      expect((await blocks(request, fixture.url))[0]).toMatchObject({ block_type: 'h3', attrs: {}, text: first.text });
+      expect(errors).toEqual([]);
+    } finally { await context.close(); }
   });
 }

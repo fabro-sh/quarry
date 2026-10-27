@@ -7,6 +7,7 @@ import { initSync } from '../../generated/document/quarry_document';
 import { DocumentModel, type DocumentBatch } from './document-model';
 import { DocumentMarkdownEditor } from './DocumentMarkdownEditor';
 import { acceptAllDocumentSuggestions } from './document-actions';
+import { DocumentSession } from './document-session';
 
 beforeAll(() => {
   initSync({ module: readFileSync(resolve(process.cwd(), 'src/generated/document/quarry_document_bg.wasm')) });
@@ -39,6 +40,35 @@ function server() {
   const collab = { documentId: authority.view().document_id, sessionId: crypto.randomUUID(), onSaveStateChange: vi.fn() };
   return { authority, collab, requests, changed() { for (const stream of streams) stream.onmessage?.(new MessageEvent('message', { data: '{"type":"doc.changed"}' })); } };
 }
+
+test('parent save status follows committed session emissions without loading or duplicate notifications', async () => {
+  const fixture = server();
+  const open = DocumentSession.open;
+  let session: DocumentSession | undefined;
+  let finishOpening!: () => void;
+  const opening = new Promise<void>((resolve) => { finishOpening = resolve; });
+  vi.spyOn(DocumentSession, 'open').mockImplementation(async (...args) => {
+    await opening;
+    session = await open(...args);
+    return session;
+  });
+  try {
+    render(<DocumentMarkdownEditor documentUrl="/document" config={fixture.collab} author="Reviewer" mode="viewing" />);
+    expect(screen.getByText('Loading document…')).toBeVisible();
+    expect(fixture.collab.onSaveStateChange).not.toHaveBeenCalled();
+    await act(async () => { finishOpening(); });
+    await screen.findByText('Keep this text');
+    await waitFor(() => expect(fixture.collab.onSaveStateChange.mock.calls).toEqual([['saved']]));
+    act(() => {
+      session!.setBufferedEdit(true);
+      session!.setBufferedEdit(true);
+      expect(fixture.collab.onSaveStateChange.mock.calls).toEqual([['saved']]);
+    });
+    expect(fixture.collab.onSaveStateChange.mock.calls).toEqual([['saved'], ['saving']]);
+    act(() => { session!.setBufferedEdit(false); session!.setBufferedEdit(false); });
+    expect(fixture.collab.onSaveStateChange.mock.calls).toEqual([['saved'], ['saving'], ['saved']]);
+  } finally { cleanup(); fixture.authority.dispose(); }
+});
 
 test('the native page saves review decisions and replies through the durable command session', async () => {
   const fixture = server();
