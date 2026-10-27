@@ -61,10 +61,11 @@ export function DocumentMarkdownEditor(props: Props) {
   }, []);
   useEffect(() => {
     let cancelled = false;
+    const opening = new AbortController();
     let opened: Connection | undefined;
     let unregister: (() => void) | undefined;
     setError(''); setPeers([]); setDocument(undefined); setConnection(undefined); setDraft(undefined); setActiveId(null); setHoverId(null); blocked.current = false; statusOwner.current = undefined;
-    void DocumentSession.open(props.documentUrl, props.config.documentId, props.author, props.config.sessionId, props.config.token).then((session) => {
+    void DocumentSession.open(props.documentUrl, props.config.documentId, props.author, props.config.sessionId, props.config.token, { signal: opening.signal }).then((session) => {
       if (cancelled) { void session.close().then(() => session.model.dispose()); return; }
       opened = { session, started: false }; active.current = opened; setConnection(opened);
       session.onPresence = setPeers;
@@ -86,7 +87,7 @@ export function DocumentMarkdownEditor(props: Props) {
       publish(session);
     }).catch((error) => { if (!cancelled) setError(String(error)); });
     return () => {
-      cancelled = true; unregister?.();
+      cancelled = true; opening.abort(); unregister?.();
       if (opened) { opened.adapter?.flush(); void opened.session.close().then(() => opened!.session.model.dispose()); }
       if (active.current === opened) active.current = undefined;
     };
@@ -97,8 +98,14 @@ export function DocumentMarkdownEditor(props: Props) {
     try { action(); return true; } catch (error) { setError(String(error)); return false; }
   };
   const command = (...commands: Command[]) => attempt(() => {
-    if (blocked.current || !active.current?.adapter) throw new Error('The document is not editable');
-    active.current.adapter.command(commands);
+    const connection = active.current;
+    if (blocked.current || !connection?.adapter) throw new Error('The document is not editable');
+    connection.adapter.command(commands);
+    // Review actions must update their controls with the inline projection.
+    // Delaying this can change menu items while the next click is in flight.
+    clearTimeout(publishTimer.current);
+    publishTimer.current = undefined;
+    publish(connection.session);
   });
   const changed = (batch: DocumentBatch) => {
     const connection = active.current;
