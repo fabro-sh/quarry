@@ -1,3 +1,4 @@
+import { createServer } from 'node:http';
 import { expect, test } from 'playwright/test';
 import { blocks, body, createDocument, openDocument, select, transaction } from './helpers/native-document';
 
@@ -81,4 +82,34 @@ test('browser error collection retains access errors on an active page and appli
     expect(user.errors[0]).toContain('due to access control checks.');
     expect(user.errors[1]).toBe('Application teardown failed');
   } finally { await user.context.close(); }
+});
+
+
+test('an unhandled cross-origin fetch remains visible with navigation tracking installed', async ({ browser, request }) => {
+  let requests = 0;
+  const server = createServer((_request, response) => {
+    requests++;
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end('{}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing test server address');
+    const fixture = await createDocument(request, 'TARGET');
+    const user = await openDocument(browser, fixture.path, 'Reviewer');
+    try {
+      // Same endpoint shape, different origin, and deliberately no CORS header.
+      // Returning the fetch from evaluate would catch its rejection in Node;
+      // leave it unhandled in the page to exercise the actual error collector.
+      await user.page.evaluate((url) => { void fetch(url); },
+        `http://127.0.0.1:${address.port}/v1/libraries/test/documents-by-id/test/document-state`);
+      await expect.poll(() => requests).toBe(1);
+      await expect.poll(() => user.errors.length).toBeGreaterThan(0);
+      expect(user.errors.join(' ')).toMatch(/fetch|load|access control/i);
+    } finally { await user.context.close(); }
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
