@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { expect, test } from 'playwright/test';
-import { blocks, body, createDocument, openDocument, select, transaction } from './helpers/native-document';
+import { blocks, body, createDocument, openDocument, select, transaction, uiOrigin } from './helpers/native-document';
 
 for (const restoreCachedPage of [false, true]) test(`navigation interrupts a pending read and preserves text and comments (cached restore: ${restoreCachedPage})`, async ({ browser, browserName, request }) => {
   const fixture = await createDocument(request, 'TARGET');
@@ -34,25 +34,29 @@ for (const restoreCachedPage of [false, true]) test(`navigation interrupts a pen
     await user.page.evaluate(() => window.dispatchEvent(new Event('online')));
     await expect.poll(() => held).toBe(true);
     if (restoreCachedPage) {
-      await user.page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
-      expect(await user.page.evaluate(() => sessionStorage.getItem('test-read-events'))).toMatch(/^abort;/);
+      await user.page.evaluate(() => {
+        sessionStorage.setItem('test-read-events', 'cached-hide;');
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+      });
+      expect(await user.page.evaluate(() => sessionStorage.getItem('test-read-events'))).toMatch(/^cached-hide;abort;/);
       const [current] = await blocks(request, fixture.url);
       await transaction(request, fixture.url, [{ op: 'replace_block_content', block_id: current.block_id, text: 'Agent ' + current.text }], current.document_clock);
       release();
       await user.page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
       await expect(body(user.page)).toHaveText('Agent Local TARGET');
     }
+    await user.page.evaluate(() => sessionStorage.setItem('test-read-events', 'reload;'));
     await user.page.reload();
     release();
     await expect(body(user.page)).toHaveText(restoreCachedPage ? 'Agent Local TARGET' : 'Local TARGET');
     await expect(body(user.page).locator('[data-comment-id]')).toHaveText('TARGET');
-    const events = await user.page.evaluate(() => sessionStorage.getItem('test-read-events'));
-    if (!restoreCachedPage) {
-      // A real navigation can tear down the JavaScript realm immediately
-      // after pagehide. The browser still cancels the held fetch, but its
-      // AbortSignal callback is not guaranteed to update sessionStorage.
-      expect(events).toMatch(/^(?:abort;|pagehide;|TypeError: (?:Load failed|Failed to fetch|NetworkError when attempting to fetch resource\.);(?:abort;|pagehide;))/);
-    } else expect(events).toMatch(/^abort;/);
+    const recordedEvents = await user.page.evaluate(() => sessionStorage.getItem('test-read-events'));
+    expect(recordedEvents).toMatch(/^reload;/);
+    const events = recordedEvents!.slice('reload;'.length);
+    // A real navigation can tear down the JavaScript realm immediately
+    // after pagehide. The browser still cancels the held fetch, but its
+    // AbortSignal callback is not guaranteed to update sessionStorage.
+    expect(events).toMatch(/^(?:abort;|pagehide;|TypeError: (?:Load failed|Failed to fetch|NetworkError when attempting to fetch resource\.);(?:abort;|pagehide;))/);
     expect(events).toContain('pagehide;');
     await expect(user.page.getByLabel('Save status', { exact: true })).toHaveText('Saved');
     expect(user.errors).toEqual([]);
@@ -112,4 +116,26 @@ test('an unhandled cross-origin fetch remains visible to browser error collectio
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test('an unhandled same-URL fetch cannot reuse a previous cancellation proof', async ({ browser, request }) => {
+  const fixture = await createDocument(request, 'TARGET');
+  const documentId = (await request.get(fixture.url)).headers()['x-quarry-document-id'];
+  expect(documentId).toBeTruthy();
+  const url = `${uiOrigin}/v1/libraries/${fixture.library}/documents-by-id/${documentId}/document-state?error-collector-test=1`;
+  const user = await openDocument(browser, fixture.path, 'Reviewer');
+  try {
+    await user.page.route(url, (route) => route.abort('aborted'));
+    await Promise.all([
+      user.page.waitForEvent('requestfailed', (failed) => failed.url() === url),
+      user.page.evaluate(async (target) => { await fetch(target).catch(() => {}); }, url),
+    ]);
+    await Promise.all([
+      user.page.waitForEvent('requestfailed', (failed) => failed.url() === url),
+      user.page.evaluate((target) => { void fetch(target); }, url),
+    ]);
+    // The first caller handles its rejection. Only the second caller can
+    // produce this unhandled TypeError; both use the identical request URL.
+    await expect.poll(() => user.errors.some((error) => /(?:TypeError: )?(?:Load failed|Failed to fetch|NetworkError)/.test(error))).toBe(true);
+  } finally { await user.context.close(); }
 });

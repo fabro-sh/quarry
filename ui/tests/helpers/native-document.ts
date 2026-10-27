@@ -1,4 +1,5 @@
 import { expect, type APIRequestContext, type Browser, type Page } from 'playwright/test';
+import { NavigationErrors } from './navigation-errors';
 
 export const apiOrigin = `http://127.0.0.1:${process.env.QUARRY_LIVE_API_PORT ?? '7832'}`;
 export const uiOrigin = process.env.QUARRY_PRODUCTION_UI === '1' ? apiOrigin : `http://127.0.0.1:${process.env.QUARRY_LIVE_UI_PORT ?? '5174'}`;
@@ -16,17 +17,27 @@ export async function openDocument(browser: Browser, path: string, author: strin
   await context.addInitScript((name) => localStorage.setItem('quarry:author', name), author);
   const page = await context.newPage();
   const errors: string[] = [];
+  const navigationErrors = new NavigationErrors(browser.browserType().name(), new URL(uiOrigin).origin);
   const traceEnabled = process.env.QUARRY_NAVIGATION_TRACE === '1';
+  page.on('request', (request) => {
+    navigationErrors.requestStarted(request, request.url(), request.method(), request.resourceType() === 'fetch');
+  });
+  page.on('requestfinished', (request) => navigationErrors.requestFinished(request));
   page.on('requestfailed', (request) => {
     if (traceEnabled) console.info('QUARRY_NAVIGATION_TRACE', JSON.stringify({
       event: 'request-failed', url: request.url(), reason: request.failure()?.errorText,
     }));
+    let sameOrigin = true;
+    for (let redirect: typeof request | null = request; redirect; redirect = redirect.redirectedFrom()) {
+      if (new URL(redirect.url()).origin !== new URL(uiOrigin).origin) sameOrigin = false;
+    }
+    navigationErrors.requestFailed(request, request.failure()?.errorText ?? '', sameOrigin);
   });
   page.on('pageerror', (error) => {
     if (traceEnabled) console.info('QUARRY_NAVIGATION_TRACE', JSON.stringify({
       event: 'page-error', name: error.name, message: error.message, stack: error.stack,
     }));
-    errors.push(error.message);
+    navigationErrors.record(error, errors);
   });
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
