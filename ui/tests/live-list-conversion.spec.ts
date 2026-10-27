@@ -120,6 +120,7 @@ for (const input of ['keyboard', 'touch'] as const) {
         await page.keyboard.press('ArrowDown');
         await expect(page.getByRole('menuitem', { name: 'Turn into', exact: true })).toBeFocused();
         await page.keyboard.press('ArrowRight');
+        await expect(page.getByRole('menuitem', { name: 'Text', exact: true })).toBeFocused();
         for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowDown');
         await expect(page.getByRole('menuitem', { name: 'Heading 3', exact: true })).toBeFocused();
         await page.keyboard.press('Enter');
