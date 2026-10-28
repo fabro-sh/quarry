@@ -349,3 +349,17 @@ test('typing immediately after a proposed split stays in the same structural sug
     expect(t.model.view().blocks.map(({ text }) => text)).toEqual(['Before ', 'New TARGET after.', 'Second TARGET.']);
   } finally { t.close(); }
 });
+
+test('the first inline suggestion preserves other paragraphs without projecting the full document', () => {
+  const t = setup(); t.setMode('suggesting');
+  try {
+    t.editor.tf.select({ path: [0, 0], offset: 7 });
+    const untouched = t.editor.children[1];
+    const view = vi.spyOn(t.model, 'view').mockImplementation(() => { throw new Error('Unexpected whole-document projection'); });
+    try { t.editor.tf.insertText('New'); t.adapter.flush(); } finally { view.mockRestore(); }
+    t.check();
+    expect(t.editor.children[1]).toBe(untouched);
+    expect(t.model.view().proposals).toHaveLength(1);
+    expect(t.model.view().proposals[0].text).toBe('New');
+  } finally { t.close(); }
+});
