@@ -190,8 +190,8 @@ for (const [path, caller] of [
     at unknown (${origin}/node_modules/.vite/deps/swr.js?v=test:958:25)`;
   const error = { message: 'Initial metadata read failed', stack };
   const tracker = new NavigationErrors('webkit', origin), errors: string[] = [];
-  tracker.observeRead({ phase: 'start', id: 'old', url: target });
-  tracker.observeRead({ phase: 'closing', reads: [{ id: 'old', url: target }] });
+  tracker.observeRead({ phase: 'closing', reads: [] });
+  tracker.observeRead({ phase: 'start', id: 'old', url: target, closing: true });
   tracker.record(error, errors);
   tracker.record({ ...error, stack: stack.replace('client.ts', 'unhandled.ts') }, errors);
   tracker.record({ ...error, stack: stack.replaceAll('/node_modules/.vite/deps/swr.js', '/unhandled.js') }, errors);
