@@ -73,4 +73,16 @@ jobs:
         run: bunx playwright install --with-deps chromium firefox webkit
       - name: Check large-document responsiveness
         working-directory: ui
-        run: bun run test:performance
+        env:
+          QUARRY_PERFORMANCE: "1"
+          PLAYWRIGHT_JSON_OUTPUT_FILE: performance-results.json
+        run: |
+          bunx playwright test -c playwright.live.config.ts --workers=1 --reporter=line,json
+          python3 - <<'CHECK'
+          import json
+          with open('performance-results.json') as report:
+              stats = json.load(report)['stats']
+          print(stats)
+          assert stats['expected'] == 9, stats
+          assert stats['unexpected'] == 0, stats
+          CHECK
