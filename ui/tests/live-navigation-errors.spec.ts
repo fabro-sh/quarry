@@ -144,6 +144,7 @@ test('a foreign redirect discovered after the diagnostic keeps the error visible
   tracker.observeRead({ phase: 'closing', reads: [{ id: 'old', url }] });
   tracker.record(diagnostic(), errors);
   tracker.foreignRedirect(url);
+  tracker.observeRead({ phase: 'start', id: 'new-page', url });
   tracker.navigationCompleted();
   expect(errors).toHaveLength(1);
 });

@@ -9,7 +9,7 @@ export class NavigationErrors {
   private readonly observed = new Map<string, string>();
   private readonly foreignRedirects = new Set<string>();
   private readonly closing = new Set<string>();
-  private readonly deferred: Array<{ url: string; index: number; errors: string[] }> = [];
+  private readonly deferred: Array<{ url: string; index: number; errors: string[]; foreign?: boolean }> = [];
 
   constructor(private readonly browser: string, private readonly origin: string) {}
 
@@ -36,12 +36,13 @@ export class NavigationErrors {
   foreignRedirect(url: string) {
     this.foreignRedirects.add(url);
     this.cancelled.delete(url);
+    for (const candidate of this.deferred) if (candidate.url === url) candidate.foreign = true;
   }
 
   navigationCompleted() {
     // A cancelled beforeunload never reaches load, so its errors remain.
     for (const candidate of this.deferred.slice().reverse()) {
-      if (!this.foreignRedirects.has(candidate.url)) candidate.errors.splice(candidate.index, 1);
+      if (!candidate.foreign && !this.foreignRedirects.has(candidate.url)) candidate.errors.splice(candidate.index, 1);
     }
     this.deferred.length = 0;
     this.closing.clear();
