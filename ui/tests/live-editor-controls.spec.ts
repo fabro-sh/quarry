@@ -131,12 +131,22 @@ test('formatting toolbar follows selection-only moves between paragraphs', async
   const user = await openDocument(browser, fixture.path, 'Writer');
   try {
     const toolbar = user.page.getByLabel('Formatting', { exact: true });
-    await select(user.page, initial[0].block_id, 0);
-    for (let i = 0; i < 5; i++) await user.page.keyboard.press('Shift+ArrowRight');
+    const selectInBlock = async (id: string) => {
+      // A real click lets Slate commit its native selection before keyboard
+      // extension. A synthetic Range can be restored to the previous block.
+      await body(user.page).locator(`[data-block-id="${id}"]`).click();
+      await expect.poll(() => user.page.evaluate(() => window.getSelection()?.anchorNode?.parentElement?.closest('[data-block-id]')?.getAttribute('data-block-id'))).toBe(id);
+      for (let i = 1; i <= 5; i++) {
+        await user.page.keyboard.press('Shift+ArrowLeft');
+        await expect.poll(() => user.page.evaluate(() => String(window.getSelection()).length)).toBe(i);
+      }
+    };
+    await selectInBlock(initial[0].block_id);
     await expect(toolbar).toBeVisible();
     const first = (await toolbar.boundingBox())!;
-    await select(user.page, initial[1].block_id, 0);
-    for (let i = 0; i < 5; i++) await user.page.keyboard.press('Shift+ArrowRight');
+    await user.page.keyboard.press('ArrowRight');
+    await expect(toolbar).toBeHidden();
+    await selectInBlock(initial[1].block_id);
     await expect.poll(() => user.page.evaluate(() => {
       const selection = window.getSelection();
       return selection?.anchorNode?.parentElement?.closest('[data-block-id]')?.getAttribute('data-block-id');

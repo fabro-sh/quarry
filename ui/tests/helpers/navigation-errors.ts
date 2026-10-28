@@ -1,7 +1,7 @@
 export type ReadAbortEvent = { phase: 'start' | 'abort'; id: string; url: string; closing?: boolean }
   | { phase: 'closing'; reads: Array<{ id: string; url: string }> };
 
-/** WebKit reports some caught DocumentSession fetch aborts as page errors. */
+/** WebKit reports some caught document-read cancellations as page errors. */
 export class NavigationErrors {
   private readonly pending = new Map<object, string>();
   private readonly cancelled = new Map<string, object>();
@@ -93,15 +93,21 @@ export class NavigationErrors {
 
   private isHandledSessionRead(stack: string) {
     try {
-      const frames = [...stack.matchAll(/^\s+at (open|refresh|documentRequest|unknown) \((https?:\/\/[^\s]+):\d+:\d+\)$/gm)]
+      const frames = [...stack.matchAll(/^\s+at ([\w.<>]+) \((https?:\/\/[^\s]+):\d+:\d+\)$/gm)]
         .map((match) => ({ name: match[1], url: new URL(match[2]) }));
-      return frames.some(({ url }) => url.origin === this.origin && url.pathname === '/src/features/editor/document-request.ts')
+      const session = frames.some(({ url }) => url.origin === this.origin && url.pathname === '/src/features/editor/document-request.ts')
         && frames.some(({ name, url }) => (name === 'open' || name === 'refresh') && url.origin === this.origin && url.pathname === '/src/features/editor/document-session.ts');
+      const metadata = frames.some(({ name, url }) => name === 'jsonRequest' && url.origin === this.origin && url.pathname === '/src/api/client.ts')
+        && frames.some(({ name, url }) => name === 'execute' && url.origin === this.origin && url.pathname === '/node_modules/.vite/deps/swr.js');
+      return session || metadata;
     } catch { return false; }
   }
 
   private isDocumentRead(value: string) {
     const url = new URL(value);
-    return url.origin === this.origin && /^\/v1\/(?:libraries\/[^/]+\/documents-by-id|tmp\/documents)\/[^/]+\/document-state$/.test(url.pathname);
+    return url.origin === this.origin && (
+      /^\/v1\/(?:libraries\/[^/]+\/documents-by-id|tmp\/documents)\/[^/]+\/document-state$/.test(url.pathname)
+      || /^\/v1\/libraries\/[^/]+\/documents(?:\/.+\/(?:presence|outgoing-links|backlinks))?$/.test(url.pathname)
+    );
   }
 }

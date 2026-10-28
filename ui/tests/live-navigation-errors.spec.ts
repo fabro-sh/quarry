@@ -160,6 +160,23 @@ test('a queued read in the closing realm is distinct from a new-document read', 
   expect(errors).toEqual([diagnostic().message]);
 });
 
+test('caught SWR metadata reads qualify only while the old document closes', () => {
+  const target = `${origin}/v1/libraries/example/documents/doc.md/presence`;
+  const error = {
+    message: 'Metadata read failed',
+    stack: `Fetch API cannot load ${target} due to access control checks.\n    at jsonRequest (${origin}/src/api/client.ts:235:31)\n    at execute (${origin}/node_modules/.vite/deps/swr.js?v=test:981:19)`,
+  };
+  const tracker = new NavigationErrors('webkit', origin), errors: string[] = [];
+  tracker.observeRead({ phase: 'start', id: 'metadata', url: target });
+  tracker.record(error, errors);
+  expect(errors).toHaveLength(1);
+  tracker.observeRead({ phase: 'closing', reads: [{ id: 'metadata', url: target }] });
+  tracker.record(error, errors);
+  tracker.record({ ...error, stack: error.stack.replace('execute', 'unhandledCaller') }, errors);
+  tracker.navigationCompleted();
+  expect(errors).toEqual(['Metadata read failed', 'Metadata read failed']);
+});
+
 test('observing aborts returns the native fetch promise without consuming rejection', async ({ page }) => {
   await page.route(`${uiOrigin}/abort-observer-test`, (route) => route.fulfill({ body: '<!doctype html><title>Observer</title>', contentType: 'text/html' }));
   await page.goto(`${uiOrigin}/abort-observer-test`);

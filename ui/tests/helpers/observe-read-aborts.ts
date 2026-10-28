@@ -21,16 +21,19 @@ export function observeReadAborts(options: { origin: string; marker: string }) {
     const request = input instanceof Request ? input : undefined;
     const signal = init?.signal ?? request?.signal;
     const method = (init?.method ?? request?.method ?? 'GET').toUpperCase();
-    if (method !== 'GET' || !signal || signal.aborted) return nativeFetch.call(this, input, init);
+    if (method !== 'GET') return nativeFetch.call(this, input, init);
     let url: URL;
     try { url = new URL(request?.url ?? String(input), location.href); }
     catch { return nativeFetch.call(this, input, init); }
-    if (url.origin !== options.origin || !/^\/v1\/(?:libraries\/[^/]+\/documents-by-id|tmp\/documents)\/[^/]+\/document-state$/.test(url.pathname)) {
+    const stateRead = /^\/v1\/(?:libraries\/[^/]+\/documents-by-id|tmp\/documents)\/[^/]+\/document-state$/.test(url.pathname);
+    const metadataRead = /^\/v1\/libraries\/[^/]+\/documents(?:\/.+\/(?:presence|outgoing-links|backlinks))?$/.test(url.pathname);
+    if (url.origin !== options.origin || !(stateRead || metadataRead)) {
       return nativeFetch.call(this, input, init);
     }
     const event = { id: crypto.randomUUID(), url: url.href };
     reads.set(event.url, event);
     notify({ ...event, phase: 'start', closing });
+    if (!signal || signal.aborted) return nativeFetch.call(this, input, init);
     const abort = () => notify({ ...event, phase: 'abort' });
     signal.addEventListener('abort', abort, { once: true });
     try { return nativeFetch.call(this, input, init); }
