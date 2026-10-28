@@ -474,15 +474,7 @@ function FloatingFormatToolbar({
   // Inline void chips have native text even though Slate's string is empty.
   const selectedNativeText = useEditorSelector((editor) => editor.selection && editor.api.isExpanded()
     ? editor.api.string() || (selectedText(editor.children, editor.selection).length ? 'selected' : '') : '', []);
-  // Plate calls floating.update from an editor selector, which can run during
-  // React rendering. Reposition after commit instead of updating another store
-  // while a component is rendering.
-  const selection = useEditorSelector((editor) => editor.selection, []);
-  const value = useEditorSelector((editor) => editor.children, []);
-  const ignoreRenderUpdate = useCallback(() => {}, []);
-  const { hidden, props, ref } = useFloatingToolbar({ ...state,
-    floating: { ...state.floating, update: ignoreRenderUpdate }, selectionText: selectedNativeText });
-  useLayoutEffect(() => { void state.floating.update?.(); }, [state.floating.update, selection, value]);
+  const { hidden, props, ref } = useFloatingToolbar({ ...state, selectionText: selectedNativeText });
   useEffect(() => {
     if (!commenting) return;
     // The selection remains the comment's target. Keep its formatting popup
