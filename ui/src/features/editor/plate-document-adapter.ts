@@ -167,6 +167,9 @@ export class PlateDocumentAdapter {
       if (selection && block && isTextBlock(block.node) && !block.node.quarryProposedBlock && textOffset(this.editor.children, selection.anchor).proposal) { this.editor.tf.insertText('\n'); return; }
       if (!RangeApi.isCollapsed(selection) && this.suggestSelection('\n')) return;
       this.insertBreak(...args);
+      // Present the proposed caret before the next browser input event can
+      // reconcile its DOM selection against the temporary split nodes.
+      if (!this.compositionGroup && this.structuralProposals.length && this.editor.api.isNormalizing()) this.flush();
     });
     editor.tf.addMark = (...args) => { this.endIntent(); if (!this.suggestFormat(args[0], args[1])) this.addMark(...args); };
     editor.tf.removeMark = (...args) => { this.endIntent(); if (!this.suggestFormat(args[0], null)) this.removeMark(...args); };

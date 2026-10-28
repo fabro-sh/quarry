@@ -13,7 +13,7 @@ import { WikiLinkPlugin } from './wiki-link-element';
 import { PlateDocumentAdapter } from './plate-document-adapter';
 import { BaseTablePlugin, BaseTableRowPlugin, BaseTableCellPlugin, BaseTableCellHeaderPlugin, insertTable, insertTableRow, insertTableColumn } from '@platejs/table';
 import type { EditorMode } from './editor-types';
-import { nativeNodeIdOptions, projectPlate } from './plate-document-projection';
+import { nativeNodeIdOptions, projectPlate, textOffset } from './plate-document-projection';
 
 beforeAll(() => initSync({ module: readFileSync(resolve(process.cwd(), 'src/generated/document/quarry_document_bg.wasm')) }));
 
@@ -361,5 +361,17 @@ test('the first inline suggestion preserves other paragraphs without projecting 
     expect(t.editor.children[1]).toBe(untouched);
     expect(t.model.view().proposals).toHaveLength(1);
     expect(t.model.view().proposals[0].text).toBe('New');
+  } finally { t.close(); }
+});
+
+test('a proposed paragraph split presents its native caret before returning to the browser', () => {
+  const t = setup(); t.setMode('suggesting');
+  try {
+    t.editor.tf.select({ path: [0, 0], offset: 7 });
+    t.editor.tf.insertBreak();
+    const anchor = t.editor.selection!.anchor;
+    expect(textOffset(t.editor.children, anchor).proposal).toBe(true);
+    t.editor.tf.insertText('New '); t.check();
+    expect(t.model.view().proposals.map(({ proposal }) => proposal.action.kind)).toEqual(['split_block']);
   } finally { t.close(); }
 });
