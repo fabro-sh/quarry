@@ -1011,6 +1011,7 @@ function DraggableBlock(props: PlateElementProps) {
   // drag never fires `click`, so drag and menu don't conflict.
   const [menuOpen, setMenuOpen] = useState(false);
   const menuId = useId();
+  const keyboardOpen = useRef(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const connectHandle = useCallback((button: HTMLButtonElement | null) => {
     buttonRef.current = button;
@@ -1035,35 +1036,42 @@ function DraggableBlock(props: PlateElementProps) {
         contentEditable={false}
         style={{ height: HANDLE_SIZE, top: handleTop }}
       >
-        <DropdownMenu.Root modal={false} open={menuOpen} onOpenChange={setMenuOpen}>
-          {/* Keep the native drag handle separate: a menu trigger opens on
-              pointerdown, which would prevent the handle's drag gesture. */}
-          <DropdownMenu.Trigger asChild>
-            <span aria-hidden="true" className="pointer-events-none absolute inset-0" tabIndex={-1} />
-          </DropdownMenu.Trigger>
-          <button
-            aria-label={supportsBlockDrag ? 'Drag to move block' : 'Block actions'}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            aria-controls={menuOpen ? menuId : undefined}
-            className={cn('flex size-6 items-center justify-center rounded text-faint transition-colors hover:bg-well hover:text-muted', supportsBlockDrag && 'cursor-grab active:cursor-grabbing')}
-            data-plate-prevent-deselect
-            data-quarry-block-handle
-            onClick={() => setMenuOpen(true)}
-            onKeyDown={(event) => {
-              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-                event.preventDefault();
-                setMenuOpen(true);
-              }
-            }}
-            ref={connectHandle}
-            title={supportsBlockDrag ? 'Drag to move · click for actions' : 'Block actions'}
-            type="button"
-          >
-            <GripVertical size={15} />
-          </button>
-          <BlockActionsMenu editor={editor} element={element} id={menuId} restoreFocus={() => buttonRef.current?.focus()} />
-        </DropdownMenu.Root>
+        <button
+          aria-label={supportsBlockDrag ? 'Drag to move block' : 'Block actions'}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          aria-controls={menuOpen ? menuId : undefined}
+          className={cn('flex size-6 items-center justify-center rounded text-faint transition-colors hover:bg-well hover:text-muted', supportsBlockDrag && 'cursor-grab active:cursor-grabbing')}
+          data-plate-prevent-deselect
+          data-quarry-block-handle
+          onClick={(event) => {
+            keyboardOpen.current = event.detail === 0;
+            setMenuOpen(true);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              keyboardOpen.current = true;
+              setMenuOpen(true);
+            }
+          }}
+          ref={connectHandle}
+          title={supportsBlockDrag ? 'Drag to move · click for actions' : 'Block actions'}
+          type="button"
+        >
+          <GripVertical size={15} />
+        </button>
+        {/* Closed menus must not install one global keyboard listener per block. */}
+        {menuOpen && (
+          <DropdownMenu.Root modal={false} open onOpenChange={setMenuOpen}>
+            {/* Keep the native drag handle separate: a menu trigger opens on
+                pointerdown, which would prevent the handle's drag gesture. */}
+            <DropdownMenu.Trigger asChild>
+              <span aria-hidden="true" className="pointer-events-none absolute inset-0" tabIndex={-1} />
+            </DropdownMenu.Trigger>
+            <BlockActionsMenu editor={editor} element={element} id={menuId} keyboardOpen={keyboardOpen.current} restoreFocus={() => buttonRef.current?.focus()} />
+          </DropdownMenu.Root>
+        )}
       </div>
       {children}
       <BlockDropLine />
@@ -1133,9 +1141,18 @@ function deleteBlock(editor: PlateEditor, element: TElement) {
   editor.tf.focus();
 }
 
-function BlockActionsMenu({ editor, element, id, restoreFocus }: {
-  editor: PlateEditor; element: TElement; id: string; restoreFocus: () => void;
+function BlockActionsMenu({ editor, element, id, keyboardOpen, restoreFocus }: {
+  editor: PlateEditor; element: TElement; id: string; keyboardOpen: boolean; restoreFocus: () => void;
 }) {
+  useEffect(() => {
+    if (!keyboardOpen) return;
+    // The root mounts after the opening key event, so Radix has not observed
+    // that event. Focus the first item after its content focus scope mounts.
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(id)?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [id, keyboardOpen]);
   const selected = useRef(false);
   const interactedOutside = useRef(false);
   const choose = (action: () => void) => {
