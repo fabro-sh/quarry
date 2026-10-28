@@ -13,7 +13,7 @@ import { WikiLinkPlugin } from './wiki-link-element';
 import { PlateDocumentAdapter } from './plate-document-adapter';
 import { BaseTablePlugin, BaseTableRowPlugin, BaseTableCellPlugin, BaseTableCellHeaderPlugin, insertTable, insertTableRow, insertTableColumn } from '@platejs/table';
 import type { EditorMode } from './editor-types';
-import { nativeNodeIdOptions, projectPlate } from './plate-document-projection';
+import { nativeNodeIdOptions, projectPlate, textOffset } from './plate-document-projection';
 
 beforeAll(() => initSync({ module: readFileSync(resolve(process.cwd(), 'src/generated/document/quarry_document_bg.wasm')) }));
 
@@ -370,8 +370,8 @@ test('a proposed paragraph split presents its native caret before returning to t
     t.editor.tf.select({ path: [0, 0], offset: 7 });
     t.editor.tf.insertBreak();
     const anchor = t.editor.selection!.anchor;
-    expect(t.editor.children[anchor.path[0]]).toMatchObject({ quarryProposal: expect.any(String), quarryProposedBlock: expect.any(String) });
+    expect(textOffset(t.editor.children, anchor).proposal).toBe(true);
     t.editor.tf.insertText('New '); t.check();
-    expect(t.model.view().proposals.map(({ proposal }) => proposal.action.kind)).toEqual(['block_update']);
+    expect(t.model.view().proposals.map(({ proposal }) => proposal.action.kind)).toEqual(['split_block']);
   } finally { t.close(); }
 });
