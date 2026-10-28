@@ -36,8 +36,12 @@ env:
 
 jobs:
   e2e-live:
-    name: E2E (live server)
+    name: ${{ matrix.suite == 'live' && 'E2E (live server)' || 'Performance (live server)' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [live, performance]
     permissions:
       contents: read
     steps:
@@ -74,8 +78,10 @@ jobs:
         working-directory: ui
         run: bunx playwright install --with-deps chromium firefox webkit
       - name: Run live suite
+        if: matrix.suite == 'live'
         working-directory: ui
         run: bun run test:e2e:live
       - name: Check large-document responsiveness
+        if: matrix.suite == 'performance'
         working-directory: ui
         run: bun run test:performance
