@@ -65,7 +65,9 @@ jobs:
       # Prebuild so the Playwright webServer readiness budget (120s) is not
       # spent compiling; the config's `cargo run` then reuses this build.
       - name: Build quarry server
-        run: cargo build --locked -p quarry --features lib-documents
+        # Keep Vite's development React/StrictMode coverage, while testing an
+        # optimized native engine instead of spending the budget in debug code.
+        run: cargo build --release --locked -p quarry --features lib-documents
       - name: Install Playwright browsers
         working-directory: ui
         run: bunx playwright install --with-deps chromium firefox webkit
@@ -73,6 +75,7 @@ jobs:
         working-directory: ui
         env:
           QUARRY_NAVIGATION_TRACE: "1"
+          QUARRY_RELEASE_API: "1"
         run: bun run test:e2e:live
       - name: Check large-document responsiveness
         working-directory: ui

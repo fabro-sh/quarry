@@ -1,10 +1,30 @@
+export interface ReadAbortEvent { phase: 'start' | 'abort'; id: string; url: string }
+
 /** WebKit reports some caught DocumentSession fetch aborts as page errors. */
 export class NavigationErrors {
   private readonly pending = new Map<object, string>();
   private readonly cancelled = new Map<string, object>();
   private readonly ambiguous = new Set<string>();
+  private readonly observed = new Map<string, string>();
+  private readonly foreignRedirects = new Set<string>();
 
   constructor(private readonly browser: string, private readonly origin: string) {}
+
+  observeRead(event: ReadAbortEvent) {
+    if (!this.isDocumentRead(event.url)) return;
+    if (event.phase === 'start') {
+      this.cancelled.delete(event.url);
+      this.foreignRedirects.delete(event.url);
+      this.observed.set(event.url, event.id);
+    } else if (this.observed.get(event.url) === event.id && !this.foreignRedirects.has(event.url)) {
+      this.cancelled.set(event.url, event);
+    }
+  }
+
+  foreignRedirect(url: string) {
+    this.foreignRedirects.add(url);
+    this.cancelled.delete(url);
+  }
 
   requestStarted(request: object, url: string, method: string, fetch: boolean) {
     if (method !== 'GET' || !fetch || !this.isDocumentRead(url)) return;

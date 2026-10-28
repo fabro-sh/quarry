@@ -1,5 +1,6 @@
 import { expect, type APIRequestContext, type Browser, type Page } from 'playwright/test';
-import { NavigationErrors } from './navigation-errors';
+import { NavigationErrors, type ReadAbortEvent } from './navigation-errors';
+import { observeReadAborts } from './observe-read-aborts';
 
 export const apiOrigin = `http://127.0.0.1:${process.env.QUARRY_LIVE_API_PORT ?? '7832'}`;
 export const uiOrigin = process.env.QUARRY_PRODUCTION_UI === '1' ? apiOrigin : `http://127.0.0.1:${process.env.QUARRY_LIVE_UI_PORT ?? '5174'}`;
@@ -18,8 +19,15 @@ export async function openDocument(browser: Browser, path: string, author: strin
   const page = await context.newPage();
   const errors: string[] = [];
   const navigationErrors = new NavigationErrors(browser.browserType().name(), new URL(uiOrigin).origin);
+  const abortMarker = `quarry-read-abort:${crypto.randomUUID()}:`;
+  if (browser.browserType().name() === 'webkit') {
+    await page.addInitScript(observeReadAborts, { origin: new URL(uiOrigin).origin, marker: abortMarker });
+  }
   const traceEnabled = process.env.QUARRY_NAVIGATION_TRACE === '1';
   page.on('request', (request) => {
+    let first = request;
+    while (first.redirectedFrom()) first = first.redirectedFrom()!;
+    if (new URL(request.url()).origin !== new URL(uiOrigin).origin) navigationErrors.foreignRedirect(first.url());
     navigationErrors.requestStarted(request, request.url(), request.method(), request.resourceType() === 'fetch');
   });
   page.on('requestfinished', (request) => navigationErrors.requestFinished(request));
@@ -40,6 +48,12 @@ export async function openDocument(browser: Browser, path: string, author: strin
     navigationErrors.record(error, errors);
   });
   page.on('console', (message) => {
+    if (message.type() === 'debug' && message.text().startsWith(abortMarker)) {
+      const event = JSON.parse(message.text().slice(abortMarker.length)) as ReadAbortEvent;
+      navigationErrors.observeRead(event);
+      if (traceEnabled) console.info('QUARRY_NAVIGATION_TRACE', JSON.stringify({ event: 'signal', detail: event }));
+      return;
+    }
     if (message.type() !== 'error') return;
     // Intentional offline and lost-response tests generate browser network logs.
     if (/^(Failed to load resource:|Load failed|NetworkError when attempting to fetch resource)/.test(message.text())) return;

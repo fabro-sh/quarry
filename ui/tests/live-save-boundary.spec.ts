@@ -51,6 +51,7 @@ for (const scope of ['library', 'temporary']) test(`${scope}: held and failed re
 });
 
 test('healthy sockets may lose every notification and periodic reads still recover the exact comment target', async ({ browser, request }) => {
+  test.setTimeout(60000);
   const fixture = await createDocument(request, 'TARGET');
   const [block] = await blocks(request, fixture.url);
   const context = await browser.newContext();
@@ -76,10 +77,16 @@ test('healthy sockets may lose every notification and periodic reads still recov
       }
     });
     page.on('requestfinished', (request) => pendingReads.delete(request));
+    page.on('requestfailed', (request) => pendingReads.delete(request));
     await page.goto(`${uiOrigin}${fixture.path}`); await expect(body(page)).toHaveText('TARGET');
     await expect.poll(() => page.evaluate(() => sessionStorage.getItem('notifications-open'))).toBe('yes');
     await expect.poll(() => stateReads >= 2 && pendingReads.size === 0).toBe(true);
-    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    // Network-idle alone does not mean startup refreshes have settled: the
+    // socket's open callback can queue another read during cache persistence.
+    // Observe one real periodic cycle before measuring the next one.
+    const startupReadAt = lastReadAt;
+    await expect.poll(() => lastReadAt - startupReadAt, { timeout: 22000 }).toBeGreaterThanOrEqual(10000);
+    await expect.poll(() => pendingReads.size).toBe(0);
     const initialReadAt = lastReadAt;
     await transaction(request, fixture.url, [{ op: 'comment.add', block_id: block.block_id, start: 0, end: 6, body: 'Original characters' },
       { op: 'replace_block_content', block_id: block.block_id, text: 'Agent TARGET' }], block.document_clock);

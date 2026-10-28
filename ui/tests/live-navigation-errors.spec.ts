@@ -1,5 +1,7 @@
 import { expect, test } from 'playwright/test';
 import { NavigationErrors } from './helpers/navigation-errors';
+import { observeReadAborts } from './helpers/observe-read-aborts';
+import { uiOrigin } from './helpers/native-document';
 
 const origin = 'http://127.0.0.1:5174';
 const url = `${origin}/v1/libraries/example/documents-by-id/document/document-state?since=abc`;
@@ -89,4 +91,55 @@ for (const browser of ['firefox', 'chromium']) test(`${browser} errors are never
   const { tracker, request, errors } = fixture(browser);
   tracker.requestFailed(request, 'cancelled', true); tracker.record(diagnostic(), errors);
   expect(errors).toHaveLength(1);
+});
+
+test('an observed signal abort proves a pre-network handled cancellation only once', () => {
+  const tracker = new NavigationErrors('webkit', origin), errors: string[] = [];
+  tracker.observeRead({ phase: 'start', id: 'read', url });
+  tracker.observeRead({ phase: 'abort', id: 'read', url });
+  tracker.record(diagnostic(), errors);
+  expect(errors).toEqual([]);
+  tracker.record(diagnostic(), errors);
+  expect(errors).toHaveLength(1);
+});
+
+test('stale signal aborts and foreign redirects cannot supply cancellation proof', () => {
+  const tracker = new NavigationErrors('webkit', origin), errors: string[] = [];
+  tracker.observeRead({ phase: 'start', id: 'old', url });
+  tracker.observeRead({ phase: 'start', id: 'new', url });
+  tracker.observeRead({ phase: 'abort', id: 'old', url });
+  tracker.record(diagnostic(), errors);
+  tracker.foreignRedirect(url);
+  tracker.observeRead({ phase: 'abort', id: 'new', url });
+  tracker.record(diagnostic(), errors);
+  expect(errors).toHaveLength(2);
+});
+
+test('observing aborts returns the native fetch promise without consuming rejection', async ({ page }) => {
+  await page.route(`${uiOrigin}/abort-observer-test`, (route) => route.fulfill({ body: '<!doctype html><title>Observer</title>', contentType: 'text/html' }));
+  await page.goto(`${uiOrigin}/abort-observer-test`);
+  await page.evaluate(() => {
+    const state = window as unknown as { events: unknown[]; result: Promise<Response>; nativeSignal?: AbortSignal };
+    state.events = [];
+    console.debug = (message: string) => { state.events.push(JSON.parse(message.slice('observer-test:'.length))); };
+    state.result = Promise.resolve(new Response('ok'));
+    window.fetch = (_input, init) => { state.nativeSignal = init?.signal ?? undefined; return state.result; };
+  });
+  await page.evaluate(observeReadAborts, { origin: new URL(uiOrigin).origin, marker: 'observer-test:' });
+  const result = await page.evaluate(() => {
+    const state = window as unknown as { events: Array<{ phase: string }>; result: Promise<Response>; nativeSignal?: AbortSignal };
+    const controller = new AbortController();
+    const returned = fetch('/v1/libraries/test/documents-by-id/test/document-state', { signal: controller.signal });
+    controller.abort();
+    return { identical: returned === state.result, signal: state.nativeSignal === controller.signal, events: state.events.map((event) => event.phase) };
+  });
+  expect(result).toEqual({ identical: true, signal: true, events: ['start', 'abort'] });
+  const failures: string[] = [];
+  page.on('pageerror', (error) => failures.push(error.message));
+  await page.evaluate(() => {
+    const state = window as unknown as { result: Promise<Response> };
+    state.result = Promise.reject(new Error('unhandled observer regression'));
+    void fetch('/v1/libraries/test/documents-by-id/test/document-state', { signal: new AbortController().signal });
+  });
+  await expect.poll(() => failures.join('\n')).toContain('unhandled observer regression');
 });
