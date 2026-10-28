@@ -127,6 +127,7 @@ import {
   useReadOnly,
   useSelectionFragmentProp,
   type PlateEditor,
+  type PlatePlugin,
   type PlateElementProps,
   type RenderNodeWrapper,
 } from 'platejs/react';
@@ -141,6 +142,9 @@ import { MermaidPlugin } from './mermaid-block';
 import { tableMdRules, turnIntoTable } from './table';
 import { TableKit } from './table-element';
 import { TocSidebar } from './toc-sidebar';
+import { TocPlugin } from '@platejs/toc/react';
+import type { TocConfig } from '@platejs/toc';
+import { documentHeadings } from './toc-headings';
 import { wikiLinkMdRules } from './wiki-link';
 import { WikiLinkPlugin, WikiLinkProvider, type WikiLinkApi } from './wiki-link-element';
 import { RawMarkdownPlugin } from './raw-markdown-block';
@@ -286,6 +290,8 @@ const NativeClipboardPlugin = createPlatePlugin({ key: 'quarry_clipboard' }).ove
   },
 }; });
 
+const DocumentTocPlugin: PlatePlugin<TocConfig> = TocPlugin.configure({ options: { queryHeading: (editor) => documentHeadings(editor.children) } });
+
 export const plateMarkdownPlugins = [
   NativeClipboardPlugin,
   NativeReviewPlugin,
@@ -302,6 +308,7 @@ export const plateMarkdownPlugins = [
   H4Plugin.withComponent(makeHeadingElement('h4')),
   H5Plugin.withComponent(makeHeadingElement('h5')),
   H6Plugin.withComponent(makeHeadingElement('h6')),
+  DocumentTocPlugin,
   BlockquotePlugin,
   CodeBlockPlugin.withComponent(CodeBlockElement),
   CodeLinePlugin,
