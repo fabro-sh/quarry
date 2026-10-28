@@ -1344,6 +1344,7 @@ export class PlateDocumentAdapter {
         else if (isBlock(child)) next = markers.get(`block:${child.id}`);
         if (next) {
           const key = next.length ? JSON.stringify(next) : null;
+          if (key === null && child.quarryReviewKey == null) { visit(child.children, path); return; }
           // This derived property is also the render invalidation token. The
           // coordinates can be equal while the native projection object and
           // its decoration cache changed during a structural edit.
