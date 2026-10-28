@@ -5,5 +5,5 @@ for (const mode of ['development', 'production']) test(`React ${mode} restores e
   const output = execFileSync(process.execPath, [resolve('src/features/editor/__fixtures__/react-selection.mjs')], {
     env: { ...process.env, NODE_ENV: mode }, encoding: 'utf8',
   });
-  expect(JSON.parse(output)).toEqual({ mode, cases: 6 });
+  expect(JSON.parse(output)).toEqual({ mode, cases: 12 });
 });
