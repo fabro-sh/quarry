@@ -332,3 +332,20 @@ test('unflushed Slate operations report pending work until the native batch is h
     expect(model.view().blocks[0].text).toBe('Local TARGET');
   } finally { adapter.dispose(); model.dispose(); }
 });
+
+
+test('typing immediately after a proposed split stays in the same structural suggestion', () => {
+  const t = setup(); t.setMode('suggesting');
+  try {
+    t.editor.tf.select({ path: [0, 0], offset: 7 });
+    t.editor.tf.insertBreak();
+    // Do not flush between these inputs: browsers can deliver them in one frame.
+    t.editor.tf.insertText('New ');
+    t.check();
+    const suggestions = t.model.view().proposals.filter(({ proposal }) => proposal.state === 'open');
+    expect(suggestions).toHaveLength(1);
+    t.adapter.command([{ op: 'accept_proposal', id: suggestions[0].proposal.id }]);
+    t.check();
+    expect(t.model.view().blocks.map(({ text }) => text)).toEqual(['Before ', 'New TARGET after.', 'Second TARGET.']);
+  } finally { t.close(); }
+});

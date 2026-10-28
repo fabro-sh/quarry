@@ -454,6 +454,9 @@ export class PlateDocumentAdapter {
     return true;
   }
   private input<T>(action: () => T): T {
+    // The next keystroke can arrive before the scheduled frame. Materialize
+    // proposed structure before interpreting its new nodes as editable input.
+    if (!this.inputDepth && !this.compositionGroup && (this.structuralProposals.length || this.proposedStructureChanged) && this.editor.api.isNormalizing()) this.flush();
     const mode = this.options.mode?.() ?? 'editing';
     if (mode !== this.inputMode) this.endIntent();
     this.inputMode = mode; this.inputDepth++;
