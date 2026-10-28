@@ -303,7 +303,10 @@ async fn agent_transactions_require_the_read_version_before_resolving_repeated_t
             assert_eq!(error["code"], "INVALID_TRANSACTION");
             assert_eq!(error["details"]["field"], "base_clock");
             assert_eq!(fixture.state().await.0, before);
-            assert!(fixture.consistent().await.comments().unwrap().is_empty());
+            assert_eq!(
+                fixture.consistent().await.comments().unwrap(),
+                [] as [quarry_document::Comment; 0]
+            );
         }
     }
 }
@@ -405,7 +408,10 @@ async fn stale_agent_deletion_cannot_remove_browser_typing_or_partially_commit_r
             saved.block_view(&block).unwrap().text,
             "Browser See TARGET here."
         );
-        assert!(saved.comments().unwrap().is_empty());
+        assert_eq!(
+            saved.comments().unwrap(),
+            [] as [quarry_document::Comment; 0]
+        );
     }
 }
 
@@ -1129,7 +1135,10 @@ async fn invitations_are_scoped_revocable_and_enforce_viewing_for_native_transpo
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert!(fixture.state().await.1.comments().unwrap().is_empty());
+    assert_eq!(
+        fixture.state().await.1.comments().unwrap(),
+        [] as [quarry_document::Comment; 0]
+    );
 }
 
 #[tokio::test]

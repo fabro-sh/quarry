@@ -70,6 +70,8 @@ jobs:
         with:
           cache-on-failure: true
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
       # quarry-server embeds ui/dist at compile time (rust_embed)
       - uses: ./.github/actions/setup-document
       - name: Build browser bundle
@@ -106,6 +108,8 @@ jobs:
         with:
           cache-on-failure: true
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
       # quarry-server embeds ui/dist at compile time (rust_embed)
       - uses: ./.github/actions/setup-document
       - name: Build browser bundle
@@ -144,6 +148,8 @@ jobs:
         with:
           cache-on-failure: true
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
       # quarry-server embeds ui/dist at compile time (rust_embed)
       - uses: ./.github/actions/setup-document
       - name: Build browser bundle

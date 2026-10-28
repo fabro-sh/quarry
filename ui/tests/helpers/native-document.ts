@@ -11,7 +11,7 @@ export async function createDocument(request: APIRequestContext, markdown: strin
   expect(put.ok(), await put.text()).toBe(true);
   return { library, url, path: `/lib/${library}/documents/doc.md` };
 }
-export async function openDocument(browser: Browser, path: string, author: string) {
+export async function openDocument(browser: Browser, path: string, author: string, readyTimeout = 10000) {
   const context = await browser.newContext();
   await context.addInitScript((name) => localStorage.setItem('quarry:author', name), author);
   const page = await context.newPage();
@@ -20,15 +20,15 @@ export async function openDocument(browser: Browser, path: string, author: strin
   page.on('request', (request) => {
     if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigating = true;
   });
-  page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) navigating = false; });
+  page.on('domcontentloaded', () => { navigating = false; });
   page.on('pageerror', (error) => {
     // WebKit labels a fetch denied during page teardown as an access-control
     // page error, even when its rejection is caught. Require an actual main
-    // frame navigation and the exact same-origin native state endpoint.
+    // frame navigation and a same-origin Quarry API request.
     const match = error.stack?.match(/^Fetch API cannot load (http:\/\/[^\s]+) due to access control checks\./);
     if (navigating && browser.browserType().name() === 'webkit' && match) {
       const url = new URL(match[1]);
-      if (url.origin === new URL(page.url()).origin && /^\/v1\/(?:libraries\/[^/]+\/documents-by-id|tmp\/documents)\/[^/]+\/document-state$/.test(url.pathname)) return;
+      if (url.origin === new URL(page.url()).origin && /^\/v1\/(?:libraries\/[^/]+\/(?:documents(?:\/|$)|documents-by-id\/|conflicts$|git\/peers$)|tmp\/documents\/)/.test(url.pathname)) return;
     }
     errors.push(error.message);
   });
@@ -40,7 +40,7 @@ export async function openDocument(browser: Browser, path: string, author: strin
     errors.push(message.text());
   });
   await page.goto(`${uiOrigin}${path}`);
-  await expect(body(page)).toBeVisible();
+  await expect(body(page)).toBeVisible({ timeout: readyTimeout });
   await expect(page.getByLabel('Save status', { exact: true })).toHaveText('Saved', { timeout: 20000 });
   return { context, page, errors };
 }

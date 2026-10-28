@@ -47,6 +47,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
       - uses: ./.github/actions/setup-document
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
@@ -61,6 +63,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
       - uses: ./.github/actions/setup-document
       - run: bun install --frozen-lockfile
       - run: bun run check:architecture
@@ -75,6 +79,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
       - uses: ./.github/actions/setup-document
       - run: bun install --frozen-lockfile
       - run: bun run test
@@ -89,6 +95,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
       - uses: ./.github/actions/setup-document
       - run: bun install --frozen-lockfile
       - run: bun run build
@@ -104,6 +112,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
       - uses: ./.github/actions/setup-document
       - run: bun install --frozen-lockfile
       - run: bun run test

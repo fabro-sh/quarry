@@ -3,7 +3,7 @@ import { DocumentModel, type BlockConversion, type Command, type DocumentBatch, 
 import type { EditorMode } from './editor-types';
 import { sourceDrafts, type SourceBlock } from './source-drafts';
 import { wikiLinkLeaves, type WikiLinkNode } from './wiki-link';
-import { blockAt, blockAttrs, blockKinds, blockText, flattenBlocks, inlineText, inputBlockId, isBlock, isTextBlock, nodeAt, projectPlate, selectedText, slatePoint, textOffset, type NativeOffset, type ReviewMarker } from './plate-document-projection';
+import { blockAt, blockAttrs, blockKinds, blockText, flattenBlocks, inlineText, inputBlockId, isBlock, isTextBlock, nodeAt, projectPlate, runNodes, selectedText, slatePoint, textOffset, type NativeOffset, type ReviewMarker } from './plate-document-projection';
 
 const marks = ['bold', 'italic', 'strikethrough', 'underline', 'superscript', 'subscript', 'code', 'link', 'wikilink'];
 interface PasteRun { start: number; end: number; marks: Record<string, unknown> }
@@ -167,6 +167,9 @@ export class PlateDocumentAdapter {
       if (selection && block && isTextBlock(block.node) && !block.node.quarryProposedBlock && textOffset(this.editor.children, selection.anchor).proposal) { this.editor.tf.insertText('\n'); return; }
       if (!RangeApi.isCollapsed(selection) && this.suggestSelection('\n')) return;
       this.insertBreak(...args);
+      // Present the proposed caret before the next browser input event can
+      // reconcile its DOM selection against the temporary split nodes.
+      if (!this.compositionGroup && this.structuralProposals.length && this.editor.api.isNormalizing()) this.flush();
     });
     editor.tf.addMark = (...args) => { this.endIntent(); if (!this.suggestFormat(args[0], args[1])) this.addMark(...args); };
     editor.tf.removeMark = (...args) => { this.endIntent(); if (!this.suggestFormat(args[0], null)) this.removeMark(...args); };
@@ -454,6 +457,9 @@ export class PlateDocumentAdapter {
     return true;
   }
   private input<T>(action: () => T): T {
+    // The next keystroke can arrive before the scheduled frame. Materialize
+    // proposed structure before interpreting its new nodes as editable input.
+    if (!this.inputDepth && !this.compositionGroup && (this.structuralProposals.length || this.proposedStructureChanged) && this.editor.api.isNormalizing()) this.flush();
     const mode = this.options.mode?.() ?? 'editing';
     if (mode !== this.inputMode) this.endIntent();
     this.inputMode = mode; this.inputDepth++;
@@ -522,6 +528,10 @@ export class PlateDocumentAdapter {
       const id = continuation?.id ?? crypto.randomUUID();
       const group = continuation ? this.inputGroup : crypto.randomUUID();
       const mode: EditMode = { kind: continuation ? 'continue' : 'suggest', id, author };
+      // A new inline proposal in a plain paragraph only changes that paragraph.
+      const inlineInsertion = !paste && !!text && !text.includes('\n') && RangeApi.isCollapsed(selection)
+        && !start.proposal && !input && !continuation && owner.path.length === 1 && owner.node.type === 'p'
+        && this.model.proposalsForBlock(start.block).length === 0;
       const formatting = paste ? {} : { ...this.formatting(from.path), ...this.editor.api.marks() };
       const reviewOnly = !text && selected.length > 0 && selected.every((part) => !part.proposal && !part.proposedBlock);
       const reviewBlocks = reviewOnly ? [...new Set(selected.map((part) => part.block))] : undefined;
@@ -558,7 +568,13 @@ export class PlateDocumentAdapter {
             draft.apply(marks.filter((name) => formatting[name] != null).map((name) => this.content({ op: 'format', ranges, name, value: formatting[name] })));
           }
         }
-        }, undefined, group);
+        }, undefined, group, inlineInsertion ? () => {
+          const proposal = this.model.proposal(id);
+          this.present(() => this.editor.tf.insertNodes({
+            type: 'quarry_proposal', quarryProposal: id, children: runNodes(proposal.runs),
+          }, { at: from }));
+          this.refreshReviewOwners([{ kind: 'block', id: start.block }]);
+        } : undefined);
       }
       const created = selected.some((part) => !part.proposal);
       this.continuation = created ? { id, author } : undefined; this.inputGroup = created ? group : undefined;
@@ -1097,6 +1113,7 @@ export class PlateDocumentAdapter {
     if (!tx || this.presenting || this.disposed) return;
     try {
       const updatedProposals = this.proposedStructureChanged;
+      const changedStructure = this.structureChanged;
       const proposed = [...this.structuralProposals, ...(this.structureChanged ? this.finishBlockEdits() : [])];
       for (const { node } of this.dirty.size ? flattenBlocks(this.editor.children) : []) {
         if (!this.dirty.has(String(node.id)) || !isTextBlock(node)) continue;
@@ -1129,7 +1146,7 @@ export class PlateDocumentAdapter {
       const batch = tx.finish(this.compositionGroup ?? this.group);
       this.refreshReviewOwners(reviewOwners);
       this.options.changed(batch);
-      this.nativeIds = new Set(this.model.view().blocks.map((view) => view.block.id));
+      if (changedStructure) this.nativeIds = new Set(this.model.view().blocks.map((view) => view.block.id));
       if (proposed.length || updatedProposals) {
         if (this.structuralSelection) this.savedSelection = this.structuralSelection;
         else this.rememberSelection();
@@ -1343,6 +1360,7 @@ export class PlateDocumentAdapter {
         else if (isBlock(child)) next = markers.get(`block:${child.id}`);
         if (next) {
           const key = next.length ? JSON.stringify(next) : null;
+          if (key === null && child.quarryReviewKey == null) { visit(child.children, path); return; }
           // This derived property is also the render invalidation token. The
           // coordinates can be equal while the native projection object and
           // its decoration cache changed during a structural edit.
@@ -1421,12 +1439,13 @@ export class PlateDocumentAdapter {
   command(commands: Command[] | ((draft: DocumentDraft) => void), base?: string[], group?: string) {
     this.commit(commands, base, group);
   }
-  private commit(commands: Command[] | ((draft: DocumentDraft) => void), base?: string[], group?: string) {
+  private commit(commands: Command[] | ((draft: DocumentDraft) => void), base?: string[], group?: string, presentChange?: () => void) {
     if (!this.inputDepth) this.endIntent();
     if (this.options.readOnly?.()) throw new Error('The document is not editable');
     this.flush();
     const batch = this.model.edit((draft) => typeof commands === 'function' ? commands(draft) : draft.apply(commands, base), undefined, this.compositionGroup ?? group);
-    this.refresh(); this.options.changed(batch);
+    if (presentChange) presentChange(); else this.refresh();
+    this.options.changed(batch);
   }
   private commitReview(commands: Command[], group: string | undefined, review: { proposal: string; blocks: string[] }) {
     if (!this.inputDepth) this.endIntent();

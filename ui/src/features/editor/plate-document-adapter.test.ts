@@ -13,7 +13,7 @@ import { WikiLinkPlugin } from './wiki-link-element';
 import { PlateDocumentAdapter } from './plate-document-adapter';
 import { BaseTablePlugin, BaseTableRowPlugin, BaseTableCellPlugin, BaseTableCellHeaderPlugin, insertTable, insertTableRow, insertTableColumn } from '@platejs/table';
 import type { EditorMode } from './editor-types';
-import { nativeNodeIdOptions, projectPlate } from './plate-document-projection';
+import { nativeNodeIdOptions, projectPlate, textOffset } from './plate-document-projection';
 
 beforeAll(() => initSync({ module: readFileSync(resolve(process.cwd(), 'src/generated/document/quarry_document_bg.wasm')) }));
 
@@ -331,4 +331,47 @@ test('unflushed Slate operations report pending work until the native batch is h
     expect(order).toEqual(['pending', 'queued', 'settled']);
     expect(model.view().blocks[0].text).toBe('Local TARGET');
   } finally { adapter.dispose(); model.dispose(); }
+});
+
+
+test('typing immediately after a proposed split stays in the same structural suggestion', () => {
+  const t = setup(); t.setMode('suggesting');
+  try {
+    t.editor.tf.select({ path: [0, 0], offset: 7 });
+    t.editor.tf.insertBreak();
+    // Do not flush between these inputs: browsers can deliver them in one frame.
+    t.editor.tf.insertText('New ');
+    t.check();
+    const suggestions = t.model.view().proposals.filter(({ proposal }) => proposal.state === 'open');
+    expect(suggestions).toHaveLength(1);
+    t.adapter.command([{ op: 'accept_proposal', id: suggestions[0].proposal.id }]);
+    t.check();
+    expect(t.model.view().blocks.map(({ text }) => text)).toEqual(['Before ', 'New TARGET after.', 'Second TARGET.']);
+  } finally { t.close(); }
+});
+
+test('the first inline suggestion preserves other paragraphs without projecting the full document', () => {
+  const t = setup(); t.setMode('suggesting');
+  try {
+    t.editor.tf.select({ path: [0, 0], offset: 7 });
+    const untouched = t.editor.children[1];
+    const view = vi.spyOn(t.model, 'view').mockImplementation(() => { throw new Error('Unexpected whole-document projection'); });
+    try { t.editor.tf.insertText('New'); t.adapter.flush(); } finally { view.mockRestore(); }
+    t.check();
+    expect(t.editor.children[1]).toBe(untouched);
+    expect(t.model.view().proposals).toHaveLength(1);
+    expect(t.model.view().proposals[0].text).toBe('New');
+  } finally { t.close(); }
+});
+
+test('a proposed paragraph split presents its native caret before returning to the browser', () => {
+  const t = setup(); t.setMode('suggesting');
+  try {
+    t.editor.tf.select({ path: [0, 0], offset: 7 });
+    t.editor.tf.insertBreak();
+    const anchor = t.editor.selection!.anchor;
+    expect(textOffset(t.editor.children, anchor).proposal).toBe(true);
+    t.editor.tf.insertText('New '); t.check();
+    expect(t.model.view().proposals.map(({ proposal }) => proposal.action.kind)).toEqual(['split_block']);
+  } finally { t.close(); }
 });
