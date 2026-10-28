@@ -177,6 +177,30 @@ test('caught SWR metadata reads qualify only while the old document closes', () 
   expect(errors).toEqual(['Metadata read failed', 'Metadata read failed']);
 });
 
+for (const [path, caller] of [
+  ['renamed.md', 'getDocument'], ['renamed.md/outgoing-links', 'jsonRequest'],
+  ['renamed.md/backlinks', 'jsonRequest'], ['renamed.md/versions', 'jsonRequest'],
+  ['renamed.md/presence', 'jsonRequest'], ['renamed.md/review?includeResolved=1', 'jsonRequest'],
+] as const) test(`caught initial SWR read during navigation: ${path}`, () => {
+  const target = `${origin}/v1/libraries/example/documents/${path}`;
+  const stack = `Fetch API cannot load ${target} due to access control checks.
+    at unknown (web-inspector://bootstrap.js:623:59)
+    at ${caller} (${origin}/src/api/client.ts:235:31)
+    at unknown (${origin}/node_modules/.vite/deps/swr.js?v=test:824:27)
+    at unknown (${origin}/node_modules/.vite/deps/swr.js?v=test:958:25)`;
+  const error = { message: 'Initial metadata read failed', stack };
+  const tracker = new NavigationErrors('webkit', origin), errors: string[] = [];
+  tracker.observeRead({ phase: 'start', id: 'old', url: target });
+  tracker.observeRead({ phase: 'closing', reads: [{ id: 'old', url: target }] });
+  tracker.record(error, errors);
+  tracker.record({ ...error, stack: stack.replace('client.ts', 'unhandled.ts') }, errors);
+  tracker.record({ ...error, stack: stack.replaceAll('/node_modules/.vite/deps/swr.js', '/unhandled.js') }, errors);
+  tracker.observeRead({ phase: 'start', id: 'new', url: target, closing: false });
+  tracker.record(error, errors);
+  tracker.navigationCompleted();
+  expect(errors).toEqual(Array(3).fill(error.message));
+});
+
 test('observing aborts returns the native fetch promise without consuming rejection', async ({ page }) => {
   await page.route(`${uiOrigin}/abort-observer-test`, (route) => route.fulfill({ body: '<!doctype html><title>Observer</title>', contentType: 'text/html' }));
   await page.goto(`${uiOrigin}/abort-observer-test`);
@@ -196,6 +220,16 @@ test('observing aborts returns the native fetch promise without consuming reject
     return { identical: returned === state.result, signal: state.nativeSignal === controller.signal, events: state.events.map((event) => event.phase) };
   });
   expect(result).toEqual({ identical: true, signal: true, events: ['start', 'abort'] });
+  const metadata = await page.evaluate(() => {
+    const state = window as unknown as { result: Promise<Response>; events: Array<{ phase: string; reads?: Array<{ url: string }> }> };
+    const paths = ['renamed.md', 'renamed.md/outgoing-links', 'renamed.md/backlinks', 'renamed.md/versions', 'renamed.md/presence', 'renamed.md/review?includeResolved=1'];
+    const urls = paths.map((path) => `${location.origin}/v1/libraries/test/documents/${path}`);
+    const identical = urls.every((url) => fetch(url) === state.result);
+    dispatchEvent(new Event('beforeunload'));
+    const observed = state.events.at(-1)?.reads?.map((read) => read.url);
+    return { identical, covered: urls.every((url) => observed?.includes(url)) };
+  });
+  expect(metadata).toEqual({ identical: true, covered: true });
   const failures: string[] = [];
   page.on('pageerror', (error) => failures.push(error.message));
   await page.evaluate(() => {

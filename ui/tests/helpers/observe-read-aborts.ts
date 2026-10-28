@@ -26,7 +26,7 @@ export function observeReadAborts(options: { origin: string; marker: string }) {
     try { url = new URL(request?.url ?? String(input), location.href); }
     catch { return nativeFetch.call(this, input, init); }
     const stateRead = /^\/v1\/(?:libraries\/[^/]+\/documents-by-id|tmp\/documents)\/[^/]+\/document-state$/.test(url.pathname);
-    const metadataRead = /^\/v1\/libraries\/[^/]+\/documents(?:\/.+\/(?:presence|outgoing-links|backlinks))?$/.test(url.pathname);
+    const metadataRead = /^\/v1\/libraries\/[^/]+\/documents(?:\/.+)?$/.test(url.pathname);
     if (url.origin !== options.origin || !(stateRead || metadataRead)) {
       return nativeFetch.call(this, input, init);
     }

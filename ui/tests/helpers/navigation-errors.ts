@@ -97,8 +97,12 @@ export class NavigationErrors {
         .map((match) => ({ name: match[1], url: new URL(match[2]) }));
       const session = frames.some(({ url }) => url.origin === this.origin && url.pathname === '/src/features/editor/document-request.ts')
         && frames.some(({ name, url }) => (name === 'open' || name === 'refresh') && url.origin === this.origin && url.pathname === '/src/features/editor/document-session.ts');
-      const metadata = frames.some(({ name, url }) => name === 'jsonRequest' && url.origin === this.origin && url.pathname === '/src/api/client.ts')
-        && frames.some(({ name, url }) => name === 'execute' && url.origin === this.origin && url.pathname === '/node_modules/.vite/deps/swr.js');
+      const swr = frames.filter(({ url }) => url.origin === this.origin && url.pathname === '/node_modules/.vite/deps/swr.js');
+      // SWR revalidation names its caller execute; initial layout-effect reads
+      // have two anonymous SWR frames in WebKit instead.
+      const caughtBySwr = swr.some(({ name }) => name === 'execute') || swr.filter(({ name }) => name === 'unknown').length >= 2;
+      const metadata = frames.some(({ name, url }) => (name === 'jsonRequest' || name === 'getDocument')
+        && url.origin === this.origin && url.pathname === '/src/api/client.ts') && caughtBySwr;
       return session || metadata;
     } catch { return false; }
   }
@@ -107,7 +111,7 @@ export class NavigationErrors {
     const url = new URL(value);
     return url.origin === this.origin && (
       /^\/v1\/(?:libraries\/[^/]+\/documents-by-id|tmp\/documents)\/[^/]+\/document-state$/.test(url.pathname)
-      || /^\/v1\/libraries\/[^/]+\/documents(?:\/.+\/(?:presence|outgoing-links|backlinks))?$/.test(url.pathname)
+      || /^\/v1\/libraries\/[^/]+\/documents(?:\/.+)?$/.test(url.pathname)
     );
   }
 }

@@ -72,18 +72,23 @@ jobs:
         working-directory: ui
         run: bunx playwright install --with-deps chromium firefox webkit
       - name: Run live suite
+        id: live_suite
         working-directory: ui
         env:
           QUARRY_NAVIGATION_TRACE: "1"
           QUARRY_RELEASE_API: "1"
         run: bun run test:e2e:live
       - name: Check large-document responsiveness
+        # Report performance failures even if a functional browser case failed.
+        if: ${{ success() || steps.live_suite.outcome == 'failure' }}
         working-directory: ui
-        run: bun run test:performance
+        run: bun run test:performance --output=test-results-performance
       - name: Upload failed browser traces
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: browser-failure-traces
-          path: ui/test-results/
+          path: |
+            ui/test-results/
+            ui/test-results-performance/
           retention-days: 7
