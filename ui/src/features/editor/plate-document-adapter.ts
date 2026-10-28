@@ -1348,7 +1348,7 @@ export class PlateDocumentAdapter {
             start < at.offset + inlineText(child).length && end > at.offset);
         } else if (child.quarryProposal) next = markers.get(`proposal:${child.quarryProposal}`);
         else if (isBlock(child)) next = markers.get(`block:${child.id}`);
-        if (next) {
+        if (next && (next.length > 0 || child.quarryReviewKey != null)) {
           const key = next.length ? JSON.stringify(next) : null;
           // This derived property is also the render invalidation token. The
           // coordinates can be equal while the native projection object and

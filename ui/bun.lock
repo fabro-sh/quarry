@@ -70,6 +70,7 @@
   "patchedDependencies": {
     "slate-react@0.120.0": "patches/slate-react@0.120.0.patch",
     "react-dom@19.2.1": "patches/react-dom@19.2.1.patch",
+    "@platejs/list@52.0.11": "patches/@platejs%2Flist@52.0.11.patch",
     "@platejs/table@52.0.11": "patches/@platejs%2Ftable@52.0.11.patch",
   },
   "packages": {
