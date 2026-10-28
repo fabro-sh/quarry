@@ -14,11 +14,6 @@ export async function createDocument(request: APIRequestContext, markdown: strin
 export async function openDocument(browser: Browser, path: string, author: string, readyTimeout = 10000) {
   const context = await browser.newContext();
   await context.addInitScript((name) => localStorage.setItem('quarry:author', name), author);
-  // Preserve the caller stack for React render warnings in CI failure output.
-  await context.addInitScript(() => {
-    const error = console.error;
-    console.error = (...args) => error(...args, ...(String(args[0]).includes('Cannot update') ? [new Error().stack] : []));
-  });
   const page = await context.newPage();
   const errors: string[] = [];
   let navigating = false;

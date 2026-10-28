@@ -34,6 +34,7 @@ test('chunked text and highlights render every edit across distant blocks', asyn
     }
     await expect(user.page.getByLabel('Save status', { exact: true })).toHaveText('Saved', { timeout: 60000 });
     await user.page.reload();
+    await expect(body(user.page)).toBeVisible({ timeout: 30000 });
     for (const index of [0, 1000, 1400]) {
       const block = initial[index];
       const element = body(user.page).locator(`[data-block-id="${block.block_id}"]`);

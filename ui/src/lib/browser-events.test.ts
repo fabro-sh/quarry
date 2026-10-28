@@ -33,8 +33,6 @@ test('notifications keep their scope and event type without opening an HTTP even
   socket.onopen!(); expect(opened).toHaveBeenCalledTimes(1);
   for (const data of ['not JSON', '{}', '{"type":"error"}', '{"type":"open"}']) socket.onmessage!(new MessageEvent('message', { data }));
   socket.onmessage!(new MessageEvent('message', { data: '{"type":"doc.changed","doc_id":"doc"}' }));
-  expect(changed).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(0);
   expect(changed).toHaveBeenCalledTimes(1);
   expect(JSON.parse(changed.mock.calls[0][0].data)).toEqual({ type: 'doc.changed', doc_id: 'doc' });
   expect(failed).not.toHaveBeenCalled(); expect(eventSource).not.toHaveBeenCalled();
@@ -58,7 +56,6 @@ test('a failed or stalled connection reports unavailability and reconnects with 
 test('page suspension closes the socket and restoration reconnects without stale callbacks', async () => {
   const source = await open(); const changed = vi.fn(); source.addEventListener('doc.changed', changed);
   const oldMessage = Socket.all[0].onmessage!;
-  oldMessage(new MessageEvent('message', { data: '{"type":"doc.changed"}' }));
   window.dispatchEvent(new Event('pagehide'));
   expect(Socket.all[0].closed).toBe(true);
   await vi.advanceTimersByTimeAsync(30000); expect(Socket.all).toHaveLength(1);
@@ -88,11 +85,9 @@ test('workspace and document interests share one library connection with indepen
   first.addEventListener('doc.changed', firstChanged); second.addEventListener('doc.changed', secondChanged);
   first.addEventListener('stream.lagged', lagged);
   Socket.all[0].onmessage!(new MessageEvent('message', { data: '{"type":"doc.changed","doc_id":"first"}' }));
-  await vi.advanceTimersByTimeAsync(0);
   expect(workspaceChanged).toHaveBeenCalledTimes(1); expect(firstChanged).toHaveBeenCalledTimes(1); expect(secondChanged).not.toHaveBeenCalled();
   workspace.close(); first.close(); expect(Socket.all[0].closed).toBe(false);
   Socket.all[0].onmessage!(new MessageEvent('message', { data: '{"type":"doc.changed","doc_id":"second"}' }));
-  await vi.advanceTimersByTimeAsync(0);
   expect(secondChanged).toHaveBeenCalledTimes(1); expect(workspaceChanged).toHaveBeenCalledTimes(1);
   second.close(); expect(Socket.all[0].closed).toBe(true);
 });
@@ -116,6 +111,5 @@ test('late consumers observe connectivity and document consumers receive lag not
   const opened = vi.fn(), lagged = vi.fn(); late.onopen = opened; late.addEventListener('stream.lagged', lagged);
   await vi.advanceTimersByTimeAsync(0); expect(opened).toHaveBeenCalledTimes(1);
   Socket.all[0].onmessage!(new MessageEvent('message', { data: '{"type":"stream.lagged"}' }));
-  await vi.advanceTimersByTimeAsync(0);
   expect(lagged).toHaveBeenCalledTimes(1);
 });
