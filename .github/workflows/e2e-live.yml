@@ -56,6 +56,9 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: 26.12.1
       - name: Install UI dependencies
         working-directory: ui
         run: bun install --frozen-lockfile
@@ -70,14 +73,14 @@ jobs:
         run: cargo build --locked --release -p quarry --features lib-documents
       - name: Install Playwright browsers
         working-directory: ui
-        run: bunx playwright install --with-deps chromium firefox webkit
+        run: node node_modules/playwright/cli.js install --with-deps chromium firefox webkit
       - name: Check large-document responsiveness
         working-directory: ui
         env:
           QUARRY_PERFORMANCE: "1"
           PLAYWRIGHT_JSON_OUTPUT_FILE: performance-results.json
         run: |
-          bunx playwright test -c playwright.live.config.ts --workers=1 --reporter=line,json
+          node node_modules/playwright/cli.js test -c playwright.live.config.ts --workers=1 --reporter=line,json
           python3 - <<'CHECK'
           import json
           with open('performance-results.json') as report:
