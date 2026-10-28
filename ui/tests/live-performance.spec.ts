@@ -8,6 +8,8 @@ import { blocks, body, createDocument, openDocument, review, select, transaction
 // CPU profiles here. The conformance suite still records failure traces.
 test.use({ trace: 'off' });
 
+// Remove sub-nanosecond floating-point subtraction noise.
+
 test('a 100 KiB document stays responsive during typing and reloads the exact saved text', async ({ browser, browserName, request }) => {
   test.setTimeout(120000);
   const markdown = Array.from({ length: 800 }, (_, n) => `${n}: Review TARGET with Unicode 😀 and **formatted text**. ${'Detail '.repeat(12)}`).join('\n\n');
@@ -89,7 +91,7 @@ for (const blockIndex of [0, 700, 1400]) test(`Chrome retains rapid typing respo
     if (profiler) { const { profile } = await profiler.send('Profiler.stop'); await saveCpuProfile(user.page, profile); await profiler.detach(); }
     if (process.env.QUARRY_RENDER_PROFILE) await saveRenderProfile(user.page, process.env.QUARRY_RENDER_PROFILE);
     const sorted = [...metrics.keyToFrame].sort((a, b) => a - b);
-    const result = { browser_version: browser.version(), nativeProfile: process.env.QUARRY_PROFILE ? await user.page.evaluate(() => (window as unknown as { nativeProfile: unknown }).nativeProfile) : undefined, markdown_bytes: Buffer.byteLength(markdown), block_index: blockIndex, keys: typed.length, p50_key_to_frame_ms: sorted[50], p95_key_to_frame_ms: sorted[94], max_frame_gap_ms: Math.max(...metrics.frameGaps) };
+    const result = { browser_version: browser.version(), nativeProfile: process.env.QUARRY_PROFILE ? await user.page.evaluate(() => (window as unknown as { nativeProfile: unknown }).nativeProfile) : undefined, markdown_bytes: Buffer.byteLength(markdown), block_index: blockIndex, keys: typed.length, p50_key_to_frame_ms: sorted[50], p95_key_to_frame_ms: sorted[94], max_frame_gap_ms: Math.round(Math.max(...metrics.frameGaps) * 1e6) / 1e6 };
     console.info('QUARRY_CHROME_CURRENT', JSON.stringify(result));
     await test.info().attach('chrome-typing.json', { body: JSON.stringify({ ...result, frame_gaps: metrics.frameGaps, key_to_frame: metrics.keyToFrame }, null, 2), contentType: 'application/json' });
     expect(metrics.keyToFrame).toHaveLength(typed.length);
@@ -195,7 +197,7 @@ for (const blockIndex of [0, 1400]) test(`Chrome stays responsive when an agent 
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       const metrics = (window as unknown as { concurrentMetrics: { keys: number[]; gaps: number[]; running: boolean; remoteAt: number } }).concurrentMetrics;
       metrics.running = false; const sorted = [...metrics.keys].sort((a, b) => a - b);
-      return { p95_key_to_frame_ms: sorted[Math.floor(sorted.length * .95) - 1], max_frame_gap_ms: Math.max(...metrics.gaps), keys: metrics.keys.length, remote_at_key: metrics.remoteAt,
+      return { p95_key_to_frame_ms: sorted[Math.floor(sorted.length * .95) - 1], max_frame_gap_ms: Math.round(Math.max(...metrics.gaps) * 1e6) / 1e6, keys: metrics.keys.length, remote_at_key: metrics.remoteAt,
         max_frame_index: metrics.gaps.indexOf(Math.max(...metrics.gaps)), frame_gaps: metrics.gaps, key_to_frame: metrics.keys };
     });
     if (profiler) { const { profile } = await profiler.send('Profiler.stop'); await saveCpuProfile(user.page, profile); await profiler.detach(); }
@@ -251,7 +253,7 @@ test('Chrome keeps Suggesting typing and repeated deletion within the input late
         return { frameGaps: state.frameGaps, keyToFrame: state.keyToFrame };
       });
       const sorted = [...metrics.keyToFrame].sort((a, b) => a - b);
-      const result = { action, keys, browser_version: browser.version(), p95_key_to_frame_ms: sorted[Math.ceil(keys * .95) - 1], max_frame_gap_ms: Math.max(...metrics.frameGaps),
+      const result = { action, keys, browser_version: browser.version(), p95_key_to_frame_ms: sorted[Math.ceil(keys * .95) - 1], max_frame_gap_ms: Math.round(Math.max(...metrics.frameGaps) * 1e6) / 1e6,
         nativeProfile: process.env.QUARRY_PROFILE ? await user.page.evaluate(() => (window as unknown as { nativeProfile: unknown }).nativeProfile) : undefined };
       console.info('QUARRY_CHROME_SUGGESTING', JSON.stringify(result));
       await test.info().attach(`suggesting-${action}.json`, { body: JSON.stringify({ ...result, ...metrics }), contentType: 'application/json' });

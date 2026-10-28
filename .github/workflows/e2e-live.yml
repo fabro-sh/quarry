@@ -37,7 +37,7 @@ env:
 jobs:
   e2e-live:
     name: E2E (live server)
-    runs-on: ubuntu-22.04-arm-32-cores
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
