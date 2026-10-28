@@ -82,13 +82,13 @@ jobs:
           QUARRY_PERFORMANCE: "1"
           PLAYWRIGHT_JSON_OUTPUT_FILE: performance-results.json
         run: |
-          node node_modules/playwright/cli.js test -c playwright.live.config.ts --workers=1 --project=chromium --grep "agent review" --reporter=line,json
+          node node_modules/playwright/cli.js test -c playwright.live.config.ts --workers=1 --reporter=line,json
           python3 - <<'CHECK'
           import json
           with open('performance-results.json') as report:
               stats = json.load(report)['stats']
           print(stats)
-          assert stats['expected'] == 2, stats
+          assert stats['expected'] == 9, stats
           assert stats['unexpected'] == 0, stats
           CHECK
       - name: Preserve diagnostics

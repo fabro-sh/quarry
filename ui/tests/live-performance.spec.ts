@@ -20,7 +20,7 @@ test('a 100 KiB document stays responsive during typing and reloads the exact sa
   try {
     user.page.on('requestfailed', request => console.log('FAILED_REQUEST', new URL(request.url()).pathname, request.failure()));
     user.page.on('response', async response => {
-      if (response.url().includes('/document-commands')) console.log('SAVE_RESPONSE', response.status(), response.ok() ? '' : await response.text());
+      if (response.url().includes('/document-commands') && !response.ok()) console.log('FAILED_SAVE_RESPONSE', response.status(), await response.text());
     });
     await profileNative(user.page);
     await select(user.page, target.block_id, 0);
@@ -63,7 +63,7 @@ for (const blockIndex of [0, 700, 1400]) test(`Chrome retains rapid typing respo
     user.page.on('request', (request) => { if (request.method() === 'POST' && request.url().includes('/document-commands')) publications++; });
     user.page.on('requestfailed', request => console.log('FAILED_REQUEST', new URL(request.url()).pathname, request.failure()));
     user.page.on('response', async response => {
-      if (response.url().includes('/document-commands')) console.log('SAVE_RESPONSE', response.status(), response.ok() ? '' : await response.text());
+      if (response.url().includes('/document-commands') && !response.ok()) console.log('FAILED_SAVE_RESPONSE', response.status(), await response.text());
     });
     await profileNative(user.page);
     const profiler = process.env.QUARRY_CPU_PROFILE ? await user.page.context().newCDPSession(user.page) : undefined;
@@ -162,7 +162,7 @@ for (const blockIndex of [0, 1400]) test(`Chrome stays responsive when an agent 
   try {
     user.page.on('requestfailed', request => console.log('FAILED_REQUEST', new URL(request.url()).pathname, request.failure()));
     user.page.on('response', async response => {
-      if (response.url().includes('/document-commands')) console.log('SAVE_RESPONSE', response.status(), response.ok() ? '' : await response.text());
+      if (response.url().includes('/document-commands') && !response.ok()) console.log('FAILED_SAVE_RESPONSE', response.status(), await response.text());
     });
     await profileNative(user.page);
     const profiler = process.env.QUARRY_CPU_PROFILE ? await user.page.context().newCDPSession(user.page) : undefined;
@@ -204,7 +204,7 @@ for (const blockIndex of [0, 1400]) test(`Chrome stays responsive when an agent 
     console.info('QUARRY_CHROME_CONCURRENT', JSON.stringify({ browser_version: browser.version(), block_index: blockIndex, ...summary, nativeProfile: process.env.QUARRY_PROFILE ? await user.page.evaluate(() => (window as unknown as { nativeProfile: unknown }).nativeProfile) : undefined }));
     await test.info().attach('chrome-concurrent.json', { body: JSON.stringify({ browser_version: browser.version(), ...measured }, null, 2), contentType: 'application/json' });
     expect(measured.keys).toBe(typed.length); expect(measured.remote_at_key).toBeLessThan(typed.length);
-    console.log("DIAGNOSTIC_LATENCY", measured.p95_key_to_frame_ms);
+    expect(measured.p95_key_to_frame_ms).toBeLessThanOrEqual(20); expect(measured.max_frame_gap_ms).toBeLessThanOrEqual(50);
     await expect(user.page.getByLabel('Save status', { exact: true })).toHaveText('Saved', { timeout: 120000 });
     await user.page.reload(); await expect(paragraph).toHaveText(typed + target.text);
     await expect(body(user.page).locator(`[data-block-id="${initial[700].block_id}"]`)).toHaveText('Agent ' + initial[700].text);
@@ -223,7 +223,7 @@ test('Chrome keeps Suggesting typing and repeated deletion within the input late
   try {
     user.page.on('requestfailed', request => console.log('FAILED_REQUEST', new URL(request.url()).pathname, request.failure()));
     user.page.on('response', async response => {
-      if (response.url().includes('/document-commands')) console.log('SAVE_RESPONSE', response.status(), response.ok() ? '' : await response.text());
+      if (response.url().includes('/document-commands') && !response.ok()) console.log('FAILED_SAVE_RESPONSE', response.status(), await response.text());
     });
     await profileNative(user.page);
     await user.page.getByRole('button', { name: 'Document mode', exact: true }).click();

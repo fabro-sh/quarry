@@ -1097,6 +1097,7 @@ export class PlateDocumentAdapter {
     if (!tx || this.presenting || this.disposed) return;
     try {
       const updatedProposals = this.proposedStructureChanged;
+      const changedStructure = this.structureChanged;
       const proposed = [...this.structuralProposals, ...(this.structureChanged ? this.finishBlockEdits() : [])];
       for (const { node } of this.dirty.size ? flattenBlocks(this.editor.children) : []) {
         if (!this.dirty.has(String(node.id)) || !isTextBlock(node)) continue;
@@ -1129,7 +1130,7 @@ export class PlateDocumentAdapter {
       const batch = tx.finish(this.compositionGroup ?? this.group);
       this.refreshReviewOwners(reviewOwners);
       this.options.changed(batch);
-      this.nativeIds = new Set(this.model.view().blocks.map((view) => view.block.id));
+      if (changedStructure) this.nativeIds = new Set(this.model.view().blocks.map((view) => view.block.id));
       if (proposed.length || updatedProposals) {
         if (this.structuralSelection) this.savedSelection = this.structuralSelection;
         else this.rememberSelection();
