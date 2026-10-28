@@ -1102,6 +1102,7 @@ export class PlateDocumentAdapter {
     try {
       const updatedProposals = this.proposedStructureChanged;
       const proposed = [...this.structuralProposals, ...(this.structureChanged ? this.finishBlockEdits() : [])];
+      const nativeStructureChanged = this.structureChanged || updatedProposals || proposed.length > 0;
       for (const { node } of this.dirty.size ? flattenBlocks(this.editor.children) : []) {
         if (!this.dirty.has(String(node.id)) || !isTextBlock(node)) continue;
         if (tx.block(String(node.id)).text !== blockText(node)) throw new Error('Slate text does not match its native commands');
@@ -1133,7 +1134,9 @@ export class PlateDocumentAdapter {
       const batch = tx.finish(this.compositionGroup ?? this.group);
       this.refreshReviewOwners(reviewOwners);
       this.options.changed(batch);
-      this.nativeIds = new Set(this.model.view().blocks.map((view) => view.block.id));
+      // Text edits cannot change block identity. Avoid serializing the entire
+      // native document just to rebuild the same IDs after every character.
+      if (nativeStructureChanged) this.nativeIds = new Set(this.model.view().blocks.map((view) => view.block.id));
       if (proposed.length || updatedProposals) {
         if (this.structuralSelection) this.savedSelection = this.structuralSelection;
         else this.rememberSelection();
