@@ -3,7 +3,7 @@ import { DocumentModel, type BlockConversion, type Command, type DocumentBatch, 
 import type { EditorMode } from './editor-types';
 import { sourceDrafts, type SourceBlock } from './source-drafts';
 import { wikiLinkLeaves, type WikiLinkNode } from './wiki-link';
-import { blockAt, blockAttrs, blockKinds, blockText, flattenBlocks, inlineText, inputBlockId, isBlock, isTextBlock, nodeAt, projectPlate, selectedText, slatePoint, textOffset, type NativeOffset, type ReviewMarker } from './plate-document-projection';
+import { blockAt, blockAttrs, blockKinds, blockText, flattenBlocks, inlineText, inputBlockId, isBlock, isTextBlock, nodeAt, projectPlate, runNodes, selectedText, slatePoint, textOffset, type NativeOffset, type ReviewMarker } from './plate-document-projection';
 
 const marks = ['bold', 'italic', 'strikethrough', 'underline', 'superscript', 'subscript', 'code', 'link', 'wikilink'];
 interface PasteRun { start: number; end: number; marks: Record<string, unknown> }
@@ -525,6 +525,10 @@ export class PlateDocumentAdapter {
       const id = continuation?.id ?? crypto.randomUUID();
       const group = continuation ? this.inputGroup : crypto.randomUUID();
       const mode: EditMode = { kind: continuation ? 'continue' : 'suggest', id, author };
+      // A new inline proposal in a plain paragraph only changes that paragraph.
+      const inlineInsertion = !paste && !!text && !text.includes('\n') && RangeApi.isCollapsed(selection)
+        && !start.proposal && !input && !continuation && owner.path.length === 1 && owner.node.type === 'p'
+        && this.model.proposalsForBlock(start.block).length === 0;
       const formatting = paste ? {} : { ...this.formatting(from.path), ...this.editor.api.marks() };
       const reviewOnly = !text && selected.length > 0 && selected.every((part) => !part.proposal && !part.proposedBlock);
       const reviewBlocks = reviewOnly ? [...new Set(selected.map((part) => part.block))] : undefined;
@@ -561,7 +565,13 @@ export class PlateDocumentAdapter {
             draft.apply(marks.filter((name) => formatting[name] != null).map((name) => this.content({ op: 'format', ranges, name, value: formatting[name] })));
           }
         }
-        }, undefined, group);
+        }, undefined, group, inlineInsertion ? () => {
+          const proposal = this.model.proposal(id);
+          this.present(() => this.editor.tf.insertNodes({
+            type: 'quarry_proposal', quarryProposal: id, children: runNodes(proposal.runs),
+          }, { at: from }));
+          this.refreshReviewOwners([{ kind: 'block', id: start.block }]);
+        } : undefined);
       }
       const created = selected.some((part) => !part.proposal);
       this.continuation = created ? { id, author } : undefined; this.inputGroup = created ? group : undefined;
@@ -1426,12 +1436,13 @@ export class PlateDocumentAdapter {
   command(commands: Command[] | ((draft: DocumentDraft) => void), base?: string[], group?: string) {
     this.commit(commands, base, group);
   }
-  private commit(commands: Command[] | ((draft: DocumentDraft) => void), base?: string[], group?: string) {
+  private commit(commands: Command[] | ((draft: DocumentDraft) => void), base?: string[], group?: string, presentChange?: () => void) {
     if (!this.inputDepth) this.endIntent();
     if (this.options.readOnly?.()) throw new Error('The document is not editable');
     this.flush();
     const batch = this.model.edit((draft) => typeof commands === 'function' ? commands(draft) : draft.apply(commands, base), undefined, this.compositionGroup ?? group);
-    this.refresh(); this.options.changed(batch);
+    if (presentChange) presentChange(); else this.refresh();
+    this.options.changed(batch);
   }
   private commitReview(commands: Command[], group: string | undefined, review: { proposal: string; blocks: string[] }) {
     if (!this.inputDepth) this.endIntent();
