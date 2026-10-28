@@ -62,6 +62,9 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: 24.22.1
       - name: Install UI dependencies
         working-directory: ui
         run: bun install --frozen-lockfile
@@ -84,4 +87,6 @@ jobs:
       - name: Check large-document responsiveness
         if: matrix.suite == 'performance'
         working-directory: ui
-        run: bun run test:performance
+        env:
+          QUARRY_PERFORMANCE: "1"
+        run: node node_modules/playwright/cli.js test -c playwright.live.config.ts --workers=1
