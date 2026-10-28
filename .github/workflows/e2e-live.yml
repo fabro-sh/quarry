@@ -75,20 +75,19 @@ jobs:
         timeout-minutes: 5
         working-directory: ui
         run: bunx playwright install --with-deps chromium firefox webkit
-      - name: Check large-document responsiveness
+      - name: Repeat structural split in a slow browser
         timeout-minutes: 10
         working-directory: ui
         env:
-          QUARRY_PERFORMANCE: "1"
           PLAYWRIGHT_JSON_OUTPUT_FILE: performance-results.json
         run: |
-          node node_modules/playwright/cli.js test -c playwright.live.config.ts --workers=1 --reporter=line,json
+          node node_modules/playwright/cli.js test -c playwright.live.config.ts tests/live-structural-clipboard.spec.ts --grep '^suggested paragraph splits' --project=chromium --repeat-each=30 --workers=2 --reporter=line,json
           python3 - <<'CHECK'
           import json
           with open('performance-results.json') as report:
               stats = json.load(report)['stats']
           print(stats)
-          assert stats['expected'] == 9, stats
+          assert stats['expected'] == 30, stats
           assert stats['unexpected'] == 0, stats
           CHECK
       - name: Preserve diagnostics

@@ -30,6 +30,9 @@ test('suggested paragraph splits and joins stay structural through acceptance an
     op: 'comment.add', block_id: initial[0].block_id, start: 7, end: 13, body: 'Keep identity',
   }], initial[0].document_clock);
   const user = await openDocument(browser, fixture.path, 'Reviewer');
+  test.setTimeout(90_000);
+  const diagnosticCdp = await user.context.newCDPSession(user.page);
+  await diagnosticCdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
   try {
     await setSuggesting(user.page);
     await select(user.page, initial[0].block_id, 7);

@@ -350,7 +350,6 @@ test('typing immediately after a proposed split stays in the same structural sug
   } finally { t.close(); }
 });
 
-
 test('the first inline suggestion preserves other paragraphs without projecting the full document', () => {
   const t = setup(); t.setMode('suggesting');
   try {
@@ -362,5 +361,17 @@ test('the first inline suggestion preserves other paragraphs without projecting 
     expect(t.editor.children[1]).toBe(untouched);
     expect(t.model.view().proposals).toHaveLength(1);
     expect(t.model.view().proposals[0].text).toBe('New');
+  } finally { t.close(); }
+});
+
+test('a proposed paragraph split presents its native caret before returning to the browser', () => {
+  const t = setup(); t.setMode('suggesting');
+  try {
+    t.editor.tf.select({ path: [0, 0], offset: 7 });
+    t.editor.tf.insertBreak();
+    const anchor = t.editor.selection!.anchor;
+    expect(t.editor.children[anchor.path[0]]).toMatchObject({ quarryProposal: expect.any(String), quarryProposedBlock: expect.any(String) });
+    t.editor.tf.insertText('New '); t.check();
+    expect(t.model.view().proposals.map(({ proposal }) => proposal.action.kind)).toEqual(['block_update']);
   } finally { t.close(); }
 });
