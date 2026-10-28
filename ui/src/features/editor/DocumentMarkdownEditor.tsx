@@ -22,6 +22,8 @@ export function DocumentMarkdownEditor(props: Props) {
   const [connection, setConnection] = useState<Connection>();
   const [document, setDocument] = useState<DocumentView>();
   const [status, setStatus] = useState<SessionStatus>({ state: 'saved', failed: [], blocked: false, sync: 'refreshing', readOnly: false });
+  const statusOwner = useRef<DocumentSession | undefined>(undefined);
+  const reportedStatus = useRef<{ session: DocumentSession; state: SessionStatus['state']; callback: DocumentEditorConfig['onSaveStateChange'] } | undefined>(undefined);
   const blocked = useRef(false);
   const [error, setError] = useState('');
   const [peers, setPeers] = useState<DocumentSelection[]>([]);
@@ -30,6 +32,18 @@ export function DocumentMarkdownEditor(props: Props) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const publishTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => {
+    const session = statusOwner.current;
+    if (!session || active.current?.session !== session) return;
+    const callback = props.config.onSaveStateChange;
+    const previous = reportedStatus.current;
+    if (previous?.session === session && previous.state === status.state && previous.callback === callback) return;
+    reportedStatus.current = { session, state: status.state, callback };
+    // Native notifications can arrive during editor layout/selection work.
+    // Notify the parent only after the status has committed in this component.
+    callback?.(status.state);
+  }, [status, props.config.onSaveStateChange]);
 
   const publish = (session: DocumentSession) => {
     const projection = session.model.view(); setDocument(projection);
@@ -47,17 +61,19 @@ export function DocumentMarkdownEditor(props: Props) {
   }, []);
   useEffect(() => {
     let cancelled = false;
+    const opening = new AbortController();
     let opened: Connection | undefined;
     let unregister: (() => void) | undefined;
-    setError(''); setPeers([]); setDocument(undefined); setConnection(undefined); setDraft(undefined); setActiveId(null); setHoverId(null); blocked.current = false;
-    void DocumentSession.open(props.documentUrl, props.config.documentId, props.author, props.config.sessionId, props.config.token).then((session) => {
+    setError(''); setPeers([]); setDocument(undefined); setConnection(undefined); setDraft(undefined); setActiveId(null); setHoverId(null); blocked.current = false; statusOwner.current = undefined;
+    void DocumentSession.open(props.documentUrl, props.config.documentId, props.author, props.config.sessionId, props.config.token, { signal: opening.signal }).then((session) => {
       if (cancelled) { void session.close().then(() => session.model.dispose()); return; }
       opened = { session, started: false }; active.current = opened; setConnection(opened);
       session.onPresence = setPeers;
       blocked.current = session.readOnly;
       session.onStatus = (state) => {
+        if (cancelled) return;
         blocked.current = session.readOnly || !!state.blocked;
-        setStatus(state); current.current.config.onSaveStateChange?.(state.state);
+        statusOwner.current = session; setStatus(state);
         if (state.error) setError(state.error);
       };
       unregister = registerDocumentActions(props.config.documentId, {
@@ -71,7 +87,7 @@ export function DocumentMarkdownEditor(props: Props) {
       publish(session);
     }).catch((error) => { if (!cancelled) setError(String(error)); });
     return () => {
-      cancelled = true; unregister?.();
+      cancelled = true; opening.abort(); unregister?.();
       if (opened) { opened.adapter?.flush(); void opened.session.close().then(() => opened!.session.model.dispose()); }
       if (active.current === opened) active.current = undefined;
     };
@@ -82,8 +98,14 @@ export function DocumentMarkdownEditor(props: Props) {
     try { action(); return true; } catch (error) { setError(String(error)); return false; }
   };
   const command = (...commands: Command[]) => attempt(() => {
-    if (blocked.current || !active.current?.adapter) throw new Error('The document is not editable');
-    active.current.adapter.command(commands);
+    const connection = active.current;
+    if (blocked.current || !connection?.adapter) throw new Error('The document is not editable');
+    connection.adapter.command(commands);
+    // Review actions must update their controls with the inline projection.
+    // Delaying this can change menu items while the next click is in flight.
+    clearTimeout(publishTimer.current);
+    publishTimer.current = undefined;
+    publish(connection.session);
   });
   const changed = (batch: DocumentBatch) => {
     const connection = active.current;

@@ -541,7 +541,7 @@ fn utf16_helpers_count_code_units_and_detect_surrogate_splits() {
 fn empty_document_imports_to_no_rows_and_exports_to_empty_string() {
     let rows = import("");
 
-    assert!(rows.is_empty());
+    assert_eq!(rows, [] as [quarry_markdown::BlockRow; 0]);
     assert_eq!(export(&rows), "");
 }
 

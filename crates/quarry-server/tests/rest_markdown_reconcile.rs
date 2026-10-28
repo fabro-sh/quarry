@@ -642,11 +642,12 @@ async fn document_start_conflicts_remain_at_document_start_and_can_be_dismissed(
         1
     );
     assert_eq!(review["conflicts"][0]["status"], "resolved");
-    assert!(
+    assert_eq!(
         get_block_review(&app, "conf-start.md", false).await["conflicts"]
             .as_array()
             .unwrap()
-            .is_empty()
+            .as_slice(),
+        [] as [serde_json::Value; 0]
     );
     Ok(())
 }
@@ -933,11 +934,12 @@ async fn markdown_put_overlapping_edits_become_conflict_review_items() -> anyhow
         get_document_markdown(&app, "clash.md").await,
         "# Title\n\nAlpha.\n\nBravo, external.\n"
     );
-    assert!(
+    assert_eq!(
         get_block_review(&app, "clash.md", false).await["conflicts"]
             .as_array()
             .context("review should include conflicts array")?
-            .is_empty()
+            .as_slice(),
+        [] as [serde_json::Value; 0]
     );
     Ok(())
 }

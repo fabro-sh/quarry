@@ -1,12 +1,14 @@
 import 'fake-indexeddb/auto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { cleanup, render, screen, waitFor, within, act } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { initSync } from '../../generated/document/quarry_document';
 import { DocumentModel, type DocumentBatch } from './document-model';
 import { DocumentMarkdownEditor } from './DocumentMarkdownEditor';
 import { acceptAllDocumentSuggestions } from './document-actions';
+import { DocumentSession } from './document-session';
+import { DocumentOutbox } from './document-outbox';
 
 beforeAll(() => {
   initSync({ module: readFileSync(resolve(process.cwd(), 'src/generated/document/quarry_document_bg.wasm')) });
@@ -40,6 +42,53 @@ function server() {
   return { authority, collab, requests, changed() { for (const stream of streams) stream.onmessage?.(new MessageEvent('message', { data: '{"type":"doc.changed"}' })); } };
 }
 
+test('parent save status follows committed session emissions without loading or duplicate notifications', async () => {
+  const fixture = server();
+  const open = DocumentSession.open;
+  let session: DocumentSession | undefined;
+  let finishOpening!: () => void;
+  const opening = new Promise<void>((resolve) => { finishOpening = resolve; });
+  vi.spyOn(DocumentSession, 'open').mockImplementation(async (...args) => {
+    await opening;
+    session = await open(...args);
+    return session;
+  });
+  try {
+    render(<DocumentMarkdownEditor documentUrl="/document" config={fixture.collab} author="Reviewer" mode="viewing" />);
+    expect(screen.getByText('Loading document…')).toBeVisible();
+    expect(fixture.collab.onSaveStateChange).not.toHaveBeenCalled();
+    await act(async () => { finishOpening(); });
+    await screen.findByText('Keep this text');
+    await waitFor(() => expect(fixture.collab.onSaveStateChange.mock.calls).toEqual([['saved']]));
+    act(() => {
+      session!.setBufferedEdit(true);
+      session!.setBufferedEdit(true);
+      expect(fixture.collab.onSaveStateChange.mock.calls).toEqual([['saved']]);
+    });
+    expect(fixture.collab.onSaveStateChange.mock.calls).toEqual([['saved'], ['saving']]);
+    act(() => { session!.setBufferedEdit(false); session!.setBufferedEdit(false); });
+    expect(fixture.collab.onSaveStateChange.mock.calls).toEqual([['saved'], ['saving'], ['saved']]);
+  } finally { cleanup(); fixture.authority.dispose(); }
+});
+
+test('unmount aborts an initial document read without publishing an error or session', async () => {
+  const fixture = server();
+  let requestSignal: AbortSignal | undefined;
+  vi.stubGlobal('fetch', vi.fn((_url, options: RequestInit) => new Promise((_resolve, reject) => {
+    requestSignal = options.signal!;
+    requestSignal.addEventListener('abort', () => reject(requestSignal!.reason), { once: true });
+  })));
+  const cached = vi.spyOn(DocumentOutbox.prototype, 'cached');
+  try {
+    const view = render(<DocumentMarkdownEditor documentUrl="/document" config={fixture.collab} author="Reviewer" mode="viewing" />);
+    await waitFor(() => expect(requestSignal).toBeDefined());
+    await act(async () => { view.unmount(); });
+    expect(requestSignal!.aborted).toBe(true);
+    expect(cached).not.toHaveBeenCalled();
+    expect(fixture.collab.onSaveStateChange).not.toHaveBeenCalled();
+  } finally { cleanup(); fixture.authority.dispose(); }
+});
+
 test('the native page saves review decisions and replies through the durable command session', async () => {
   const fixture = server();
   try {
@@ -56,6 +105,31 @@ test('the native page saves review decisions and replies through the durable com
     expect(fixture.authority.view().comments.find((v) => v.comment.id === 'comment')!.target.attachments[0].quote).toBe('TARGET');
     await waitFor(() => expect(fixture.collab.onSaveStateChange).toHaveBeenLastCalledWith('saved'));
   } finally { cleanup(); fixture.authority.dispose(); }
+});
+
+test('review commands update the panel before a subsequent action without waiting for the typing debounce', async () => {
+  const fixture = server();
+  try {
+    render(<DocumentMarkdownEditor documentUrl="/document" config={fixture.collab} author="Reviewer" mode="viewing" />);
+    await screen.findByText('Keep this text');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const editor = screen.getByRole('textbox', { name: 'Plate markdown editor' });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Resolve comment' })); });
+    expect(screen.queryByLabelText('Comment by Reviewer', { exact: true })).toBeNull();
+    expect(editor.querySelectorAll('[data-comment-id="comment"]')).toHaveLength(0);
+    fireEvent.click(screen.getByLabelText('Show resolved comments and closed suggestions'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Reopen comment' })); });
+    expect(screen.queryByRole('button', { name: 'Reopen comment' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Resolve comment' })).toBeVisible();
+    expect(editor.querySelectorAll('[data-comment-id="comment"]')).toHaveLength(1);
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Comment actions' }), { button: 0, ctrlKey: false });
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeVisible();
+    await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' })); });
+    expect(screen.queryByLabelText('Comment by Reviewer', { exact: true })).toBeNull();
+    expect(editor.querySelectorAll('[data-comment-id="comment"]')).toHaveLength(0);
+  } finally { cleanup(); vi.useRealTimers(); fixture.authority.dispose(); }
 });
 
 test('a remote split updates the page and its highlights without changing viewing mode', async () => {

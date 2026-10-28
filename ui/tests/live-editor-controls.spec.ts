@@ -124,3 +124,37 @@ test('a drag in Suggesting mode keeps canonical order until acceptance and retai
     expect(user.errors).toEqual([]);
   } finally { await user.context.close(); }
 });
+
+test('formatting toolbar follows selection-only moves between paragraphs', async ({ browser, request }) => {
+  const fixture = await createDocument(request, 'First paragraph with enough text to select.\n\nSecond paragraph with different contents.');
+  const initial = await blocks(request, fixture.url);
+  const user = await openDocument(browser, fixture.path, 'Writer');
+  try {
+    const toolbar = user.page.getByLabel('Formatting', { exact: true });
+    const selectInBlock = async (id: string) => {
+      // A real click lets Slate commit its native selection before keyboard
+      // extension. A synthetic Range can be restored to the previous block.
+      await body(user.page).locator(`[data-block-id="${id}"]`).click();
+      await expect.poll(() => user.page.evaluate(() => window.getSelection()?.anchorNode?.parentElement?.closest('[data-block-id]')?.getAttribute('data-block-id'))).toBe(id);
+      for (let i = 1; i <= 5; i++) {
+        await user.page.keyboard.press('Shift+ArrowLeft');
+        await expect.poll(() => user.page.evaluate(() => String(window.getSelection()).length)).toBe(i);
+      }
+    };
+    await selectInBlock(initial[0].block_id);
+    await expect(toolbar).toBeVisible();
+    const first = (await toolbar.boundingBox())!;
+    await user.page.keyboard.press('ArrowRight');
+    await expect(toolbar).toBeHidden();
+    await selectInBlock(initial[1].block_id);
+    await expect.poll(() => user.page.evaluate(() => {
+      const selection = window.getSelection();
+      return selection?.anchorNode?.parentElement?.closest('[data-block-id]')?.getAttribute('data-block-id');
+    })).toBe(initial[1].block_id);
+    await expect(toolbar).toBeVisible();
+    // Collision handling may flip the toolbar above or below the selection.
+    await expect.poll(async () => Math.abs((await toolbar.boundingBox())!.y - first.y)).toBeGreaterThan(10);
+    expect((await blocks(request, fixture.url)).map((entry) => entry.text)).toEqual(initial.map((entry) => entry.text));
+    expect(user.errors).toEqual([]);
+  } finally { await user.context.close(); }
+});

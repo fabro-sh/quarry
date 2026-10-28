@@ -22,6 +22,16 @@ on:
       - "fixtures/**"
       - ".github/workflows/e2e-live.yml"
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Browser checks to run
+        type: choice
+        options: [all, performance]
+        default: all
+      profile:
+        description: Capture Chromium CPU and frame profiles
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -65,13 +75,33 @@ jobs:
       # Prebuild so the Playwright webServer readiness budget (120s) is not
       # spent compiling; the config's `cargo run` then reuses this build.
       - name: Build quarry server
-        run: cargo build --locked -p quarry --features lib-documents
+        # Keep Vite's development React/StrictMode coverage, while testing an
+        # optimized native engine instead of spending the budget in debug code.
+        run: cargo build --release --locked -p quarry --features lib-documents
       - name: Install Playwright browsers
         working-directory: ui
         run: bunx playwright install --with-deps chromium firefox webkit
       - name: Run live suite
+        if: ${{ inputs.suite != 'performance' }}
+        id: live_suite
         working-directory: ui
+        env:
+          QUARRY_NAVIGATION_TRACE: "1"
+          QUARRY_RELEASE_API: "1"
         run: bun run test:e2e:live
       - name: Check large-document responsiveness
+        # Report performance failures even if a functional browser case failed.
+        if: ${{ success() || steps.live_suite.outcome == 'failure' }}
         working-directory: ui
-        run: bun run test:performance
+        env:
+          QUARRY_CPU_PROFILE: ${{ inputs.profile && 'test-results-performance/cpu' || '' }}
+        run: bun run test:performance --output=test-results-performance
+      - name: Upload failed browser traces
+        if: ${{ failure() || inputs.profile }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: browser-failure-traces
+          path: |
+            ui/test-results/
+            ui/test-results-performance/
+          retention-days: 7

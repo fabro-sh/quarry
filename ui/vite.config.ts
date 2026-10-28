@@ -42,6 +42,9 @@ export default defineConfig({
     },
   },
   test: {
+    // These suites launch Rust and Node subprocesses. Keep CI's limited CPU
+    // available to each test instead of exhausting its wall-clock timeout.
+    maxWorkers: process.env.CI ? 1 : undefined,
     environment: 'jsdom',
     environmentOptions: {
       jsdom: {

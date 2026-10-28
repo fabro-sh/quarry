@@ -1,0 +1,23 @@
+diff --git a/dist/src-Dvsp2AeZ.js b/dist/src-Dvsp2AeZ.js
+index 13fcc0e4caefd100686ebfa62ff8aa2c65530a4b..08f76407662e29f06ebce7aee1b3ecd51b44c436 100644
+--- a/dist/src-Dvsp2AeZ.js
++++ b/dist/src-Dvsp2AeZ.js
+@@ -634,13 +634,16 @@ const withList = (ctx) => {
+ 			}
+ 			const isListItem = (node) => KEYS.listType in node;
+ 			affectedPaths.forEach((affectedPath) => {
+-				let entry = editor.api.node(affectedPath);
++				let entry = NodeApi.has(editor, affectedPath) ? editor.api.node(affectedPath) : void 0;
+ 				if (!entry) return;
+ 				/**
+ 				* Even if the affected node isn't a list item, the subsequent node
+ 				* might be, in which case we want to normalize that node instead.
+ 				*/
+-				if (!isListItem(entry[0])) entry = editor.api.node(PathApi.next(affectedPath));
++				if (!isListItem(entry[0])) {
++					const nextPath = PathApi.next(affectedPath);
++					entry = NodeApi.has(editor, nextPath) ? editor.api.node(nextPath) : void 0;
++				}
+ 				while (entry && isListItem(entry[0])) {
+ 					/**
+ 					* Break early since the subsequent list items will already have

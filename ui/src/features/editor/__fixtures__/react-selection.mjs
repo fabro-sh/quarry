@@ -7,6 +7,9 @@ const React = (await import('react')).default;
 const { createRoot } = await import('react-dom/client');
 const { flushSync } = await import('react-dom');
 const h = React.createElement;
+// These cases check exact offsets and whether distant nodes are read. The
+// browser benchmarks separately measure documents with 1,400 blocks.
+const blockCount = 256;
 
 class Fixture extends React.Component {
   getSnapshotBeforeUpdate() {
@@ -18,7 +21,7 @@ class Fixture extends React.Component {
   render() {
     return h('section', { 'data-tick': this.props.tick }, h('button', {}, 'Focus elsewhere'),
       h('div', { contentEditable: true, suppressContentEditableWarning: true, tabIndex: 0 },
-        ...Array.from({ length: 1000 }, (_, index) => h('span', { key: index, 'data-i': index },
+        ...Array.from({ length: blockCount }, (_, index) => h('span', { key: index, 'data-i': index },
           index === 1 ? h('b', {}, 'second ') : index === 0 ? '😀 first ' : `text ${index} `))));
   }
 }
@@ -44,24 +47,34 @@ const cases = [
   [[text(1).firstChild, 5], [text(0), 3]],
   [[editable, 0], [editable, 2]],
   [[editable, 2], [editable, 0]],
-  [[text(999), 2], [text(999), 5]],
+  [[text(blockCount - 1), 2], [text(blockCount - 1), 5]],
 ];
 const logical = (node, offset) => {
   const range = document.createRange(); range.setStart(editable, 0); range.setEnd(node, offset); return range.toString().length;
 };
-const tail = text(999), nodeValue = Object.getOwnPropertyDescriptor(window.Node.prototype, 'nodeValue');
-let tailReads = 0;
+const middle = text(blockCount / 2), tail = text(blockCount - 1), nodeValue = Object.getOwnPropertyDescriptor(window.Node.prototype, 'nodeValue');
+let tailReads = 0, middleReads = 0;
+Object.defineProperty(middle, 'nodeValue', { get() { middleReads++; return nodeValue.get.call(this); }, set(value) { nodeValue.set.call(this, value); }, configurable: true });
 Object.defineProperty(tail, 'nodeValue', { get() { tailReads++; return nodeValue.get.call(this); }, set(value) { nodeValue.set.call(this, value); }, configurable: true });
+const fallback = process.env.REACT_SELECTION_FALLBACK === '1';
 for (const [index, [anchor, focus]] of cases.entries()) {
   editable.focus();
   const selection = window.getSelection(); selection.setBaseAndExtent(...anchor, ...focus);
   const expected = [logical(...anchor), logical(...focus)];
-  tailReads = 0;
-  flushSync(() => root.render(h(Fixture, { tick: index + 1 })));
+  tailReads = 0; middleReads = 0;
+  const createRange = document.createRange.bind(document);
+  let failedOnce = false;
+  if (fallback) document.createRange = () => {
+    if (!failedOnce) { failedOnce = true; throw new Error('Range capture unavailable'); }
+    return createRange();
+  };
+  try { flushSync(() => root.render(h(Fixture, { tick: index + 1 }))); }
+  finally { document.createRange = createRange; }
   assert.equal(document.activeElement, editable, 'React restores editor focus after the snapshot callback changes it');
   assert.deepEqual([logical(selection.anchorNode, selection.anchorOffset), logical(selection.focusNode, selection.focusOffset)], expected, `selection case ${index}`);
+  if (!fallback) assert.equal(middleReads, 0, 'native selection capture must not walk through distant DOM nodes');
   if (index < cases.length - 1) assert.equal(tailReads, 0, 'selection capture must stop before unrelated distant text');
 }
 flushSync(() => root.unmount());
 window.close();
-console.log(JSON.stringify({ mode: process.env.NODE_ENV, cases: cases.length }));
+console.log(JSON.stringify({ mode: process.env.NODE_ENV, fallback, cases: cases.length }));

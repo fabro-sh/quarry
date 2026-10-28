@@ -505,7 +505,11 @@ export class PlateDocumentAdapter {
     this.present(() => this.editor.tf.apply({ type: 'set_node', path: block.path, properties: { id: block.node.id }, newProperties: { id } }));
   }
   private suggestSelection(text: string, paste?: { runs: PasteRun[]; kind: string; attrs: Attributes }): boolean {
-    if (this.options.mode?.() !== 'suggesting' || !this.editor.selection || this.presenting) return false;
+    if (this.options.mode?.() !== 'suggesting' || this.presenting) return false;
+    // A structural edit first creates a temporary Slate block. Publish and
+    // project its native proposal before interpreting the next input's owner.
+    if (this.structuralSelection) this.flush();
+    if (!this.editor.selection) return false;
     const selection = this.editor.selection;
     const anchor = textOffset(this.editor.children, selection.anchor), focus = textOffset(this.editor.children, selection.focus);
     if (anchor.proposal && focus.proposal && anchor.block === focus.block && anchor.proposedBlock === focus.proposedBlock) return false;
@@ -1098,6 +1102,7 @@ export class PlateDocumentAdapter {
     try {
       const updatedProposals = this.proposedStructureChanged;
       const proposed = [...this.structuralProposals, ...(this.structureChanged ? this.finishBlockEdits() : [])];
+      const nativeStructureChanged = this.structureChanged || updatedProposals || proposed.length > 0;
       for (const { node } of this.dirty.size ? flattenBlocks(this.editor.children) : []) {
         if (!this.dirty.has(String(node.id)) || !isTextBlock(node)) continue;
         if (tx.block(String(node.id)).text !== blockText(node)) throw new Error('Slate text does not match its native commands');
@@ -1129,7 +1134,9 @@ export class PlateDocumentAdapter {
       const batch = tx.finish(this.compositionGroup ?? this.group);
       this.refreshReviewOwners(reviewOwners);
       this.options.changed(batch);
-      this.nativeIds = new Set(this.model.view().blocks.map((view) => view.block.id));
+      // Text edits cannot change block identity. Avoid serializing the entire
+      // native document just to rebuild the same IDs after every character.
+      if (nativeStructureChanged) this.nativeIds = new Set(this.model.view().blocks.map((view) => view.block.id));
       if (proposed.length || updatedProposals) {
         if (this.structuralSelection) this.savedSelection = this.structuralSelection;
         else this.rememberSelection();
@@ -1341,7 +1348,7 @@ export class PlateDocumentAdapter {
             start < at.offset + inlineText(child).length && end > at.offset);
         } else if (child.quarryProposal) next = markers.get(`proposal:${child.quarryProposal}`);
         else if (isBlock(child)) next = markers.get(`block:${child.id}`);
-        if (next) {
+        if (next && (next.length > 0 || child.quarryReviewKey != null)) {
           const key = next.length ? JSON.stringify(next) : null;
           // This derived property is also the render invalidation token. The
           // coordinates can be equal while the native projection object and

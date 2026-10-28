@@ -3,6 +3,7 @@ import { NativeReviewContext, ReviewHighlightsContext, type NativeReviewState } 
 import { NativeSuggestionActions } from './plate-review-actions';
 import { PlatePresence } from './plate-presence';
 import { SourceDraftRecovery } from './source-draft-editor';
+import { useCommittedFloatingToolbar } from './floating-toolbar';
 import type { DocumentSelection } from './document-presence';
 import { AutoformatPlugin, type AutoformatRule } from '@platejs/autoformat';
 import {
@@ -51,7 +52,6 @@ import {
   flip,
   offset,
   shift,
-  useFloatingToolbar,
   useFloatingToolbarState,
   type UseVirtualFloatingOptions,
 } from '@platejs/floating';
@@ -105,7 +105,7 @@ import {
   type TLinkElement,
   type TListElement,
 } from 'platejs';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import remarkGfm from 'remark-gfm';
 import {
@@ -141,6 +141,8 @@ import { MermaidPlugin } from './mermaid-block';
 import { tableMdRules, turnIntoTable } from './table';
 import { TableKit } from './table-element';
 import { TocSidebar } from './toc-sidebar';
+import { TocPlugin } from '@platejs/toc/react';
+import { queryHeadings } from './toc-headings';
 import { wikiLinkMdRules } from './wiki-link';
 import { WikiLinkPlugin, WikiLinkProvider, type WikiLinkApi } from './wiki-link-element';
 import { RawMarkdownPlugin } from './raw-markdown-block';
@@ -287,6 +289,7 @@ const NativeClipboardPlugin = createPlatePlugin({ key: 'quarry_clipboard' }).ove
 }; });
 
 export const plateMarkdownPlugins = [
+  TocPlugin.configure({ options: { queryHeading: queryHeadings } }),
   NativeClipboardPlugin,
   NativeReviewPlugin,
   NativeProposalPlugin,
@@ -474,7 +477,7 @@ function FloatingFormatToolbar({
   // Inline void chips have native text even though Slate's string is empty.
   const selectedNativeText = useEditorSelector((editor) => editor.selection && editor.api.isExpanded()
     ? editor.api.string() || (selectedText(editor.children, editor.selection).length ? 'selected' : '') : '', []);
-  const { hidden, props, ref } = useFloatingToolbar({ ...state, selectionText: selectedNativeText });
+  const { hidden, props, ref } = useCommittedFloatingToolbar({ ...state, selectionText: selectedNativeText });
   useEffect(() => {
     if (!commenting) return;
     // The selection remains the comment's target. Keep its formatting popup
@@ -1009,7 +1012,14 @@ function DraggableBlock(props: PlateElementProps) {
   const [handleTop, setHandleTop] = useState(0);
   // Clicking the handle (no drag) opens a block-actions menu. A native HTML5
   // drag never fires `click`, so drag and menu don't conflict.
-  const [menuRect, setMenuRect] = useState<{ left: number; top: number } | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuId = useId();
+  const keyboardOpen = useRef(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const connectHandle = useCallback((button: HTMLButtonElement | null) => {
+    buttonRef.current = button;
+    handleRef(button);
+  }, [handleRef]);
   const alignHandle = () => {
     const dom = editor.api.toDOMNode(element);
     if (!dom) return;
@@ -1025,36 +1035,49 @@ function DraggableBlock(props: PlateElementProps) {
       ref={nodeRef}
     >
       <div
-        className="absolute left-0 flex w-7 items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
+        className="absolute left-0 flex w-7 items-center justify-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
         contentEditable={false}
         style={{ height: HANDLE_SIZE, top: handleTop }}
       >
         <button
           aria-label={supportsBlockDrag ? 'Drag to move block' : 'Block actions'}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          aria-controls={menuOpen ? menuId : undefined}
           className={cn('flex size-6 items-center justify-center rounded text-faint transition-colors hover:bg-well hover:text-muted', supportsBlockDrag && 'cursor-grab active:cursor-grabbing')}
           data-plate-prevent-deselect
           data-quarry-block-handle
           onClick={(event) => {
-            const box = event.currentTarget.getBoundingClientRect();
-            setMenuRect({ left: box.left, top: box.bottom + 4 });
+            keyboardOpen.current = event.detail === 0;
+            setMenuOpen(true);
           }}
-          ref={handleRef}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              keyboardOpen.current = true;
+              setMenuOpen(true);
+            }
+          }}
+          ref={connectHandle}
           title={supportsBlockDrag ? 'Drag to move · click for actions' : 'Block actions'}
           type="button"
         >
           <GripVertical size={15} />
         </button>
+        {/* Closed menus must not install one global keyboard listener per block. */}
+        {menuOpen && (
+          <DropdownMenu.Root modal={false} open onOpenChange={setMenuOpen}>
+            {/* Keep the native drag handle separate: a menu trigger opens on
+                pointerdown, which would prevent the handle's drag gesture. */}
+            <DropdownMenu.Trigger asChild>
+              <span aria-hidden="true" className="pointer-events-none absolute inset-0" tabIndex={-1} />
+            </DropdownMenu.Trigger>
+            <BlockActionsMenu editor={editor} element={element} id={menuId} keyboardOpen={keyboardOpen.current} restoreFocus={() => buttonRef.current?.focus()} />
+          </DropdownMenu.Root>
+        )}
       </div>
       {children}
       <BlockDropLine />
-      {menuRect ? (
-        <BlockActionsMenu
-          editor={editor}
-          element={element}
-          onClose={() => setMenuRect(null)}
-          rect={menuRect}
-        />
-      ) : null}
     </div>
   );
 }
@@ -1121,80 +1144,72 @@ function deleteBlock(editor: PlateEditor, element: TElement) {
   editor.tf.focus();
 }
 
-function BlockActionsMenu({
-  editor,
-  element,
-  onClose,
-  rect,
-}: {
-  editor: PlateEditor;
-  element: TElement;
-  onClose: () => void;
-  rect: { left: number; top: number };
+function BlockActionsMenu({ editor, element, id, keyboardOpen, restoreFocus }: {
+  editor: PlateEditor; element: TElement; id: string; keyboardOpen: boolean; restoreFocus: () => void;
 }) {
-  return createPortal(
-    <div className="fixed inset-0 z-50" onMouseDown={onClose}>
-      <div
+  useEffect(() => {
+    if (!keyboardOpen) return;
+    // The root mounts after the opening key event, so Radix has not observed
+    // that event. Focus the first item after its content focus scope mounts.
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(id)?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [id, keyboardOpen]);
+  const selected = useRef(false);
+  const interactedOutside = useRef(false);
+  const choose = (action: () => void) => {
+    selected.current = true;
+    action();
+  };
+  return (
+    <DropdownMenu.Portal>
+      <DropdownMenu.Content
         aria-label="Block actions"
-        className="fixed z-50 min-w-44 rounded-md border border-line bg-raised p-1 shadow-lg"
-        onMouseDown={(event) => event.stopPropagation()}
-        role="menu"
-        style={{ left: rect.left, top: rect.top }}
+        id={id}
+        align="start"
+        className="z-50 min-w-44 rounded-md border border-line bg-raised p-1 shadow-lg"
+        sideOffset={4}
+        onInteractOutside={() => { interactedOutside.current = true; }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          if (!selected.current && !interactedOutside.current) restoreFocus();
+          selected.current = false;
+          interactedOutside.current = false;
+        }}
       >
-        <div className="group/turninto relative">
-          <button className={cn(blockMenuItem, 'justify-between')} role="menuitem" type="button">
+        <DropdownMenu.Sub>
+          <DropdownMenu.SubTrigger className={cn(blockMenuItem, 'justify-between data-highlighted:bg-well')}>
             <span className="flex items-center gap-2">
               <Type className="shrink-0 text-muted" size={15} />
               Turn into
             </span>
             <ChevronRight className="shrink-0 text-muted" size={14} />
-          </button>
-          <div className="absolute -top-1 left-full z-50 hidden min-w-44 rounded-md border border-line bg-raised p-1 shadow-lg group-hover/turninto:block">
+          </DropdownMenu.SubTrigger>
+          <DropdownMenu.SubContent className="z-50 min-w-44 rounded-md border border-line bg-raised p-1 shadow-lg">
             {BLOCK_TURN_INTO.map((item) => (
-              <button
-                className={blockMenuItem}
+              <DropdownMenu.Item
+                className={cn(blockMenuItem, 'data-highlighted:bg-well')}
                 key={item.label}
-                onClick={() => {
-                  turnBlockInto(editor, element, item.apply);
-                  onClose();
-                }}
-                role="menuitem"
-                type="button"
+                onSelect={() => choose(() => turnBlockInto(editor, element, item.apply))}
               >
                 <item.icon className="shrink-0 text-muted" size={15} />
                 {item.label}
-              </button>
+              </DropdownMenu.Item>
             ))}
-          </div>
-        </div>
-        <div className="my-1 h-px bg-line" />
-        <button
-          className={blockMenuItem}
-          onClick={() => {
-            duplicateBlock(editor, element);
-            onClose();
-          }}
-          role="menuitem"
-          type="button"
-        >
+          </DropdownMenu.SubContent>
+        </DropdownMenu.Sub>
+        <DropdownMenu.Separator className="my-1 h-px bg-line" />
+        <DropdownMenu.Item className={cn(blockMenuItem, 'data-highlighted:bg-well')} onSelect={() => choose(() => duplicateBlock(editor, element))}>
           <Copy className="shrink-0 text-muted" size={15} />
           Duplicate
-        </button>
-        <button
-          className={cn(blockMenuItem, 'text-danger')}
-          onClick={() => {
-            deleteBlock(editor, element);
-            onClose();
-          }}
-          role="menuitem"
-          type="button"
-        >
+        </DropdownMenu.Item>
+        <DropdownMenu.Item className={cn(blockMenuItem, 'text-danger data-highlighted:bg-well')} onSelect={() => choose(() => deleteBlock(editor, element))}>
           <Trash2 className="shrink-0 text-danger" size={15} />
           Delete
-        </button>
-      </div>
-    </div>,
-    document.body
+        </DropdownMenu.Item>
+      </DropdownMenu.Content>
+    </DropdownMenu.Portal>
   );
 }
 

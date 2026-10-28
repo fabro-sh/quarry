@@ -1,4 +1,6 @@
 import { expect, type APIRequestContext, type Browser, type Page } from 'playwright/test';
+import { NavigationErrors, type ReadAbortEvent } from './navigation-errors';
+import { observeReadAborts } from './observe-read-aborts';
 
 export const apiOrigin = `http://127.0.0.1:${process.env.QUARRY_LIVE_API_PORT ?? '7832'}`;
 export const uiOrigin = process.env.QUARRY_PRODUCTION_UI === '1' ? apiOrigin : `http://127.0.0.1:${process.env.QUARRY_LIVE_UI_PORT ?? '5174'}`;
@@ -16,23 +18,43 @@ export async function openDocument(browser: Browser, path: string, author: strin
   await context.addInitScript((name) => localStorage.setItem('quarry:author', name), author);
   const page = await context.newPage();
   const errors: string[] = [];
-  let navigating = false;
+  const navigationErrors = new NavigationErrors(browser.browserType().name(), new URL(uiOrigin).origin);
+  const abortMarker = `quarry-read-abort:${crypto.randomUUID()}:`;
+  if (browser.browserType().name() === 'webkit') {
+    await page.addInitScript(observeReadAborts, { origin: new URL(uiOrigin).origin, marker: abortMarker });
+  }
+  const traceEnabled = process.env.QUARRY_NAVIGATION_TRACE === '1';
   page.on('request', (request) => {
-    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigating = true;
+    let first = request;
+    while (first.redirectedFrom()) first = first.redirectedFrom()!;
+    if (new URL(request.url()).origin !== new URL(uiOrigin).origin) navigationErrors.foreignRedirect(first.url());
+    navigationErrors.requestStarted(request, request.url(), request.method(), request.resourceType() === 'fetch');
   });
-  page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) navigating = false; });
-  page.on('pageerror', (error) => {
-    // WebKit labels a fetch denied during page teardown as an access-control
-    // page error, even when its rejection is caught. Require an actual main
-    // frame navigation and the exact same-origin native state endpoint.
-    const match = error.stack?.match(/^Fetch API cannot load (http:\/\/[^\s]+) due to access control checks\./);
-    if (navigating && browser.browserType().name() === 'webkit' && match) {
-      const url = new URL(match[1]);
-      if (url.origin === new URL(page.url()).origin && /^\/v1\/(?:libraries\/[^/]+\/documents-by-id|tmp\/documents)\/[^/]+\/document-state$/.test(url.pathname)) return;
+  page.on('requestfinished', (request) => navigationErrors.requestFinished(request));
+  page.on('load', () => navigationErrors.navigationCompleted());
+  page.on('requestfailed', (request) => {
+    if (traceEnabled) console.info('QUARRY_NAVIGATION_TRACE', JSON.stringify({
+      event: 'request-failed', url: request.url(), reason: request.failure()?.errorText,
+    }));
+    let sameOrigin = true;
+    for (let redirect: typeof request | null = request; redirect; redirect = redirect.redirectedFrom()) {
+      if (new URL(redirect.url()).origin !== new URL(uiOrigin).origin) sameOrigin = false;
     }
-    errors.push(error.message);
+    navigationErrors.requestFailed(request, request.failure()?.errorText ?? '', sameOrigin);
+  });
+  page.on('pageerror', (error) => {
+    if (traceEnabled) console.info('QUARRY_NAVIGATION_TRACE', JSON.stringify({
+      event: 'page-error', name: error.name, message: error.message, stack: error.stack,
+    }));
+    navigationErrors.record(error, errors);
   });
   page.on('console', (message) => {
+    if (message.type() === 'debug' && message.text().startsWith(abortMarker)) {
+      const event = JSON.parse(message.text().slice(abortMarker.length)) as ReadAbortEvent;
+      navigationErrors.observeRead(event);
+      if (traceEnabled) console.info('QUARRY_NAVIGATION_TRACE', JSON.stringify({ event: 'signal', detail: event }));
+      return;
+    }
     if (message.type() !== 'error') return;
     // Intentional offline and lost-response tests generate browser network logs.
     if (/^(Failed to load resource:|Load failed|NetworkError when attempting to fetch resource)/.test(message.text())) return;
