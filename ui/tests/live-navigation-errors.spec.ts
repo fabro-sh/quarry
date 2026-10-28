@@ -115,6 +115,50 @@ test('stale signal aborts and foreign redirects cannot supply cancellation proof
   expect(errors).toHaveLength(2);
 });
 
+test('old-document handled reads require completed navigation, and new-page errors remain visible', () => {
+  const tracker = new NavigationErrors('webkit', origin), errors: string[] = [];
+  tracker.observeRead({ phase: 'start', id: 'old', url });
+  tracker.observeRead({ phase: 'closing', reads: [{ id: 'old', url }] });
+  tracker.record(diagnostic(), errors);
+  expect(errors).toHaveLength(1);
+  tracker.observeRead({ phase: 'start', id: 'new', url });
+  tracker.record(diagnostic(), errors);
+  tracker.record({ message: 'Application exception' }, errors);
+  tracker.navigationCompleted();
+  expect(errors).toEqual([diagnostic().message, 'Application exception']);
+});
+
+test('a cancelled navigation cannot discard a real error before a later navigation', () => {
+  const tracker = new NavigationErrors('webkit', origin), errors: string[] = [];
+  tracker.observeRead({ phase: 'start', id: 'old', url });
+  tracker.observeRead({ phase: 'closing', reads: [{ id: 'old', url }] });
+  tracker.record(diagnostic(), errors);
+  tracker.observeRead({ phase: 'closing', reads: [{ id: 'old', url }] });
+  tracker.navigationCompleted();
+  expect(errors).toHaveLength(1);
+});
+
+test('a foreign redirect discovered after the diagnostic keeps the error visible', () => {
+  const tracker = new NavigationErrors('webkit', origin), errors: string[] = [];
+  tracker.observeRead({ phase: 'start', id: 'old', url });
+  tracker.observeRead({ phase: 'closing', reads: [{ id: 'old', url }] });
+  tracker.record(diagnostic(), errors);
+  tracker.foreignRedirect(url);
+  tracker.navigationCompleted();
+  expect(errors).toHaveLength(1);
+});
+
+test('a queued read in the closing realm is distinct from a new-document read', () => {
+  const tracker = new NavigationErrors('webkit', origin), errors: string[] = [];
+  tracker.observeRead({ phase: 'closing', reads: [] });
+  tracker.observeRead({ phase: 'start', id: 'old-late', url, closing: true });
+  tracker.record(diagnostic(), errors);
+  tracker.observeRead({ phase: 'start', id: 'new-page', url, closing: false });
+  tracker.record(diagnostic(), errors);
+  tracker.navigationCompleted();
+  expect(errors).toEqual([diagnostic().message]);
+});
+
 test('observing aborts returns the native fetch promise without consuming rejection', async ({ page }) => {
   await page.route(`${uiOrigin}/abort-observer-test`, (route) => route.fulfill({ body: '<!doctype html><title>Observer</title>', contentType: 'text/html' }));
   await page.goto(`${uiOrigin}/abort-observer-test`);

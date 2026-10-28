@@ -1,4 +1,5 @@
-export interface ReadAbortEvent { phase: 'start' | 'abort'; id: string; url: string }
+export type ReadAbortEvent = { phase: 'start' | 'abort'; id: string; url: string; closing?: boolean }
+  | { phase: 'closing'; reads: Array<{ id: string; url: string }> };
 
 /** WebKit reports some caught DocumentSession fetch aborts as page errors. */
 export class NavigationErrors {
@@ -7,15 +8,26 @@ export class NavigationErrors {
   private readonly ambiguous = new Set<string>();
   private readonly observed = new Map<string, string>();
   private readonly foreignRedirects = new Set<string>();
+  private readonly closing = new Set<string>();
+  private readonly deferred: Array<{ url: string; index: number; errors: string[] }> = [];
 
   constructor(private readonly browser: string, private readonly origin: string) {}
 
   observeRead(event: ReadAbortEvent) {
+    if (event.phase === 'closing') {
+      this.closing.clear();
+      this.deferred.length = 0;
+      for (const read of event.reads) {
+        if (this.observed.get(read.url) === read.id) this.closing.add(read.id);
+      }
+      return;
+    }
     if (!this.isDocumentRead(event.url)) return;
     if (event.phase === 'start') {
       this.cancelled.delete(event.url);
       this.foreignRedirects.delete(event.url);
       this.observed.set(event.url, event.id);
+      if (event.closing) this.closing.add(event.id);
     } else if (this.observed.get(event.url) === event.id && !this.foreignRedirects.has(event.url)) {
       this.cancelled.set(event.url, event);
     }
@@ -24,6 +36,15 @@ export class NavigationErrors {
   foreignRedirect(url: string) {
     this.foreignRedirects.add(url);
     this.cancelled.delete(url);
+  }
+
+  navigationCompleted() {
+    // A cancelled beforeunload never reaches load, so its errors remain.
+    for (const candidate of this.deferred.slice().reverse()) {
+      if (!this.foreignRedirects.has(candidate.url)) candidate.errors.splice(candidate.index, 1);
+    }
+    this.deferred.length = 0;
+    this.closing.clear();
   }
 
   requestStarted(request: object, url: string, method: string, fetch: boolean) {
@@ -59,7 +80,14 @@ export class NavigationErrors {
       this.cancelled.delete(url);
       return;
     }
-    errors.push(error.message);
+    const index = errors.push(error.message) - 1;
+    const read = url && this.observed.get(url);
+    if (url && read && this.closing.has(read) && !this.foreignRedirects.has(url) && this.isHandledSessionRead(error.stack!)) {
+      // WebKit may report its own cancelled fetch diagnostic before either
+      // Request.failed or AbortSignal is delivered. The document must actually
+      // finish navigating before this handled, old-document read is ignored.
+      this.deferred.push({ url, index, errors });
+    }
   }
 
   private isHandledSessionRead(stack: string) {

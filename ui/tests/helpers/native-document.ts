@@ -31,6 +31,7 @@ export async function openDocument(browser: Browser, path: string, author: strin
     navigationErrors.requestStarted(request, request.url(), request.method(), request.resourceType() === 'fetch');
   });
   page.on('requestfinished', (request) => navigationErrors.requestFinished(request));
+  page.on('load', () => navigationErrors.navigationCompleted());
   page.on('requestfailed', (request) => {
     if (traceEnabled) console.info('QUARRY_NAVIGATION_TRACE', JSON.stringify({
       event: 'request-failed', url: request.url(), reason: request.failure()?.errorText,

@@ -5,11 +5,18 @@ export function observeReadAborts(options: { origin: string; marker: string }) {
   if (location.origin !== options.origin) return;
   const nativeFetch = window.fetch;
   const report = console.debug.bind(console);
+  const reads = new Map<string, { id: string; url: string }>();
+  let closing = false;
   const notify = (event: ReadAbortEvent) => {
     // Console events are emitted synchronously even while the realm unloads.
     // An exposed async binding can be discarded when that realm is destroyed.
     report(options.marker + JSON.stringify(event));
   };
+  window.addEventListener('beforeunload', () => {
+    closing = true;
+    notify({ phase: 'closing', reads: [...reads.values()] });
+  });
+  window.addEventListener('pageshow', () => { closing = false; });
   window.fetch = function(input, init) {
     const request = input instanceof Request ? input : undefined;
     const signal = init?.signal ?? request?.signal;
@@ -22,7 +29,8 @@ export function observeReadAborts(options: { origin: string; marker: string }) {
       return nativeFetch.call(this, input, init);
     }
     const event = { id: crypto.randomUUID(), url: url.href };
-    notify({ ...event, phase: 'start' });
+    reads.set(event.url, event);
+    notify({ ...event, phase: 'start', closing });
     const abort = () => notify({ ...event, phase: 'abort' });
     signal.addEventListener('abort', abort, { once: true });
     try { return nativeFetch.call(this, input, init); }
