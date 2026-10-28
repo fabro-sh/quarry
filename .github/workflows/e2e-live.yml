@@ -58,7 +58,7 @@ jobs:
           bun-version: 1.4.4
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
-          node-version: 26.12.1
+          node-version: 24.22.1
       - name: Install UI dependencies
         working-directory: ui
         run: bun install --frozen-lockfile
@@ -72,9 +72,11 @@ jobs:
       - name: Build quarry server
         run: cargo build --locked --release -p quarry --features lib-documents
       - name: Install Playwright browsers
+        timeout-minutes: 5
         working-directory: ui
-        run: node node_modules/playwright/cli.js install --with-deps chromium firefox webkit
+        run: bunx playwright install --with-deps chromium firefox webkit
       - name: Check large-document responsiveness
+        timeout-minutes: 10
         working-directory: ui
         env:
           QUARRY_PERFORMANCE: "1"
