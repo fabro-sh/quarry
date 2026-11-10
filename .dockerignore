@@ -1,7 +1,7 @@
 .DS_Store
 .git
 .quarry
-.ai/research
+.ai
 logs
 target
 *.lockfile
