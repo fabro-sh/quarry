@@ -599,6 +599,10 @@ const linkInput =
 // Adapted from PlateJS's official LinkFloatingToolbar: a URL input when inserting
 // (Cmd/Ctrl+K or the toolbar button), and an Edit / Open / Unlink popover when the
 // cursor sits in a link. Hidden in read-only (Viewing) mode.
+//
+// Source: https://github.com/udecode/plate/blob/7c7ba3fd4a2c912e33d44498923ee2d1e93db9b5/apps/www/src/registry/ui/link-toolbar.tsx
+// Copyright (c) Ziad Beyens, Dylan Schiemann, Joe Anderson, Felix Feng
+// SPDX-License-Identifier: MIT (https://github.com/udecode/plate/blob/7c7ba3fd4a2c912e33d44498923ee2d1e93db9b5/LICENSE)
 function LinkFloatingToolbar() {
   const readOnly = useReadOnly();
   const floatingOptions: UseVirtualFloatingOptions = useMemo(
