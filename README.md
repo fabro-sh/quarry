@@ -88,4 +88,7 @@ Quarry is young and moving fast. It is currently single-user and local-only: the
 
 License: [MIT](LICENSE)
 
+Quarry includes third-party open source components. Their licenses and copyright
+notices are in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+
 If Quarry looks useful to you, a ⭐ helps other people find it.
