@@ -67,9 +67,12 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --gid 1000 quarry \
  && useradd --uid 1000 --gid quarry --home-dir /var/quarry --shell /usr/sbin/nologin --no-create-home quarry \
- && install -d -o quarry -g quarry -m 0755 /var/quarry /storage
+ && install -d -o quarry -g quarry -m 0755 /var/quarry /storage \
+ && install -d -m 0755 /usr/share/doc/quarry
 
 # License and third-party notices accompany every distributed image.
+# The directory is created above: `COPY --chmod` would also apply 0644 to a
+# directory it creates, which makes the files unreadable for the quarry user.
 COPY --chmod=0644 LICENSE THIRD_PARTY_NOTICES.txt /usr/share/doc/quarry/
 
 ENV QUARRY_ROOT=/storage \
