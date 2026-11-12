@@ -69,6 +69,9 @@ RUN apt-get update \
  && useradd --uid 1000 --gid quarry --home-dir /var/quarry --shell /usr/sbin/nologin --no-create-home quarry \
  && install -d -o quarry -g quarry -m 0755 /var/quarry /storage
 
+# License and third-party notices accompany every distributed image.
+COPY --chmod=0644 LICENSE THIRD_PARTY_NOTICES.txt /usr/share/doc/quarry/
+
 ENV QUARRY_ROOT=/storage \
     QUARRY_LOG_FORMAT=json \
     RUST_LOG=info,quarry=info
