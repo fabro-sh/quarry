@@ -35,6 +35,7 @@ test('suggested paragraph splits and joins stay structural through acceptance an
     await select(user.page, initial[0].block_id, 7);
     await user.page.keyboard.press('Enter');
     await user.page.keyboard.type('New ');
+    await expect(user.page.getByLabel('Save status', { exact: true })).toHaveText('Saved');
     await expect.poll(async () => (await review(request, fixture.url)).suggestions.map((item) => item.kind)).toEqual(['block_update']);
     expect((await blocks(request, fixture.url)).map((block) => block.text)).toEqual(initial.map((block) => block.text));
     await transaction(request, fixture.url, [{

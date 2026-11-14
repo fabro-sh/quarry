@@ -8,8 +8,10 @@ const { createRoot } = await import('react-dom/client');
 const { flushSync } = await import('react-dom');
 const h = React.createElement;
 
+let beforeTailReads = 0, capturedBeforeTailReads = 0;
 class Fixture extends React.Component {
   getSnapshotBeforeUpdate() {
+    capturedBeforeTailReads = beforeTailReads;
     document.querySelector('button').focus();
     window.getSelection().removeAllRanges();
     return null;
@@ -49,17 +51,20 @@ const cases = [
 const logical = (node, offset) => {
   const range = document.createRange(); range.setStart(editable, 0); range.setEnd(node, offset); return range.toString().length;
 };
+const beforeTail = text(998);
 const tail = text(999), nodeValue = Object.getOwnPropertyDescriptor(window.Node.prototype, 'nodeValue');
 let tailReads = 0;
 Object.defineProperty(tail, 'nodeValue', { get() { tailReads++; return nodeValue.get.call(this); }, set(value) { nodeValue.set.call(this, value); }, configurable: true });
+Object.defineProperty(beforeTail, 'nodeValue', { get() { beforeTailReads++; return nodeValue.get.call(this); }, set(value) { nodeValue.set.call(this, value); }, configurable: true });
 for (const [index, [anchor, focus]] of cases.entries()) {
   editable.focus();
   const selection = window.getSelection(); selection.setBaseAndExtent(...anchor, ...focus);
   const expected = [logical(...anchor), logical(...focus)];
-  tailReads = 0;
+  tailReads = 0; beforeTailReads = 0;
   flushSync(() => root.render(h(Fixture, { tick: index + 1 })));
   assert.equal(document.activeElement, editable, 'React restores editor focus after the snapshot callback changes it');
   assert.deepEqual([logical(selection.anchorNode, selection.anchorOffset), logical(selection.focusNode, selection.focusOffset)], expected, `selection case ${index}`);
+  assert.equal(capturedBeforeTailReads, 0, 'selection capture must not scan text preceding a distant caret in JavaScript');
   if (index < cases.length - 1) assert.equal(tailReads, 0, 'selection capture must stop before unrelated distant text');
 }
 flushSync(() => root.unmount());

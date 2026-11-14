@@ -995,13 +995,13 @@ transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
         .context("write binary document")?;
-    assert!(
+    assert_eq!(
         store
             .outgoing_links(&library.slug, "raw.bin")
             .await
             .context("load binary outgoing links")?
-            .links
-            .is_empty()
+            .links,
+        [] as [quarry_core::DocumentLink; 0]
     );
     let focused_graph = store
         .graph(
@@ -1049,21 +1049,21 @@ transaction: quarry_storage::TransactionMetadata::default(),
         })
         .await
         .context("rewrite source without links")?;
-    assert!(
+    assert_eq!(
         store
             .outgoing_links(&library.slug, "source.md")
             .await
             .context("load source outgoing links after rewrite")?
-            .links
-            .is_empty()
+            .links,
+        [] as [quarry_core::DocumentLink; 0]
     );
-    assert!(
+    assert_eq!(
         store
             .backlinks(&library.slug, "target.md")
             .await
             .context("load target backlinks after source rewrite")?
-            .links
-            .is_empty()
+            .links,
+        [] as [quarry_core::DocumentLink; 0]
     );
 
     let tx = store
@@ -1479,13 +1479,13 @@ async fn link_index_tracks_moves_and_deletes() -> TestResult {
         .delete_document(&library.slug, "folder/source.md", DocumentSource::Rest)
         .await
         .context("delete moved source document")?;
-    assert!(
+    assert_eq!(
         store
             .backlinks(&library.slug, "renamed.md")
             .await
             .context("load backlinks after source delete")?
-            .links
-            .is_empty()
+            .links,
+        [] as [quarry_core::DocumentLink; 0]
     );
     Ok(())
 }
@@ -3129,12 +3129,12 @@ async fn expired_documents_are_gone_and_excluded_from_live_queries() -> TestResu
         .await
         .expect_err("expired library document should be gone");
     assert!(matches!(err, QuarryError::Gone(_)));
-    assert!(
+    assert_eq!(
         store
             .list_documents(&library.slug, None, None)
             .await
-            .context("list documents after expiry")?
-            .is_empty()
+            .context("list documents after expiry")?,
+        [] as [quarry_core::DocumentListEntry; 0]
     );
 
     store
@@ -3989,12 +3989,12 @@ async fn raw_documents_keep_the_byte_path_untouched() -> TestResult {
         .expect_err("raw document export through block API should fail");
     assert!(matches!(export_refused, QuarryError::Unsupported(_)));
 
-    assert!(
+    assert_eq!(
         store
             .load_block_tree(&outcome.document.id)
             .await
-            .context("load block tree for raw document before restart")?
-            .is_empty()
+            .context("load block tree for raw document before restart")?,
+        [] as [quarry_storage::BlockRow; 0]
     );
 
     drop(store);
@@ -4008,12 +4008,12 @@ async fn raw_documents_keep_the_byte_path_untouched() -> TestResult {
             .content,
         bytes
     );
-    assert!(
+    assert_eq!(
         reopened
             .load_block_tree(&outcome.document.id)
             .await
-            .context("load block tree for raw document after restart")?
-            .is_empty()
+            .context("load block tree for raw document after restart")?,
+        [] as [quarry_storage::BlockRow; 0]
     );
     Ok(())
 }
@@ -4290,7 +4290,10 @@ async fn deleted_documents_keep_history_but_refuse_active_reads() -> TestResult 
         .await
         .context("delete document")?;
 
-    assert!(!store.load_block_tree(&document_id).await?.is_empty());
+    assert_ne!(
+        store.load_block_tree(&document_id).await?,
+        [] as [quarry_storage::BlockRow; 0]
+    );
     assert_eq!(store.list_block_review_items(&document_id).await?.len(), 1);
     assert!(
         store
@@ -4331,7 +4334,7 @@ async fn empty_native_document_exports_its_metadata_without_an_editor_placeholde
         .load_block_tree(&outcome.document.id)
         .await
         .context("load frontmatter-only block tree")?;
-    assert!(tree.is_empty());
+    assert_eq!(tree, [] as [quarry_storage::BlockRow; 0]);
     assert_eq!(
         store
             .export_block_document(&outcome.document.id)

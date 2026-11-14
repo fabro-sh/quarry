@@ -81,19 +81,24 @@ function typing(id: string, before: string, after: string, source = 'text', inte
       : { op: 'insert_text', at: { source, cursor: 'cursor' }, text: id }] }] } };
 }
 
-test.each([false, true])('rapid causal typing commits one immutable delivery and replays it after a lost response (edit intent: %s)', async (intent) => {
+test.each([false, true])('rapid causal typing bounds immutable deliveries and replays them after a lost response (edit intent: %s)', async (intent) => {
   const name = crypto.randomUUID(); let box = await DocumentOutbox.open(name);
   for (let n = 0; n < 40; n++) await box.add(typing('key' + n, 'head' + n, 'head' + (n + 1), 'text', intent));
   const envelopes: unknown[] = [];
   await expect(drainDocumentOutbox(box, 'doc', async (entry) => { envelopes.push(entry.envelope); throw new Error('Response lost after durable commit'); })).rejects.toThrow('Response lost');
-  const rows = await box.list('doc'); expect(rows).toHaveLength(1); expect(rows[0].attempted).toBe(true);
-  expect(new TextDecoder().decode(rows[0].draft)).toBe('head40');
+  const rows = await box.list('doc'); expect(rows).toHaveLength(25); expect(rows[0].attempted).toBe(true);
+  expect(new TextDecoder().decode(rows[0].draft)).toBe('head16');
   if (rows[0].kind !== 'native') throw new Error('Expected native delivery');
-  expect(rows[0].envelope.requests.map((r) => r.request_id)).toEqual(Array.from({ length: 40 }, (_, n) => 'key' + n + '_0'));
+  expect(rows[0].envelope.requests.map((r) => r.request_id)).toEqual(Array.from({ length: 16 }, (_, n) => 'key' + n + '_0'));
   box.close(); box = await DocumentOutbox.open(name);
   await box.add(typing('later', 'head40', 'head41'));
   await drainDocumentOutbox(box, 'doc', async (entry) => { envelopes.push(entry.envelope); });
-  expect(envelopes[1]).toEqual(envelopes[0]); expect(envelopes).toHaveLength(3);
+  expect(envelopes[1]).toEqual(envelopes[0]); expect(envelopes).toHaveLength(4);
+  const deliveries = envelopes.slice(1) as { requests: { request_id: string }[] }[];
+  expect(deliveries.map((delivery) => delivery.requests.length)).toEqual([16, 16, 9]);
+  expect(deliveries.flatMap((delivery) => delivery.requests.map((request) => request.request_id))).toEqual([
+    ...Array.from({ length: 40 }, (_, n) => 'key' + n + '_0'), 'later_0',
+  ]);
   expect(await box.list('doc')).toEqual([]); box.close();
 });
 

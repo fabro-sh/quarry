@@ -44,6 +44,7 @@ export function loadDocumentEngine() {
 export class DocumentModel {
   private native: NativeDocument;
   private projection: DocumentView | undefined;
+  private markerCache = new Map<string, Array<[string, string, number, number]>>();
   private encoded: { bytes: Uint8Array; heads: string[] } | undefined;
   private undoStack: Array<{ before: string[]; after: string[] }> = [];
   private group: { key: string; at: number; heads: string } | undefined;
@@ -85,7 +86,12 @@ export class DocumentModel {
   proposal(id: string): ProposalView { return JSON.parse(this.native.proposal_view(id)); }
   proposalsForBlock(block: string): ProposalView[] { return JSON.parse(this.native.proposal_views_for_block(block)); }
   reviewMarkers(owner: Owner): Array<[string, string, number, number]> {
-    return JSON.parse(this.native.review_markers(owner.kind, owner.id));
+    const key = `${owner.kind}:${owner.id}`;
+    const cached = this.markerCache.get(key);
+    if (cached) return cached;
+    const markers: Array<[string, string, number, number]> = JSON.parse(this.native.review_markers(owner.kind, owner.id));
+    this.markerCache.set(key, markers);
+    return markers;
   }
   point(block: string, offset: number): TextPoint { return JSON.parse(this.native.point(block, offset)); }
   selection(block: string, start: number, end: number): TextRange[] {
@@ -111,7 +117,7 @@ export class DocumentModel {
     return { fragments, quote };
   }
   resolveTarget(fragments: TargetFragment[]): ReviewTarget { return JSON.parse(this.native.resolve_target(JSON.stringify(fragments))); }
-  apply(request: CommandRequest) { this.native.apply(JSON.stringify(request)); this.projection = undefined; }
+  apply(request: CommandRequest) { this.native.apply(JSON.stringify(request)); this.projection = undefined; this.markerCache.clear(); }
   applyBatch(batch: DocumentBatch) {
     const candidate = this.fork();
     try {
@@ -124,7 +130,7 @@ export class DocumentModel {
       if (!heads) throw new Error('Incremental state is missing its resulting heads');
       this.native.merge_changes(bytes, JSON.stringify(base), JSON.stringify(heads));
     } else this.native.merge(bytes);
-    this.projection = undefined;
+    this.projection = undefined; this.markerCache.clear();
   }
   useSavedVersion(bytes: Uint8Array) {
     const candidate = new DocumentModel(bytes);
@@ -171,7 +177,7 @@ export class DocumentModel {
     } catch (error) { candidate.dispose(); throw error; }
   }
   private adopt(candidate: DocumentModel) {
-    this.native.free(); this.native = candidate.native; this.projection = candidate.projection; this.encoded = candidate.encoded;
+    this.native.free(); this.native = candidate.native; this.projection = candidate.projection; this.encoded = candidate.encoded; this.markerCache.clear();
   }
   private fork() {
     const candidate = new DocumentModel(this.native.fork()); candidate.projection = this.projection; candidate.encoded = this.encoded; return candidate;
@@ -186,7 +192,7 @@ export class DocumentModel {
     if (JSON.stringify(this.heads()) !== JSON.stringify(request.base)) {
       native.free(); throw new Error('Finish the local editor transaction before receiving remote changes');
     }
-    this.native.free(); this.native = native; this.projection = undefined;
+    this.native.free(); this.native = native; this.projection = undefined; this.markerCache.clear();
     const after = this.heads(); const now = Date.now();
     const key = typeof group === 'string' ? group : group?.composition;
     if (key && this.group?.key === key && (typeof group === 'object' || now - this.group.at < 750) && this.group.heads === JSON.stringify(request.base)) this.undoStack.at(-1)!.after = after;

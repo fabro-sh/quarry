@@ -2548,12 +2548,10 @@ function LeftPane({
   const activeSearchResult = searchResults[Math.min(activeSearchIndex, searchResults.length - 1)];
 
   function toggleSearch() {
-    setSearchOpen((open) => {
-      const next = !open;
-      if (!next) onSearchChange('');
-      else window.requestAnimationFrame(() => searchInputRef.current?.focus());
-      return next;
-    });
+    const next = !searchOpen;
+    setSearchOpen(next);
+    if (!next) onSearchChange('');
+    else window.requestAnimationFrame(() => searchInputRef.current?.focus());
   }
 
   useEffect(() => {

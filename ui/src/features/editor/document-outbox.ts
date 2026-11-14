@@ -3,6 +3,10 @@ import type { DocumentBatch } from './document-model';
 export interface NativeEnvelope extends DocumentBatch {
   actor: { kind: 'browser'; id: string; label: string };
 }
+// Native replay validates each causal request. Bound combined work so a large
+// document can be acknowledged within the existing network deadline.
+const MAX_COALESCED_REQUESTS = 16;
+
 interface OutboxRecord {
   sequence?: number;
   attempted?: boolean;
@@ -88,12 +92,15 @@ export class DocumentOutbox {
             .filter((entry) => entry.state === 'pending' && entry.sequence! <= throughSequence).sort((a, b) => a.sequence! - b.sequence!);
           const first = pending[0]; if (!first) return;
           const group = [first]; const source = textSource(first);
-          if (source && first.attempted === false) {
-            for (const next of pending.slice(1, 64)) {
+          if (source && first.attempted === false && first.kind === 'native') {
+            let requests = first.envelope.requests.length;
+            for (const next of pending.slice(1, MAX_COALESCED_REQUESTS)) {
               const previous = group.at(-1)!;
               if (next.attempted !== false || next.kind !== 'native' || textSource(next) !== source
                   || JSON.stringify(next.envelope.actor) !== JSON.stringify(first.envelope.actor)
                   || !previous.heads || JSON.stringify(next.envelope.requests[0]?.base) !== JSON.stringify(previous.heads)) break;
+              if (requests + next.envelope.requests.length > MAX_COALESCED_REQUESTS) break;
+              requests += next.envelope.requests.length;
               group.push(next);
             }
           }

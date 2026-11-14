@@ -641,7 +641,10 @@ async fn block_transaction_comment_lifecycle_projects_from_rows() -> anyhow::Res
     )
     .await;
     let review = get_block_review(&app, "doc.md", false).await;
-    assert!(review["comments"].as_array().unwrap().is_empty());
+    assert_eq!(
+        review["comments"].as_array().unwrap().as_slice(),
+        [] as [serde_json::Value; 0]
+    );
     let review = get_block_review(&app, "doc.md", true).await;
     assert_eq!(review["comments"][0]["status"], "resolved");
 
@@ -658,7 +661,10 @@ async fn block_transaction_comment_lifecycle_projects_from_rows() -> anyhow::Res
     )
     .await;
     let review = get_block_review(&app, "doc.md", true).await;
-    assert!(review["comments"].as_array().unwrap().is_empty());
+    assert_eq!(
+        review["comments"].as_array().unwrap().as_slice(),
+        [] as [serde_json::Value; 0]
+    );
 
     Ok(())
 }
@@ -861,7 +867,10 @@ async fn block_transaction_comment_reply_targets_open_suggestion_and_edit_update
     )
     .await;
     let review = get_block_review(&app, "doc.md", false).await;
-    assert!(review["comments"].as_array().unwrap().is_empty());
+    assert_eq!(
+        review["comments"].as_array().unwrap().as_slice(),
+        [] as [serde_json::Value; 0]
+    );
     let reply = &review["suggestions"][0]["replies"][0];
     assert_eq!(reply["body"], "why this wording?");
     assert_eq!(reply["status"], "open");
@@ -1064,7 +1073,10 @@ async fn block_transaction_suggestion_accept_applies_replacement_and_resolves() 
         "Make this great.\n"
     );
     let review = get_block_review(&app, "doc.md", false).await;
-    assert!(review["suggestions"].as_array().unwrap().is_empty());
+    assert_eq!(
+        review["suggestions"].as_array().unwrap().as_slice(),
+        [] as [serde_json::Value; 0]
+    );
     let review = get_block_review(&app, "doc.md", true).await;
     assert_eq!(review["suggestions"][0]["status"], "resolved");
     assert_eq!(
@@ -2084,11 +2096,12 @@ async fn deleted_target_never_attaches_to_new_text_at_the_same_position() -> any
     let review = get_block_review(&app, "doc.md", false).await;
     assert_eq!(review["comments"][0]["status"], "open");
     assert_eq!(review["comments"][0]["target"]["state"], "deleted");
-    assert!(
+    assert_eq!(
         review["comments"][0]["target"]["attachments"]
             .as_array()
             .unwrap()
-            .is_empty()
+            .as_slice(),
+        [] as [serde_json::Value; 0]
     );
     assert_eq!(review["comments"][0]["quote"], "MIDDLE");
 
@@ -2117,11 +2130,12 @@ async fn deleted_target_never_attaches_to_new_text_at_the_same_position() -> any
     let review = get_block_review(&app, "doc.md", false).await;
     assert_eq!(review["comments"][0]["status"], "open");
     assert_eq!(review["comments"][0]["target"]["state"], "deleted");
-    assert!(
+    assert_eq!(
         review["comments"][0]["target"]["attachments"]
             .as_array()
             .unwrap()
-            .is_empty()
+            .as_slice(),
+        [] as [serde_json::Value; 0]
     );
     assert_eq!(review["comments"][0]["quote"], "MIDDLE");
 

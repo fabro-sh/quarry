@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { TextApi, type NodeEntry, type TRange } from 'platejs';
 import { createPlatePlugin, PlateElement, PlateLeaf, type PlateElementProps, type PlateLeafProps, type PlateEditor } from 'platejs/react';
-import type { Attachment, DocumentView, DocumentModel, ReviewTarget } from './document-model';
+import type { DocumentModel, ReviewTarget } from './document-model';
 import { textOffset, type NativeOffset } from './plate-document-projection';
 import { useReviewHighlights } from '../review/native-review-context';
 import { cn } from '../../lib/utils';
@@ -46,45 +46,24 @@ export function useReviewDecoration(model: DocumentModel, editor: PlateEditor, d
     editor.api.onChange();
   }, [editor, draftTarget]);
   return useMemo(() => {
-    let cachedDocument: DocumentView | undefined;
-    let cachedDraft: ReviewTarget | undefined;
-    let ranges: ReturnType<typeof collectRanges>;
-    function collectRanges(document: DocumentView, draftTarget?: ReviewTarget) {
-    const byBlock = new Map<string, Array<Attachment & { id: string; kind: 'comment' | 'suggestion' | 'format' | 'draft' }>>();
-    const add = (part: Attachment, id: string, kind: 'comment' | 'suggestion' | 'format' | 'draft') => {
-      const key = `${part.owner.kind}:${part.owner.id}`;
-      const items = byBlock.get(key) ?? []; items.push({ ...part, id, kind }); byBlock.set(key, items);
-    };
-    for (const view of document.comments) {
-      if (view.comment.deleted || view.comment.state !== 'open' || view.comment.parent_id) continue;
-      for (const part of view.target.attachments) {
-        add(part, view.comment.id, 'comment');
-      }
-    }
-    for (const view of document.proposals) {
-      if (view.proposal.state !== 'open') continue;
-      for (const part of view.target.attachments) add(part, view.proposal.id, view.proposal.action.kind === 'format' ? 'format' : 'suggestion');
-    }
-    for (const part of draftTarget?.attachments ?? []) add(part, '', 'draft');
-    return byBlock;
-    }
-    // Read the committed native state in Slate's render. Changing this callback
-    // after the text render would split leaves after Slate positioned the DOM
-    // selection, resetting Chrome's cursor as the text nodes change again.
+    // Native marker reads are cached per owner and invalidated by model edits.
+    // Typing in one paragraph must not serialize every block for decoration.
     return ({ entry: [node, path] }: { entry: NodeEntry }): TRange[] => {
-    const document = model.view();
-    if (cachedDocument !== document || cachedDraft !== draft.current) {
-      cachedDocument = document; cachedDraft = draft.current;
-      ranges = collectRanges(document, draft.current);
-    }
     if (!TextApi.isText(node) || !node.text) return [];
     let at: NativeOffset;
     try { at = textOffset(editor.children, { path, offset: 0 }); } catch { return []; }
-    const parts = (ranges.get(`${at.proposal ? 'proposal' : 'block'}:${at.block}`) ?? []).flatMap((part) => {
+    const owner = { kind: at.proposal ? 'proposal' as const : 'block' as const, id: at.block };
+    const markers = model.reviewMarkers(owner).map(([kind, id, start, end]) => ({
+      start, end, id, kind: kind === 'comment' ? 'comment' : kind === 'format' ? 'format' : 'suggestion',
+    }));
+    for (const part of draft.current?.attachments ?? []) {
+      if (part.owner.kind === owner.kind && part.owner.id === owner.id) markers.push({ start: part.start, end: part.end, id: '', kind: 'draft' });
+    }
+    const parts = markers.flatMap((part) => {
       const start = Math.max(0, part.start - at.offset), end = Math.min(node.text.length, part.end - at.offset);
       return end > start ? [{ ...part, start, end }] : [];
     });
-    if (at.proposedBlock) parts.push({ owner: { kind: 'proposal', id: at.block }, start: 0, end: node.text.length, quote: node.text, id: at.block, kind: 'suggestion' });
+    if (at.proposedBlock) parts.push({ start: 0, end: node.text.length, id: at.block, kind: 'suggestion' });
     const stops = [...new Set(parts.flatMap((part) => [part.start, part.end]))].sort((a, b) => a - b);
     return stops.slice(0, -1).flatMap((start, index) => {
       const end = stops[index + 1];

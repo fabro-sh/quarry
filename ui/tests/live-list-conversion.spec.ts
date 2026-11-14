@@ -9,6 +9,25 @@ const styles = [
 type Menu = 'toolbar' | 'block actions';
 type ListBlock = Block & { attrs: Record<string, unknown> };
 
+test('block conversion submenu opens from the keyboard', async ({ browser, request }) => {
+  const fixture = await createDocument(request, '- Before TARGET after.');
+  const [first] = await blocks(request, fixture.url);
+  const user = await openDocument(browser, fixture.path, 'Writer');
+  try {
+    const block = body(user.page).locator(`[data-block-id="${first.block_id}"]`);
+    await block.hover();
+    await block.locator('..').getByRole('button', { name: /^(Drag to move block|Block actions)$/ }).click();
+    const trigger = user.page.getByRole('menuitem', { name: 'Turn into', exact: true });
+    await trigger.focus();
+    await trigger.press('ArrowRight');
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    await user.page.getByRole('menu', { name: 'Turn into', exact: true }).getByRole('menuitem', { name: 'Heading 3', exact: true }).click();
+    await expect(body(user.page).locator(`h3[data-block-id="${first.block_id}"]`)).toHaveText(first.text);
+    await expect(user.page.getByLabel('Save status', { exact: true })).toHaveText('Saved');
+    expect(user.errors).toEqual([]);
+  } finally { await user.context.close(); }
+});
+
 async function convert(page: Page, id: string, menu: Menu, label: string) {
   if (menu === 'toolbar') {
     await select(page, id, 0, 'Before TARGET after.'.length);

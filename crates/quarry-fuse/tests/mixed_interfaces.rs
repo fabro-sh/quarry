@@ -578,7 +578,7 @@ async fn mixed_scenario(order: Option<[u8; 3]>) -> anyhow::Result<()> {
     ] {
         assert_eq!(saved.block_view(id)?.text, text);
     }
-    assert!(saved.conflicts()?.is_empty());
+    assert_eq!(saved.conflicts()?, [] as [quarry_document::Conflict; 0]);
     let comments = saved.comments()?;
     assert_eq!(comments.len(), 1);
     let target = saved.comment_target(&comments[0].id)?;

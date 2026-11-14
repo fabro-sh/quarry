@@ -63,7 +63,11 @@ class BrowserEventConnection extends EventTarget {
     const socket = this.socket; this.socket = undefined;
     if (socket) {
       socket.onopen = socket.onmessage = socket.onerror = socket.onclose = null;
-      socket.close();
+      // Closing a connecting socket produces a browser console error during
+      // normal navigation. Detach consumers now, then close after it opens.
+      if (socket.readyState === WebSocket.CONNECTING) {
+        socket.onopen = () => { socket.onopen = null; socket.close(); };
+      } else socket.close();
     }
   }
 

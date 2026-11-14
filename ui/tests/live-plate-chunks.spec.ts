@@ -6,7 +6,8 @@ import { blocks, body, createDocument, openDocument, select, transaction } from 
 test('chunked text and highlights render every edit across distant blocks', async ({ browser, request }) => {
   test.setTimeout(120000);
   const fixture = await createDocument(request, '# Performance\n\n' + Array.from({ length: 1400 }, (_, i) => `Paragraph ${i}: ${'content '.repeat(8)}`).join('\n\n'));
-  const user = await openDocument(browser, fixture.path, 'Writer');
+  // This test checks chunk correctness; the production suite owns load budgets.
+  const user = await openDocument(browser, fixture.path, 'Writer', 30000);
   const initial = await blocks(request, fixture.url);
   try {
     expect(await body(user.page).locator('[data-slate-chunk]').count()).toBeGreaterThan(0);
@@ -33,6 +34,7 @@ test('chunked text and highlights render every edit across distant blocks', asyn
     }
     await expect(user.page.getByLabel('Save status', { exact: true })).toHaveText('Saved', { timeout: 60000 });
     await user.page.reload();
+    await expect(body(user.page)).toBeVisible({ timeout: 30000 });
     for (const index of [0, 1000, 1400]) {
       const block = initial[index];
       const element = body(user.page).locator(`[data-block-id="${block.block_id}"]`);

@@ -2,6 +2,8 @@ import { BrowserEvents } from './browser-events';
 
 class Socket {
   static all: Socket[] = [];
+  static CONNECTING = 0;
+  readyState = 1;
   onopen: (() => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: (() => void) | null = null;
@@ -112,4 +114,18 @@ test('late consumers observe connectivity and document consumers receive lag not
   await vi.advanceTimersByTimeAsync(0); expect(opened).toHaveBeenCalledTimes(1);
   Socket.all[0].onmessage!(new MessageEvent('message', { data: '{"type":"stream.lagged"}' }));
   expect(lagged).toHaveBeenCalledTimes(1);
+});
+
+test('closing during the handshake waits for open without notifying detached consumers', async () => {
+  const source = await open();
+  const socket = Socket.all[0]; socket.readyState = Socket.CONNECTING;
+  const opened = vi.fn(), failed = vi.fn(); source.onopen = opened; source.onerror = failed;
+  source.close();
+  expect(socket.closed).toBe(false);
+  socket.readyState = 1; socket.onopen!();
+  expect(socket.closed).toBe(true);
+  expect(socket.onopen).toBeNull();
+  expect(opened).not.toHaveBeenCalled(); expect(failed).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(30000);
+  expect(Socket.all).toHaveLength(1);
 });
