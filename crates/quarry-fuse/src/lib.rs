@@ -1046,10 +1046,10 @@ mod linux_mount {
     }
 
     impl Filesystem for FuseProjection {
-        async fn init(&self, _req: Request) -> fuse3::Result<ReplyInit> {
-            Ok(ReplyInit {
+        fn init(&self, _req: Request) -> impl Future<Output = fuse3::Result<ReplyInit>> {
+            std::future::ready(Ok(ReplyInit {
                 max_write: MAX_WRITE_BYTES,
-            })
+            }))
         }
 
         async fn destroy(&self, _req: Request) {}
@@ -1337,8 +1337,12 @@ mod linux_mount {
             Ok(())
         }
 
-        async fn statfs(&self, _req: Request, _inode: Inode) -> fuse3::Result<ReplyStatFs> {
-            Ok(ReplyStatFs {
+        fn statfs(
+            &self,
+            _req: Request,
+            _inode: Inode,
+        ) -> impl Future<Output = fuse3::Result<ReplyStatFs>> {
+            std::future::ready(Ok(ReplyStatFs {
                 blocks: 0,
                 bfree: 0,
                 bavail: 0,
@@ -1347,7 +1351,7 @@ mod linux_mount {
                 bsize: 4096,
                 namelen: 255,
                 frsize: 4096,
-            })
+            }))
         }
     }
 

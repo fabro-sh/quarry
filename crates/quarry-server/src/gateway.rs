@@ -2010,8 +2010,11 @@ mod tests {
             "delete-last",
         )
         .unwrap();
-        assert!(result.rows.is_empty());
-        assert!(result.review_items.is_empty());
+        assert_eq!(result.rows, [] as [quarry_markdown::BlockRow; 0]);
+        assert_eq!(
+            result.review_items,
+            [] as [quarry_storage::BlockReviewItem; 0]
+        );
     }
 
     #[test]

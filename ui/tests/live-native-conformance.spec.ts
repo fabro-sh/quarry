@@ -137,6 +137,7 @@ test('browser undo and redo preserve a comment delivered after the edit', async 
     await expect.poll(async () => (await blocks(request, fixture.url))[0].text).toBe('TARGET');
     await expect(body(user.page).locator(`[data-comment-id="${comment.id}"]`)).toHaveText('TARGET');
     await user.page.keyboard.press('ControlOrMeta+Shift+z');
+    await expect(user.page.getByLabel('Save status', { exact: true })).toHaveText('Saved', { timeout: 20000 });
     await expect.poll(async () => (await blocks(request, fixture.url))[0].text).toBe('Prefix TARGET');
     expect((await review(request, fixture.url)).comments[0].target.attachments[0].quote).toBe('TARGET');
     expect(user.errors).toEqual([]);
@@ -160,6 +161,7 @@ test('an offline browser draft survives page closure and merges with an agent ed
     reopened.on('pageerror', (error) => user.errors.push(error.message));
     await reopened.goto(`${uiOrigin}${fixture.path}`);
     await expect(body(reopened)).toHaveText('Offline TARGET agent');
+    await expect(reopened.getByLabel('Save status', { exact: true })).toHaveText('Saved', { timeout: 20000 });
     await expect.poll(async () => (await blocks(request, fixture.url))[0].text).toBe('Offline TARGET agent');
     await expect(reopened.getByLabel('Save status', { exact: true })).toHaveText('Saved');
     expect(user.errors).toEqual([]);

@@ -977,8 +977,11 @@ mod tests {
              Drop {--one\ntwo--}{#s3}.\n",
         );
 
-        assert!(document.markers.comments.is_empty());
-        assert!(document.markers.suggestions.is_empty());
+        assert_eq!(document.markers.comments, [] as [ReviewCommentMarker; 0]);
+        assert_eq!(
+            document.markers.suggestions,
+            [] as [ReviewSuggestionMarker; 0]
+        );
         assert!(document.meta.comments.is_empty());
         assert!(document.meta.suggestions.is_empty());
     }

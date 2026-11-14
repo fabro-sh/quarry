@@ -72,12 +72,12 @@ for (const blockIndex of [0, 700, 1400]) test(`Chrome retains rapid typing respo
       document.addEventListener('keydown', () => { const start = performance.now(); requestAnimationFrame(() => metrics.keyToFrame.push(performance.now() - start)); }, { capture: true });
     });
     const typed = 'abcdefghij'.repeat(10); const typingStarted = Date.now(); await user.page.keyboard.type(typed);
-    await expect(paragraph).toHaveText(typed + target.text);
     const metrics = await user.page.evaluate(async () => {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       const metrics = (window as unknown as { typingMetrics: { frameGaps: number[]; keyToFrame: number[]; running: boolean } }).typingMetrics;
       metrics.running = false; return metrics;
     });
+    await expect(paragraph).toHaveText(typed + target.text);
     if (profiler) { const { profile } = await profiler.send('Profiler.stop'); await saveCpuProfile(user.page, profile); await profiler.detach(); }
     if (process.env.QUARRY_RENDER_PROFILE) await saveRenderProfile(user.page, process.env.QUARRY_RENDER_PROFILE);
     const sorted = [...metrics.keyToFrame].sort((a, b) => a - b);
@@ -175,7 +175,10 @@ for (const blockIndex of [0, 1400]) test(`Chrome stays responsive when an agent 
           { op: 'comment.add', block_id: initial[700].block_id, start: 0, end: 9, body: 'Concurrent large review' },
           { op: 'replace_block_content', block_id: initial[700].block_id, text: 'Agent ' + initial[700].text },
         ], initial[700].document_clock);
-        await expect(body(user.page).locator('[data-comment-id]')).toHaveText('Paragraph');
+        // Failed locator assertions build an accessibility snapshot on every
+        // poll. Keep that full-document work outside the measured interval.
+        await user.page.waitForFunction((id) =>
+          document.querySelector(`[data-block-id="${id}"] [data-comment-id]`)?.textContent === 'Paragraph', initial[700].block_id, { timeout: 10000 });
         await user.page.evaluate(() => { const metrics = (window as unknown as { concurrentMetrics: { count: number; remoteAt: number } }).concurrentMetrics; metrics.remoteAt = metrics.count; });
       })(),
     ]);

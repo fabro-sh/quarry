@@ -1115,6 +1115,15 @@ mod tests {
 
     #[cfg(feature = "tmp-documents")]
     fn capture_debug_logs() -> (CapturedLogs, tracing::dispatcher::DefaultGuard) {
+        // Keep two dispatchers alive during capture, as tests/common does.
+        // With only the thread-local subscriber, tracing-core's JustOne path
+        // can cache Interest::never when another test first hits a callsite.
+        static GLOBAL_NO_OP: std::sync::Once = std::sync::Once::new();
+        GLOBAL_NO_OP.call_once(|| {
+            let _ = tracing::subscriber::set_global_default(
+                tracing::subscriber::NoSubscriber::default(),
+            );
+        });
         let logs = CapturedLogs::default();
         let subscriber = tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::new("quarry_server=debug"))

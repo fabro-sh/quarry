@@ -1369,7 +1369,7 @@ mod tests {
         let (pairs, degraded) =
             lcs_matching_bounded_by(&a, &empty, 0, &mut work_budget, |x, y| x.shape == y.shape);
 
-        assert!(pairs.is_empty());
+        assert_eq!(pairs, [] as [(usize, usize); 0]);
         assert!(!degraded);
     }
 

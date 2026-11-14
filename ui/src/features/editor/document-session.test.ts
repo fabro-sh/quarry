@@ -69,6 +69,54 @@ test('a rejected capability never falls back to an editable cached document', as
   } finally { server.model.dispose(); }
 });
 
+test('cancelling an initial read aborts fetch without opening a cached session', async () => {
+  const server = authority(); const id = server.model.view().document_id;
+  const cachedSession = await DocumentSession.open('/document', id, 'Reviewer', 'tab');
+  await cachedSession.close(); cachedSession.model.dispose();
+  const cached = vi.spyOn(DocumentOutbox.prototype, 'cached');
+  const closed = vi.spyOn(DocumentOutbox.prototype, 'close');
+  const controller = new AbortController(), reason = new Error('Document closed');
+  let requestSignal: AbortSignal | undefined;
+  vi.stubGlobal('fetch', vi.fn((_url, options: RequestInit) => new Promise((_resolve, reject) => {
+    requestSignal = options.signal!;
+    requestSignal.addEventListener('abort', () => reject(requestSignal!.reason), { once: true });
+  })));
+  try {
+    const opening = DocumentSession.open('/document', id, 'Reviewer', 'tab', undefined, { signal: controller.signal });
+    const rejected = expect(opening).rejects.toBe(reason);
+    await waitFor(() => expect(requestSignal).toBeDefined());
+    controller.abort(reason);
+    await rejected;
+    expect(requestSignal!.aborted).toBe(true);
+    expect(cached).not.toHaveBeenCalled();
+    expect(closed).toHaveBeenCalledTimes(1);
+  } finally { server.model.dispose(); }
+});
+
+test('cancelling after the initial response disposes its model and outbox before caching', async () => {
+  const server = authority(); const id = server.model.view().document_id;
+  let release!: () => void, entered = false;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const list = DocumentOutbox.prototype.list;
+  vi.spyOn(DocumentOutbox.prototype, 'list').mockImplementationOnce(async function (this: DocumentOutbox, documentId) {
+    entered = true; await gate; return list.call(this, documentId);
+  });
+  const disposed = vi.spyOn(DocumentModel.prototype, 'dispose');
+  const closed = vi.spyOn(DocumentOutbox.prototype, 'close');
+  const cached = vi.spyOn(DocumentOutbox.prototype, 'cache');
+  const controller = new AbortController(), reason = new Error('Document changed');
+  try {
+    const opening = DocumentSession.open('/document', id, 'Reviewer', 'tab', undefined, { signal: controller.signal });
+    const rejected = expect(opening).rejects.toBe(reason);
+    await waitFor(() => expect(entered).toBe(true));
+    controller.abort(reason); release();
+    await rejected;
+    expect(disposed).toHaveBeenCalledTimes(1);
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(cached).not.toHaveBeenCalled();
+  } finally { release(); server.model.dispose(); }
+});
+
 test('library transport uses native identity and sends its invitation on every request', async () => {
   const server = authority(); const id = server.model.view().document_id;
   const session = await DocumentSession.open('/v1/libraries/notes/documents/old.md', id, 'Reviewer', 'tab', 'invitation');

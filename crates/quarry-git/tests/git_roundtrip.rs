@@ -396,7 +396,7 @@ async fn sync_preserves_both_sides_when_quarry_and_git_change_same_path() -> any
         .await?;
 
     let first = push_peer(&store, &library.slug, &peer.id).await?;
-    assert!(first.conflicts.is_empty());
+    assert_eq!(first.conflicts, [] as [quarry_core::ConflictRecord; 0]);
     assert_eq!(
         store
             .sync_state(&peer.id, "notes/plan.md")
@@ -511,8 +511,8 @@ async fn sync_with_both_sides_unchanged_does_not_create_new_git_commit() -> anyh
 
     let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
-    assert!(result.imported_paths.is_empty());
-    assert!(result.conflicts.is_empty());
+    assert_eq!(result.imported_paths, [] as [std::string::String; 0]);
+    assert_eq!(result.conflicts, [] as [quarry_core::ConflictRecord; 0]);
     assert_eq!(result.commit_id, None);
     let head_after = git2::Repository::open(repo.path())
         .context("exported git repo should still open")?
@@ -574,8 +574,8 @@ async fn sync_exports_quarry_only_content_change_to_git() -> anyhow::Result<()> 
 
     let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
-    assert!(result.imported_paths.is_empty());
-    assert!(result.conflicts.is_empty());
+    assert_eq!(result.imported_paths, [] as [std::string::String; 0]);
+    assert_eq!(result.conflicts, [] as [quarry_core::ConflictRecord; 0]);
     assert_eq!(result.exported_paths, vec!["notes/plan.md"]);
     assert_eq!(
         std::fs::read_to_string(repo.path().join("notes/plan.md"))?,
@@ -624,7 +624,7 @@ async fn sync_imports_git_only_content_change_to_quarry() -> anyhow::Result<()> 
     let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
     assert_eq!(result.imported_paths, vec!["notes/plan.md"]);
-    assert!(result.conflicts.is_empty());
+    assert_eq!(result.conflicts, [] as [quarry_core::ConflictRecord; 0]);
     assert_eq!(
         store
             .get_document(&library.slug, "notes/plan.md")
@@ -741,8 +741,8 @@ async fn sync_accepts_both_changed_to_same_content_without_conflict() -> anyhow:
 
     let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
-    assert!(result.conflicts.is_empty());
-    assert!(result.conflict_paths.is_empty());
+    assert_eq!(result.conflicts, [] as [quarry_core::ConflictRecord; 0]);
+    assert_eq!(result.conflict_paths, [] as [std::string::String; 0]);
     assert_eq!(
         store
             .sync_state(&peer.id, "notes/plan.md")
@@ -847,7 +847,7 @@ async fn sync_records_both_deleted_as_clean_state() -> anyhow::Result<()> {
     std::fs::remove_file(repo.path().join("notes/remove.md"))?;
     let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
-    assert!(result.conflicts.is_empty());
+    assert_eq!(result.conflicts, [] as [quarry_core::ConflictRecord; 0]);
     assert!(
         store
             .get_document(&library.slug, "notes/remove.md")
@@ -895,7 +895,7 @@ async fn sync_applies_git_only_delete_to_quarry() -> anyhow::Result<()> {
     std::fs::remove_file(repo.path().join("notes/remove.md"))?;
     let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
-    assert!(result.conflicts.is_empty());
+    assert_eq!(result.conflicts, [] as [quarry_core::ConflictRecord; 0]);
     assert!(
         store
             .get_document(&library.slug, "notes/remove.md")
@@ -945,7 +945,7 @@ async fn sync_applies_quarry_only_delete_to_git() -> anyhow::Result<()> {
         .await?;
     let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
-    assert!(result.conflicts.is_empty());
+    assert_eq!(result.conflicts, [] as [quarry_core::ConflictRecord; 0]);
     assert!(!repo.path().join("notes/remove.md").exists());
     let state = store
         .sync_state(&peer.id, "notes/remove.md")
@@ -1337,7 +1337,7 @@ async fn sync_peer_fetches_remote_branch_and_pushes_merged_tree() -> anyhow::Res
 
     let result = sync_peer(&store, &library.slug, &peer.id).await?;
 
-    assert!(result.conflicts.is_empty());
+    assert_eq!(result.conflicts, [] as [quarry_core::ConflictRecord; 0]);
     assert_eq!(result.imported_paths, vec!["notes/remote.md"]);
     assert_eq!(
         store
@@ -1475,7 +1475,7 @@ async fn git_sync_edit_preserves_sibling_block_ids_and_live_anchors() -> anyhow:
     let text = std::fs::read_to_string(&file)?;
     std::fs::write(&file, text.replace("Bravo.", "Bravo, from git."))?;
     let result = sync_peer(&store, &library.slug, &peer.id).await?;
-    assert!(result.conflicts.is_empty());
+    assert_eq!(result.conflicts, [] as [quarry_core::ConflictRecord; 0]);
 
     let rows = store.load_block_tree(&document_id).await?;
     let ids_after: Vec<String> = rows
@@ -1600,7 +1600,7 @@ async fn sync_pairs_pure_git_renames_into_identity_preserving_moves() -> anyhow:
         repo.path().join("notes/new.md"),
     )?;
     let result = sync_peer(&store, &library.slug, &peer.id).await?;
-    assert!(result.conflicts.is_empty());
+    assert_eq!(result.conflicts, [] as [quarry_core::ConflictRecord; 0]);
 
     let moved = store
         .get_document(&library.slug, "notes/new.md")
@@ -1692,7 +1692,7 @@ async fn sync_treats_renamed_and_edited_files_as_delete_plus_create() -> anyhow:
         text.replace("Alpha.", "Alpha, edited."),
     )?;
     let result = sync_peer(&store, &library.slug, &peer.id).await?;
-    assert!(result.conflicts.is_empty());
+    assert_eq!(result.conflicts, [] as [quarry_core::ConflictRecord; 0]);
 
     let created = store
         .get_document(&library.slug, "notes/new.md")
@@ -1758,7 +1758,7 @@ async fn sync_refuses_to_pair_renames_with_duplicate_content() -> anyhow::Result
         repo.path().join("notes/dos.md"),
     )?;
     let result = sync_peer(&store, &library.slug, &peer.id).await?;
-    assert!(result.conflicts.is_empty());
+    assert_eq!(result.conflicts, [] as [quarry_core::ConflictRecord; 0]);
 
     let uno = store
         .get_document(&library.slug, "notes/uno.md")
@@ -1826,7 +1826,7 @@ async fn sync_bulk_renames_pass_the_delete_safety_limit() -> anyhow::Result<()> 
     // 2 of 2 tracked paths gone would exceed the 50% delete cap; paired
     // renames must not count as deletions.
     let result = sync_peer(&store, &library.slug, &peer.id).await?;
-    assert!(result.conflicts.is_empty());
+    assert_eq!(result.conflicts, [] as [quarry_core::ConflictRecord; 0]);
     assert_eq!(
         store
             .get_document(&library.slug, "archive/alpha.md")

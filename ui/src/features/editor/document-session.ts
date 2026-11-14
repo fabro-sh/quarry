@@ -70,34 +70,44 @@ export class DocumentSession {
     }, timing.retryMs, timing.pollMs, timing.deliveryDelayMs);
   }
 
-  static async open(url: string, documentId: string, author: string, actorId: string, token?: string, options: Partial<SessionTiming> = {}) {
-    const timing = { ...defaultTiming, ...options };
+  static async open(url: string, documentId: string, author: string, actorId: string, token?: string, options: Partial<SessionTiming> & { signal?: AbortSignal } = {}) {
+    const { signal, ...timingOptions } = options;
+    const timing = { ...defaultTiming, ...timingOptions };
     const library = url.match(/^(.*\/v1\/libraries\/[^/]+)\/documents\//);
     if (library) url = `${library[1]}/documents-by-id/${encodeURIComponent(documentId)}`;
+    signal?.throwIfAborted();
     await loadDocumentEngine();
+    signal?.throwIfAborted();
     const outbox = await DocumentOutbox.open();
     let model: DocumentModel | undefined;
     try {
+      signal?.throwIfAborted();
       let state: NativeState, fresh = true;
-      try { state = await documentRequest(resourceUrl(url, 'document-state', token), undefined, undefined, timing.requestTimeoutMs); }
+      try { state = await documentRequest(resourceUrl(url, 'document-state', token), undefined, signal, timing.requestTimeoutMs); }
       catch (error) {
+        signal?.throwIfAborted();
         if (error instanceof DocumentRequestError && error.status < 500) throw error;
         const cached = await outbox.cached(documentId);
+        signal?.throwIfAborted();
         if (!cached) throw error;
         fresh = false;
         state = { format: 'automerge', document_clock: cached.document_clock, bytes: Array.from(cached.bytes), writable: cached.writable, metadata: cached.metadata,
           document: cached.heads ? { document_id: documentId, heads: cached.heads } : undefined };
       }
+      signal?.throwIfAborted();
       if (state.format !== 'automerge') throw new Error('This document cannot use the editor');
       model = new DocumentModel(Uint8Array.from(state.bytes));
       if (model.view().document_id !== documentId) throw new Error('The document changed while opening');
       const entries = await outbox.list(documentId);
+      signal?.throwIfAborted();
       for (const entry of entries.filter((entry) => entry.state !== 'archived')) {
         // Rejected structural drafts retain their full bytes for recovery.
         try { model.merge(entry.draft); } catch { /* The server decides each request. */ }
       }
       const session = new DocumentSession(url, documentId, author, actorId, model, outbox, token, state, entries, timing, fresh);
+      signal?.throwIfAborted();
       await outbox.cache(session.snapshot());
+      signal?.throwIfAborted();
       return session;
     } catch (error) { model?.dispose(); outbox.close(); throw error; }
   }
